@@ -164,9 +164,21 @@ function fetch_build_info(build_number::Int, token::String; pipeline::String=BUI
     if build === nothing
         return nothing
     end
+
+    # Extract PR number from pull_request field if present
+    pr_number = nothing
+    pr_data = get(build, :pull_request, nothing)
+    if pr_data !== nothing
+        pr_id = get(pr_data, :id, nothing)
+        if pr_id !== nothing
+            pr_number = tryparse(Int, string(pr_id))
+        end
+    end
+
     return (
         branch = String(get(build, :branch, "")),
         commit = String(get(build, :commit, "")),
+        pr_number = pr_number,
     )
 end
 
@@ -737,14 +749,15 @@ function main()
         println("Found $(length(current_jobs)) jobs")
     end
 
+    # Always fetch build info to extract PR number
+    build_info = fetch_build_info(build_number, token; pipeline=pipeline)
+    pr_number = build_info !== nothing ? build_info.pr_number : nothing
+
     # Auto-detect base build for PR branches if not explicitly set
-    pr_number = nothing
-    branch = nothing
     if base_build === nothing
         (detected_base, branch) = determine_base_build(build_number, token; pipeline=pipeline, quiet=output_json || output_markdown)
         if detected_base !== nothing
             base_build = detected_base
-            pr_number = extract_pr_number(branch)
         end
     end
 

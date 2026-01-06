@@ -373,7 +373,10 @@
         .color-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
         .coverage-logo { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
         .bk-emoji { height: 1em; width: 1em; vertical-align: -0.1em; display: inline; }
-        .failure-rate { font-size: 9px; color: var(--color-danger-fg); margin-left: auto; padding-left: 6px; white-space: nowrap; }
+        .pass-rate { font-size: 9px; margin-left: auto; padding-left: 6px; white-space: nowrap; }
+        .pass-rate.green { color: var(--color-success-fg); }
+        .pass-rate.yellow { color: var(--color-attention-fg); }
+        .pass-rate.red { color: var(--color-danger-fg); }
         .failure-indicator { color: var(--color-danger-fg); font-size: 9px; margin-left: 2px; }
         .matrix-cell .failure-indicator { position: absolute; top: 1px; right: 2px; font-size: 8px; }
 
@@ -877,7 +880,7 @@
             text-decoration: none;
         }
         .comparison-banner h2::before {
-            content: '⚡';
+            content: '✳';
         }
         .comparison-summary {
             display: flex;
@@ -3669,15 +3672,19 @@
                 if (allTotal > 0) {
                     const aggRate = allPassed / allTotal;
                     const aggPct = Math.round(aggRate * 100);
-                    const isLow = allTotal >= PASS_RATE_MIN_RUNS && aggRate < PASS_RATE_THRESHOLD;
-                    const prColor = isLow ? 'var(--color-danger-fg)' : (aggRate < 1 ? 'var(--color-attention-fg)' : 'var(--color-success-fg)');
-                    const icon = isLow ? '⚠️ ' : '';
+                    const aggFailures = allFailed + allTimedOut + allCanceled;
+                    // Color: green=100%, yellow>=90%, red<90%
+                    const prColor = aggRate >= 1 ? 'var(--color-success-fg)' : (aggRate >= 0.9 ? 'var(--color-attention-fg)' : 'var(--color-danger-fg)');
+                    // Icons: ⚠️ if <50% success, ⏳ if >50% of failures are timeouts
+                    let icons = '';
+                    if (aggRate < 0.5) icons += '⚠️';
+                    if (aggFailures > 0 && allTimedOut / aggFailures > 0.5) icons += '⏳';
                     const parts = [];
                     if (allFailed > 0) parts.push(`${allFailed} failed`);
                     if (allTimedOut > 0) parts.push(`${allTimedOut} timed out`);
                     if (allCanceled > 0) parts.push(`${allCanceled} canceled`);
                     const breakdown = parts.length > 0 ? parts.join(', ') : 'all passed';
-                    aggPassRateHtml = `<span style="color: ${prColor}" title="${breakdown} out of ${allTotal} total runs">${icon}${aggPct}%</span>`;
+                    aggPassRateHtml = `<span style="color: ${prColor}" title="${breakdown} out of ${allTotal} total runs">${aggPct}%${icons ? ' ' + icons : ''}</span>`;
                 }
 
                 const aggRow = document.createElement('tr');
@@ -3721,15 +3728,19 @@
                 let passRateHtml = '<span style="color: var(--color-fg-muted)">—</span>';
                 if (pr && pr.total > 0) {
                     const pct = Math.round(pr.rate * 100);
-                    const isLow = pr.total >= PASS_RATE_MIN_RUNS && pr.rate < PASS_RATE_THRESHOLD;
-                    const prColor = isLow ? 'var(--color-danger-fg)' : (pr.rate < 1 ? 'var(--color-attention-fg)' : 'var(--color-success-fg)');
-                    const icon = isLow ? '⚠️ ' : '';
+                    const failures = pr.failed + pr.timedOut + pr.canceled;
+                    // Color: green=100%, yellow>=90%, red<90%
+                    const prColor = pr.rate >= 1 ? 'var(--color-success-fg)' : (pr.rate >= 0.9 ? 'var(--color-attention-fg)' : 'var(--color-danger-fg)');
+                    // Icons: ⚠️ if <50% success, ⏳ if >50% of failures are timeouts
+                    let icons = '';
+                    if (pr.rate < 0.5) icons += '⚠️';
+                    if (failures > 0 && pr.timedOut / failures > 0.5) icons += '⏳';
                     const parts = [];
                     if (pr.failed > 0) parts.push(`${pr.failed} failed`);
                     if (pr.timedOut > 0) parts.push(`${pr.timedOut} timed out`);
                     if (pr.canceled > 0) parts.push(`${pr.canceled} canceled`);
                     const breakdown = parts.length > 0 ? parts.join(', ') : 'all passed';
-                    passRateHtml = `<span style="color: ${prColor}" title="${breakdown} out of ${pr.total} in selected range">${icon}${pct}%</span>`;
+                    passRateHtml = `<span style="color: ${prColor}" title="${breakdown} out of ${pr.total} in selected range">${pct}%${icons ? ' ' + icons : ''}</span>`;
                 }
 
                 const isExpanded = expandedJobs.has(jobName);
@@ -3848,15 +3859,19 @@
                             }
                             const hostRate = hostPassed / hostTotal;
                             const hostPct = Math.round(hostRate * 100);
-                            const isLow = hostTotal >= PASS_RATE_MIN_RUNS && hostRate < PASS_RATE_THRESHOLD;
-                            const hostPrColor = isLow ? 'var(--color-danger-fg)' : (hostRate < 1 ? 'var(--color-attention-fg)' : 'var(--color-success-fg)');
-                            const hostIcon = isLow ? '⚠️ ' : '';
+                            const hostFailures = hostFailed + hostTimedOut + hostCanceled;
+                            // Color: green=100%, yellow>=90%, red<90%
+                            const hostPrColor = hostRate >= 1 ? 'var(--color-success-fg)' : (hostRate >= 0.9 ? 'var(--color-attention-fg)' : 'var(--color-danger-fg)');
+                            // Icons: ⚠️ if <50% success, ⏳ if >50% of failures are timeouts
+                            let hostIcons = '';
+                            if (hostRate < 0.5) hostIcons += '⚠️';
+                            if (hostFailures > 0 && hostTimedOut / hostFailures > 0.5) hostIcons += '⏳';
                             const parts = [];
                             if (hostFailed > 0) parts.push(`${hostFailed} failed`);
                             if (hostTimedOut > 0) parts.push(`${hostTimedOut} timed out`);
                             if (hostCanceled > 0) parts.push(`${hostCanceled} canceled`);
                             const breakdown = parts.length > 0 ? parts.join(', ') : 'all passed';
-                            hostPrHtml = `<span style="color: ${hostPrColor}" title="${breakdown} out of ${hostTotal} in selected range">${hostIcon}${hostPct}%</span>`;
+                            hostPrHtml = `<span style="color: ${hostPrColor}" title="${breakdown} out of ${hostTotal} in selected range">${hostPct}%${hostIcons ? ' ' + hostIcons : ''}</span>`;
                         }
 
                         const hostRow = document.createElement('tr');
@@ -4247,18 +4262,27 @@
             for (const { name, job } of allJobsSorted) {
                 const color = jobColors[name];
                 const pr = jobPassRates[name];
-                const showWarning = pr && pr.total >= PASS_RATE_MIN_RUNS && pr.rate < PASS_RATE_THRESHOLD;
                 const item = document.createElement('div');
                 item.className = 'job-item' + (selectedJobs.has(name) ? ' selected' : '');
                 item.dataset.job = name;
                 item.onclick = () => toggleJobItem(item, name);
                 let passRateHtml = '';
-                if (showWarning) {
+                if (pr && pr.total >= PASS_RATE_MIN_RUNS) {
                     const pct = Math.round(pr.rate * 100);
+                    const failures = pr.failed + pr.timedOut + pr.canceled;
+                    // Color: green=100%, yellow>=90%, red<90%
+                    let rateClass = 'green';
+                    if (pr.rate < 1) rateClass = pr.rate >= 0.9 ? 'yellow' : 'red';
+                    // Icons: ⚠️ if <50% success, ⏳ if >50% of failures are timeouts
+                    let icons = '';
+                    if (pr.rate < 0.5) icons += '⚠️';
+                    if (failures > 0 && pr.timedOut / failures > 0.5) icons += '⏳';
                     const parts = [];
                     if (pr.failed > 0) parts.push(`${pr.failed} failed`);
                     if (pr.timedOut > 0) parts.push(`${pr.timedOut} timed out`);
-                    passRateHtml = `<span class="failure-rate" title="${parts.join(', ')} in last ${PASS_RATE_DAYS} days">⚠️ ${pct}%</span>`;
+                    if (pr.canceled > 0) parts.push(`${pr.canceled} canceled`);
+                    const tooltip = parts.length > 0 ? `${parts.join(', ')} in last ${PASS_RATE_DAYS} days` : `${pr.passed}/${pr.total} passed in last ${PASS_RATE_DAYS} days`;
+                    passRateHtml = `<span class="pass-rate ${rateClass}" title="${tooltip}">${pct}%${icons ? ' ' + icons : ''}</span>`;
                 }
                 const latestDuration = getLatestDuration(job);
                 item.innerHTML = `
