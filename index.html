@@ -3484,7 +3484,7 @@
                                 const HOUR = 60 * MINUTE;
                                 const DAY = 24 * HOUR;
 
-                                // Nice intervals from seconds to months, with minor tick subdivisions
+                                // Nice intervals from seconds to years, with minor tick subdivisions
                                 const niceStepsWithMinor = [
                                     { step: 5*SECOND, minor: SECOND },
                                     { step: 10*SECOND, minor: 2*SECOND },
@@ -3505,7 +3505,11 @@
                                     { step: 2*DAY, minor: DAY },
                                     { step: 7*DAY, minor: DAY },
                                     { step: 14*DAY, minor: 7*DAY },
-                                    { step: 30*DAY, minor: 7*DAY }
+                                    { step: 30*DAY, minor: 7*DAY },
+                                    { step: 60*DAY, minor: 14*DAY },
+                                    { step: 90*DAY, minor: 30*DAY },
+                                    { step: 180*DAY, minor: 30*DAY },
+                                    { step: 365*DAY, minor: 90*DAY }
                                 ];
 
                                 // Find smallest step that gives <= 12 major ticks
@@ -3533,12 +3537,22 @@
                                     // Align to day boundary
                                     minDate.setHours(0, 0, 0, 0);
                                     minTick = minDate.getTime();
-                                } else {
+                                } else if (step < 60*DAY) {
                                     // Align to week boundary (Sunday)
                                     minDate.setHours(0, 0, 0, 0);
                                     minTick = minDate.getTime();
                                     const dayOfWeek = minDate.getDay();
                                     minTick -= dayOfWeek * DAY;
+                                } else if (step < 365*DAY) {
+                                    // Align to month boundary (1st of month)
+                                    minDate.setDate(1);
+                                    minDate.setHours(0, 0, 0, 0);
+                                    minTick = minDate.getTime();
+                                } else {
+                                    // Align to year boundary (Jan 1)
+                                    minDate.setMonth(0, 1);
+                                    minDate.setHours(0, 0, 0, 0);
+                                    minTick = minDate.getTime();
                                 }
 
                                 // Move to first tick after axis.min
