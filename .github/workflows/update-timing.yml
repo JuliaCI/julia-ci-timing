@@ -27,7 +27,7 @@ jobs:
           version: '1.12'
 
       - name: Cache Julia packages
-        uses: julia-actions/cache@v2
+        uses: julia-actions/cache@v3
 
       - name: Install dependencies
         run: |
