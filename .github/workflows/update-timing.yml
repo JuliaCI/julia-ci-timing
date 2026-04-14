@@ -16,7 +16,7 @@ permissions:
 jobs:
   fetch-and-update:
     # Only run data fetch on schedule, manual trigger, or workflow/fetcher changes
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'fetch_timing.jl') || contains(github.event.head_commit.modified, '.github/workflows/update-timing.yml')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'fetch_timing.jl') || contains(github.event.head_commit.modified, 'fetch_benchmarks.jl') || contains(github.event.head_commit.modified, '.github/workflows/update-timing.yml')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -38,6 +38,10 @@ jobs:
           BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
         run: |
           julia --color=yes --project fetch_timing.jl
+
+      - name: Fetch benchmark data
+        run: |
+          julia --color=yes --project fetch_benchmarks.jl
 
       - name: Commit updated data
         run: |
