@@ -6022,6 +6022,15 @@
             if (tab === 'benchmarks' && !benchData) {
                 loadBenchmarkData();
             }
+
+            // Update tab in URL
+            const url = new URL(window.location);
+            if (tab === 'benchmarks') {
+                url.searchParams.set('tab', 'benchmarks');
+            } else {
+                url.searchParams.delete('tab');
+            }
+            history.replaceState(null, '', url);
         }
 
         // === Benchmarks State ===
@@ -6034,10 +6043,81 @@
         let benchSortAsc = false;
         let benchGroupColors = {};
 
+        function updateBenchURL() {
+            const url = new URL(window.location);
+            // Tab
+            url.searchParams.set('tab', activeTab);
+            // Benchmark time range (default 365)
+            if (benchTimeRangeDays !== 365) {
+                url.searchParams.set('bt', benchTimeRangeDays);
+            } else {
+                url.searchParams.delete('bt');
+            }
+            // Benchmark stat type (default minimum)
+            if (benchStatType !== 'minimum') {
+                url.searchParams.set('bs', benchStatType);
+            } else {
+                url.searchParams.delete('bs');
+            }
+            // Benchmark selected groups — encode as deselected groups (shorter when most are selected)
+            const allGroups = Object.keys(benchGroupColors).sort();
+            const deselected = allGroups.filter(g => !benchSelectedGroups.has(g));
+            if (deselected.length === 0) {
+                url.searchParams.delete('bg');
+            } else if (deselected.length < allGroups.length / 2) {
+                // Encode deselected with leading '-'
+                url.searchParams.set('bg', '-' + deselected.map(encodeURIComponent).join(','));
+            } else {
+                // Encode selected
+                const selected = allGroups.filter(g => benchSelectedGroups.has(g));
+                url.searchParams.set('bg', selected.map(encodeURIComponent).join(','));
+            }
+            history.replaceState(null, '', url);
+        }
+
+        function applyBenchURLParams() {
+            const params = new URLSearchParams(window.location.search);
+
+            const bt = params.get('bt');
+            if (bt !== null) {
+                const days = parseInt(bt, 10);
+                if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+                    benchTimeRangeDays = days;
+                    const sel = document.getElementById('bench-time-range');
+                    if (sel) sel.value = days;
+                }
+            }
+
+            const bs = params.get('bs');
+            if (bs !== null && ['minimum', 'mean'].includes(bs)) {
+                benchStatType = bs;
+                const sel = document.getElementById('bench-stat-type');
+                if (sel) sel.value = bs;
+            }
+        }
+
+        function applyBenchGroupParams() {
+            const params = new URLSearchParams(window.location.search);
+            const bg = params.get('bg');
+            if (bg === null) return; // no param → keep default (all selected)
+
+            const allGroups = Object.keys(benchGroupColors).sort();
+            if (bg.startsWith('-')) {
+                // Deselected list
+                const deselected = new Set(bg.slice(1).split(',').map(decodeURIComponent));
+                benchSelectedGroups = new Set(allGroups.filter(g => !deselected.has(g)));
+            } else {
+                // Selected list
+                const selected = new Set(bg.split(',').map(decodeURIComponent));
+                benchSelectedGroups = new Set(allGroups.filter(g => selected.has(g)));
+            }
+        }
+
         function setBenchTimeRange(value) {
             benchTimeRangeDays = parseInt(value);
             updateBenchChart();
             updateBenchTable();
+            updateBenchURL();
         }
 
         function setBenchStatType(value) {
@@ -6045,6 +6125,7 @@
             populateBenchGroupList(Object.keys(benchGroupColors).sort());
             updateBenchChart();
             updateBenchTable();
+            updateBenchURL();
         }
 
         function getBenchCutoff() {
@@ -6100,6 +6181,9 @@
                 // Select all groups by default
                 benchSelectedGroups = new Set(groupList);
 
+                // Apply URL params for group selection (overrides default)
+                applyBenchGroupParams();
+
                 populateBenchGroupList(groupList);
                 updateBenchChart();
                 updateBenchTable();
@@ -6142,6 +6226,7 @@
             populateBenchGroupList(Object.keys(benchGroupColors).sort());
             updateBenchChart();
             updateBenchTable();
+            updateBenchURL();
         }
 
         function selectAllGroups() {
@@ -6149,6 +6234,7 @@
             populateBenchGroupList(Object.keys(benchGroupColors).sort());
             updateBenchChart();
             updateBenchTable();
+            updateBenchURL();
         }
 
         function deselectAllGroups() {
@@ -6156,6 +6242,7 @@
             populateBenchGroupList(Object.keys(benchGroupColors).sort());
             updateBenchChart();
             updateBenchTable();
+            updateBenchURL();
         }
 
         function updateBenchChart() {
@@ -6171,16 +6258,33 @@
             const textColor = isDark ? '#8b949e' : '#656d76';
             const key = benchKey();
             const statLabel = benchStatType === 'minimum' ? 'Min' : 'Mean';
+            const multiGroup = benchSelectedGroups.size > 1;
 
             const datasets = [];
 
             for (const group of benchSelectedGroups) {
                 const color = benchGroupColors[group];
+                const rawPoints = reports
+                    .filter(r => r.by_group?.[group]?.[key] != null)
+                    .map(r => ({ x: new Date(r.date), y: r.by_group[group][key], commit: r.commit }));
+
+                if (rawPoints.length === 0) continue;
+
+                let data;
+                if (multiGroup) {
+                    const baseline = rawPoints[0].y;
+                    data = rawPoints.map(p => ({
+                        ...p,
+                        yRaw: p.y,
+                        y: baseline > 0 ? ((p.y - baseline) / baseline) * 100 : 0
+                    }));
+                } else {
+                    data = rawPoints.map(p => ({ ...p, yRaw: p.y }));
+                }
+
                 datasets.push({
                     label: group,
-                    data: reports
-                        .filter(r => r.by_group?.[group]?.[key] != null)
-                        .map(r => ({ x: new Date(r.date), y: r.by_group[group][key], commit: r.commit })),
+                    data,
                     borderColor: color,
                     backgroundColor: color + '22',
                     borderWidth: 1.5,
@@ -6191,6 +6295,20 @@
                 });
             }
 
+            const yAxis = {
+                type: 'linear',
+                grid: { color: gridColor },
+                ticks: { color: textColor }
+            };
+
+            if (multiGroup) {
+                yAxis.title = { display: true, text: `% Change from Start`, color: textColor };
+                yAxis.ticks.callback = function(value) { return (value >= 0 ? '+' : '') + value.toFixed(0) + '%'; };
+            } else {
+                yAxis.title = { display: true, text: `${statLabel} Geomean Time`, color: textColor };
+                yAxis.ticks.callback = function(value) { return formatTime(value); };
+            }
+
             const chartConfig = {
                 type: 'line',
                 data: { datasets },
@@ -6199,7 +6317,6 @@
                     maintainAspectRatio: false,
                     interaction: {
                         mode: 'nearest',
-                        axis: 'x',
                         intersect: false,
                     },
                     scales: {
@@ -6209,15 +6326,7 @@
                             grid: { color: gridColor },
                             ticks: { color: textColor, maxRotation: 0 }
                         },
-                        y: {
-                            type: 'logarithmic',
-                            title: { display: true, text: `${statLabel} Geomean Time (ns)`, color: textColor },
-                            grid: { color: gridColor },
-                            ticks: {
-                                color: textColor,
-                                callback: function(value) { return formatTime(value); }
-                            }
-                        }
+                        y: yAxis
                     },
                     plugins: {
                         legend: {
@@ -6237,7 +6346,13 @@
                                     return items[0].raw.commit ? `Commit: ${items[0].raw.commit}` : '';
                                 },
                                 label: (item) => {
-                                    return `${item.dataset.label}: ${formatTime(item.raw.y)}`;
+                                    const raw = item.raw;
+                                    const abs = formatTime(raw.yRaw);
+                                    if (multiGroup) {
+                                        const sign = raw.y >= 0 ? '+' : '';
+                                        return `${item.dataset.label}: ${sign}${raw.y.toFixed(1)}% (${abs})`;
+                                    }
+                                    return `${item.dataset.label}: ${abs}`;
                                 }
                             }
                         },
@@ -6340,6 +6455,14 @@
         }
 
         loadData();
+
+        // Apply benchmark URL params before potential tab switch
+        applyBenchURLParams();
+
+        // Switch to benchmarks tab if URL says so
+        if (new URLSearchParams(window.location.search).get('tab') === 'benchmarks') {
+            switchTab('benchmarks');
+        }
 
         // Auto-refresh data periodically
         setInterval(refreshData, DATA_REFRESH_INTERVAL);
