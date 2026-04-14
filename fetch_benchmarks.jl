@@ -8,6 +8,7 @@ using Dates
 using Statistics
 using DataStructures: SortedDict
 using CodecZstd
+using CodecZlib: GzipCompressor, GzipDecompressor
 using Tar
 
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
@@ -162,11 +163,17 @@ function parse_tarball(by_date_dir::String, date_path::String)
 end
 
 function load_existing_data(output_dir)
+    summary_gz = joinpath(output_dir, "benchmark_summary.json.gz")
     summary_file = joinpath(output_dir, "benchmark_summary.json")
-    !isfile(summary_file) && return (nothing, Set{String}())
     local summary
     try
-        summary = JSON3.read(read(summary_file, String))
+        if isfile(summary_gz)
+            summary = JSON3.read(transcode(GzipDecompressor, read(summary_gz)))
+        elseif isfile(summary_file)
+            summary = JSON3.read(read(summary_file, String))
+        else
+            return (nothing, Set{String}())
+        end
     catch e
         @warn "Failed to load summary" error=e
         return (nothing, Set{String}())
@@ -177,7 +184,7 @@ function load_existing_data(output_dir)
 
     # Check if per-group detail files exist — if not, need full re-parse
     benchdir = joinpath(output_dir, "benchmarks")
-    has_detail = isdir(benchdir) && !isempty(readdir(benchdir))
+    has_detail = isdir(benchdir) && any(endswith(f, ".json") || endswith(f, ".json.gz") for f in readdir(benchdir))
     if !has_detail && !isempty(reports)
         @info "No per-group detail files found, forcing full re-parse"
         return (nothing, Set{String}())
@@ -266,17 +273,24 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
     )
 
     summary_file = joinpath(output_dir, "benchmark_summary.json")
-    write_if_changed(summary_file, summary)
+    write_if_changed(summary_file, summary; gzip=true)
 
     return summary_file
 end
 
 function update_group_detail(output_dir, group, new_reports)
     group_file = joinpath(output_dir, "benchmarks", "$(group).json")
+    group_file_gz = group_file * ".gz"
 
-    # Load existing detail
+    # Load existing detail (prefer .json.gz, fall back to .json)
     existing = Dict{String, Any}()
-    if isfile(group_file)
+    if isfile(group_file_gz)
+        try
+            existing = JSON3.read(transcode(GzipDecompressor, read(group_file_gz)))
+        catch e
+            @warn "Failed to load existing group detail, rebuilding" group error=e
+        end
+    elseif isfile(group_file)
         try
             existing = JSON3.read(read(group_file, String))
         catch e
@@ -353,20 +367,34 @@ function update_group_detail(output_dir, group, new_reports)
         existing = existing_dict
     end
 
-    write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)))
+    write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)); gzip=true)
 end
 
-function write_if_changed(filepath, data)
-    new_json = sprint(io -> JSON3.pretty(io, data))
-    if isfile(filepath)
-        existing = read(filepath, String)
-        if existing == new_json
-            @info "No changes, skipping write" file=filepath
-            return
+function write_if_changed(filepath, data; gzip=false)
+    new_json = JSON3.write(data)
+    if gzip
+        filepath = replace(filepath, r"\.json$" => ".json.gz")
+        new_bytes = transcode(GzipCompressor, Vector{UInt8}(new_json))
+        if isfile(filepath)
+            existing = read(filepath)
+            if existing == new_bytes
+                @info "No changes, skipping write" file=filepath
+                return
+            end
         end
+        write(filepath, new_bytes)
+        @info "Wrote" file=filepath size=filesize(filepath)
+    else
+        if isfile(filepath)
+            existing = read(filepath, String)
+            if existing == new_json
+                @info "No changes, skipping write" file=filepath
+                return
+            end
+        end
+        write(filepath, new_json)
+        @info "Wrote" file=filepath size=filesize(filepath)
     end
-    write(filepath, new_json)
-    @info "Wrote" file=filepath size=filesize(filepath)
 end
 
 function main()

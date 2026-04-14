@@ -1217,14 +1217,18 @@
         .group-item .bench-count {
             color: var(--color-fg-muted);
         }
-        .bench-table-expand {
-            cursor: pointer;
-            user-select: none;
-            font-size: 10px;
-            padding: 0 4px;
+        .benchmarks-stats tr.expandable { cursor: pointer; }
+        .benchmarks-stats tr.expandable td:first-child::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 6px;
+            font-size: 8px;
+            transition: transform 0.15s;
             color: var(--color-fg-muted);
         }
-        .bench-table-expand:hover { color: var(--color-fg-default); }
+        .benchmarks-stats tr.expandable.expanded td:first-child::before {
+            transform: rotate(90deg);
+        }
         .bench-detail-row td {
             padding-left: 28px !important;
             font-size: 11px;
@@ -5760,11 +5764,12 @@
                 // Render empty matrix skeleton immediately
                 renderMatrixSkeleton();
 
-                const resp = await fetch('data/timing_summary.json');
+                const resp = await fetch('data/timing_summary.json.gz');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-                // Stream and parse JSON progressively
-                const reader = resp.body.getReader();
+                // Stream and parse JSON progressively (decompress gzip on the fly)
+                const decompressed = resp.body.pipeThrough(new DecompressionStream('gzip'));
+                const reader = decompressed.getReader();
                 const decoder = new TextDecoder();
                 let jsonText = '';
                 let jobCount = 0;
@@ -6001,9 +6006,11 @@
 
         async function refreshData() {
             try {
-                const resp = await fetch('data/timing_summary.json');
+                const resp = await fetch('data/timing_summary.json.gz');
                 if (!resp.ok) return;
-                const newData = await resp.json();
+                const ds = new DecompressionStream('gzip');
+                const decompressed = resp.body.pipeThrough(ds);
+                const newData = await new Response(decompressed).json();
 
                 // Only update if data actually changed
                 if (newData.generated_at !== data.generated_at) {
@@ -6183,9 +6190,11 @@
 
         async function loadBenchmarkData() {
             try {
-                const resp = await fetch('data/benchmark_summary.json');
+                const resp = await fetch('data/benchmark_summary.json.gz');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                benchData = await resp.json();
+                const ds = new DecompressionStream('gzip');
+                const decompressed = resp.body.pipeThrough(ds);
+                benchData = await new Response(decompressed).json();
 
                 const updatedEl = document.getElementById('bench-last-updated');
                 updatedEl.textContent = `Updated ${timeAgo(benchData.generated_at)}`;
@@ -6285,9 +6294,12 @@
 
             if (!benchGroupDetail[group]) {
                 try {
-                    const resp = await fetch(`data/benchmarks/${encodeURIComponent(group)}.json`);
+                    const resp = await fetch(`data/benchmarks/${encodeURIComponent(group)}.json.gz`);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    benchGroupDetail[group] = await resp.json();
+                    const ds = new DecompressionStream('gzip');
+                    const decompressed = resp.body.pipeThrough(ds);
+                    const text = await new Response(decompressed).text();
+                    benchGroupDetail[group] = JSON.parse(text);
                 } catch (err) {
                     console.error(`Failed to load detail for ${group}:`, err);
                     benchExpandedGroups.delete(group);
@@ -6300,13 +6312,34 @@
             updateBenchChart();
         }
 
-        function toggleBenchItem(group, name) {
+        function toggleBenchItem(group, name, event) {
             if (!benchHiddenBenchmarks[group]) benchHiddenBenchmarks[group] = new Set();
             const hidden = benchHiddenBenchmarks[group];
-            if (hidden.has(name)) {
-                hidden.delete(name);
+
+            if (event && (event.shiftKey || event.ctrlKey || event.metaKey)) {
+                // Solo: hide all others, or restore all if already solo
+                const detail = benchGroupDetail[group];
+                const statData = detail?.[benchStatType];
+                if (statData) {
+                    const allNames = Object.keys(statData.benchmarks);
+                    const othersHidden = allNames.every(n => n === name || hidden.has(n));
+                    if (othersHidden && !hidden.has(name)) {
+                        // Already solo — restore all
+                        hidden.clear();
+                    } else {
+                        // Solo this one
+                        hidden.clear();
+                        for (const n of allNames) {
+                            if (n !== name) hidden.add(n);
+                        }
+                    }
+                }
             } else {
-                hidden.add(name);
+                if (hidden.has(name)) {
+                    hidden.delete(name);
+                } else {
+                    hidden.add(name);
+                }
             }
             updateBenchTable();
             updateBenchChart();
@@ -6657,9 +6690,9 @@
             for (const row of rows) {
                 if (!benchSelectedGroups.has(row.group)) continue;
                 const isExpanded = benchExpandedGroups.has(row.group);
-                const arrow = isExpanded ? '▾' : '▸';
-                html += `<tr style="cursor: pointer;" data-bench-group="${escapeHtml(row.group)}" onclick="toggleExpandGroup('${escapeHtml(row.group)}')">`;
-                html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || '#888'}"></span> ${escapeHtml(row.group)} <span class="bench-table-expand">${arrow}</span></td>`;
+                const expandClass = isExpanded ? 'expandable expanded' : 'expandable';
+                html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}" onclick="toggleExpandGroup('${escapeHtml(row.group)}')">`;
+                html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || '#888'}"></span> ${escapeHtml(row.group)}</td>`;
                 html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
                 html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
                 html += `<td class="bench-time">${formatTime(row.min)}</td>`;
@@ -6717,7 +6750,7 @@
                 const label = tr.dataset.benchLabel;
                 const group = tr.dataset.benchGroupName;
                 const item = tr.dataset.benchItemName;
-                tr.onclick = () => toggleBenchItem(group, item);
+                tr.onclick = (e) => toggleBenchItem(group, item, e);
                 tr.onmouseenter = () => highlightBenchDataset(label);
                 tr.onmouseleave = () => clearBenchHighlight();
             });
