@@ -8,6 +8,7 @@ using Dates
 using Statistics
 using DataStructures: SortedDict
 using CodecZstd
+using CodecZlib: GzipCompressor, GzipDecompressor
 using Tar
 
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
@@ -52,31 +53,35 @@ end
 """
 Walk a BenchmarkTools JSON structure and collect all leaf `time` values per top-level group.
 The structure is: [metadata, [[\"BenchmarkGroup\", {\"data\": {group => ...}}]]]
+Returns Dict{group_name => Dict{benchmark_path => time_ns}}
 """
 function collect_group_times(parsed)
-    result = Dict{String, Vector{Float64}}()
+    result = Dict{String, Dict{String, Float64}}()
 
     data_root = parsed[2][1][2]["data"]
     for (group_name, group_node) in data_root
-        times = Float64[]
-        walk_times!(times, group_node)
-        if !isempty(times)
-            result[String(group_name)] = times
+        benchmarks = Dict{String, Float64}()
+        walk_times!(benchmarks, group_node, String[])
+        if !isempty(benchmarks)
+            result[String(group_name)] = benchmarks
         end
     end
     return result
 end
 
-function walk_times!(times::Vector{Float64}, node)
+function walk_times!(benchmarks::Dict{String, Float64}, node, path::Vector{String})
     node isa AbstractVector && length(node) == 2 || return
     tag = node[1]
     tag isa AbstractString || return
     if tag == "TrialEstimate"
         t = get(node[2], "time", nothing)
-        t !== nothing && push!(times, Float64(t))
+        if t !== nothing
+            key = join(path, "/")
+            benchmarks[key] = Float64(t)
+        end
     elseif tag == "BenchmarkGroup"
-        for (_, child) in get(node[2], "data", Dict())
-            walk_times!(times, child)
+        for (name, child) in get(node[2], "data", Dict())
+            walk_times!(benchmarks, child, [path; replace(String(name), '"' => '\'')])
         end
     end
 end
@@ -133,12 +138,16 @@ function parse_tarball(by_date_dir::String, date_path::String)
         end
 
         group_times = collect_group_times(parsed)
-        for (group, times) in group_times
+        for (group, benchmarks) in group_times
             if !haskey(by_group, group)
                 by_group[group] = Dict{String, Any}()
             end
+            times = collect(values(benchmarks))
             by_group[group]["$(stat_type)_geomean_ns"] = geomean(times)
             by_group[group]["$(stat_type)_count"] = length(times)
+            by_group[group]["$(stat_type)_benchmarks"] = SortedDict{String, Any}(
+                k => v for (k, v) in benchmarks
+            )
         end
     end
 
@@ -154,44 +163,62 @@ function parse_tarball(by_date_dir::String, date_path::String)
 end
 
 function load_existing_data(output_dir)
+    summary_gz = joinpath(output_dir, "benchmark_summary.json.gz")
     summary_file = joinpath(output_dir, "benchmark_summary.json")
-    !isfile(summary_file) && return Dict{String, Any}()
+    local summary
     try
-        data = JSON3.read(read(summary_file, String))
-        @info "Loaded existing benchmark data" reports=length(get(data, :reports, []))
-        return data
+        if isfile(summary_gz)
+            summary = JSON3.read(transcode(GzipDecompressor, read(summary_gz)))
+        elseif isfile(summary_file)
+            summary = JSON3.read(read(summary_file, String))
+        else
+            return (nothing, Set{String}())
+        end
     catch e
-        @warn "Failed to load existing benchmark data, starting fresh" error=e
-        return Dict{String, Any}()
+        @warn "Failed to load summary" error=e
+        return (nothing, Set{String}())
     end
-end
 
-function get_known_dates(existing_data)
-    dates = Set{String}()
-    for report in get(existing_data, :reports, [])
+    reports = get(summary, :reports, [])
+    @info "Loaded existing summary" reports=length(reports)
+
+    # Check if per-group detail files exist — if not, need full re-parse
+    benchdir = joinpath(output_dir, "benchmarks")
+    has_detail = isdir(benchdir) && any(endswith(f, ".json") || endswith(f, ".json.gz") for f in readdir(benchdir))
+    if !has_detail && !isempty(reports)
+        @info "No per-group detail files found, forcing full re-parse"
+        return (nothing, Set{String}())
+    end
+
+    known_dates = Set{String}()
+    for report in reports
         d = get(report, :date, nothing)
-        d !== nothing && push!(dates, String(d))
+        d !== nothing && push!(known_dates, String(d))
     end
-    return dates
+
+    return (summary, known_dates)
 end
 
-function generate_json_output(new_reports, existing_data; output_dir="data")
+function generate_json_output(new_reports, existing_summary; output_dir="data")
     mkpath(output_dir)
+    mkpath(joinpath(output_dir, "benchmarks"))
 
     reports_by_date = SortedDict{String, Any}()
 
-    for report in get(existing_data, :reports, [])
-        d = String(get(report, :date, ""))
-        isempty(d) && continue
-        reports_by_date[d] = SortedDict(
-            "date" => d,
-            "commit" => String(get(report, :commit, "")),
-            "by_group" => let bg = get(report, :by_group, Dict())
-                SortedDict{String, Any}(String(k) => Dict{String, Any}(
-                    String(fk) => fv for (fk, fv) in pairs(v)
-                ) for (k, v) in pairs(bg))
-            end
-        )
+    if existing_summary !== nothing
+        for report in get(existing_summary, :reports, [])
+            d = String(get(report, :date, ""))
+            isempty(d) && continue
+            reports_by_date[d] = SortedDict(
+                "date" => d,
+                "commit" => String(get(report, :commit, "")),
+                "by_group" => let bg = get(report, :by_group, Dict())
+                    SortedDict{String, Any}(String(k) => Dict{String, Any}(
+                        String(fk) => fv for (fk, fv) in pairs(v)
+                    ) for (k, v) in pairs(bg))
+                end
+            )
+        end
     end
 
     for report in new_reports
@@ -200,36 +227,180 @@ function generate_json_output(new_reports, existing_data; output_dir="data")
 
     reports = [reports_by_date[k] for k in sort(collect(keys(reports_by_date)))]
 
-    summary = SortedDict(
-        "generated_at" => Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
-        "reports" => reports
-    )
+    # Build summary reports (geomean only, no _benchmarks)
+    summary_reports = []
+    for report in reports
+        sr = SortedDict{String, Any}("date" => report["date"], "commit" => get(report, "commit", ""))
+        sr_groups = SortedDict{String, Any}()
+        for (group, gdata) in report["by_group"]
+            sg = Dict{String, Any}()
+            for (k, v) in gdata
+                endswith(String(k), "_benchmarks") && continue
+                sg[String(k)] = v
+            end
+            sr_groups[String(group)] = sg
+        end
+        sr["by_group"] = sr_groups
+        push!(summary_reports, sr)
+    end
 
-    summary_file = joinpath(output_dir, "benchmark_summary.json")
+    generated_at = Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ")
 
-    if isfile(summary_file)
-        existing_content = read(summary_file, String)
-        existing_parsed = JSON3.read(existing_content)
-        existing_reports_json = sprint(io -> JSON3.pretty(io, get(existing_parsed, :reports, [])))
-        new_reports_json = sprint(io -> JSON3.pretty(io, reports))
-        if existing_reports_json == new_reports_json
-            @info "No changes to benchmark data, skipping write"
-            return summary_file
+    # Write per-group detail files (merge new data into existing)
+    # Only new_reports have _benchmarks data; existing reports don't
+    new_dates_with_benchmarks = filter(r -> any(
+        endswith(String(k), "_benchmarks") for g in values(r["by_group"]) for k in keys(g)
+    ), new_reports)
+
+    if !isempty(new_dates_with_benchmarks)
+        # Find all groups that have benchmark data in new reports
+        groups_to_update = Set{String}()
+        for report in new_dates_with_benchmarks
+            for group in keys(report["by_group"])
+                push!(groups_to_update, String(group))
+            end
+        end
+
+        for group in sort(collect(groups_to_update))
+            update_group_detail(output_dir, group, new_dates_with_benchmarks)
         end
     end
 
-    open(summary_file, "w") do f
-        JSON3.pretty(f, summary)
-    end
-    @info "Wrote benchmark summary" file=summary_file num_reports=length(reports)
+    # Write summary
+    summary = SortedDict(
+        "generated_at" => generated_at,
+        "reports" => summary_reports
+    )
+
+    summary_file = joinpath(output_dir, "benchmark_summary.json")
+    write_if_changed(summary_file, summary; gzip=true)
+
     return summary_file
+end
+
+function update_group_detail(output_dir, group, new_reports)
+    group_file = joinpath(output_dir, "benchmarks", "$(group).json")
+    group_file_gz = group_file * ".gz"
+
+    # Load existing detail (prefer .json.gz, fall back to .json)
+    existing = Dict{String, Any}()
+    if isfile(group_file_gz)
+        try
+            existing = JSON3.read(transcode(GzipDecompressor, read(group_file_gz)))
+        catch e
+            @warn "Failed to load existing group detail, rebuilding" group error=e
+        end
+    elseif isfile(group_file)
+        try
+            existing = JSON3.read(read(group_file, String))
+        catch e
+            @warn "Failed to load existing group detail, rebuilding" group error=e
+        end
+    end
+
+    for stat_type in ("minimum", "mean")
+        # Load existing series
+        old = get(existing, Symbol(stat_type), nothing)
+        old_dates = old !== nothing ? [String(d) for d in old[:dates]] : String[]
+        old_commits = old !== nothing ? [String(c) for c in old[:commits]] : String[]
+        old_benchmarks = Dict{String, Vector{Any}}()
+        if old !== nothing
+            for (name, vals) in pairs(old[:benchmarks])
+                old_benchmarks[String(name)] = collect(vals)
+            end
+        end
+
+        old_date_set = Set(old_dates)
+
+        # Collect new entries
+        new_entries = []
+        for report in new_reports
+            report["date"] in old_date_set && continue
+            gdata = get(report["by_group"], group, nothing)
+            gdata === nothing && continue
+            benchmarks = get(gdata, "$(stat_type)_benchmarks", nothing)
+            benchmarks === nothing && continue
+            push!(new_entries, (date=report["date"], commit=get(report, "commit", ""), benchmarks=benchmarks))
+        end
+
+        isempty(new_entries) && continue
+
+        # Collect all benchmark names
+        all_names = Set(keys(old_benchmarks))
+        for entry in new_entries
+            for name in keys(entry.benchmarks)
+                push!(all_names, String(name))
+            end
+        end
+        sorted_names = sort(collect(all_names))
+
+        # Pad existing series for any new benchmark names
+        n_old = length(old_dates)
+        merged_benchmarks = SortedDict{String, Vector{Any}}()
+        for name in sorted_names
+            if haskey(old_benchmarks, name)
+                merged_benchmarks[name] = old_benchmarks[name]
+            else
+                merged_benchmarks[name] = fill(nothing, n_old)
+            end
+        end
+
+        # Append new entries (sorted by date)
+        sort!(new_entries; by=e -> e.date)
+        merged_dates = copy(old_dates)
+        merged_commits = copy(old_commits)
+        for entry in new_entries
+            push!(merged_dates, entry.date)
+            push!(merged_commits, entry.commit)
+            for name in sorted_names
+                v = get(entry.benchmarks, name, nothing)
+                push!(merged_benchmarks[name], v)
+            end
+        end
+
+        existing_dict = existing isa Dict ? existing : Dict{String, Any}(String(k) => v for (k, v) in pairs(existing))
+        existing_dict[stat_type] = SortedDict(
+            "dates" => merged_dates,
+            "commits" => merged_commits,
+            "benchmarks" => merged_benchmarks
+        )
+        existing = existing_dict
+    end
+
+    write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)); gzip=true)
+end
+
+function write_if_changed(filepath, data; gzip=false)
+    new_json = JSON3.write(data)
+    if gzip
+        filepath = replace(filepath, r"\.json$" => ".json.gz")
+        new_bytes = transcode(GzipCompressor, Vector{UInt8}(new_json))
+        if isfile(filepath)
+            existing = read(filepath)
+            if existing == new_bytes
+                @info "No changes, skipping write" file=filepath
+                return
+            end
+        end
+        write(filepath, new_bytes)
+        @info "Wrote" file=filepath size=filesize(filepath)
+    else
+        if isfile(filepath)
+            existing = read(filepath, String)
+            if existing == new_json
+                @info "No changes, skipping write" file=filepath
+                return
+            end
+        end
+        write(filepath, new_json)
+        @info "Wrote" file=filepath size=filesize(filepath)
+    end
 end
 
 function main()
     by_date_dir = ensure_clone()
 
-    existing = load_existing_data("data")
-    known_dates = get_known_dates(existing)
+    existing_summary, known_dates = load_existing_data("data")
     @info "Known dates" count=length(known_dates)
 
     all_dates = enumerate_report_dates(by_date_dir)
@@ -250,7 +421,7 @@ function main()
 
     @info "Parsed new reports" count=length(new_reports)
 
-    generate_json_output(new_reports, existing)
+    generate_json_output(new_reports, existing_summary)
     return 0
 end
 

@@ -1212,9 +1212,35 @@
             font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
             display: flex;
             gap: 6px;
+            align-items: center;
         }
         .group-item .bench-count {
             color: var(--color-fg-muted);
+        }
+        .benchmarks-stats tr.expandable { cursor: pointer; }
+        .benchmarks-stats tr.expandable td:first-child::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 6px;
+            font-size: 8px;
+            transition: transform 0.15s;
+            color: var(--color-fg-muted);
+        }
+        .benchmarks-stats tr.expandable.expanded td:first-child::before {
+            transform: rotate(90deg);
+        }
+        .bench-detail-row td {
+            padding-left: 28px !important;
+            font-size: 11px;
+        }
+        .bench-detail-row.bench-hidden {
+            opacity: 0.4;
+        }
+        .bench-detail-row td:first-child {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 200px;
         }
         .benchmarks-chart-area {
             flex: 1;
@@ -1242,6 +1268,7 @@
         }
         .benchmarks-stats {
             flex-shrink: 0;
+            min-height: 200px;
             max-height: 40vh;
             overflow-y: auto;
             border-top: 1px solid var(--color-border-default);
@@ -5737,11 +5764,12 @@
                 // Render empty matrix skeleton immediately
                 renderMatrixSkeleton();
 
-                const resp = await fetch('data/timing_summary.json');
+                const resp = await fetch('data/timing_summary.json.gz');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-                // Stream and parse JSON progressively
-                const reader = resp.body.getReader();
+                // Stream and parse JSON progressively (decompress gzip on the fly)
+                const decompressed = resp.body.pipeThrough(new DecompressionStream('gzip'));
+                const reader = decompressed.getReader();
                 const decoder = new TextDecoder();
                 let jsonText = '';
                 let jobCount = 0;
@@ -5978,9 +6006,11 @@
 
         async function refreshData() {
             try {
-                const resp = await fetch('data/timing_summary.json');
+                const resp = await fetch('data/timing_summary.json.gz');
                 if (!resp.ok) return;
-                const newData = await resp.json();
+                const ds = new DecompressionStream('gzip');
+                const decompressed = resp.body.pipeThrough(ds);
+                const newData = await new Response(decompressed).json();
 
                 // Only update if data actually changed
                 if (newData.generated_at !== data.generated_at) {
@@ -6042,6 +6072,9 @@
         let benchSortCol = 'latest';
         let benchSortAsc = false;
         let benchGroupColors = {};
+        let benchExpandedGroups = new Set();
+        let benchGroupDetail = {}; // group => fetched detail data
+        let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 
         function updateBenchURL() {
             const url = new URL(window.location);
@@ -6157,9 +6190,11 @@
 
         async function loadBenchmarkData() {
             try {
-                const resp = await fetch('data/benchmark_summary.json');
+                const resp = await fetch('data/benchmark_summary.json.gz');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                benchData = await resp.json();
+                const ds = new DecompressionStream('gzip');
+                const decompressed = resp.body.pipeThrough(ds);
+                benchData = await new Response(decompressed).json();
 
                 const updatedEl = document.getElementById('bench-last-updated');
                 updatedEl.textContent = `Updated ${timeAgo(benchData.generated_at)}`;
@@ -6207,11 +6242,13 @@
             let html = '<div class="group-header">Benchmark Groups (' + groups.length + ')</div>';
             for (const group of groups) {
                 const isSelected = benchSelectedGroups.has(group);
-                const latestVal = latest?.by_group?.[group]?.[key];
+                const countKey = benchStatType + '_count';
+                const testCount = latest?.by_group?.[group]?.[countKey];
+                const countLabel = testCount != null ? testCount : '';
                 html += `<div class="group-item ${isSelected ? 'selected' : ''}" onclick="toggleBenchGroup('${escapeHtml(group)}')" title="${escapeHtml(group)}">`;
                 html += `<span class="color-dot" style="background: ${benchGroupColors[group] || '#888'}"></span>`;
                 html += `<span>${escapeHtml(group)}</span>`;
-                html += `<span class="group-counts"><span class="bench-count">${formatTime(latestVal)}</span></span>`;
+                html += `<span class="group-counts"><span class="bench-count">${countLabel}</span></span>`;
                 html += `</div>`;
             }
             container.innerHTML = html;
@@ -6245,6 +6282,137 @@
             updateBenchURL();
         }
 
+        async function toggleExpandGroup(group) {
+            if (benchExpandedGroups.has(group)) {
+                benchExpandedGroups.delete(group);
+                updateBenchTable();
+                updateBenchChart();
+                return;
+            }
+
+            benchExpandedGroups.add(group);
+
+            if (!benchGroupDetail[group]) {
+                try {
+                    const resp = await fetch(`data/benchmarks/${encodeURIComponent(group)}.json.gz`);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const ds = new DecompressionStream('gzip');
+                    const decompressed = resp.body.pipeThrough(ds);
+                    const text = await new Response(decompressed).text();
+                    benchGroupDetail[group] = JSON.parse(text);
+                } catch (err) {
+                    console.error(`Failed to load detail for ${group}:`, err);
+                    benchExpandedGroups.delete(group);
+                    updateBenchTable();
+                    return;
+                }
+            }
+
+            updateBenchTable();
+            updateBenchChart();
+        }
+
+        function toggleBenchItem(group, name, event) {
+            if (!benchHiddenBenchmarks[group]) benchHiddenBenchmarks[group] = new Set();
+            const hidden = benchHiddenBenchmarks[group];
+
+            if (event && (event.shiftKey || event.ctrlKey || event.metaKey)) {
+                // Solo: hide all others, or restore all if already solo
+                const detail = benchGroupDetail[group];
+                const statData = detail?.[benchStatType];
+                if (statData) {
+                    const allNames = Object.keys(statData.benchmarks);
+                    const othersHidden = allNames.every(n => n === name || hidden.has(n));
+                    if (othersHidden && !hidden.has(name)) {
+                        // Already solo — restore all
+                        hidden.clear();
+                    } else {
+                        // Solo this one
+                        hidden.clear();
+                        for (const n of allNames) {
+                            if (n !== name) hidden.add(n);
+                        }
+                    }
+                }
+            } else {
+                if (hidden.has(name)) {
+                    hidden.delete(name);
+                } else {
+                    hidden.add(name);
+                }
+            }
+            updateBenchTable();
+            updateBenchChart();
+        }
+
+        let benchHighlightActive = false;
+
+        function highlightBenchDataset(label) {
+            if (!benchChart) return;
+            if (!benchHighlightActive) {
+                benchChart.data.datasets.forEach(ds => {
+                    ds._origBorderColor = ds.borderColor;
+                    ds._origBackgroundColor = ds.backgroundColor;
+                    ds._origBorderWidth = ds.borderWidth;
+                    ds._origPointRadius = ds.pointRadius;
+                });
+                benchHighlightActive = true;
+            }
+            benchChart.data.datasets.forEach(ds => {
+                if (ds.label === label) {
+                    ds.borderColor = ds._origBorderColor;
+                    ds.backgroundColor = ds._origBackgroundColor;
+                    ds.borderWidth = 2.5;
+                    ds.pointRadius = 3;
+                } else {
+                    ds.borderColor = colorToRgba(ds._origBorderColor, 0.15);
+                    ds.backgroundColor = colorToRgba(ds._origBackgroundColor, 0.05);
+                    ds.borderWidth = 1;
+                    ds.pointRadius = 0;
+                }
+            });
+            benchChart.update();
+        }
+
+        function highlightBenchGroup(group) {
+            if (!benchChart) return;
+            if (!benchHighlightActive) {
+                benchChart.data.datasets.forEach(ds => {
+                    ds._origBorderColor = ds.borderColor;
+                    ds._origBackgroundColor = ds.backgroundColor;
+                    ds._origBorderWidth = ds.borderWidth;
+                    ds._origPointRadius = ds.pointRadius;
+                });
+                benchHighlightActive = true;
+            }
+            benchChart.data.datasets.forEach(ds => {
+                if (ds.label === group || ds.label.startsWith(group + '/')) {
+                    ds.borderColor = ds._origBorderColor;
+                    ds.backgroundColor = ds._origBackgroundColor;
+                    ds.borderWidth = 2.5;
+                    ds.pointRadius = 3;
+                } else {
+                    ds.borderColor = colorToRgba(ds._origBorderColor, 0.15);
+                    ds.backgroundColor = colorToRgba(ds._origBackgroundColor, 0.05);
+                    ds.borderWidth = 1;
+                    ds.pointRadius = 0;
+                }
+            });
+            benchChart.update();
+        }
+
+        function clearBenchHighlight() {
+            if (!benchChart || !benchHighlightActive) return;
+            benchChart.data.datasets.forEach(ds => {
+                if (ds._origBorderColor !== undefined) ds.borderColor = ds._origBorderColor;
+                if (ds._origBackgroundColor !== undefined) ds.backgroundColor = ds._origBackgroundColor;
+                if (ds._origBorderWidth !== undefined) ds.borderWidth = ds._origBorderWidth;
+                if (ds._origPointRadius !== undefined) ds.pointRadius = ds._origPointRadius;
+            });
+            benchHighlightActive = false;
+            benchChart.update();
+        }
+
         function updateBenchChart() {
             const reports = getFilteredReports();
             if (reports.length === 0) {
@@ -6261,7 +6429,23 @@
             const multiGroup = benchSelectedGroups.size > 1;
 
             const datasets = [];
+            const cutoff = getBenchCutoff();
 
+            // Expanded groups that have detail data loaded
+            const expandedWithDetail = [...benchSelectedGroups].filter(g =>
+                benchExpandedGroups.has(g) && benchGroupDetail[g]
+            );
+
+            // Count total series for % deviation mode
+            // All selected groups get a geomean line; expanded ones also get individual lines
+            let totalSeries = benchSelectedGroups.size;
+            for (const group of expandedWithDetail) {
+                const statData = benchGroupDetail[group]?.[benchStatType];
+                if (statData) totalSeries += Object.keys(statData.benchmarks).length;
+            }
+            const multiSeries = totalSeries > 1;
+
+            // Always show geomean for all selected groups
             for (const group of benchSelectedGroups) {
                 const color = benchGroupColors[group];
                 const rawPoints = reports
@@ -6271,7 +6455,7 @@
                 if (rawPoints.length === 0) continue;
 
                 let data;
-                if (multiGroup) {
+                if (multiSeries) {
                     const baseline = rawPoints[0].y;
                     data = rawPoints.map(p => ({
                         ...p,
@@ -6295,17 +6479,78 @@
                 });
             }
 
+            // Additionally plot individual benchmarks for expanded groups
+            if (expandedWithDetail.length > 0) {
+                let colorIdx = 0;
+                const detailColors = generateColors(Math.max(totalSeries, 10));
+                // Offset past geomean colors
+                colorIdx = benchSelectedGroups.size;
+                for (const group of expandedWithDetail) {
+                    const detail = benchGroupDetail[group];
+                    const statData = detail?.[benchStatType];
+                    if (!statData) continue;
+
+                    const benchNames = Object.keys(statData.benchmarks).sort();
+                    const hiddenSet = benchHiddenBenchmarks[group] || new Set();
+                    for (const name of benchNames) {
+                        if (hiddenSet.has(name)) { colorIdx++; continue; }
+                        const series = statData.benchmarks[name];
+                        if (!series) continue;
+                        const color = detailColors[colorIdx++ % detailColors.length];
+
+                        const rawPoints = [];
+                        for (let i = 0; i < statData.dates.length; i++) {
+                            if (series[i] == null) continue;
+                            const d = new Date(statData.dates[i]);
+                            if (cutoff && d < cutoff) continue;
+                            rawPoints.push({
+                                x: d,
+                                y: series[i],
+                                commit: statData.commits[i] || '',
+                                yRaw: series[i]
+                            });
+                        }
+                        if (rawPoints.length === 0) continue;
+
+                        let data;
+                        if (multiSeries) {
+                            const baseline = rawPoints[0].y;
+                            data = rawPoints.map(p => ({
+                                ...p,
+                                yRaw: p.y,
+                                y: baseline > 0 ? ((p.y - baseline) / baseline) * 100 : 0
+                            }));
+                        } else {
+                            data = rawPoints;
+                        }
+
+                        datasets.push({
+                            label: `${group}/${name}`,
+                            data,
+                            borderColor: color,
+                            backgroundColor: color + '22',
+                            borderWidth: 1.5,
+                            pointRadius: 2,
+                            pointHoverRadius: 5,
+                            fill: false,
+                            tension: 0.1
+                        });
+                    }
+                }
+            }
+
             const yAxis = {
                 type: 'linear',
                 grid: { color: gridColor },
                 ticks: { color: textColor }
             };
 
-            if (multiGroup) {
+            if (multiSeries) {
                 yAxis.title = { display: true, text: `% Change from Start`, color: textColor };
                 yAxis.ticks.callback = function(value) { return (value >= 0 ? '+' : '') + value.toFixed(0) + '%'; };
             } else {
-                yAxis.title = { display: true, text: `${statLabel} Geomean Time`, color: textColor };
+                const yLabel = expandedWithDetail.length > 0 ? `${statLabel} Time` : `${statLabel} Geomean Time`;
+                yAxis.title = { display: true, text: yLabel, color: textColor };
                 yAxis.ticks.callback = function(value) { return formatTime(value); };
             }
 
@@ -6315,6 +6560,12 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    transitions: {
+                        active: { animation: { duration: 0 } },
+                    },
+                    animation: {
+                        y: { duration: 0 },
+                    },
                     interaction: {
                         mode: 'nearest',
                         intersect: false,
@@ -6346,7 +6597,7 @@
                                 label: (item) => {
                                     const raw = item.raw;
                                     const abs = formatTime(raw.yRaw);
-                                    if (multiGroup) {
+                                    if (multiSeries) {
                                         const sign = raw.y >= 0 ? '+' : '';
                                         return `${item.dataset.label}: ${sign}${raw.y.toFixed(1)}% (${abs})`;
                                     }
@@ -6437,9 +6688,10 @@
 
             let html = '';
             for (const row of rows) {
-                const isSelected = benchSelectedGroups.has(row.group);
-                const rowClass = isSelected ? 'selected-group' : '';
-                html += `<tr class="${rowClass}" style="cursor: pointer;" onclick="toggleBenchGroup('${escapeHtml(row.group)}')">`;
+                if (!benchSelectedGroups.has(row.group)) continue;
+                const isExpanded = benchExpandedGroups.has(row.group);
+                const expandClass = isExpanded ? 'expandable expanded' : 'expandable';
+                html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}" onclick="toggleExpandGroup('${escapeHtml(row.group)}')">`;
                 html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || '#888'}"></span> ${escapeHtml(row.group)}</td>`;
                 html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
                 html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
@@ -6447,9 +6699,61 @@
                 html += `<td class="bench-time">${formatTime(row.max)}</td>`;
                 html += `<td>${row.count}</td>`;
                 html += `</tr>`;
+
+                // Show individual benchmarks when expanded
+                if (isExpanded && benchGroupDetail[row.group]) {
+                    const detail = benchGroupDetail[row.group];
+                    const statData = detail[benchStatType];
+                    if (statData) {
+                        const cutoff = getBenchCutoff();
+                        const benchNames = Object.keys(statData.benchmarks).sort();
+                        for (const name of benchNames) {
+                            const vals = statData.benchmarks[name];
+                            // Compute stats for filtered date range
+                            const filtered = [];
+                            let latestBenchVal = null;
+                            for (let i = 0; i < statData.dates.length; i++) {
+                                if (vals[i] == null) continue;
+                                const d = new Date(statData.dates[i]);
+                                if (cutoff && d < cutoff) continue;
+                                filtered.push(vals[i]);
+                            }
+                            latestBenchVal = filtered.length > 0 ? filtered[filtered.length - 1] : null;
+                            const benchAvg = filtered.length > 0 ? filtered.reduce((a, b) => a + b, 0) / filtered.length : 0;
+                            const benchMin = filtered.length > 0 ? Math.min(...filtered) : 0;
+                            const benchMax = filtered.length > 0 ? Math.max(...filtered) : 0;
+
+                            const isHidden = (benchHiddenBenchmarks[row.group] || new Set()).has(name);
+                            const detailClass = isHidden ? 'bench-detail-row bench-hidden' : 'bench-detail-row';
+                            html += `<tr class="${detailClass}" data-bench-label="${escapeHtml(row.group + '/' + name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(name)}" style="cursor: pointer;" title="${escapeHtml(name)}">`;
+                            html += `<td>${escapeHtml(name)}</td>`;
+                            html += `<td class="bench-time">${formatTime(latestBenchVal)}</td>`;
+                            html += `<td class="bench-time">${formatTime(benchAvg)}</td>`;
+                            html += `<td class="bench-time">${formatTime(benchMin)}</td>`;
+                            html += `<td class="bench-time">${formatTime(benchMax)}</td>`;
+                            html += `<td></td>`;
+                            html += `</tr>`;
+                        }
+                    }
+                }
             }
 
             tbody.innerHTML = html;
+
+            // Attach hover highlight listeners
+            tbody.querySelectorAll('tr[data-bench-group]').forEach(tr => {
+                const group = tr.dataset.benchGroup;
+                tr.onmouseenter = () => highlightBenchGroup(group);
+                tr.onmouseleave = () => clearBenchHighlight();
+            });
+            tbody.querySelectorAll('tr[data-bench-label]').forEach(tr => {
+                const label = tr.dataset.benchLabel;
+                const group = tr.dataset.benchGroupName;
+                const item = tr.dataset.benchItemName;
+                tr.onclick = (e) => toggleBenchItem(group, item, e);
+                tr.onmouseenter = () => highlightBenchDataset(label);
+                tr.onmouseleave = () => clearBenchHighlight();
+            });
         }
 
         loadData();

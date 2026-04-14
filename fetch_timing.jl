@@ -6,6 +6,7 @@ using JSON3
 using Dates
 using Statistics
 using DataStructures: SortedDict
+using CodecZlib: GzipCompressor, GzipDecompressor
 
 const BUILDKITE_ORG = "julialang"
 const PIPELINE = "julia-master"
@@ -226,16 +227,22 @@ function compute_stats(timings)
 end
 
 function load_existing_data(output_dir)
+    summary_gz = joinpath(output_dir, "timing_summary.json.gz")
     summary_file = joinpath(output_dir, "timing_summary.json")
-    !isfile(summary_file) && return Dict{String, Any}()
     try
-        data = JSON3.read(read(summary_file, String))
-        @info "Loaded existing data" file=summary_file num_jobs=length(get(data, :jobs, Dict()))
-        return data
+        if isfile(summary_gz)
+            data = JSON3.read(transcode(GzipDecompressor, read(summary_gz)))
+            @info "Loaded existing data" file=summary_gz num_jobs=length(get(data, :jobs, Dict()))
+            return data
+        elseif isfile(summary_file)
+            data = JSON3.read(read(summary_file, String))
+            @info "Loaded existing data" file=summary_file num_jobs=length(get(data, :jobs, Dict()))
+            return data
+        end
     catch e
         @warn "Failed to load existing data, starting fresh" error=e
-        return Dict{String, Any}()
     end
+    return Dict{String, Any}()
 end
 
 function get_known_build_numbers(existing_data)
@@ -496,15 +503,14 @@ function generate_json_output(job_timings; output_dir="data", coverage_data=Dict
     end
 
     # Only write if data actually changed (ignore generated_at timestamp)
-    summary_file = joinpath(output_dir, "timing_summary.json")
+    summary_file = joinpath(output_dir, "timing_summary.json.gz")
 
     # Compare serialized data (normalize by re-serializing both sides)
-    new_jobs_json = sprint(io -> JSON3.pretty(io, summary["jobs"]))
-    new_coverage_json = sprint(io -> JSON3.pretty(io, get(summary, "coverage", Dict())))
+    new_jobs_json = JSON3.write(summary["jobs"])
+    new_coverage_json = JSON3.write(get(summary, "coverage", Dict()))
     
     if isfile(summary_file)
-        existing_content = read(summary_file, String)
-        existing_parsed = JSON3.read(existing_content)
+        existing_parsed = JSON3.read(transcode(GzipDecompressor, read(summary_file)))
         existing_jobs = get(existing_parsed, :jobs, nothing)
         existing_coverage = get(existing_parsed, :coverage, nothing)
         
@@ -512,12 +518,12 @@ function generate_json_output(job_timings; output_dir="data", coverage_data=Dict
         coverage_unchanged = false
         
         if existing_jobs !== nothing
-            existing_jobs_json = sprint(io -> JSON3.pretty(io, existing_jobs))
+            existing_jobs_json = JSON3.write(existing_jobs)
             jobs_unchanged = existing_jobs_json == new_jobs_json
         end
         
         if existing_coverage !== nothing
-            existing_coverage_json = sprint(io -> JSON3.pretty(io, existing_coverage))
+            existing_coverage_json = JSON3.write(existing_coverage)
             coverage_unchanged = existing_coverage_json == new_coverage_json
         elseif isempty(coverage_data)
             coverage_unchanged = true
@@ -531,9 +537,7 @@ function generate_json_output(job_timings; output_dir="data", coverage_data=Dict
 
     # Update timestamp and write
     summary["generated_at"] = Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ")
-    open(summary_file, "w") do f
-        JSON3.pretty(f, summary)
-    end
+    write(summary_file, transcode(GzipCompressor, Vector{UInt8}(JSON3.write(summary))))
     @info "Wrote summary" file=summary_file num_jobs=length(summary["jobs"])
 
     return summary_file
