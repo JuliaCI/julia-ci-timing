@@ -1124,11 +1124,185 @@
         .btn-special { font-size: 10px; padding: 3px 8px; }
         .btn-retry { margin-left: 8px; }
         .loading-small { font-size: 11px; }
+
+        /* Tab navigation */
+        .tab-nav {
+            display: inline-flex;
+            gap: 0;
+            margin-right: 12px;
+            border: 1px solid var(--color-btn-border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .tab-btn {
+            padding: 4px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            background: var(--color-btn-bg);
+            border: none;
+            border-right: 1px solid var(--color-btn-border);
+            color: var(--color-fg-muted);
+            cursor: pointer;
+            line-height: 20px;
+            white-space: nowrap;
+        }
+        .tab-btn:last-child { border-right: none; }
+        .tab-btn:hover { background: var(--color-btn-hover-bg); }
+        .tab-btn.active {
+            background: var(--color-accent-emphasis);
+            color: #fff;
+        }
+        .tab-btn.active:hover { background: #1f6feb; }
+        .view-hidden { display: none !important; }
+
+        /* Benchmarks view */
+        .benchmarks-main {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .benchmarks-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: var(--color-canvas-subtle);
+            border-bottom: 1px solid var(--color-border-default);
+            flex-shrink: 0;
+        }
+        .benchmarks-content {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .benchmarks-sidebar {
+            width: 240px;
+            background: var(--color-canvas-subtle);
+            border-right: 1px solid var(--color-border-default);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            overflow-y: auto;
+        }
+        .benchmarks-sidebar .group-header {
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--color-fg-muted);
+            border-bottom: 1px solid var(--color-border-default);
+        }
+        .group-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            font-size: 11px;
+            cursor: pointer;
+            color: var(--color-fg-default);
+            opacity: 0.5;
+        }
+        .group-item:hover { background: var(--color-neutral-muted); }
+        .group-item.selected { opacity: 1; }
+        .group-item .group-counts {
+            margin-left: auto;
+            font-size: 10px;
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+            display: flex;
+            gap: 6px;
+        }
+        .group-item .bench-count {
+            color: var(--color-fg-muted);
+        }
+        .benchmarks-chart-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .benchmarks-chart-container {
+            flex: 1;
+            padding: 12px;
+            min-height: 0;
+            position: relative;
+        }
+        .benchmarks-chart-wrapper {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 16px;
+            bottom: 12px;
+            overflow: hidden;
+        }
+        .benchmarks-chart-wrapper canvas {
+            touch-action: none;
+            max-width: 100% !important;
+        }
+        .benchmarks-stats {
+            flex-shrink: 0;
+            max-height: 40vh;
+            overflow-y: auto;
+            border-top: 1px solid var(--color-border-default);
+        }
+        .benchmarks-stats table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--color-canvas-subtle);
+            font-size: 12px;
+        }
+        .benchmarks-stats th, .benchmarks-stats td {
+            padding: 6px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--color-border-muted);
+        }
+        .benchmarks-stats th {
+            background: var(--color-canvas-inset);
+            color: var(--color-fg-muted);
+            font-weight: 600;
+            font-size: 11px;
+            position: sticky;
+            top: 0;
+            cursor: pointer;
+            user-select: none;
+        }
+        .benchmarks-stats th:hover {
+            background: var(--color-neutral-muted);
+        }
+        .benchmarks-stats td {
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 11px;
+        }
+        .benchmarks-stats tr:hover { background: var(--color-neutral-muted); }
+        .benchmarks-stats tr.selected-group { background: var(--color-accent-subtle); }
+        .benchmarks-stats td.bench-time {
+            text-align: right;
+        }
+        .benchmarks-stats th.bench-time-header {
+            text-align: right;
+        }
+
+        @media (max-width: 768px) {
+            .benchmarks-content { flex-direction: column; }
+            .benchmarks-sidebar {
+                width: 100%;
+                max-height: 150px;
+                border-right: none;
+                border-bottom: 1px solid var(--color-border-default);
+            }
+            .benchmarks-chart-container { min-height: 300px; }
+        }
     </style>
 </head>
 <body>
     <div class="toolbar" role="toolbar" aria-label="Dashboard controls">
-        <h1><img src="favicon.svg" alt="Julia CI Timing" class="julia-logo"><a href="https://github.com/JuliaLang" target="_blank" rel="noopener noreferrer" class="link-muted">JuliaLang</a> / <a href="https://github.com/JuliaLang/julia" target="_blank" rel="noopener noreferrer" class="link-inherit">julia</a> <span class="header-separator">|</span> CI Timing <span class="branch-badge" title="Only showing CI runs from commits to master">master</span></h1>
+        <h1><img src="favicon.svg" alt="Julia CI Timing" class="julia-logo"><a href="https://github.com/JuliaLang" target="_blank" rel="noopener noreferrer" class="link-muted">JuliaLang</a> / <a href="https://github.com/JuliaLang/julia" target="_blank" rel="noopener noreferrer" class="link-inherit">julia</a></h1>
+        <div class="tab-nav">
+            <button class="tab-btn active" id="tab-ci-timing" onclick="switchTab('ci-timing')">CI Timing</button>
+            <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">Benchmarks</button>
+        </div>
+        <span id="ci-timing-controls">
         <select class="time-select" id="time-range" onchange="setTimeRange(this.value)" aria-label="Time range">
             <option value="custom" disabled>Custom</option>
             <option value="7">Last 7 days</option>
@@ -1165,6 +1339,7 @@
             </button>
             <div class="checkbox-dropdown-menu" id="host-filter-menu"></div>
         </div>
+        </span>
         <button class="btn btn-icon" onclick="toggleShortcutsHelp()" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
         <span class="updated" id="last-updated" aria-live="polite"></span>
         <a href="https://github.com/JuliaCI/julia-ci-timing/commit/__BUILD_COMMIT__" target="_blank" rel="noopener noreferrer" class="updated link-no-underline" id="build-commit" title="Site build commit">__BUILD_COMMIT_SHORT__</a>
@@ -1226,7 +1401,7 @@
         </div>
     </div>
 
-    <main class="main">
+    <main class="main" id="ci-timing-view">
         <aside class="sidebar" aria-label="Job selection">
             <div class="job-matrix-wrapper">
                 <div class="section-header" id="section-matrix" onclick="toggleSection(this)"><span class="section-header-text">Platform Matrix</span></div>
@@ -1286,6 +1461,57 @@
             </div>
         </div>
     </main>
+
+    <div class="benchmarks-main view-hidden" id="benchmarks-view">
+        <div class="benchmarks-toolbar">
+            <select class="time-select" id="bench-time-range" onchange="setBenchTimeRange(this.value)" aria-label="Time range">
+                <option value="90">Last 90 days</option>
+                <option value="180">Last 180 days</option>
+                <option value="365" selected>Last 365 days</option>
+                <option value="730">Last 2 years</option>
+                <option value="0">All time</option>
+            </select>
+            <select class="time-select" id="bench-stat-type" onchange="setBenchStatType(this.value)" aria-label="Statistic type">
+                <option value="minimum" selected>Minimum</option>
+                <option value="mean">Mean</option>
+            </select>
+            <button class="btn" id="bench-btn-all" onclick="selectAllGroups()">All groups</button>
+            <button class="btn" id="bench-btn-none" onclick="deselectAllGroups()">None</button>
+            <button class="btn btn-primary" id="bench-btn-reset-zoom" onclick="benchChart && benchChart.resetZoom()" style="display: none;">Reset zoom</button>
+            <span class="updated" id="bench-last-updated"></span>
+        </div>
+        <div class="benchmarks-content">
+            <div class="benchmarks-sidebar" id="bench-group-list">
+                <div class="group-header">Benchmark Groups</div>
+                <div class="loading">Loading...</div>
+            </div>
+            <div class="benchmarks-chart-area">
+                <div class="benchmarks-chart-container">
+                    <div class="benchmarks-chart-wrapper">
+                        <div class="loading-overlay" id="bench-chart-loading"><span class="loading">Loading benchmark data...</span></div>
+                        <canvas id="benchmarks-chart"></canvas>
+                    </div>
+                </div>
+                <div class="benchmarks-stats" id="bench-stats">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th onclick="sortBenchTable('group')">Group</th>
+                                <th class="bench-time-header" onclick="sortBenchTable('latest')">Latest</th>
+                                <th class="bench-time-header" onclick="sortBenchTable('avg')">Average</th>
+                                <th class="bench-time-header" onclick="sortBenchTable('min')">Min</th>
+                                <th class="bench-time-header" onclick="sortBenchTable('max')">Max</th>
+                                <th onclick="sortBenchTable('count')">Benchmarks</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bench-stats-tbody">
+                            <tr><td colspan="6" class="loading">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         'use strict';
@@ -5775,6 +6001,344 @@
             }
         }
 
+        // === Tab Navigation ===
+        let activeTab = 'ci-timing';
+
+        function switchTab(tab) {
+            activeTab = tab;
+            document.getElementById('tab-ci-timing').classList.toggle('active', tab === 'ci-timing');
+            document.getElementById('tab-benchmarks').classList.toggle('active', tab === 'benchmarks');
+
+            document.getElementById('ci-timing-view').classList.toggle('view-hidden', tab !== 'ci-timing');
+            document.getElementById('ci-timing-controls').classList.toggle('view-hidden', tab !== 'ci-timing');
+            // Hide CI-timing-specific banners
+            for (const id of ['stale-data-warning', 'comparison-banner']) {
+                const el = document.getElementById(id);
+                if (el) el.style.display = tab === 'ci-timing' ? '' : 'none';
+            }
+
+            document.getElementById('benchmarks-view').classList.toggle('view-hidden', tab !== 'benchmarks');
+
+            if (tab === 'benchmarks' && !benchData) {
+                loadBenchmarkData();
+            }
+        }
+
+        // === Benchmarks State ===
+        let benchData = null;
+        let benchChart = null;
+        let benchSelectedGroups = new Set();
+        let benchTimeRangeDays = 365;
+        let benchStatType = 'minimum';
+        let benchSortCol = 'latest';
+        let benchSortAsc = false;
+        let benchGroupColors = {};
+
+        function setBenchTimeRange(value) {
+            benchTimeRangeDays = parseInt(value);
+            updateBenchChart();
+            updateBenchTable();
+        }
+
+        function setBenchStatType(value) {
+            benchStatType = value;
+            populateBenchGroupList(Object.keys(benchGroupColors).sort());
+            updateBenchChart();
+            updateBenchTable();
+        }
+
+        function getBenchCutoff() {
+            if (benchTimeRangeDays === 0) return null;
+            const d = new Date();
+            d.setDate(d.getDate() - benchTimeRangeDays);
+            return d;
+        }
+
+        function getFilteredReports() {
+            if (!benchData?.reports) return [];
+            const cutoff = getBenchCutoff();
+            return cutoff
+                ? benchData.reports.filter(r => new Date(r.date) >= cutoff)
+                : benchData.reports;
+        }
+
+        function benchKey() {
+            return benchStatType + '_geomean_ns';
+        }
+
+        function formatTime(ns) {
+            if (ns == null || ns === 0) return '—';
+            if (ns < 1e3) return ns.toFixed(1) + ' ns';
+            if (ns < 1e6) return (ns / 1e3).toFixed(1) + ' μs';
+            if (ns < 1e9) return (ns / 1e6).toFixed(1) + ' ms';
+            return (ns / 1e9).toFixed(2) + ' s';
+        }
+
+        async function loadBenchmarkData() {
+            try {
+                const resp = await fetch('data/benchmark_summary.json');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                benchData = await resp.json();
+
+                const updatedEl = document.getElementById('bench-last-updated');
+                updatedEl.textContent = `Updated ${timeAgo(benchData.generated_at)}`;
+                updatedEl.title = benchData.generated_at;
+
+                document.getElementById('bench-chart-loading').style.display = 'none';
+
+                const allGroups = new Set();
+                for (const report of benchData.reports) {
+                    if (report.by_group) {
+                        for (const g of Object.keys(report.by_group)) allGroups.add(g);
+                    }
+                }
+
+                const groupList = Array.from(allGroups).sort();
+                const colors = generateColors(groupList.length);
+                groupList.forEach((g, i) => { benchGroupColors[g] = colors[i]; });
+
+                // Select all groups by default
+                benchSelectedGroups = new Set(groupList);
+
+                populateBenchGroupList(groupList);
+                updateBenchChart();
+                updateBenchTable();
+            } catch (err) {
+                console.error('Failed to load benchmark data:', err);
+                document.getElementById('bench-chart-loading').innerHTML =
+                    '<span class="error">Failed to load benchmark data. Run <code>julia fetch_benchmarks.jl</code> to generate data.</span>';
+                document.getElementById('bench-group-list').innerHTML =
+                    '<div class="group-header">Benchmark Groups</div><div class="error" style="padding: 12px;">Failed to load</div>';
+                document.getElementById('bench-stats-tbody').innerHTML =
+                    '<tr><td colspan="6" class="error">Failed to load data</td></tr>';
+            }
+        }
+
+        function populateBenchGroupList(groups) {
+            const container = document.getElementById('bench-group-list');
+            const reports = getFilteredReports();
+            const latest = reports.length > 0 ? reports[reports.length - 1] : null;
+            const key = benchKey();
+
+            let html = '<div class="group-header">Benchmark Groups (' + groups.length + ')</div>';
+            for (const group of groups) {
+                const isSelected = benchSelectedGroups.has(group);
+                const latestVal = latest?.by_group?.[group]?.[key];
+                html += `<div class="group-item ${isSelected ? 'selected' : ''}" onclick="toggleBenchGroup('${escapeHtml(group)}')" title="${escapeHtml(group)}">`;
+                html += `<span class="color-dot" style="background: ${benchGroupColors[group] || '#888'}"></span>`;
+                html += `<span>${escapeHtml(group)}</span>`;
+                html += `<span class="group-counts"><span class="bench-count">${formatTime(latestVal)}</span></span>`;
+                html += `</div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        function toggleBenchGroup(group) {
+            if (benchSelectedGroups.has(group)) {
+                benchSelectedGroups.delete(group);
+            } else {
+                benchSelectedGroups.add(group);
+            }
+            populateBenchGroupList(Object.keys(benchGroupColors).sort());
+            updateBenchChart();
+            updateBenchTable();
+        }
+
+        function selectAllGroups() {
+            benchSelectedGroups = new Set(Object.keys(benchGroupColors));
+            populateBenchGroupList(Object.keys(benchGroupColors).sort());
+            updateBenchChart();
+            updateBenchTable();
+        }
+
+        function deselectAllGroups() {
+            benchSelectedGroups.clear();
+            populateBenchGroupList(Object.keys(benchGroupColors).sort());
+            updateBenchChart();
+            updateBenchTable();
+        }
+
+        function updateBenchChart() {
+            const reports = getFilteredReports();
+            if (reports.length === 0) {
+                if (benchChart) benchChart.destroy();
+                benchChart = null;
+                return;
+            }
+
+            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+            const textColor = isDark ? '#8b949e' : '#656d76';
+            const key = benchKey();
+            const statLabel = benchStatType === 'minimum' ? 'Min' : 'Mean';
+
+            const datasets = [];
+
+            for (const group of benchSelectedGroups) {
+                const color = benchGroupColors[group];
+                datasets.push({
+                    label: group,
+                    data: reports
+                        .filter(r => r.by_group?.[group]?.[key] != null)
+                        .map(r => ({ x: new Date(r.date), y: r.by_group[group][key], commit: r.commit })),
+                    borderColor: color,
+                    backgroundColor: color + '22',
+                    borderWidth: 1.5,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    tension: 0.1
+                });
+            }
+
+            const chartConfig = {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false,
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'week', displayFormats: { week: 'MMM d', month: 'MMM yyyy' } },
+                            grid: { color: gridColor },
+                            ticks: { color: textColor, maxRotation: 0 }
+                        },
+                        y: {
+                            type: 'logarithmic',
+                            title: { display: true, text: `${statLabel} Geomean Time (ns)`, color: textColor },
+                            grid: { color: gridColor },
+                            ticks: {
+                                color: textColor,
+                                callback: function(value) { return formatTime(value); }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: { color: textColor, boxWidth: 12, padding: 8, font: { size: 11 } }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: (items) => {
+                                    if (!items.length) return '';
+                                    const d = items[0].raw.x;
+                                    return d instanceof Date ? d.toLocaleDateString() : d;
+                                },
+                                afterTitle: (items) => {
+                                    if (!items.length) return '';
+                                    return items[0].raw.commit ? `Commit: ${items[0].raw.commit}` : '';
+                                },
+                                label: (item) => {
+                                    return `${item.dataset.label}: ${formatTime(item.raw.y)}`;
+                                }
+                            }
+                        },
+                        zoom: {
+                            pan: { enabled: true, mode: 'x' },
+                            zoom: {
+                                wheel: { enabled: true },
+                                pinch: { enabled: true },
+                                mode: 'x',
+                                onZoomComplete: () => {
+                                    document.getElementById('bench-btn-reset-zoom').style.display = '';
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            if (benchChart) {
+                benchChart.data = chartConfig.data;
+                benchChart.options = chartConfig.options;
+                benchChart.update();
+            } else {
+                const ctx = document.getElementById('benchmarks-chart').getContext('2d');
+                benchChart = new Chart(ctx, chartConfig);
+            }
+        }
+
+        function sortBenchTable(col) {
+            if (benchSortCol === col) {
+                benchSortAsc = !benchSortAsc;
+            } else {
+                benchSortCol = col;
+                benchSortAsc = col === 'group';
+            }
+            updateBenchTable();
+        }
+
+        function updateBenchTable() {
+            const reports = getFilteredReports();
+            const tbody = document.getElementById('bench-stats-tbody');
+
+            if (reports.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6">No data in selected range</td></tr>';
+                return;
+            }
+
+            const key = benchKey();
+            const countKey = benchStatType + '_count';
+            const groupStats = {};
+            const allGroups = new Set();
+
+            for (const report of reports) {
+                if (!report.by_group) continue;
+                for (const [group, gdata] of Object.entries(report.by_group)) {
+                    allGroups.add(group);
+                    const val = gdata[key];
+                    if (val == null || val === 0) continue;
+                    if (!groupStats[group]) {
+                        groupStats[group] = { values: [], count: gdata[countKey] || 0 };
+                    }
+                    groupStats[group].values.push(val);
+                    groupStats[group].count = Math.max(groupStats[group].count, gdata[countKey] || 0);
+                }
+            }
+
+            const latest = reports[reports.length - 1];
+
+            let rows = Array.from(allGroups).map(group => {
+                const s = groupStats[group] || { values: [], count: 0 };
+                const latestVal = latest?.by_group?.[group]?.[key] || 0;
+                const avg = s.values.length > 0 ? s.values.reduce((a, b) => a + b, 0) / s.values.length : 0;
+                const min = s.values.length > 0 ? Math.min(...s.values) : 0;
+                const max = s.values.length > 0 ? Math.max(...s.values) : 0;
+                return { group, latest: latestVal, avg, min, max, count: s.count };
+            });
+
+            rows.sort((a, b) => {
+                const va = a[benchSortCol] ?? a.group;
+                const vb = b[benchSortCol] ?? b.group;
+                const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+                return benchSortAsc ? cmp : -cmp;
+            });
+
+            let html = '';
+            for (const row of rows) {
+                const isSelected = benchSelectedGroups.has(row.group);
+                const rowClass = isSelected ? 'selected-group' : '';
+                html += `<tr class="${rowClass}" style="cursor: pointer;" onclick="toggleBenchGroup('${escapeHtml(row.group)}')">`;
+                html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || '#888'}"></span> ${escapeHtml(row.group)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.min)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.max)}</td>`;
+                html += `<td>${row.count}</td>`;
+                html += `</tr>`;
+            }
+
+            tbody.innerHTML = html;
+        }
+
         loadData();
 
         // Auto-refresh data periodically
@@ -5791,6 +6355,7 @@
         // Re-render chart when color scheme changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
             if (selectedJobs.size > 0) updateChart();
+            if (benchChart) updateBenchChart();
         });
     </script>
 </body>
