@@ -6539,8 +6539,12 @@
             benchChart.update();
         }
 
-        function nanosoldierReportUrl(type, date) {
-            const d = date instanceof Date ? date : new Date(date);
+        function nanosoldierReportUrl(type, dateOrPath) {
+            if (typeof dateOrPath === 'string' && dateOrPath.includes('/')) {
+                // Direct date_path like "2026-04/12"
+                return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${dateOrPath}/report.md`;
+            }
+            const d = dateOrPath instanceof Date ? dateOrPath : new Date(dateOrPath);
             const yyyy = d.getFullYear();
             const mm = String(d.getMonth() + 1).padStart(2, '0');
             const dd = String(d.getDate()).padStart(2, '0');
@@ -7077,9 +7081,9 @@
                     onClick: (evt, elements) => {
                         if (elements.length > 0) {
                             const idx = elements[0].index;
-                            const date = reports[idx]?.date;
-                            if (date) {
-                                window.open(nanosoldierReportUrl('pkgeval', date), '_blank');
+                            const r = reports[idx];
+                            if (r) {
+                                window.open(nanosoldierReportUrl('pkgeval', r.date_path || r.date), '_blank');
                             }
                         }
                     },
@@ -7148,7 +7152,7 @@
             const recent = reports.slice().reverse();
             let html = '';
             for (const r of recent) {
-                const url = nanosoldierReportUrl('pkgeval', r.date);
+                const url = nanosoldierReportUrl('pkgeval', r.date_path || r.date);
                 const t = r.total || 0;
                 const pct = (v) => t > 0 ? (v / t * 100).toFixed(1) : '0.0';
                 html += `<tr data-date="${escapeHtml(r.date)}" onclick="window.open('${url}', '_blank')">`;

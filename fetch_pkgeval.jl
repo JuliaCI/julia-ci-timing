@@ -58,7 +58,7 @@ function fetch_db_json(date_path::String)
     end
 end
 
-function count_statuses(db)
+function count_statuses(db, date_path::String)
     tests = get(db, :tests, nothing)
     tests === nothing && return nothing
 
@@ -101,6 +101,7 @@ function count_statuses(db)
     total = sum(values(counts))
     return Dict{String,Any}(
         "date" => date_str,
+        "date_path" => date_path,
         "total" => total,
         "ok" => counts["ok"],
         "fail" => counts["fail"],
@@ -149,7 +150,7 @@ function main()
             @info "Progress: $n/$total"
         end
         db === nothing && return nothing
-        return count_statuses(db)
+        return count_statuses(db, date_path)
     end
     new_reports = filter(!isnothing, results)
 
