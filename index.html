@@ -1320,6 +1320,84 @@
             }
             .benchmarks-chart-container { min-height: 300px; }
         }
+
+        /* PkgEval view */
+        .pkgeval-main {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .pkgeval-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: var(--color-canvas-subtle);
+            border-bottom: 1px solid var(--color-border-default);
+            flex-shrink: 0;
+        }
+        .pkgeval-chart-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .pkgeval-chart-container {
+            flex: 1;
+            padding: 12px;
+            min-height: 0;
+            position: relative;
+        }
+        .pkgeval-chart-wrapper {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 16px;
+            bottom: 12px;
+            overflow: hidden;
+        }
+        .pkgeval-chart-wrapper canvas {
+            touch-action: none;
+            max-width: 100% !important;
+        }
+        .pkgeval-stats {
+            flex-shrink: 0;
+            max-height: 40vh;
+            overflow-y: auto;
+            border-top: 1px solid var(--color-border-default);
+        }
+        .pkgeval-stats table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--color-canvas-subtle);
+            font-size: 12px;
+        }
+        .pkgeval-stats th, .pkgeval-stats td {
+            padding: 6px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--color-border-muted);
+        }
+        .pkgeval-stats th {
+            background: var(--color-canvas-inset);
+            color: var(--color-fg-muted);
+            font-weight: 600;
+            font-size: 11px;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            user-select: none;
+        }
+        .pkgeval-stats td {
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 11px;
+        }
+        .pkgeval-stats tr:hover, .pkgeval-stats tr.highlight { background: var(--color-neutral-muted); }
+        .pkgeval-stats tr { cursor: pointer; }
+        .pkgeval-stats td.num { text-align: right; }
+        .pkgeval-stats td.num small { opacity: 0.7; font-size: 10px; }
+        .pkgeval-stats th.num { text-align: right; }
     </style>
 </head>
 <body>
@@ -1328,6 +1406,7 @@
         <div class="tab-nav">
             <button class="tab-btn active" id="tab-ci-timing" onclick="switchTab('ci-timing')">CI Timing</button>
             <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">Benchmarks</button>
+            <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')">PkgEval</button>
         </div>
         <span id="ci-timing-controls">
         <select class="time-select" id="time-range" onchange="setTimeRange(this.value)" aria-label="Time range">
@@ -1488,6 +1567,48 @@
             </div>
         </div>
     </main>
+
+    <div class="pkgeval-main view-hidden" id="pkgeval-view">
+        <div class="pkgeval-toolbar">
+            <select class="time-select" id="pkgeval-time-range" onchange="setPkgevalTimeRange(this.value)" aria-label="Time range">
+                <option value="90">Last 90 days</option>
+                <option value="180">Last 180 days</option>
+                <option value="365">Last 365 days</option>
+                <option value="730">Last 2 years</option>
+                <option value="0" selected>All time</option>
+            </select>
+            <button class="btn" id="pkgeval-btn-proportional" onclick="togglePkgevalProportional()">Show %</button>
+            <button class="btn btn-primary" id="pkgeval-btn-reset-zoom" onclick="pkgevalChart && pkgevalChart.resetZoom()" style="display: none;">Reset zoom</button>
+            <span class="updated" id="pkgeval-last-updated"></span>
+        </div>
+        <div class="pkgeval-chart-area">
+            <div class="pkgeval-chart-container">
+                <div class="pkgeval-chart-wrapper">
+                    <div class="loading-overlay" id="pkgeval-chart-loading"><span class="loading">Loading pkgeval data...</span></div>
+                    <canvas id="pkgeval-chart"></canvas>
+                </div>
+            </div>
+            <div class="pkgeval-stats" id="pkgeval-stats">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Version</th>
+                            <th class="num">Total</th>
+                            <th class="num" style="color: #3fb950;">OK</th>
+                            <th class="num" style="color: #f85149;">Fail</th>
+                            <th class="num" style="color: #db6d28;">Crash</th>
+                            <th class="num" style="color: #8b949e;">Skip</th>
+                            <th class="num" style="color: #d29922;">Kill</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pkgeval-stats-tbody">
+                        <tr><td colspan="8" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
     <div class="benchmarks-main view-hidden" id="benchmarks-view">
         <div class="benchmarks-toolbar">
@@ -6038,6 +6159,7 @@
             activeTab = tab;
             document.getElementById('tab-ci-timing').classList.toggle('active', tab === 'ci-timing');
             document.getElementById('tab-benchmarks').classList.toggle('active', tab === 'benchmarks');
+            document.getElementById('tab-pkgeval').classList.toggle('active', tab === 'pkgeval');
 
             document.getElementById('ci-timing-view').classList.toggle('view-hidden', tab !== 'ci-timing');
             document.getElementById('ci-timing-controls').classList.toggle('view-hidden', tab !== 'ci-timing');
@@ -6048,15 +6170,19 @@
             }
 
             document.getElementById('benchmarks-view').classList.toggle('view-hidden', tab !== 'benchmarks');
+            document.getElementById('pkgeval-view').classList.toggle('view-hidden', tab !== 'pkgeval');
 
             if (tab === 'benchmarks' && !benchData) {
                 loadBenchmarkData();
             }
+            if (tab === 'pkgeval' && !pkgevalData) {
+                loadPkgevalData();
+            }
 
             // Update tab in URL
             const url = new URL(window.location);
-            if (tab === 'benchmarks') {
-                url.searchParams.set('tab', 'benchmarks');
+            if (tab !== 'ci-timing') {
+                url.searchParams.set('tab', tab);
             } else {
                 url.searchParams.delete('tab');
             }
@@ -6413,6 +6539,14 @@
             benchChart.update();
         }
 
+        function nanosoldierReportUrl(type, date) {
+            const d = date instanceof Date ? date : new Date(date);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${yyyy}-${mm}/${dd}/report.md`;
+        }
+
         function updateBenchChart() {
             const reports = getFilteredReports();
             if (reports.length === 0) {
@@ -6616,6 +6750,17 @@
                                 }
                             }
                         }
+                    },
+                    onClick: (evt, elements) => {
+                        if (elements.length > 0) {
+                            const raw = elements[0].element.$context.raw;
+                            if (raw && raw.x) {
+                                window.open(nanosoldierReportUrl('benchmark', raw.x), '_blank');
+                            }
+                        }
+                    },
+                    onHover: (evt, elements) => {
+                        evt.native.target.style.cursor = elements.length > 0 ? 'pointer' : '';
                     }
                 }
             };
@@ -6756,14 +6901,280 @@
             });
         }
 
+        // === PkgEval State ===
+        let pkgevalData = null;
+        let pkgevalChart = null;
+        let pkgevalTimeRangeDays = 0;
+        let pkgevalProportional = false;
+
+        function togglePkgevalProportional() {
+            pkgevalProportional = !pkgevalProportional;
+            document.getElementById('pkgeval-btn-proportional').textContent = pkgevalProportional ? 'Show counts' : 'Show %';
+            updatePkgevalChart();
+            updatePkgevalURL();
+        }
+
+        function setPkgevalTimeRange(val) {
+            pkgevalTimeRangeDays = parseInt(val);
+            updatePkgevalChart();
+            updatePkgevalTable();
+            updatePkgevalURL();
+        }
+
+        function updatePkgevalURL() {
+            const url = new URL(window.location);
+            url.searchParams.set('tab', activeTab);
+            if (pkgevalTimeRangeDays !== 0) {
+                url.searchParams.set('pt', pkgevalTimeRangeDays);
+            } else {
+                url.searchParams.delete('pt');
+            }
+            if (pkgevalProportional) {
+                url.searchParams.set('pp', '1');
+            } else {
+                url.searchParams.delete('pp');
+            }
+            history.replaceState(null, '', url);
+        }
+
+        function applyPkgevalURLParams() {
+            const params = new URLSearchParams(window.location.search);
+            const pt = params.get('pt');
+            if (pt !== null) {
+                const days = parseInt(pt, 10);
+                if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+                    pkgevalTimeRangeDays = days;
+                    const sel = document.getElementById('pkgeval-time-range');
+                    if (sel) sel.value = days;
+                }
+            }
+            if (params.get('pp') === '1') {
+                pkgevalProportional = true;
+                document.getElementById('pkgeval-btn-proportional').textContent = 'Show counts';
+            }
+        }
+
+        function getPkgevalFilteredReports() {
+            if (!pkgevalData) return [];
+            const reports = (pkgevalData.reports || []).filter(r => r.date);
+            if (pkgevalTimeRangeDays === 0) return reports;
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - pkgevalTimeRangeDays);
+            return reports.filter(r => new Date(r.date) >= cutoff);
+        }
+
+        async function loadPkgevalData() {
+            try {
+                const resp = await fetch('data/pkgeval_summary.json.gz');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const ds = new DecompressionStream('gzip');
+                const decompressed = resp.body.pipeThrough(ds);
+                pkgevalData = await new Response(decompressed).json();
+
+                const updatedEl = document.getElementById('pkgeval-last-updated');
+                updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
+                updatedEl.title = pkgevalData.generated_at;
+
+                document.getElementById('pkgeval-chart-loading').style.display = 'none';
+                updatePkgevalChart();
+                updatePkgevalTable();
+            } catch (err) {
+                console.error('Failed to load pkgeval data:', err);
+                document.getElementById('pkgeval-chart-loading').innerHTML =
+                    '<span class="error">Failed to load pkgeval data. Run <code>julia fetch_pkgeval.jl</code> to generate data.</span>';
+                document.getElementById('pkgeval-stats-tbody').innerHTML =
+                    '<tr><td colspan="8" class="error">Failed to load data</td></tr>';
+            }
+        }
+
+        function updatePkgevalChart() {
+            const reports = getPkgevalFilteredReports();
+            if (!reports.length) return;
+
+            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+            const textColor = isDark ? '#8b949e' : '#656d76';
+
+            const dates = reports.map(r => r.date);
+            const toData = (key) => reports.map(r => {
+                const v = r[key] || 0;
+                if (!pkgevalProportional || !r.total) return v;
+                return (v / r.total) * 100;
+            });
+            const okData = toData('ok');
+            const failData = toData('fail');
+            const crashData = toData('crash');
+            const skipData = toData('skip');
+            const killData = toData('kill');
+
+            const datasets = [
+                { label: 'OK', data: okData, borderColor: '#3fb950', backgroundColor: 'rgba(63,185,80,0.15)', fill: true, order: 5 },
+                { label: 'Fail', data: failData, borderColor: '#f85149', backgroundColor: 'rgba(248,81,73,0.15)', fill: true, order: 4 },
+                { label: 'Crash', data: crashData, borderColor: '#db6d28', backgroundColor: 'rgba(219,109,40,0.15)', fill: true, order: 3 },
+                { label: 'Skip', data: skipData, borderColor: '#8b949e', backgroundColor: 'rgba(139,148,158,0.15)', fill: true, order: 2 },
+                { label: 'Kill', data: killData, borderColor: '#d29922', backgroundColor: 'rgba(210,153,34,0.15)', fill: true, order: 1 },
+            ];
+
+            // Hide series with all zeros
+            const visibleDatasets = datasets.filter(ds => ds.data.some(v => v > 0));
+
+            const config = {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: visibleDatasets.map(ds => ({
+                        ...ds,
+                        borderWidth: pkgevalProportional ? 0 : 1.5,
+                        pointRadius: 0,
+                        pointHitRadius: 8,
+                        tension: 0.1,
+                        backgroundColor: pkgevalProportional ? ds.borderColor + 'cc' : ds.backgroundColor,
+                    })),
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: true, labels: { color: textColor, usePointStyle: true, pointStyle: 'circle', boxWidth: 10, boxHeight: 10, padding: 16 } },
+                        tooltip: {
+                            usePointStyle: true,
+                            boxPadding: 4,
+                            callbacks: {
+                                title: (items) => {
+                                    if (!items.length) return '';
+                                    const idx = items[0].dataIndex;
+                                    const r = reports[idx];
+                                    return `${r.date}${r.version ? ' (' + r.version + ')' : ''}`;
+                                },
+                                label: (item) => {
+                                    const idx = item.dataIndex;
+                                    const r = reports[idx];
+                                    const key = item.dataset.label.toLowerCase();
+                                    const raw = r[key] || r[key === 'ok' ? 'ok' : key] || 0;
+                                    const pct = r.total > 0 ? (raw / r.total * 100).toFixed(1) : '0.0';
+                                    return ` ${item.dataset.label}: ${raw.toLocaleString()} (${pct}%)`;
+                                },
+                                afterBody: (items) => {
+                                    if (!items.length) return '';
+                                    const idx = items[0].dataIndex;
+                                    const r = reports[idx];
+                                    return `Total: ${(r.total || 0).toLocaleString()}`;
+                                }
+                            }
+                        },
+                        zoom: {
+                            pan: { enabled: true, mode: 'x' },
+                            zoom: {
+                                wheel: { enabled: true },
+                                pinch: { enabled: true },
+                                drag: { enabled: true, backgroundColor: isDark ? 'rgba(56,139,253,0.15)' : 'rgba(31,111,235,0.1)' },
+                                mode: 'x',
+                                onZoom: () => { document.getElementById('pkgeval-btn-reset-zoom').style.display = ''; },
+                            },
+                        },
+                    },
+                    onClick: (evt, elements) => {
+                        if (elements.length > 0) {
+                            const idx = elements[0].index;
+                            const date = reports[idx]?.date;
+                            if (date) {
+                                window.open(nanosoldierReportUrl('pkgeval', date), '_blank');
+                            }
+                        }
+                    },
+                    onHover: (evt, elements) => {
+                        evt.native.target.style.cursor = elements.length > 0 ? 'pointer' : '';
+                        highlightPkgevalRow(elements.length > 0 ? reports[elements[0].index]?.date : null);
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'month', tooltipFormat: 'yyyy-MM-dd' },
+                            grid: { color: gridColor },
+                            ticks: { color: textColor, maxRotation: 0, autoSkip: true },
+                        },
+                        y: {
+                            stacked: true,
+                            grid: { color: gridColor },
+                            ticks: {
+                                color: textColor,
+                                callback: pkgevalProportional ? (v) => v.toFixed(0) + '%' : undefined,
+                            },
+                            title: { display: true, text: pkgevalProportional ? 'Percentage' : 'Packages', color: textColor },
+                            max: pkgevalProportional ? 100 : undefined,
+                        },
+                    },
+                },
+            };
+
+            const canvas = document.getElementById('pkgeval-chart');
+            if (pkgevalChart) {
+                pkgevalChart.destroy();
+            }
+            pkgevalChart = new Chart(canvas, config);
+        }
+
+        function highlightPkgevalRow(date) {
+            const tbody = document.getElementById('pkgeval-stats-tbody');
+            const prev = tbody.querySelector('tr.highlight');
+            if (prev) prev.classList.remove('highlight');
+            if (!date) return;
+            const row = tbody.querySelector(`tr[data-date="${CSS.escape(date)}"]`);
+            if (row) {
+                row.classList.add('highlight');
+                const container = tbody.closest('.pkgeval-stats');
+                if (container) {
+                    const headerHeight = container.querySelector('thead')?.offsetHeight || 0;
+                    const rowRect = row.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    const visibleTop = containerRect.top + headerHeight;
+                    if (rowRect.top < visibleTop || rowRect.bottom > containerRect.bottom) {
+                        const rowTop = row.offsetTop - headerHeight;
+                        container.scrollTo({ top: rowTop - 4, behavior: 'smooth' });
+                    }
+                }
+            }
+        }
+
+        function updatePkgevalTable() {
+            const reports = getPkgevalFilteredReports();
+            const tbody = document.getElementById('pkgeval-stats-tbody');
+            if (!reports.length) {
+                tbody.innerHTML = '<tr><td colspan="8">No data</td></tr>';
+                return;
+            }
+            // Show most recent first, limit to 100 rows
+            const recent = reports.slice().reverse().slice(0, 100);
+            let html = '';
+            for (const r of recent) {
+                const url = nanosoldierReportUrl('pkgeval', r.date);
+                const t = r.total || 0;
+                const pct = (v) => t > 0 ? (v / t * 100).toFixed(1) : '0.0';
+                html += `<tr data-date="${escapeHtml(r.date)}" onclick="window.open('${url}', '_blank')">`;
+                html += `<td>${escapeHtml(r.date)}</td>`;
+                html += `<td>${escapeHtml(r.version || '')}</td>`;
+                html += `<td class="num">${t.toLocaleString()}</td>`;
+                html += `<td class="num" style="color: #3fb950;">${(r.ok || 0).toLocaleString()} <small>(${pct(r.ok || 0)}%)</small></td>`;
+                html += `<td class="num" style="color: #f85149;">${(r.fail || 0).toLocaleString()} <small>(${pct(r.fail || 0)}%)</small></td>`;
+                html += `<td class="num" style="color: #db6d28;">${(r.crash || 0).toLocaleString()} <small>(${pct(r.crash || 0)}%)</small></td>`;
+                html += `<td class="num" style="color: #8b949e;">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
+                html += `<td class="num" style="color: #d29922;">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
+                html += '</tr>';
+            }
+            tbody.innerHTML = html;
+        }
+
         loadData();
 
         // Apply benchmark URL params before potential tab switch
         applyBenchURLParams();
+        applyPkgevalURLParams();
 
-        // Switch to benchmarks tab if URL says so
-        if (new URLSearchParams(window.location.search).get('tab') === 'benchmarks') {
-            switchTab('benchmarks');
+        // Switch to correct tab if URL says so
+        const urlTab = new URLSearchParams(window.location.search).get('tab');
+        if (urlTab === 'benchmarks' || urlTab === 'pkgeval') {
+            switchTab(urlTab);
         }
 
         // Auto-refresh data periodically
@@ -6781,6 +7192,7 @@
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
             if (selectedJobs.size > 0) updateChart();
             if (benchChart) updateBenchChart();
+            if (pkgevalChart) updatePkgevalChart();
         });
     </script>
 </body>
