@@ -7144,8 +7144,8 @@
                 tbody.innerHTML = '<tr><td colspan="8">No data</td></tr>';
                 return;
             }
-            // Show most recent first, limit to 100 rows
-            const recent = reports.slice().reverse().slice(0, 100);
+            // Show most recent first
+            const recent = reports.slice().reverse();
             let html = '';
             for (const r of recent) {
                 const url = nanosoldierReportUrl('pkgeval', r.date);
