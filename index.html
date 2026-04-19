@@ -6544,10 +6544,17 @@
                 // Direct date_path like "2026-04/12"
                 return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${dateOrPath}/report.md`;
             }
-            const d = dateOrPath instanceof Date ? dateOrPath : new Date(dateOrPath);
-            const yyyy = d.getFullYear();
-            const mm = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
+            // Convert date string "2026-04-08" or Date object to path "2026-04/8"
+            let yyyy, mm, dd;
+            if (typeof dateOrPath === 'string') {
+                [yyyy, mm, dd] = dateOrPath.split('-');
+                dd = String(parseInt(dd, 10)); // strip leading zero
+            } else {
+                const d = dateOrPath instanceof Date ? dateOrPath : new Date(dateOrPath);
+                yyyy = d.getUTCFullYear();
+                mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+                dd = String(d.getUTCDate());
+            }
             return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${yyyy}-${mm}/${dd}/report.md`;
         }
 

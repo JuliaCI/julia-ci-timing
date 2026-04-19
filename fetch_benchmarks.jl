@@ -213,6 +213,7 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
             isempty(d) && continue
             reports_by_date[d] = SortedDict(
                 "date" => d,
+                "date_path" => String(get(report, :date_path, d)),
                 "commit" => String(get(report, :commit, "")),
                 "by_group" => let bg = get(report, :by_group, Dict())
                     SortedDict{String, Any}(String(k) => Dict{String, Any}(
@@ -232,7 +233,7 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
     # Build summary reports (geomean only, no _benchmarks)
     summary_reports = []
     for report in reports
-        sr = SortedDict{String, Any}("date" => report["date"], "commit" => get(report, "commit", ""))
+        sr = SortedDict{String, Any}("date" => report["date"], "date_path" => get(report, "date_path", report["date"]), "commit" => get(report, "commit", ""))
         sr_groups = SortedDict{String, Any}()
         for (group, gdata) in report["by_group"]
             sg = Dict{String, Any}()
