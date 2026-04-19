@@ -18,7 +18,8 @@ function ensure_clone()
     by_date = joinpath(CLONE_DIR, "benchmark", "by_date")
     if isdir(joinpath(CLONE_DIR, ".git"))
         @info "Updating existing clone..." dir=CLONE_DIR
-        run(`git -C $CLONE_DIR pull --ff-only`)
+        run(`git -C $CLONE_DIR fetch --depth 1 origin`)
+        run(`git -C $CLONE_DIR reset --hard origin/master`)
     else
         @info "Cloning NanosoldierReports (sparse)..." dir=CLONE_DIR
         rm(CLONE_DIR; force=true, recursive=true)
@@ -157,6 +158,7 @@ function parse_tarball(by_date_dir::String, date_path::String)
 
     return SortedDict(
         "date" => date,
+        "date_path" => date_path,
         "commit" => commit,
         "by_group" => by_group,
     )
@@ -303,6 +305,7 @@ function update_group_detail(output_dir, group, new_reports)
         old = get(existing, Symbol(stat_type), nothing)
         old_dates = old !== nothing ? [String(d) for d in old[:dates]] : String[]
         old_commits = old !== nothing ? [String(c) for c in old[:commits]] : String[]
+        old_date_paths = old !== nothing && haskey(old, :date_paths) ? [String(p) for p in old[:date_paths]] : copy(old_dates)
         old_benchmarks = Dict{String, Vector{Any}}()
         if old !== nothing
             for (name, vals) in pairs(old[:benchmarks])
@@ -320,7 +323,7 @@ function update_group_detail(output_dir, group, new_reports)
             gdata === nothing && continue
             benchmarks = get(gdata, "$(stat_type)_benchmarks", nothing)
             benchmarks === nothing && continue
-            push!(new_entries, (date=report["date"], commit=get(report, "commit", ""), benchmarks=benchmarks))
+            push!(new_entries, (date=report["date"], date_path=get(report, "date_path", report["date"]), commit=get(report, "commit", ""), benchmarks=benchmarks))
         end
 
         isempty(new_entries) && continue
@@ -349,9 +352,11 @@ function update_group_detail(output_dir, group, new_reports)
         sort!(new_entries; by=e -> e.date)
         merged_dates = copy(old_dates)
         merged_commits = copy(old_commits)
+        merged_date_paths = copy(old_date_paths)
         for entry in new_entries
             push!(merged_dates, entry.date)
             push!(merged_commits, entry.commit)
+            push!(merged_date_paths, entry.date_path)
             for name in sorted_names
                 v = get(entry.benchmarks, name, nothing)
                 push!(merged_benchmarks[name], v)
@@ -361,6 +366,7 @@ function update_group_detail(output_dir, group, new_reports)
         existing_dict = existing isa Dict ? existing : Dict{String, Any}(String(k) => v for (k, v) in pairs(existing))
         existing_dict[stat_type] = SortedDict(
             "dates" => merged_dates,
+            "date_paths" => merged_date_paths,
             "commits" => merged_commits,
             "benchmarks" => merged_benchmarks
         )

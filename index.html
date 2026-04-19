@@ -6588,7 +6588,7 @@
                 const color = benchGroupColors[group];
                 const rawPoints = reports
                     .filter(r => r.by_group?.[group]?.[key] != null)
-                    .map(r => ({ x: new Date(r.date), y: r.by_group[group][key], commit: r.commit }));
+                    .map(r => ({ x: new Date(r.date), y: r.by_group[group][key], commit: r.commit, date_path: r.date_path }));
 
                 if (rawPoints.length === 0) continue;
 
@@ -6645,6 +6645,7 @@
                                 x: d,
                                 y: series[i],
                                 commit: statData.commits[i] || '',
+                                date_path: statData.date_paths?.[i] || '',
                                 yRaw: series[i]
                             });
                         }
@@ -6758,8 +6759,8 @@
                     onClick: (evt, elements) => {
                         if (elements.length > 0) {
                             const raw = elements[0].element.$context.raw;
-                            if (raw && raw.x) {
-                                window.open(nanosoldierReportUrl('benchmark', raw.x), '_blank');
+                            if (raw) {
+                                window.open(nanosoldierReportUrl('benchmark', raw.date_path || raw.x), '_blank');
                             }
                         }
                     },
