@@ -1357,6 +1357,32 @@
         .benchmarks-stats th.bench-time-header {
             text-align: right;
         }
+        .bench-table-view-toggle {
+            display: inline-flex;
+            gap: 0;
+        }
+        .bench-table-view-toggle .btn {
+            border-radius: 0;
+            margin-left: -1px;
+        }
+        .bench-table-view-toggle .btn:first-child {
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
+            margin-left: 0;
+        }
+        .bench-table-view-toggle .btn:last-child {
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }
+        .bench-delta-pos { color: var(--color-danger-fg); }
+        .bench-delta-neg { color: var(--color-success-fg); }
+        .bench-runs-improved { color: var(--color-success-fg); font-variant-numeric: tabular-nums; }
+        .bench-runs-regressed { color: var(--color-danger-fg); font-variant-numeric: tabular-nums; }
+        .bench-runs-link {
+            color: var(--color-accent-fg);
+            text-decoration: none;
+        }
+        .bench-runs-link:hover { text-decoration: underline; }
 
         @media (max-width: 768px) {
             .benchmarks-content { flex-direction: column; }
@@ -1683,6 +1709,10 @@
             </select>
             <button class="btn" id="bench-btn-all" onclick="selectAllGroups()">All groups</button>
             <button class="btn" id="bench-btn-none" onclick="deselectAllGroups()">None</button>
+            <span class="bench-table-view-toggle" role="group" aria-label="Table view">
+                <button class="btn btn-primary" id="bench-view-runs" onclick="setBenchTableView('runs')">By run</button>
+                <button class="btn" id="bench-view-groups" onclick="setBenchTableView('groups')">By group</button>
+            </span>
             <button class="btn btn-primary" id="bench-btn-reset-zoom" onclick="benchChart && benchChart.resetZoom()" style="display: none;">Reset zoom</button>
             <span class="updated" id="bench-last-updated"></span>
         </div>
@@ -1700,16 +1730,7 @@
                 </div>
                 <div class="benchmarks-stats" id="bench-stats">
                     <table>
-                        <thead>
-                            <tr>
-                                <th onclick="sortBenchTable('group')">Group</th>
-                                <th class="bench-time-header" onclick="sortBenchTable('latest')">Latest</th>
-                                <th class="bench-time-header" onclick="sortBenchTable('avg')">Average</th>
-                                <th class="bench-time-header" onclick="sortBenchTable('min')">Min</th>
-                                <th class="bench-time-header" onclick="sortBenchTable('max')">Max</th>
-                                <th onclick="sortBenchTable('count')">Benchmarks</th>
-                            </tr>
-                        </thead>
+                        <thead id="bench-stats-thead"></thead>
                         <tbody id="bench-stats-tbody">
                             <tr><td colspan="6" class="loading">Loading...</td></tr>
                         </tbody>
@@ -6283,12 +6304,13 @@
         let benchSelectedGroups = new Set();
         let benchTimeRangeDays = 365;
         let benchStatType = 'minimum';
-        let benchSortCol = 'latest';
+        let benchSortCol = 'date';
         let benchSortAsc = false;
         let benchGroupColors = {};
         let benchExpandedGroups = new Set();
         let benchGroupDetail = {}; // group => fetched detail data
         let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
+        let benchTableView = 'runs'; // 'groups' or 'runs'
 
         function updateBenchURL() {
             const url = new URL(window.location);
@@ -6305,6 +6327,12 @@
                 url.searchParams.set('bs', benchStatType);
             } else {
                 url.searchParams.delete('bs');
+            }
+            // Benchmark table view (default runs)
+            if (benchTableView !== 'runs') {
+                url.searchParams.set('bv', benchTableView);
+            } else {
+                url.searchParams.delete('bv');
             }
             // Benchmark selected groups — encode as deselected groups (shorter when most are selected)
             const allGroups = Object.keys(benchGroupColors).sort();
@@ -6340,6 +6368,15 @@
                 benchStatType = bs;
                 const sel = document.getElementById('bench-stat-type');
                 if (sel) sel.value = bs;
+            }
+
+            const bv = params.get('bv');
+            if (bv === 'groups') {
+                benchTableView = 'groups';
+                benchSortCol = 'latest';
+                benchSortAsc = false;
+                document.getElementById('bench-view-runs')?.classList.remove('btn-primary');
+                document.getElementById('bench-view-groups')?.classList.add('btn-primary');
             }
         }
 
@@ -6880,14 +6917,159 @@
                 benchSortAsc = !benchSortAsc;
             } else {
                 benchSortCol = col;
-                benchSortAsc = col === 'group';
+                if (benchTableView === 'runs') {
+                    // Date and commit ascend by default for text; date we want newest first → desc
+                    benchSortAsc = col === 'commit';
+                } else {
+                    benchSortAsc = col === 'group';
+                }
             }
             updateBenchTable();
         }
 
+        function setBenchTableView(view) {
+            if (view !== 'groups' && view !== 'runs') return;
+            if (view === benchTableView) return;
+            benchTableView = view;
+            document.getElementById('bench-view-groups').classList.toggle('btn-primary', view === 'groups');
+            document.getElementById('bench-view-runs').classList.toggle('btn-primary', view === 'runs');
+            // Reset sort to sensible default for the new view
+            if (view === 'runs') {
+                benchSortCol = 'date';
+                benchSortAsc = false;
+            } else {
+                benchSortCol = 'latest';
+                benchSortAsc = false;
+            }
+            updateBenchTable();
+            updateBenchURL();
+        }
+
         function updateBenchTable() {
+            if (benchTableView === 'runs') {
+                renderBenchRunsTable();
+            } else {
+                renderBenchGroupsTable();
+            }
+        }
+
+        function formatBenchDelta(d) {
+            if (d == null) return '—';
+            const pct = d * 100;
+            const sign = d > 0 ? '+' : '';
+            const text = `${sign}${pct.toFixed(2)}%`;
+            const cls = Math.abs(d) < 0.005 ? '' : (d > 0 ? 'bench-delta-pos' : 'bench-delta-neg');
+            return cls ? `<span class="${cls}">${text}</span>` : text;
+        }
+
+        function renderBenchRunsTable() {
             const reports = getFilteredReports();
+            const thead = document.getElementById('bench-stats-thead');
             const tbody = document.getElementById('bench-stats-tbody');
+
+            const arrow = (col) => benchSortCol === col ? (benchSortAsc ? ' ▲' : ' ▼') : '';
+            thead.innerHTML = `<tr>
+                <th onclick="sortBenchTable('date')">Report date${arrow('date')}</th>
+                <th onclick="sortBenchTable('commit')">Commit${arrow('commit')}</th>
+                <th onclick="sortBenchTable('baseline')" title="Baseline date the Nanosoldier report compared against">Baseline${arrow('baseline')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('geomean')">Geomean${arrow('geomean')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('delta')" title="Geomean change vs previous run in selected range">Geomean Δ${arrow('delta')}</th>
+                <th onclick="sortBenchTable('improved')" title="Improvements reported by Nanosoldier">Improved${arrow('improved')}</th>
+                <th onclick="sortBenchTable('regressed')" title="Regressions reported by Nanosoldier">Regressed${arrow('regressed')}</th>
+            </tr>`;
+
+            if (reports.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7">No data in selected range</td></tr>';
+                return;
+            }
+
+            const key = benchKey();
+            const selected = benchSelectedGroups;
+
+            const geomeanOf = (vals) => {
+                if (vals.length === 0) return null;
+                const sumLog = vals.reduce((a, v) => a + Math.log(v), 0);
+                return Math.exp(sumLog / vals.length);
+            };
+
+            const geomeans = reports.map(r => {
+                const vals = [];
+                if (r.by_group) {
+                    for (const g of selected) {
+                        const v = r.by_group[g]?.[key];
+                        if (v != null && v > 0) vals.push(v);
+                    }
+                }
+                return geomeanOf(vals);
+            });
+
+            const rows = reports.map((r, i) => {
+                const gm = geomeans[i];
+                const prev = i > 0 ? geomeans[i - 1] : null;
+                const delta = (gm != null && prev != null && prev > 0) ? (gm / prev) - 1 : null;
+                return {
+                    date: r.date || '',
+                    date_path: r.date_path || '',
+                    commit: r.commit || '',
+                    baseline: r.report_baseline_date || '',
+                    geomean: gm,
+                    delta,
+                    improved: r.report_improvements ?? null,
+                    regressed: r.report_regressions ?? null,
+                };
+            });
+
+            rows.sort((a, b) => {
+                const va = a[benchSortCol];
+                const vb = b[benchSortCol];
+                if (va == null && vb == null) return 0;
+                if (va == null) return 1;
+                if (vb == null) return -1;
+                const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+                return benchSortAsc ? cmp : -cmp;
+            });
+
+            const fmtCount = (n, cls) => n == null ? '—' : (n > 0 ? `<span class="${cls}">${n}</span>` : '0');
+
+            let html = '';
+            for (const row of rows) {
+                const reportUrl = row.date_path
+                    ? `https://github.com/JuliaCI/NanosoldierReports/blob/master/benchmark/by_date/${row.date_path.split('/').map(encodeURIComponent).join('/')}/report.md`
+                    : null;
+                const dateDisplay = reportUrl
+                    ? `<a class="bench-runs-link" href="${reportUrl}" target="_blank" rel="noopener">${escapeHtml(row.date)}</a>`
+                    : escapeHtml(row.date);
+                const commitDisplay = row.commit
+                    ? `<a class="bench-runs-link" href="https://github.com/JuliaLang/julia/commit/${encodeURIComponent(row.commit)}" target="_blank" rel="noopener">${escapeHtml(row.commit.slice(0, 8))}</a>`
+                    : '—';
+                const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : '—';
+                html += `<tr>`;
+                html += `<td>${dateDisplay}</td>`;
+                html += `<td>${commitDisplay}</td>`;
+                html += `<td>${baselineDisplay}</td>`;
+                html += `<td class="bench-time">${formatTime(row.geomean)}</td>`;
+                html += `<td class="bench-time">${formatBenchDelta(row.delta)}</td>`;
+                html += `<td>${fmtCount(row.improved, 'bench-runs-improved')}</td>`;
+                html += `<td>${fmtCount(row.regressed, 'bench-runs-regressed')}</td>`;
+                html += `</tr>`;
+            }
+            tbody.innerHTML = html || '<tr><td colspan="7">No runs</td></tr>';
+        }
+
+        function renderBenchGroupsTable() {
+            const reports = getFilteredReports();
+            const thead = document.getElementById('bench-stats-thead');
+            const tbody = document.getElementById('bench-stats-tbody');
+
+            const arrow = (col) => benchSortCol === col ? (benchSortAsc ? ' ▲' : ' ▼') : '';
+            thead.innerHTML = `<tr>
+                <th onclick="sortBenchTable('group')">Group${arrow('group')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('latest')">Latest${arrow('latest')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('avg')">Average${arrow('avg')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('min')">Min${arrow('min')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('max')">Max${arrow('max')}</th>
+                <th onclick="sortBenchTable('count')">Benchmarks${arrow('count')}</th>
+            </tr>`;
 
             if (reports.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6">No data in selected range</td></tr>';

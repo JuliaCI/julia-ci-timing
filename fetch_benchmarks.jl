@@ -102,12 +102,42 @@ function extract_commit(by_date_dir::String, date_path::String)
     return ""
 end
 
+"""
+Extract the official summary counts and the baseline comparison date from the report markdown.
+Returns a NamedTuple with fields `total`, `regressions`, `improvements`, `baseline_date` (each may be `nothing`).
+The summary line looks like: `**4818** benchmarks were executed, **89** showed regressions, and **168** showed improvements.`
+The baseline line looks like: `*Daily Job:* 2026-04-26 vs [2026-04-18](../../2026-04/18/report.md)`
+"""
+function extract_report_summary(by_date_dir::String, date_path::String)
+    report_file = joinpath(by_date_dir, date_path, "report.md")
+    if !isfile(report_file)
+        return (total=nothing, regressions=nothing, improvements=nothing, baseline_date=nothing)
+    end
+    total = nothing
+    regressions = nothing
+    improvements = nothing
+    baseline_date = nothing
+    text = read(report_file, String)
+    m = match(r"\*\*(\d+)\*\* benchmarks were executed,\s*\*\*(\d+)\*\* showed\s*regressions,\s*and\s*\*\*(\d+)\*\* showed\s*improvements"s, text)
+    if m !== nothing
+        total = parse(Int, m.captures[1])
+        regressions = parse(Int, m.captures[2])
+        improvements = parse(Int, m.captures[3])
+    end
+    bm = match(r"Daily Job:\*\s*\d{4}-\d{2}-\d{2}\s*vs\s*\[(\d{4}-\d{2}-\d{2})\]", text)
+    if bm !== nothing
+        baseline_date = String(bm.captures[1])
+    end
+    return (total=total, regressions=regressions, improvements=improvements, baseline_date=baseline_date)
+end
+
 function parse_tarball(by_date_dir::String, date_path::String)
     date = date_path_to_date(date_path)
     tarball = joinpath(by_date_dir, date_path, "data.tar.zst")
     isfile(tarball) || return nothing
 
     commit = extract_commit(by_date_dir, date_path)
+    summary_stats = extract_report_summary(by_date_dir, date_path)
 
     # Extract into a temp directory
     tmpdir = mktempdir()
@@ -156,12 +186,17 @@ function parse_tarball(by_date_dir::String, date_path::String)
 
     isempty(by_group) && return nothing
 
-    return SortedDict(
+    result = SortedDict(
         "date" => date,
         "date_path" => date_path,
         "commit" => commit,
         "by_group" => by_group,
     )
+    summary_stats.total !== nothing && (result["report_total"] = summary_stats.total)
+    summary_stats.regressions !== nothing && (result["report_regressions"] = summary_stats.regressions)
+    summary_stats.improvements !== nothing && (result["report_improvements"] = summary_stats.improvements)
+    summary_stats.baseline_date !== nothing && (result["report_baseline_date"] = summary_stats.baseline_date)
+    return result
 end
 
 function load_existing_data(output_dir)
@@ -211,7 +246,7 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
         for report in get(existing_summary, :reports, [])
             d = String(get(report, :date, ""))
             isempty(d) && continue
-            reports_by_date[d] = SortedDict(
+            entry = SortedDict{String, Any}(
                 "date" => d,
                 "date_path" => String(get(report, :date_path, d)),
                 "commit" => String(get(report, :commit, "")),
@@ -221,6 +256,12 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
                     ) for (k, v) in pairs(bg))
                 end
             )
+            for fld in (:report_total, :report_regressions, :report_improvements, :report_baseline_date)
+                v = get(report, fld, nothing)
+                v === nothing && continue
+                entry[String(fld)] = v isa AbstractString ? String(v) : v
+            end
+            reports_by_date[d] = entry
         end
     end
 
@@ -234,6 +275,9 @@ function generate_json_output(new_reports, existing_summary; output_dir="data")
     summary_reports = []
     for report in reports
         sr = SortedDict{String, Any}("date" => report["date"], "date_path" => get(report, "date_path", report["date"]), "commit" => get(report, "commit", ""))
+        for fld in ("report_total", "report_regressions", "report_improvements", "report_baseline_date")
+            haskey(report, fld) && (sr[fld] = report[fld])
+        end
         sr_groups = SortedDict{String, Any}()
         for (group, gdata) in report["by_group"]
             sg = Dict{String, Any}()
@@ -427,6 +471,41 @@ function main()
     end
 
     @info "Parsed new reports" count=length(new_reports)
+
+    # Backfill report summary fields (counts + baseline) for known dates that lack them.
+    # This is cheap: we only read report.md files for dates that don't already have report_total.
+    if existing_summary !== nothing
+        backfilled = 0
+        for report in get(existing_summary, :reports, [])
+            haskey(report, :report_total) && haskey(report, :report_baseline_date) && continue
+            d = String(get(report, :date, ""))
+            isempty(d) && continue
+            d in known_dates || continue
+            # Skip if a freshly-parsed entry already covers this date
+            any(r -> r["date"] == d, new_reports) && continue
+            date_path = String(get(report, :date_path, ""))
+            isempty(date_path) && continue
+            stats = extract_report_summary(by_date_dir, date_path)
+            (stats.total === nothing && stats.baseline_date === nothing) && continue
+            entry = SortedDict{String, Any}(
+                "date" => d,
+                "date_path" => date_path,
+                "commit" => String(get(report, :commit, "")),
+                "by_group" => let bg = get(report, :by_group, Dict())
+                    SortedDict{String, Any}(String(k) => Dict{String, Any}(
+                        String(fk) => fv for (fk, fv) in pairs(v)
+                    ) for (k, v) in pairs(bg))
+                end,
+            )
+            stats.total !== nothing && (entry["report_total"] = stats.total)
+            stats.regressions !== nothing && (entry["report_regressions"] = stats.regressions)
+            stats.improvements !== nothing && (entry["report_improvements"] = stats.improvements)
+            stats.baseline_date !== nothing && (entry["report_baseline_date"] = stats.baseline_date)
+            push!(new_reports, entry)
+            backfilled += 1
+        end
+        @info "Backfilled report summaries" count=backfilled
+    end
 
     generate_json_output(new_reports, existing_summary)
     return 0
