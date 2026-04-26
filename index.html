@@ -6213,13 +6213,32 @@
         // === Tab Navigation ===
         let activeTab = 'ci-timing';
 
+        const PERF_ORIGIN = 'https://tealquaternion.camdvr.org';
+
         function applyPerfURLParams() {
-            const perfQuery = new URLSearchParams(window.location.search).get('perf');
-            if (perfQuery) {
+            const perfPath = new URLSearchParams(window.location.search).get('perf');
+            if (perfPath) {
                 const iframe = document.getElementById('perf-iframe');
-                iframe.src = 'https://tealquaternion.camdvr.org/?' + perfQuery;
+                iframe.src = PERF_ORIGIN + (perfPath.startsWith('/') ? perfPath : '/' + perfPath);
             }
         }
+
+        // Listen for URL updates posted by the embedded julia-perf site so we
+        // can reflect them in our own address bar.
+        window.addEventListener('message', (event) => {
+            if (event.origin !== PERF_ORIGIN) return;
+            const msg = event.data;
+            if (!msg || msg.type !== 'julia-perf-url') return;
+            if (activeTab !== 'perf') return;
+            const perfPath = (msg.pathname || '/') + (msg.search || '') + (msg.hash || '');
+            const url = new URL(window.location);
+            if (perfPath && perfPath !== '/') {
+                url.searchParams.set('perf', perfPath);
+            } else {
+                url.searchParams.delete('perf');
+            }
+            history.replaceState(null, '', url);
+        });
 
         function switchTab(tab) {
             activeTab = tab;
