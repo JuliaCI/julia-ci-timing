@@ -1357,6 +1357,11 @@
         .benchmarks-stats th.bench-time-header {
             text-align: right;
         }
+        .benchmarks-stats td.bench-delta,
+        .benchmarks-stats th.bench-delta-header {
+            text-align: left;
+            padding-left: 12px;
+        }
         .bench-table-view-toggle {
             display: inline-flex;
             gap: 0;
@@ -6972,19 +6977,22 @@
                 <th onclick="sortBenchTable('date')">Report date${arrow('date')}</th>
                 <th onclick="sortBenchTable('commit')">Commit${arrow('commit')}</th>
                 <th onclick="sortBenchTable('baseline')" title="Baseline date the Nanosoldier report compared against">Baseline${arrow('baseline')}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('geomean')">Geomean${arrow('geomean')}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('delta')" title="Geomean change vs previous run in selected range">Geomean Δ${arrow('delta')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('geomeanMin')">Geomean (min)${arrow('geomeanMin')}</th>
+                <th class="bench-delta-header" onclick="sortBenchTable('deltaMin')" title="Min geomean change vs previous run in selected range">Δ${arrow('deltaMin')}</th>
+                <th class="bench-time-header" onclick="sortBenchTable('geomeanMean')">Geomean (mean)${arrow('geomeanMean')}</th>
+                <th class="bench-delta-header" onclick="sortBenchTable('deltaMean')" title="Mean geomean change vs previous run in selected range">Δ${arrow('deltaMean')}</th>
                 <th onclick="sortBenchTable('improved')" title="Improvements reported by Nanosoldier">Improved${arrow('improved')}</th>
                 <th onclick="sortBenchTable('regressed')" title="Regressions reported by Nanosoldier">Regressed${arrow('regressed')}</th>
             </tr>`;
 
             if (reports.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7">No data in selected range</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9">No data in selected range</td></tr>';
                 return;
             }
 
-            const key = benchKey();
             const selected = benchSelectedGroups;
+            const minKey = 'minimum_geomean_ns';
+            const meanKey = 'mean_geomean_ns';
 
             const geomeanOf = (vals) => {
                 if (vals.length === 0) return null;
@@ -6992,7 +7000,7 @@
                 return Math.exp(sumLog / vals.length);
             };
 
-            const geomeans = reports.map(r => {
+            const computeGeomeans = (key) => reports.map(r => {
                 const vals = [];
                 if (r.by_group) {
                     for (const g of selected) {
@@ -7002,18 +7010,25 @@
                 }
                 return geomeanOf(vals);
             });
+            const minGms = computeGeomeans(minKey);
+            const meanGms = computeGeomeans(meanKey);
 
             const rows = reports.map((r, i) => {
-                const gm = geomeans[i];
-                const prev = i > 0 ? geomeans[i - 1] : null;
-                const delta = (gm != null && prev != null && prev > 0) ? (gm / prev) - 1 : null;
+                const gmMin = minGms[i];
+                const prevMin = i > 0 ? minGms[i - 1] : null;
+                const deltaMin = (gmMin != null && prevMin != null && prevMin > 0) ? (gmMin / prevMin) - 1 : null;
+                const gmMean = meanGms[i];
+                const prevMean = i > 0 ? meanGms[i - 1] : null;
+                const deltaMean = (gmMean != null && prevMean != null && prevMean > 0) ? (gmMean / prevMean) - 1 : null;
                 return {
                     date: r.date || '',
                     date_path: r.date_path || '',
                     commit: r.commit || '',
                     baseline: r.report_baseline_date || '',
-                    geomean: gm,
-                    delta,
+                    geomeanMin: gmMin,
+                    deltaMin,
+                    geomeanMean: gmMean,
+                    deltaMean,
                     improved: r.report_improvements ?? null,
                     regressed: r.report_regressions ?? null,
                 };
@@ -7047,13 +7062,15 @@
                 html += `<td>${dateDisplay}</td>`;
                 html += `<td>${commitDisplay}</td>`;
                 html += `<td>${baselineDisplay}</td>`;
-                html += `<td class="bench-time">${formatTime(row.geomean)}</td>`;
-                html += `<td class="bench-time">${formatBenchDelta(row.delta)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.geomeanMin)}</td>`;
+                html += `<td class="bench-delta">${formatBenchDelta(row.deltaMin)}</td>`;
+                html += `<td class="bench-time">${formatTime(row.geomeanMean)}</td>`;
+                html += `<td class="bench-delta">${formatBenchDelta(row.deltaMean)}</td>`;
                 html += `<td>${fmtCount(row.improved, 'bench-runs-improved')}</td>`;
                 html += `<td>${fmtCount(row.regressed, 'bench-runs-regressed')}</td>`;
                 html += `</tr>`;
             }
-            tbody.innerHTML = html || '<tr><td colspan="7">No runs</td></tr>';
+            tbody.innerHTML = html || '<tr><td colspan="9">No runs</td></tr>';
         }
 
         function renderBenchGroupsTable() {
