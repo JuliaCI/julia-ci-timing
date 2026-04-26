@@ -679,6 +679,7 @@
         @media (max-width: 768px) {
             html, body { overflow: auto; }
             body { height: auto; min-height: 100vh; }
+            body.tab-perf-active { height: 100dvh; min-height: unset; overflow: hidden; }
 
             .toolbar {
                 flex-wrap: wrap;
@@ -696,6 +697,14 @@
                 margin-left: 0;
                 font-size: 10px;
                 order: 10;
+            }
+            .tab-nav {
+                margin-right: 0;
+                order: 5;
+            }
+            .tab-btn {
+                padding: 3px 8px;
+                font-size: 11px;
             }
             .btn, .time-select {
                 padding: 4px 8px;
@@ -788,6 +797,18 @@
             }
             .julia-logo {
                 height: 14px;
+            }
+            .tab-nav {
+                margin-right: 0;
+                order: 5;
+            }
+            .tab-btn {
+                padding: 3px 6px;
+                font-size: 10px;
+            }
+            .tab-group-label {
+                font-size: 9px;
+                padding: 1px 5px;
             }
             .btn, .time-select {
                 padding: 6px 8px; /* Taller touch targets */
@@ -6218,6 +6239,7 @@
             document.getElementById('benchmarks-view').classList.toggle('view-hidden', tab !== 'benchmarks');
             document.getElementById('pkgeval-view').classList.toggle('view-hidden', tab !== 'pkgeval');
             document.getElementById('perf-view').classList.toggle('view-hidden', tab !== 'perf');
+            document.body.classList.toggle('tab-perf-active', tab === 'perf');
 
             if (tab === 'benchmarks' && !benchData) {
                 loadBenchmarkData();
