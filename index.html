@@ -1453,7 +1453,6 @@
         <h1><img src="favicon.svg" alt="Julia CI Timing" class="julia-logo"><a href="https://github.com/JuliaLang" target="_blank" rel="noopener noreferrer" class="link-muted">JuliaLang</a> / <a href="https://github.com/JuliaLang/julia" target="_blank" rel="noopener noreferrer" class="link-inherit">julia</a></h1>
         <div class="tab-nav">
             <button class="tab-btn active" id="tab-ci-timing" onclick="switchTab('ci-timing')">CI Timing</button>
-            <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')">PkgEval</button>
             <div class="tab-group">
                 <span class="tab-group-label">Benchmarks</span>
                 <div class="tab-group-buttons">
@@ -1461,6 +1460,7 @@
                     <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">History</button>
                 </div>
             </div>
+            <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')">PkgEval</button>
         </div>
         <span id="ci-timing-controls">
         <select class="time-select" id="time-range" onchange="setTimeRange(this.value)" aria-label="Time range">
