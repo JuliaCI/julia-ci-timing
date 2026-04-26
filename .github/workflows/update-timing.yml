@@ -29,6 +29,14 @@ jobs:
       - name: Cache Julia packages
         uses: julia-actions/cache@v3
 
+      - name: Cache NanosoldierReports clone
+        uses: actions/cache@v4
+        with:
+          path: .cache/NanosoldierReports
+          key: nanosoldier-reports-${{ github.run_id }}
+          restore-keys: |
+            nanosoldier-reports-
+
       - name: Install dependencies
         run: |
           julia --color=yes --project -e 'using Pkg; Pkg.instantiate()'

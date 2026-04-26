@@ -9,7 +9,7 @@ using Dates
 using CodecZlib: GzipCompressor, GzipDecompressor
 
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
-const CLONE_DIR = joinpath(tempdir(), "NanosoldierReports")
+const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports")
 const RAW_BASE = "https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/pkgeval/by_date"
 const CONCURRENCY = 20
 
