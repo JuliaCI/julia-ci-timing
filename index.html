@@ -1153,6 +1153,33 @@
             color: #fff;
         }
         .tab-btn.active:hover { background: #1f6feb; }
+        .tab-group {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .tab-group-label {
+            padding: 1px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--color-fg-muted);
+            background: var(--color-canvas-inset);
+            border-bottom: 1px solid var(--color-btn-border);
+            white-space: nowrap;
+            user-select: none;
+            text-align: center;
+        }
+        .tab-group-buttons {
+            display: flex;
+            flex: 1;
+        }
+        .tab-group .tab-btn {
+            border-right: 1px solid var(--color-btn-border);
+        }
+        .tab-group .tab-btn:hover { background: var(--color-btn-hover-bg); }
+        .tab-group .tab-btn.active { background: var(--color-accent-emphasis); color: #fff; }
+        .tab-group .tab-btn.active:hover { background: #1f6feb; }
+        .tab-group .tab-btn:last-child { border-right: none; }
         .view-hidden { display: none !important; }
 
         /* Benchmarks view */
@@ -1405,8 +1432,14 @@
         <h1><img src="favicon.svg" alt="Julia CI Timing" class="julia-logo"><a href="https://github.com/JuliaLang" target="_blank" rel="noopener noreferrer" class="link-muted">JuliaLang</a> / <a href="https://github.com/JuliaLang/julia" target="_blank" rel="noopener noreferrer" class="link-inherit">julia</a></h1>
         <div class="tab-nav">
             <button class="tab-btn active" id="tab-ci-timing" onclick="switchTab('ci-timing')">CI Timing</button>
-            <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">Benchmarks</button>
             <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')">PkgEval</button>
+            <div class="tab-group">
+                <span class="tab-group-label">Benchmarks</span>
+                <div class="tab-group-buttons">
+                    <button class="tab-btn" id="tab-perf" onclick="switchTab('perf')">Diff</button>
+                    <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">History</button>
+                </div>
+            </div>
         </div>
         <span id="ci-timing-controls">
         <select class="time-select" id="time-range" onchange="setTimeRange(this.value)" aria-label="Time range">
@@ -1567,6 +1600,10 @@
             </div>
         </div>
     </main>
+
+    <div class="view-hidden" id="perf-view" style="flex:1;min-height:0;background:white;color-scheme:light;">
+        <iframe src="https://tealquaternion.camdvr.org/" style="width:100%;height:100%;border:none;display:block;color-scheme:light;background:white;" title="Julia Perf" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+    </div>
 
     <div class="pkgeval-main view-hidden" id="pkgeval-view">
         <div class="pkgeval-toolbar">
@@ -6160,6 +6197,7 @@
             document.getElementById('tab-ci-timing').classList.toggle('active', tab === 'ci-timing');
             document.getElementById('tab-benchmarks').classList.toggle('active', tab === 'benchmarks');
             document.getElementById('tab-pkgeval').classList.toggle('active', tab === 'pkgeval');
+            document.getElementById('tab-perf').classList.toggle('active', tab === 'perf');
 
             document.getElementById('ci-timing-view').classList.toggle('view-hidden', tab !== 'ci-timing');
             document.getElementById('ci-timing-controls').classList.toggle('view-hidden', tab !== 'ci-timing');
@@ -6171,6 +6209,7 @@
 
             document.getElementById('benchmarks-view').classList.toggle('view-hidden', tab !== 'benchmarks');
             document.getElementById('pkgeval-view').classList.toggle('view-hidden', tab !== 'pkgeval');
+            document.getElementById('perf-view').classList.toggle('view-hidden', tab !== 'perf');
 
             if (tab === 'benchmarks' && !benchData) {
                 loadBenchmarkData();
@@ -7185,7 +7224,7 @@
 
         // Switch to correct tab if URL says so
         const urlTab = new URLSearchParams(window.location.search).get('tab');
-        if (urlTab === 'benchmarks' || urlTab === 'pkgeval') {
+        if (urlTab === 'benchmarks' || urlTab === 'pkgeval' || urlTab === 'perf') {
             switchTab(urlTab);
         }
 
