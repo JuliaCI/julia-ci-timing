@@ -1602,7 +1602,7 @@
     </main>
 
     <div class="view-hidden" id="perf-view" style="flex:1;min-height:0;background:white;color-scheme:light;">
-        <iframe src="https://tealquaternion.camdvr.org/" style="width:100%;height:100%;border:none;display:block;color-scheme:light;background:white;" title="Julia Perf" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+        <iframe id="perf-iframe" src="https://tealquaternion.camdvr.org/" style="width:100%;height:100%;border:none;display:block;color-scheme:light;background:white;" title="Julia Perf" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
     </div>
 
     <div class="pkgeval-main view-hidden" id="pkgeval-view">
@@ -6192,6 +6192,14 @@
         // === Tab Navigation ===
         let activeTab = 'ci-timing';
 
+        function applyPerfURLParams() {
+            const perfQuery = new URLSearchParams(window.location.search).get('perf');
+            if (perfQuery) {
+                const iframe = document.getElementById('perf-iframe');
+                iframe.src = 'https://tealquaternion.camdvr.org/?' + perfQuery;
+            }
+        }
+
         function switchTab(tab) {
             activeTab = tab;
             document.getElementById('tab-ci-timing').classList.toggle('active', tab === 'ci-timing');
@@ -7221,6 +7229,7 @@
         // Apply benchmark URL params before potential tab switch
         applyBenchURLParams();
         applyPkgevalURLParams();
+        applyPerfURLParams();
 
         // Switch to correct tab if URL says so
         const urlTab = new URLSearchParams(window.location.search).get('tab');
