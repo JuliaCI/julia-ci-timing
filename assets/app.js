@@ -4958,13 +4958,48 @@ let activeTab = "perf";
 
 const PERF_ORIGIN = "https://tealquaternion.camdvr.org";
 
+// URL params owned by this dashboard. Anything NOT in this set is treated as
+// belonging to the embedded julia-perf site and forwarded to/from the iframe
+// so deep links like ?start=abc&end=def&stat=instructions Just Work.
+// "perf" is a legacy single-param fallback that holds the full iframe path.
+const DASHBOARD_PARAMS = new Set([
+  "s", // selected jobs
+  "t", // time range (days)
+  "x", // custom x zoom
+  "y", // custom y zoom
+  "l", // line type
+  "e", // expanded jobs in stats table
+  "st", // state filter
+  "c", // comparison build pair
+  "tab", // active tab
+  "bt", // bench time range
+  "bs", // bench stat type
+  "bv", // bench table view
+  "bg", // bench groups
+  "pt", // pkgeval time range
+  "pp", // pkgeval proportional toggle
+  "perf", // legacy: full iframe path
+]);
+
 function applyPerfURLParams() {
-  const perfPath = new URLSearchParams(window.location.search).get("perf");
+  const params = new URLSearchParams(window.location.search);
+  const iframe = document.getElementById("perf-iframe");
+
+  // Legacy: ?perf=/path?foo=bar wins if present.
+  const perfPath = params.get("perf");
   if (perfPath) {
-    const iframe = document.getElementById("perf-iframe");
     iframe.src =
       PERF_ORIGIN + (perfPath.startsWith("/") ? perfPath : "/" + perfPath);
+    return;
   }
+
+  // Otherwise, forward any non-dashboard params straight through.
+  const forwarded = new URLSearchParams();
+  for (const [k, v] of params) {
+    if (!DASHBOARD_PARAMS.has(k)) forwarded.append(k, v);
+  }
+  const qs = forwarded.toString();
+  if (qs) iframe.src = `${PERF_ORIGIN}/?${qs}`;
 }
 
 // Listen for URL updates posted by the embedded julia-perf site so we
@@ -4974,13 +5009,29 @@ window.addEventListener("message", (event) => {
   const msg = event.data;
   if (!msg || msg.type !== "julia-perf-url") return;
   if (activeTab !== "perf") return;
-  const perfPath =
-    (msg.pathname || "/") + (msg.search || "") + (msg.hash || "");
   const url = new URL(window.location);
-  if (perfPath && perfPath !== "/") {
+
+  // Legacy single-param mode: only used if the iframe is not at "/".
+  // (julia-perf is a SPA at "/" so in practice we always hit the
+  // pass-through branch below.)
+  const path = msg.pathname || "/";
+  if (path !== "/") {
+    const perfPath = path + (msg.search || "") + (msg.hash || "");
     url.searchParams.set("perf", perfPath);
-  } else {
-    url.searchParams.delete("perf");
+    history.replaceState(null, "", url);
+    return;
+  }
+
+  // Pass-through mode: mirror the iframe's query params on the parent URL,
+  // leaving dashboard-owned params untouched.
+  url.searchParams.delete("perf");
+  const incoming = new URLSearchParams(msg.search || "");
+  // Drop existing forwarded params so removed iframe params disappear here too.
+  for (const k of Array.from(url.searchParams.keys())) {
+    if (!DASHBOARD_PARAMS.has(k)) url.searchParams.delete(k);
+  }
+  for (const [k, v] of incoming) {
+    if (!DASHBOARD_PARAMS.has(k)) url.searchParams.append(k, v);
   }
   history.replaceState(null, "", url);
 });
