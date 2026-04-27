@@ -7,6 +7,17 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Julia CI Timing</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <script>
+        // Apply saved theme as early as possible to avoid FOUC
+        (function() {
+            try {
+                const t = localStorage.getItem('theme');
+                if (t === 'dark' || t === 'light') {
+                    document.documentElement.setAttribute('data-theme', t);
+                }
+            } catch (e) {}
+        })();
+    </script>
     <link rel="apple-touch-icon" href="favicon.svg">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -48,7 +59,7 @@
         }
 
         @media (prefers-color-scheme: dark) {
-            :root {
+            :root:not([data-theme="light"]) {
                 --color-canvas-default: #0d1117;
                 --color-canvas-subtle: #161b22;
                 --color-canvas-inset: #010409;
@@ -77,6 +88,35 @@
                 --color-neutral-muted: rgba(110,118,129,0.4);
                 --color-overlay-shadow: 0 0 0 1px #30363d, 0 16px 32px rgba(1,4,9,0.85);
             }
+        }
+        :root[data-theme="dark"] {
+            --color-canvas-default: #0d1117;
+            --color-canvas-subtle: #161b22;
+            --color-canvas-inset: #010409;
+            --color-border-default: #30363d;
+            --color-border-muted: #21262d;
+            --color-fg-default: #e6edf3;
+            --color-fg-muted: #8b949e;
+            --color-fg-subtle: #6e7681;
+            --color-accent-fg: #58a6ff;
+            --color-accent-emphasis: #1f6feb;
+            --color-success-fg: #3fb950;
+            --color-success-subtle: rgba(46,160,67,1.0);
+            --color-danger-fg: #f85149;
+            --color-danger-subtle: rgba(248,81,73,1.0);
+            --color-attention-fg: #d29922;
+            --color-attention-subtle: rgba(210,153,34,0.5);
+            --color-attention-emphasis: #f0b429;
+            --color-neutral-subtle: rgba(110,118,129,1.0);
+            --color-btn-bg: #21262d;
+            --color-btn-border: rgba(240,246,252,0.1);
+            --color-btn-hover-bg: #30363d;
+            --color-btn-active-bg: hsla(212,12%,18%,1);
+            --color-btn-primary-bg: #238636;
+            --color-btn-primary-border: rgba(240,246,252,0.1);
+            --color-btn-primary-hover-bg: #2ea043;
+            --color-neutral-muted: rgba(110,118,129,0.4);
+            --color-overlay-shadow: 0 0 0 1px #30363d, 0 16px 32px rgba(1,4,9,0.85);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -131,8 +171,12 @@
         }
         .btn:hover { background: var(--color-btn-hover-bg); }
         .btn-icon {
-            padding: 4px 8px;
-            line-height: normal;
+            padding: 0;
+            width: 28px;
+            height: 28px;
+            line-height: 28px;
+            text-align: center;
+            display: inline-block;
         }
         .btn-primary {
             background: var(--color-accent-emphasis);
@@ -1531,6 +1575,7 @@
             <div class="checkbox-dropdown-menu" id="host-filter-menu"></div>
         </div>
         </span>
+        <button class="btn btn-icon" id="theme-toggle" onclick="cycleTheme()" aria-label="Toggle theme" title="Theme: system">◑</button>
         <button class="btn btn-icon" onclick="toggleShortcutsHelp()" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
         <span class="updated" id="last-updated" aria-live="polite"></span>
         <a href="https://github.com/JuliaCI/julia-ci-timing/commit/__BUILD_COMMIT__" target="_blank" rel="noopener noreferrer" class="updated link-no-underline" id="build-commit" title="Site build commit">__BUILD_COMMIT_SHORT__</a>
@@ -3705,7 +3750,7 @@
             if (chart) chart.destroy();
             highlightActive = false;  // Reset highlight state when chart is recreated
 
-            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const isDark = isDarkMode();
             const gridColor = isDark ? '#30363d' : '#d0d7de';
             const textColor = isDark ? '#8b949e' : '#656d76';
 
@@ -6696,7 +6741,7 @@
                 return;
             }
 
-            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const isDark = isDarkMode();
             const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
             const textColor = isDark ? '#8b949e' : '#656d76';
             const key = benchKey();
@@ -7290,7 +7335,7 @@
             const reports = getPkgevalFilteredReports();
             if (!reports.length) return;
 
-            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const isDark = isDarkMode();
             const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
             const textColor = isDark ? '#8b949e' : '#656d76';
 
@@ -7493,10 +7538,49 @@
 
         // Re-render chart when color scheme changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            if (currentTheme() === 'system') applyTheme();
             if (selectedJobs.size > 0) updateChart();
             if (benchChart) updateBenchChart();
             if (pkgevalChart) updatePkgevalChart();
         });
+
+        function currentTheme() {
+            try { return localStorage.getItem('theme') || 'system'; } catch (e) { return 'system'; }
+        }
+        function isDarkMode() {
+            const t = currentTheme();
+            if (t === 'dark') return true;
+            if (t === 'light') return false;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+        function applyTheme() {
+            const t = currentTheme();
+            const root = document.documentElement;
+            if (t === 'dark' || t === 'light') {
+                root.setAttribute('data-theme', t);
+            } else {
+                root.removeAttribute('data-theme');
+            }
+            const btn = document.getElementById('theme-toggle');
+            if (btn) {
+                const icons = { system: '◑', dark: '☾', light: '☀' };
+                btn.textContent = icons[t] || icons.system;
+                btn.title = `Theme: ${t}`;
+            }
+            if (selectedJobs.size > 0) updateChart();
+            if (benchChart) updateBenchChart();
+            if (pkgevalChart) updatePkgevalChart();
+        }
+        function cycleTheme() {
+            const order = ['system', 'dark', 'light'];
+            const next = order[(order.indexOf(currentTheme()) + 1) % order.length];
+            try {
+                if (next === 'system') localStorage.removeItem('theme');
+                else localStorage.setItem('theme', next);
+            } catch (e) {}
+            applyTheme();
+        }
+        applyTheme();
     </script>
 </body>
 </html>
