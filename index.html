@@ -52,13 +52,16 @@
           >julia</a
         >
       </h1>
-      <div class="tab-nav">
+      <div class="tab-nav" role="tablist" aria-label="Dashboard pages">
         <div class="tab-group">
           <span class="tab-group-label">Benchmarks</span>
           <div class="tab-group-buttons">
             <button
               class="tab-btn active"
               id="tab-perf"
+              role="tab"
+              aria-selected="true"
+              aria-controls="perf-view"
               onclick="switchTab('perf')"
               title="Side-by-side benchmark comparison between two commits"
             >
@@ -67,6 +70,9 @@
             <button
               class="tab-btn"
               id="tab-benchmarks"
+              role="tab"
+              aria-selected="false"
+              aria-controls="benchmarks-view"
               onclick="switchTab('benchmarks')"
               title="Time-series of nightly Nanosoldier benchmark results"
             >
@@ -77,6 +83,9 @@
         <button
           class="tab-btn"
           id="tab-ci-timing"
+          role="tab"
+          aria-selected="false"
+          aria-controls="ci-timing-view"
           onclick="switchTab('ci-timing')"
           title="Buildkite CI job timing per host and platform"
         >
@@ -85,6 +94,9 @@
         <button
           class="tab-btn"
           id="tab-pkgeval"
+          role="tab"
+          aria-selected="false"
+          aria-controls="pkgeval-view"
           onclick="switchTab('pkgeval')"
           title="PkgEval results: package test pass/fail rates per Julia version"
         >

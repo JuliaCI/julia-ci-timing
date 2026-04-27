@@ -4970,18 +4970,18 @@ window.addEventListener("message", (event) => {
 
 function switchTab(tab) {
   activeTab = tab;
-  document
-    .getElementById("tab-ci-timing")
-    .classList.toggle("active", tab === "ci-timing");
-  document
-    .getElementById("tab-benchmarks")
-    .classList.toggle("active", tab === "benchmarks");
-  document
-    .getElementById("tab-pkgeval")
-    .classList.toggle("active", tab === "pkgeval");
-  document
-    .getElementById("tab-perf")
-    .classList.toggle("active", tab === "perf");
+  const tabIds = {
+    "ci-timing": "tab-ci-timing",
+    benchmarks: "tab-benchmarks",
+    pkgeval: "tab-pkgeval",
+    perf: "tab-perf",
+  };
+  for (const [name, id] of Object.entries(tabIds)) {
+    const btn = document.getElementById(id);
+    const selected = name === tab;
+    btn.classList.toggle("active", selected);
+    btn.setAttribute("aria-selected", selected ? "true" : "false");
+  }
 
   document
     .getElementById("ci-timing-view")
