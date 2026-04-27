@@ -15,6 +15,7 @@
   --color-success-subtle: rgba(74, 194, 107, 0.15);
   --color-danger-fg: #d1242f;
   --color-danger-subtle: rgba(255, 129, 130, 0.15);
+  --color-severe-fg: #bc4c00;
   --color-attention-fg: #9a6700;
   --color-attention-subtle: rgba(212, 167, 44, 0.4);
   --color-attention-emphasis: #bf8700;
@@ -47,6 +48,7 @@
     --color-success-subtle: rgba(46, 160, 67, 1);
     --color-danger-fg: #f85149;
     --color-danger-subtle: rgba(248, 81, 73, 1);
+    --color-severe-fg: #db6d28;
     --color-attention-fg: #d29922;
     --color-attention-subtle: rgba(210, 153, 34, 0.5);
     --color-attention-emphasis: #f0b429;
@@ -77,6 +79,7 @@
   --color-success-subtle: rgba(46, 160, 67, 1);
   --color-danger-fg: #f85149;
   --color-danger-subtle: rgba(248, 81, 73, 1);
+  --color-severe-fg: #db6d28;
   --color-attention-fg: #d29922;
   --color-attention-subtle: rgba(210, 153, 34, 0.5);
   --color-attention-emphasis: #f0b429;
@@ -1744,4 +1747,19 @@ body {
 }
 .pkgeval-stats th.num {
   text-align: right;
+}
+.pkgeval-stats .pe-ok {
+  color: var(--color-success-fg);
+}
+.pkgeval-stats .pe-fail {
+  color: var(--color-danger-fg);
+}
+.pkgeval-stats .pe-crash {
+  color: var(--color-severe-fg);
+}
+.pkgeval-stats .pe-skip {
+  color: var(--color-fg-muted);
+}
+.pkgeval-stats .pe-kill {
+  color: var(--color-attention-fg);
 }

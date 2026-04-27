@@ -2644,6 +2644,7 @@ function showPopup(meta) {
   }
 
   document.getElementById("popup-overlay").classList.add("visible");
+  document.getElementById("popup-overlay").setAttribute("aria-hidden", "false");
 }
 
 // Helper to get full commit SHA from coverage data
@@ -2658,8 +2659,14 @@ function getFullCommitSha(shortCommit) {
 
 function closePopup(event) {
   if (event.target.id === "popup-overlay") {
-    document.getElementById("popup-overlay").classList.remove("visible");
+    closePopupOverlay();
   }
+}
+
+function closePopupOverlay() {
+  const el = document.getElementById("popup-overlay");
+  el.classList.remove("visible");
+  el.setAttribute("aria-hidden", "true");
 }
 
 // Helper to convert HSL to RGB
@@ -3176,8 +3183,11 @@ function clearChartHighlight() {
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    document.getElementById("popup-overlay").classList.remove("visible");
-    document.getElementById("shortcuts-overlay").classList.remove("visible");
+    for (const id of ["popup-overlay", "shortcuts-overlay"]) {
+      const el = document.getElementById(id);
+      el.classList.remove("visible");
+      el.setAttribute("aria-hidden", "true");
+    }
   }
   // Keyboard shortcuts (when not typing in an input)
   if (
@@ -3203,7 +3213,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 function toggleShortcutsHelp() {
-  document.getElementById("shortcuts-overlay").classList.toggle("visible");
+  const el = document.getElementById("shortcuts-overlay");
+  const visible = el.classList.toggle("visible");
+  el.setAttribute("aria-hidden", visible ? "false" : "true");
 }
 
 // Update stats table header for comparison mode
@@ -6304,11 +6316,11 @@ function updatePkgevalTable() {
     html += `<td>${escapeHtml(r.date)}</td>`;
     html += `<td>${escapeHtml(r.version || "")}</td>`;
     html += `<td class="num">${t.toLocaleString()}</td>`;
-    html += `<td class="num" style="color: #3fb950;">${(r.ok || 0).toLocaleString()} <small>(${pct(r.ok || 0)}%)</small></td>`;
-    html += `<td class="num" style="color: #f85149;">${(r.fail || 0).toLocaleString()} <small>(${pct(r.fail || 0)}%)</small></td>`;
-    html += `<td class="num" style="color: #db6d28;">${(r.crash || 0).toLocaleString()} <small>(${pct(r.crash || 0)}%)</small></td>`;
-    html += `<td class="num" style="color: #8b949e;">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
-    html += `<td class="num" style="color: #d29922;">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
+    html += `<td class="num pe-ok">${(r.ok || 0).toLocaleString()} <small>(${pct(r.ok || 0)}%)</small></td>`;
+    html += `<td class="num pe-fail">${(r.fail || 0).toLocaleString()} <small>(${pct(r.fail || 0)}%)</small></td>`;
+    html += `<td class="num pe-crash">${(r.crash || 0).toLocaleString()} <small>(${pct(r.crash || 0)}%)</small></td>`;
+    html += `<td class="num pe-skip">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
+    html += `<td class="num pe-kill">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;

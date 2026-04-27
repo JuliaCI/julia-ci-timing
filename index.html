@@ -278,13 +278,12 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="popup-title"
+      aria-hidden="true"
     >
       <div class="popup" onclick="event.stopPropagation()">
         <button
           class="popup-close"
-          onclick="
-            document.getElementById('popup-overlay').classList.remove('visible')
-          "
+          onclick="closePopupOverlay()"
           aria-label="Close dialog"
         >
           ×
@@ -339,12 +338,16 @@
     <div
       class="shortcuts-overlay"
       id="shortcuts-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-title"
+      aria-hidden="true"
       onclick="
         if (event.target.id === 'shortcuts-overlay') toggleShortcutsHelp();
       "
     >
       <div class="shortcuts-panel">
-        <h3>Keyboard Shortcuts</h3>
+        <h3 id="shortcuts-title">Keyboard Shortcuts</h3>
         <div class="shortcuts-list">
           <span class="shortcut-key">?</span>
           <span class="shortcut-desc">Show this help</span>
@@ -540,10 +543,7 @@
       </div>
     </main>
 
-    <div
-      id="perf-view"
-      style="flex: 1; min-height: 0; background: white; color-scheme: light"
-    >
+    <div id="perf-view" style="flex: 1; min-height: 0">
       <iframe
         id="perf-iframe"
         src="https://tealquaternion.camdvr.org/"
@@ -602,11 +602,11 @@
                 <th>Date</th>
                 <th>Version</th>
                 <th class="num">Total</th>
-                <th class="num" style="color: #3fb950">OK</th>
-                <th class="num" style="color: #f85149">Fail</th>
-                <th class="num" style="color: #db6d28">Crash</th>
-                <th class="num" style="color: #8b949e">Skip</th>
-                <th class="num" style="color: #d29922">Kill</th>
+                <th class="num pe-ok">OK</th>
+                <th class="num pe-fail">Fail</th>
+                <th class="num pe-crash">Crash</th>
+                <th class="num pe-skip">Skip</th>
+                <th class="num pe-kill">Kill</th>
               </tr>
             </thead>
             <tbody id="pkgeval-stats-tbody">
