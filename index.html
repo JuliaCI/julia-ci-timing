@@ -2584,7 +2584,7 @@
             // Type codes
             'build': 'b', 'test': 't', 'upload': 'u', 'coverage': 'c',
             // Special group codes
-            'juliasyntax': 'js', 'docs': 'd', 'special': 'sp', 'pipeline': 'p', 'upload-results': 'ur', 'other': 'o'
+            'juliasyntax': 'js', 'juliac': 'jc', 'docs': 'd', 'special': 'sp', 'pipeline': 'p', 'upload-results': 'ur', 'other': 'o'
         };
         const urlCodesReverse = Object.fromEntries(Object.entries(urlCodes).map(([k, v]) => [v, k]));
 
@@ -3219,6 +3219,7 @@
             if (lower.includes('launch')) return { group: 'pipeline', type: 'pipeline' };
             if (lower.includes('unlock')) return { group: 'pipeline', type: 'pipeline' };
             if (lower.includes('juliasyntax')) return { group: 'juliasyntax', type: 'test' };
+            if (lower.includes('juliac')) return { group: 'juliac', type: 'test' };
             if (lower.includes('upload test results')) return { group: 'upload-results', type: 'upload' };
             if (lower.includes('upload docs')) return { group: 'docs', type: 'upload' };
             if (lower.includes('doctest') || lower.includes('pdf_docs')) return { group: 'docs', type: 'test' };
@@ -5456,10 +5457,11 @@
             'test': 'Test',
             'coverage': 'Coverage'
         };
-        const specialGroups = ['upload', 'juliasyntax', 'docs', 'special', 'pipeline', 'upload-results', 'other'];
+        const specialGroups = ['upload', 'juliasyntax', 'juliac', 'docs', 'special', 'pipeline', 'upload-results', 'other'];
         const specialLabels = {
             'upload': '📤 Upload',
             'juliasyntax': '📝 JuliaSyntax',
+            'juliac': '🛠️ JuliaC',
             'docs': '📚 Docs',
             'special': '🔬 Special',
             'pipeline': '⚙️ Pipeline',
