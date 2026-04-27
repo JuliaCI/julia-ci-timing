@@ -1530,12 +1530,12 @@
             <div class="tab-group">
                 <span class="tab-group-label">Benchmarks</span>
                 <div class="tab-group-buttons">
-                    <button class="tab-btn active" id="tab-perf" onclick="switchTab('perf')">Diff</button>
-                    <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')">History</button>
+                    <button class="tab-btn active" id="tab-perf" onclick="switchTab('perf')" title="Side-by-side benchmark comparison between two commits">Diff</button>
+                    <button class="tab-btn" id="tab-benchmarks" onclick="switchTab('benchmarks')" title="Time-series of nightly Nanosoldier benchmark results">History</button>
                 </div>
             </div>
-            <button class="tab-btn" id="tab-ci-timing" onclick="switchTab('ci-timing')">CI Timing</button>
-            <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')">PkgEval</button>
+            <button class="tab-btn" id="tab-ci-timing" onclick="switchTab('ci-timing')" title="Buildkite CI job timing per host and platform">CI Timing</button>
+            <button class="tab-btn" id="tab-pkgeval" onclick="switchTab('pkgeval')" title="PkgEval results: package test pass/fail rates per Julia version">PkgEval</button>
         </div>
         <span id="ci-timing-controls">
         <select class="time-select" id="time-range" onchange="setTimeRange(this.value)" aria-label="Time range">
