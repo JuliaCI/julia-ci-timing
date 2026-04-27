@@ -180,7 +180,7 @@ body {
   color: #fff;
 }
 .btn-primary:hover {
-  background: #1f6feb;
+  filter: brightness(1.08);
 }
 .btn-link {
   text-decoration: none;
@@ -1389,7 +1389,7 @@ body {
   color: #fff;
 }
 .tab-btn.active:hover {
-  background: #1f6feb;
+  filter: brightness(1.08);
 }
 .tab-group {
   display: inline-flex;
@@ -1422,7 +1422,7 @@ body {
   color: #fff;
 }
 .tab-group .tab-btn.active:hover {
-  background: #1f6feb;
+  filter: brightness(1.08);
 }
 .tab-group .tab-btn:last-child {
   border-right: none;

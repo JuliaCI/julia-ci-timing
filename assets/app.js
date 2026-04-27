@@ -3,10 +3,6 @@
 // === Constants ===
 const FAILED_STATES = ["failed", "timed_out", "canceled"];
 const VALID_TIME_RANGES = [0, 7, 14, 30, 60, 90, 120, 240, 365];
-
-// Stats table sorting state
-let statsTableSortColumn = "median";
-let statsTableSortAsc = false; // false = descending (largest first)
 const VALID_LINE_TYPES = ["raw", "7", "30", "90"];
 const DEFAULT_TIME_RANGE = 30;
 const DEFAULT_LINE_TYPE = "7";
@@ -30,6 +26,9 @@ const TREND_MIN_POINTS = 3; // Minimum data points required for trend analysis
 
 // === State ===
 let chart = null;
+let data = null;
+let statsTableSortColumn = "median";
+let statsTableSortAsc = false; // false = descending (largest first)
 
 // Fetch a gzipped JSON file and return the parsed value.
 // Throws on non-2xx responses; AbortError if the signal fires.
@@ -39,7 +38,6 @@ async function loadGzipJson(url, options = {}) {
   const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
   return new Response(decompressed).json();
 }
-let data = null;
 let selectedJobs = new Set();
 let timeRangeDays = DEFAULT_TIME_RANGE;
 let lineType = DEFAULT_LINE_TYPE;
@@ -6312,7 +6310,7 @@ function updatePkgevalTable() {
     const url = nanosoldierReportUrl("pkgeval", r.date_path || r.date);
     const t = r.total || 0;
     const pct = (v) => (t > 0 ? ((v / t) * 100).toFixed(1) : "0.0");
-    html += `<tr data-date="${escapeHtml(r.date)}" onclick="window.open('${url}', '_blank')">`;
+    html += `<tr data-date="${escapeHtml(r.date)}" onclick="window.open('${url}', '_blank', 'noopener')">`;
     html += `<td>${escapeHtml(r.date)}</td>`;
     html += `<td>${escapeHtml(r.version || "")}</td>`;
     html += `<td class="num">${t.toLocaleString()}</td>`;
@@ -6342,8 +6340,13 @@ if (urlTab === "ci-timing" || urlTab === "benchmarks" || urlTab === "pkgeval") {
   switchTab("perf");
 }
 
-// Auto-refresh data periodically
-setInterval(refreshData, DATA_REFRESH_INTERVAL);
+// Auto-refresh data periodically — but only when the page is visible.
+setInterval(() => {
+  if (document.visibilityState === "visible") refreshData();
+}, DATA_REFRESH_INTERVAL);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshData();
+});
 
 // Update "ago" time periodically
 setInterval(() => {
