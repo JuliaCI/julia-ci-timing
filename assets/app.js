@@ -4998,6 +4998,7 @@ function switchTab(tab) {
     const selected = name === tab;
     btn.classList.toggle("active", selected);
     btn.setAttribute("aria-selected", selected ? "true" : "false");
+    btn.setAttribute("tabindex", selected ? "0" : "-1");
   }
 
   document
@@ -6346,6 +6347,25 @@ setInterval(() => {
 }, DATA_REFRESH_INTERVAL);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") refreshData();
+});
+
+// WAI-ARIA tablist keyboard navigation: Left/Right/Home/End move focus and
+// activate the tab (manual activation would be safer but our tabs are
+// expensive-to-render "pages" rather than panels, and existing UX is click-
+// to-switch).
+document.querySelector(".tab-nav").addEventListener("keydown", (e) => {
+  const tabs = Array.from(document.querySelectorAll(".tab-nav [role='tab']"));
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  let next = -1;
+  if (e.key === "ArrowRight") next = (i + 1) % tabs.length;
+  else if (e.key === "ArrowLeft") next = (i - 1 + tabs.length) % tabs.length;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = tabs.length - 1;
+  else return;
+  e.preventDefault();
+  tabs[next].focus();
+  tabs[next].click();
 });
 
 // Update "ago" time periodically

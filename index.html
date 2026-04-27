@@ -74,6 +74,7 @@
               role="tab"
               aria-selected="true"
               aria-controls="perf-view"
+              tabindex="0"
               onclick="switchTab('perf')"
               title="Side-by-side benchmark comparison between two commits"
             >
@@ -85,6 +86,7 @@
               role="tab"
               aria-selected="false"
               aria-controls="benchmarks-view"
+              tabindex="-1"
               onclick="switchTab('benchmarks')"
               title="Time-series of nightly Nanosoldier benchmark results"
             >
@@ -98,6 +100,7 @@
           role="tab"
           aria-selected="false"
           aria-controls="ci-timing-view"
+          tabindex="-1"
           onclick="switchTab('ci-timing')"
           title="Buildkite CI job timing per host and platform"
         >
@@ -109,6 +112,7 @@
           role="tab"
           aria-selected="false"
           aria-controls="pkgeval-view"
+          tabindex="-1"
           onclick="switchTab('pkgeval')"
           title="PkgEval results: package test pass/fail rates per Julia version"
         >
@@ -375,7 +379,13 @@
       </div>
     </div>
 
-    <main class="main view-hidden" id="ci-timing-view">
+    <main
+      class="main view-hidden"
+      id="ci-timing-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-timing"
+      tabindex="0"
+    >
       <aside class="sidebar" aria-label="Job selection">
         <div class="job-matrix-wrapper">
           <div
@@ -557,6 +567,9 @@
 
     <div
       id="perf-view"
+      role="tabpanel"
+      aria-labelledby="tab-perf"
+      tabindex="0"
       style="flex: 1; min-height: 0; background: white; color-scheme: light"
     >
       <iframe
@@ -570,7 +583,13 @@
       ></iframe>
     </div>
 
-    <div class="pkgeval-main view-hidden" id="pkgeval-view">
+    <div
+      class="pkgeval-main view-hidden"
+      id="pkgeval-view"
+      role="tabpanel"
+      aria-labelledby="tab-pkgeval"
+      tabindex="0"
+    >
       <div class="pkgeval-toolbar">
         <select
           class="time-select"
@@ -634,7 +653,13 @@
       </div>
     </div>
 
-    <div class="benchmarks-main view-hidden" id="benchmarks-view">
+    <div
+      class="benchmarks-main view-hidden"
+      id="benchmarks-view"
+      role="tabpanel"
+      aria-labelledby="tab-benchmarks"
+      tabindex="0"
+    >
       <div class="benchmarks-toolbar">
         <select
           class="time-select"
