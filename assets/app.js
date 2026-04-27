@@ -30,6 +30,15 @@ const TREND_MIN_POINTS = 3; // Minimum data points required for trend analysis
 
 // === State ===
 let chart = null;
+
+// Fetch a gzipped JSON file and return the parsed value.
+// Throws on non-2xx responses; AbortError if the signal fires.
+async function loadGzipJson(url, options = {}) {
+  const resp = await fetch(url, options);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
+  return new Response(decompressed).json();
+}
 let data = null;
 let selectedJobs = new Set();
 let timeRangeDays = DEFAULT_TIME_RANGE;
@@ -4910,11 +4919,9 @@ async function refreshData() {
   refreshController = new AbortController();
   const signal = refreshController.signal;
   try {
-    const resp = await fetch("data/timing_summary.json.gz", { signal });
-    if (!resp.ok) return;
-    const ds = new DecompressionStream("gzip");
-    const decompressed = resp.body.pipeThrough(ds);
-    const newData = await new Response(decompressed).json();
+    const newData = await loadGzipJson("data/timing_summary.json.gz", {
+      signal,
+    });
     if (signal.aborted) return;
 
     // Only update if data actually changed
@@ -5169,11 +5176,7 @@ function formatTime(ns) {
 
 async function loadBenchmarkData() {
   try {
-    const resp = await fetch("data/benchmark_summary.json.gz");
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const ds = new DecompressionStream("gzip");
-    const decompressed = resp.body.pipeThrough(ds);
-    benchData = await new Response(decompressed).json();
+    benchData = await loadGzipJson("data/benchmark_summary.json.gz");
 
     const updatedEl = document.getElementById("bench-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(benchData.generated_at)}`;
@@ -5276,14 +5279,9 @@ async function toggleExpandGroup(group) {
 
   if (!benchGroupDetail[group]) {
     try {
-      const resp = await fetch(
+      benchGroupDetail[group] = await loadGzipJson(
         `data/benchmarks/${encodeURIComponent(group)}.json.gz`,
       );
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const ds = new DecompressionStream("gzip");
-      const decompressed = resp.body.pipeThrough(ds);
-      const text = await new Response(decompressed).text();
-      benchGroupDetail[group] = JSON.parse(text);
     } catch (err) {
       console.error(`Failed to load detail for ${group}:`, err);
       benchExpandedGroups.delete(group);
@@ -6052,11 +6050,7 @@ function getPkgevalFilteredReports() {
 
 async function loadPkgevalData() {
   try {
-    const resp = await fetch("data/pkgeval_summary.json.gz");
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const ds = new DecompressionStream("gzip");
-    const decompressed = resp.body.pipeThrough(ds);
-    pkgevalData = await new Response(decompressed).json();
+    pkgevalData = await loadGzipJson("data/pkgeval_summary.json.gz");
 
     const updatedEl = document.getElementById("pkgeval-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
