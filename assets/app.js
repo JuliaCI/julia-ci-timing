@@ -4903,13 +4903,19 @@ function checkStaleData(generatedAt) {
   }
 }
 
+let refreshController = null;
 async function refreshData() {
+  // Abort any in-flight refresh so we don't race with ourselves.
+  if (refreshController) refreshController.abort();
+  refreshController = new AbortController();
+  const signal = refreshController.signal;
   try {
-    const resp = await fetch("data/timing_summary.json.gz");
+    const resp = await fetch("data/timing_summary.json.gz", { signal });
     if (!resp.ok) return;
     const ds = new DecompressionStream("gzip");
     const decompressed = resp.body.pipeThrough(ds);
     const newData = await new Response(decompressed).json();
+    if (signal.aborted) return;
 
     // Only update if data actually changed
     if (newData.generated_at !== data.generated_at) {
@@ -4926,7 +4932,7 @@ async function refreshData() {
       updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
     }
   } catch (err) {
-    // Silently ignore refresh errors
+    // Silently ignore refresh errors (including AbortError)
   }
 }
 
@@ -6377,6 +6383,16 @@ function applyTheme() {
     const icons = { system: "◑", dark: "☾", light: "☀" };
     btn.textContent = icons[t] || icons.system;
     btn.title = `Theme: ${t}`;
+  }
+  // Forward theme to the embedded julia-perf iframe so it stays in sync.
+  const iframe = document.getElementById("perf-iframe");
+  if (iframe && iframe.contentWindow) {
+    try {
+      iframe.contentWindow.postMessage(
+        { type: "set-theme", theme: t },
+        PERF_ORIGIN,
+      );
+    } catch (e) {}
   }
   if (selectedJobs.size > 0) updateChart();
   if (benchChart) updateBenchChart();
