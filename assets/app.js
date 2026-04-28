@@ -6465,11 +6465,14 @@ function applyTheme() {
     btn.title = `Theme: ${t}`;
   }
   // Forward theme to the embedded julia-perf iframe so it stays in sync.
+  // Resolve "system" to the actual dark/light value: the iframe's own
+  // prefers-color-scheme can differ from the parent's (different sandbox
+  // context, etc.), and we want the iframe to match what the parent shows.
   const iframe = document.getElementById("perf-iframe");
   if (iframe && iframe.contentWindow) {
     try {
       iframe.contentWindow.postMessage(
-        { type: "set-theme", theme: t },
+        { type: "set-theme", theme: isDarkMode() ? "dark" : "light" },
         PERF_ORIGIN,
       );
     } catch (e) {}
