@@ -6468,12 +6468,15 @@ function applyTheme() {
   // Resolve "system" to the actual dark/light value: the iframe's own
   // prefers-color-scheme can differ from the parent's (different sandbox
   // context, etc.), and we want the iframe to match what the parent shows.
+  // targetOrigin "*" is acceptable here: the payload is a non-sensitive
+  // theme name, and the iframe-side handler validates e.origin and
+  // e.source before accepting.
   const iframe = document.getElementById("perf-iframe");
   if (iframe && iframe.contentWindow) {
     try {
       iframe.contentWindow.postMessage(
         { type: "set-theme", theme: isDarkMode() ? "dark" : "light" },
-        PERF_ORIGIN,
+        "*",
       );
     } catch (e) {}
   }
