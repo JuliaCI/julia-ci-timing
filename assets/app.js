@@ -4956,7 +4956,7 @@ async function refreshData() {
 // === Tab Navigation ===
 let activeTab = "perf";
 
-const PERF_ORIGIN = "https://tealquaternion.camdvr.org";
+const PERF_ORIGIN = "http://tealquaternion.camdvr.org:8080"; // TEMP: test server
 
 // URL params owned by this dashboard. Anything NOT in this set is treated as
 // belonging to the embedded julia-perf site and forwarded to/from the iframe
