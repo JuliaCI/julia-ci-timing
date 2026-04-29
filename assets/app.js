@@ -5941,9 +5941,25 @@ function attachBenchRowHoverPreview(tbody) {
     const url = row.dataset.summaryUrl;
     if (url === currentUrl) return;
     currentUrl = url;
-    img.src = url;
-    img.onerror = () => { preview.hidden = true; row.removeAttribute("data-summary-url"); };
-    preview.hidden = false;
+    img.src = "";
+    preview.hidden = true;
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error("not found");
+        return r.blob();
+      })
+      .then((blob) => {
+        // Only show if the user is still hovering this row
+        if (currentUrl !== url) return;
+        const blobUrl = URL.createObjectURL(blob);
+        img.onload = () => URL.revokeObjectURL(blobUrl);
+        img.src = blobUrl;
+        preview.hidden = false;
+      })
+      .catch(() => {
+        row.removeAttribute("data-summary-url");
+        if (currentUrl === url) { preview.hidden = true; currentUrl = null; }
+      });
   });
 
   tbody.addEventListener("mouseout", (e) => {
