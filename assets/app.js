@@ -5904,7 +5904,7 @@ function renderBenchRunsTable() {
         ? `?tab=perf&start=${encodeURIComponent(row.baselineCommit)}&end=${encodeURIComponent(row.commit)}&stat=min-wall-time`
         : null;
     const comparisonDisplay = comparisonUrl
-      ? `<a class="bench-runs-link" href="${comparisonUrl}" target="_blank" rel="noopener">compare</a>`
+      ? `<a class="bench-runs-link" href="${comparisonUrl}">compare</a>`
       : "—";
     const commitDisplay = row.commit
       ? `<a class="bench-runs-link" href="https://github.com/JuliaLang/julia/commit/${encodeURIComponent(row.commit)}" target="_blank" rel="noopener">${escapeHtml(row.commit.slice(0, 8))}</a>`
