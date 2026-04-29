@@ -97,7 +97,7 @@ function extract_commit(by_date_dir::String, date_path::String)
     isfile(report_file) || return ""
     for line in eachline(report_file)
         m = match(r"JuliaLang/julia@([0-9a-f]+)", line)
-        m !== nothing && return String(m.captures[1])[1:min(8, length(m.captures[1]))]
+        m !== nothing && return String(m.captures[1])
     end
     return ""
 end

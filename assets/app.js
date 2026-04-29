@@ -4999,7 +4999,11 @@ function applyPerfURLParams() {
     if (!DASHBOARD_PARAMS.has(k)) forwarded.append(k, v);
   }
   const qs = forwarded.toString();
-  if (qs) iframe.src = `${PERF_ORIGIN}/?${qs}`;
+  if (qs) {
+    // If start+end are present, route to the compare page.
+    const page = forwarded.has("start") && forwarded.has("end") ? "compare.html" : "";
+    iframe.src = `${PERF_ORIGIN}/${page}?${qs}`;
+  }
 }
 
 // Listen for URL updates posted by the embedded julia-perf site so we
@@ -5797,9 +5801,10 @@ function renderBenchRunsTable() {
   const arrow = (col) =>
     benchSortCol === col ? (benchSortAsc ? " ▲" : " ▼") : "";
   thead.innerHTML = `<tr>
-                <th onclick="sortBenchTable('date')">Report date${arrow("date")}</th>
+                <th onclick="sortBenchTable('date')">Date${arrow("date")}</th>
                 <th onclick="sortBenchTable('commit')">Commit${arrow("commit")}</th>
-                <th onclick="sortBenchTable('baseline')" title="Baseline date the Nanosoldier report compared against">Baseline${arrow("baseline")}</th>
+                <th title="Nanosoldier benchmark report">Report</th>
+                <th title="Compare this commit against its baseline on perf.julialang.org">Comparison</th>
                 <th class="bench-time-header" onclick="sortBenchTable('geomeanMin')">Geomean (min)${arrow("geomeanMin")}</th>
                 <th class="bench-delta-header" onclick="sortBenchTable('deltaMin')" title="Min geomean change vs previous run in selected range">Δ${arrow("deltaMin")}</th>
                 <th class="bench-time-header" onclick="sortBenchTable('geomeanMean')">Geomean (mean)${arrow("geomeanMean")}</th>
@@ -5809,7 +5814,7 @@ function renderBenchRunsTable() {
             </tr>`;
 
   if (reports.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9">No data in selected range</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10">No data in selected range</td></tr>';
     return;
   }
 
@@ -5837,6 +5842,13 @@ function renderBenchRunsTable() {
   const minGms = computeGeomeans(minKey);
   const meanGms = computeGeomeans(meanKey);
 
+  const dateToCommit = {};
+  if (benchData?.reports) {
+    for (const r of benchData.reports) {
+      if (r.date && r.commit) dateToCommit[r.date] = r.commit;
+    }
+  }
+
   const rows = reports.map((r, i) => {
     const gmMin = minGms[i];
     const prevMin = i > 0 ? minGms[i - 1] : null;
@@ -5850,11 +5862,13 @@ function renderBenchRunsTable() {
       gmMean != null && prevMean != null && prevMean > 0
         ? gmMean / prevMean - 1
         : null;
+    const baselineDate = r.report_baseline_date || "";
     return {
       date: r.date || "",
       date_path: r.date_path || "",
       commit: r.commit || "",
-      baseline: r.report_baseline_date || "",
+      baseline: baselineDate,
+      baselineCommit: baselineDate ? (dateToCommit[baselineDate] || "") : "",
       geomeanMin: gmMin,
       deltaMin,
       geomeanMean: gmMean,
@@ -5882,17 +5896,25 @@ function renderBenchRunsTable() {
     const reportUrl = row.date_path
       ? `https://github.com/JuliaCI/NanosoldierReports/blob/master/benchmark/by_date/${row.date_path.split("/").map(encodeURIComponent).join("/")}/report.md`
       : null;
-    const dateDisplay = reportUrl
-      ? `<a class="bench-runs-link" href="${reportUrl}" target="_blank" rel="noopener">${escapeHtml(row.date)}</a>`
-      : escapeHtml(row.date);
+    const reportDisplay = reportUrl
+      ? `<a class="bench-runs-link" href="${reportUrl}" target="_blank" rel="noopener">report</a>`
+      : "—";
+    const comparisonUrl =
+      row.commit && row.baselineCommit
+        ? `?tab=perf&start=${encodeURIComponent(row.baselineCommit)}&end=${encodeURIComponent(row.commit)}&stat=min-wall-time`
+        : null;
+    const comparisonDisplay = comparisonUrl
+      ? `<a class="bench-runs-link" href="${comparisonUrl}" target="_blank" rel="noopener">compare</a>`
+      : "—";
     const commitDisplay = row.commit
       ? `<a class="bench-runs-link" href="https://github.com/JuliaLang/julia/commit/${encodeURIComponent(row.commit)}" target="_blank" rel="noopener">${escapeHtml(row.commit.slice(0, 8))}</a>`
       : "—";
     const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : "—";
     html += `<tr>`;
-    html += `<td>${dateDisplay}</td>`;
+    html += `<td>${escapeHtml(row.date)}</td>`;
     html += `<td>${commitDisplay}</td>`;
-    html += `<td>${baselineDisplay}</td>`;
+    html += `<td>${reportDisplay}</td>`;
+    html += `<td>${comparisonDisplay}</td>`;
     html += `<td class="bench-time">${formatTime(row.geomeanMin)}</td>`;
     html += `<td class="bench-delta">${formatBenchDelta(row.deltaMin)}</td>`;
     html += `<td class="bench-time">${formatTime(row.geomeanMean)}</td>`;
@@ -5901,7 +5923,7 @@ function renderBenchRunsTable() {
     html += `<td>${fmtCount(row.regressed, "bench-runs-regressed")}</td>`;
     html += `</tr>`;
   }
-  tbody.innerHTML = html || '<tr><td colspan="9">No runs</td></tr>';
+  tbody.innerHTML = html || '<tr><td colspan="10">No runs</td></tr>';
 }
 
 function renderBenchGroupsTable() {
