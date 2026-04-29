@@ -5153,7 +5153,7 @@ function applyBenchURLParams() {
   const bt = params.get("bt");
   if (bt !== null) {
     const days = parseInt(bt, 10);
-    if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+    if (!isNaN(days) && [15, 30, 60, 90, 180, 365, 730, 0].includes(days)) {
       benchTimeRangeDays = days;
       const sel = document.getElementById("bench-time-range");
       if (sel) sel.value = days;
