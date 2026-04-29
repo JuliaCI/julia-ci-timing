@@ -5910,7 +5910,10 @@ function renderBenchRunsTable() {
       ? `<a class="bench-runs-link" href="https://github.com/JuliaLang/julia/commit/${encodeURIComponent(row.commit)}" target="_blank" rel="noopener">${escapeHtml(row.commit.slice(0, 8))}</a>`
       : "—";
     const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : "—";
-    html += `<tr>`;
+    const summaryUrl = row.date_path
+      ? `https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/benchmark/by_date/${row.date_path}/summary.png`
+      : "";
+    html += `<tr${summaryUrl ? ` data-summary-url="${summaryUrl}"` : ""}>`;
     html += `<td>${escapeHtml(row.date)}</td>`;
     html += `<td>${commitDisplay}</td>`;
     html += `<td>${reportDisplay}</td>`;
@@ -5924,6 +5927,44 @@ function renderBenchRunsTable() {
     html += `</tr>`;
   }
   tbody.innerHTML = html || '<tr><td colspan="10">No runs</td></tr>';
+  attachBenchRowHoverPreview(tbody);
+}
+
+function attachBenchRowHoverPreview(tbody) {
+  const preview = document.getElementById("bench-row-preview");
+  const img = document.getElementById("bench-row-preview-img");
+  let currentUrl = null;
+
+  tbody.addEventListener("mouseover", (e) => {
+    const row = e.target.closest("tr[data-summary-url]");
+    if (!row) { preview.hidden = true; currentUrl = null; return; }
+    const url = row.dataset.summaryUrl;
+    if (url === currentUrl) return;
+    currentUrl = url;
+    img.src = url;
+    img.onerror = () => { preview.hidden = true; row.removeAttribute("data-summary-url"); };
+    preview.hidden = false;
+  });
+
+  tbody.addEventListener("mouseout", (e) => {
+    if (!e.relatedTarget || !tbody.contains(e.relatedTarget)) {
+      preview.hidden = true;
+      currentUrl = null;
+    }
+  });
+
+  tbody.addEventListener("mousemove", (e) => {
+    if (preview.hidden) return;
+    const pad = 16;
+    const pw = preview.offsetWidth;
+    const ph = preview.offsetHeight;
+    let x = e.clientX + pad;
+    let y = e.clientY + pad;
+    if (x + pw > window.innerWidth - pad) x = e.clientX - pw - pad;
+    if (y + ph > window.innerHeight - pad) y = e.clientY - ph - pad;
+    preview.style.left = x + "px";
+    preview.style.top = y + "px";
+  });
 }
 
 function renderBenchGroupsTable() {

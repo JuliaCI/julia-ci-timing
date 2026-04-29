@@ -1642,6 +1642,25 @@ body {
   text-decoration: underline;
 }
 
+#bench-row-preview {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--color-canvas-overlay, #fff);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  max-width: 480px;
+}
+
+#bench-row-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 3px;
+}
+
 @media (max-width: 768px) {
   .benchmarks-content {
     flex-direction: column;
