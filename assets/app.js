@@ -586,35 +586,20 @@ function hideRegressionLine() {
 
 // Track currently hovered trend cell to properly handle mouseover/mouseout
 let currentTrendCell = null;
-let trendHoverTimer = null;
-const TREND_HOVER_DELAY_MS = 300;
-
-function clearTrendHoverTimer() {
-  if (trendHoverTimer !== null) {
-    clearTimeout(trendHoverTimer);
-    trendHoverTimer = null;
-  }
-}
 
 // Event delegation for trend cell hover using mouseover/mouseout (which bubble)
 document.addEventListener("mouseover", (e) => {
   const cell = e.target.closest?.(".trend-cell");
   if (cell && cell !== currentTrendCell && cell.dataset.trend) {
     currentTrendCell = cell;
-    clearTrendHoverTimer();
-    trendHoverTimer = setTimeout(() => {
-      trendHoverTimer = null;
-      if (currentTrendCell !== cell) return;
-      try {
-        const trendData = JSON.parse(cell.dataset.trend.replace(/&#39;/g, "'"));
-        showRegressionLine(trendData, trendData.lineColor);
-      } catch (err) {
-        // Ignore parse errors
-      }
-    }, TREND_HOVER_DELAY_MS);
+    try {
+      const trendData = JSON.parse(cell.dataset.trend.replace(/&#39;/g, "'"));
+      showRegressionLine(trendData, trendData.lineColor);
+    } catch (err) {
+      // Ignore parse errors
+    }
   } else if (!cell && currentTrendCell) {
     currentTrendCell = null;
-    clearTrendHoverTimer();
     hideRegressionLine();
   }
 });
@@ -625,7 +610,6 @@ document.addEventListener("mouseout", (e) => {
   const relatedCell = e.relatedTarget?.closest?.(".trend-cell");
   if (relatedCell !== currentTrendCell) {
     currentTrendCell = null;
-    clearTrendHoverTimer();
     hideRegressionLine();
   }
 });
@@ -5950,13 +5934,36 @@ function attachBenchRowHoverPreview(tbody) {
   const preview = document.getElementById("bench-row-preview");
   const img = document.getElementById("bench-row-preview-img");
   let currentUrl = null;
+  let pendingRow = null;
+  let hoverTimer = null;
+  const HOVER_DELAY_MS = 400;
+  let lastMouseX = 0;
+  let lastMouseY = 0;
+  let activePreview = false;
 
-  tbody.addEventListener("mouseover", (e) => {
-    const row = e.target.closest("tr[data-summary-url]");
-    if (!row) { preview.hidden = true; currentUrl = null; return; }
+  function positionPreview(x, y) {
+    const pad = 16;
+    const pw = preview.offsetWidth;
+    const ph = preview.offsetHeight;
+    let px = x + pad;
+    let py = y + pad;
+    if (px + pw > window.innerWidth - pad) px = x - pw - pad;
+    if (py + ph > window.innerHeight - pad) py = y - ph - pad;
+    preview.style.left = px + "px";
+    preview.style.top = py + "px";
+  }
+
+  function cancelPending() {
+    if (hoverTimer !== null) {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    }
+    pendingRow = null;
+  }
+
+  function loadPreview(row) {
     const url = row.dataset.summaryUrl;
     if (url === currentUrl) return;
-    // Sanity-check: only allow the expected origin before fetching
     if (!url.startsWith("https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/")) {
       console.warn("[bench-preview] URL blocked by origin check:", url);
       return;
@@ -5973,13 +5980,20 @@ function attachBenchRowHoverPreview(tbody) {
       })
       .then((blob) => {
         console.log("[bench-preview] blob size", blob.size, "type", blob.type);
-        // Only show if the user is still hovering this row
         if (currentUrl !== url) { console.log("[bench-preview] stale, discarding"); return; }
         const blobUrl = URL.createObjectURL(blob);
-        img.onload = () => { console.log("[bench-preview] image loaded"); URL.revokeObjectURL(blobUrl); };
+        img.onload = () => {
+          console.log("[bench-preview] image loaded");
+          URL.revokeObjectURL(blobUrl);
+          if (currentUrl === url) positionPreview(lastMouseX, lastMouseY);
+        };
         img.onerror = (ev) => console.error("[bench-preview] image load error", ev);
         img.src = blobUrl;
+        // Position before unhiding to avoid a flash at (0,0)
+        positionPreview(lastMouseX, lastMouseY);
         preview.hidden = false;
+        activePreview = true;
+        positionPreview(lastMouseX, lastMouseY);
         console.log("[bench-preview] preview shown, hidden=", preview.hidden);
       })
       .catch((err) => {
@@ -5987,26 +6001,59 @@ function attachBenchRowHoverPreview(tbody) {
         row.removeAttribute("data-summary-url");
         if (currentUrl === url) { preview.hidden = true; currentUrl = null; }
       });
-  });
+  }
 
-  tbody.addEventListener("mouseout", (e) => {
-    if (!e.relatedTarget || !tbody.contains(e.relatedTarget)) {
+  function hidePreview() {
+    cancelPending();
+    preview.hidden = true;
+    currentUrl = null;
+    activePreview = false;
+  }
+
+  tbody.addEventListener("mouseover", (e) => {
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    const row = e.target.closest("tr[data-summary-url]");
+    if (!row) {
+      hidePreview();
+      return;
+    }
+    if (row === pendingRow) return;
+    if (row.dataset.summaryUrl === currentUrl) return;
+    cancelPending();
+    if (activePreview) {
+      // Already showing a preview — switch immediately to the new row
+      currentUrl = null;
+      loadPreview(row);
+      return;
+    }
+    // Hide any currently shown preview as soon as we leave its row
+    if (currentUrl !== null) {
       preview.hidden = true;
       currentUrl = null;
     }
+    pendingRow = row;
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null;
+      const target = pendingRow;
+      pendingRow = null;
+      if (target) loadPreview(target);
+    }, HOVER_DELAY_MS);
+  });
+
+  tbody.addEventListener("mouseout", (e) => {
+    const fromRow = e.target.closest("tr[data-summary-url]");
+    if (!fromRow) return;
+    const toRow = e.relatedTarget?.closest?.("tr[data-summary-url]");
+    if (toRow === fromRow) return;
+    hidePreview();
   });
 
   tbody.addEventListener("mousemove", (e) => {
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
     if (preview.hidden) return;
-    const pad = 16;
-    const pw = preview.offsetWidth;
-    const ph = preview.offsetHeight;
-    let x = e.clientX + pad;
-    let y = e.clientY + pad;
-    if (x + pw > window.innerWidth - pad) x = e.clientX - pw - pad;
-    if (y + ph > window.innerHeight - pad) y = e.clientY - ph - pad;
-    preview.style.left = x + "px";
-    preview.style.top = y + "px";
+    positionPreview(e.clientX, e.clientY);
   });
 }
 
