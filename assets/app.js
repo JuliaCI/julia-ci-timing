@@ -586,20 +586,35 @@ function hideRegressionLine() {
 
 // Track currently hovered trend cell to properly handle mouseover/mouseout
 let currentTrendCell = null;
+let trendHoverTimer = null;
+const TREND_HOVER_DELAY_MS = 300;
+
+function clearTrendHoverTimer() {
+  if (trendHoverTimer !== null) {
+    clearTimeout(trendHoverTimer);
+    trendHoverTimer = null;
+  }
+}
 
 // Event delegation for trend cell hover using mouseover/mouseout (which bubble)
 document.addEventListener("mouseover", (e) => {
   const cell = e.target.closest?.(".trend-cell");
   if (cell && cell !== currentTrendCell && cell.dataset.trend) {
     currentTrendCell = cell;
-    try {
-      const trendData = JSON.parse(cell.dataset.trend.replace(/&#39;/g, "'"));
-      showRegressionLine(trendData, trendData.lineColor);
-    } catch (err) {
-      // Ignore parse errors
-    }
+    clearTrendHoverTimer();
+    trendHoverTimer = setTimeout(() => {
+      trendHoverTimer = null;
+      if (currentTrendCell !== cell) return;
+      try {
+        const trendData = JSON.parse(cell.dataset.trend.replace(/&#39;/g, "'"));
+        showRegressionLine(trendData, trendData.lineColor);
+      } catch (err) {
+        // Ignore parse errors
+      }
+    }, TREND_HOVER_DELAY_MS);
   } else if (!cell && currentTrendCell) {
     currentTrendCell = null;
+    clearTrendHoverTimer();
     hideRegressionLine();
   }
 });
@@ -610,6 +625,7 @@ document.addEventListener("mouseout", (e) => {
   const relatedCell = e.relatedTarget?.closest?.(".trend-cell");
   if (relatedCell !== currentTrendCell) {
     currentTrendCell = null;
+    clearTrendHoverTimer();
     hideRegressionLine();
   }
 });
@@ -5940,23 +5956,34 @@ function attachBenchRowHoverPreview(tbody) {
     if (!row) { preview.hidden = true; currentUrl = null; return; }
     const url = row.dataset.summaryUrl;
     if (url === currentUrl) return;
+    // Sanity-check: only allow the expected origin before fetching
+    if (!url.startsWith("https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/")) {
+      console.warn("[bench-preview] URL blocked by origin check:", url);
+      return;
+    }
     currentUrl = url;
     img.src = "";
     preview.hidden = true;
+    console.log("[bench-preview] fetching", url);
     fetch(url)
       .then((r) => {
-        if (!r.ok) throw new Error("not found");
+        console.log("[bench-preview] fetch response", r.status, r.headers.get("content-type"));
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.blob();
       })
       .then((blob) => {
+        console.log("[bench-preview] blob size", blob.size, "type", blob.type);
         // Only show if the user is still hovering this row
-        if (currentUrl !== url) return;
+        if (currentUrl !== url) { console.log("[bench-preview] stale, discarding"); return; }
         const blobUrl = URL.createObjectURL(blob);
-        img.onload = () => URL.revokeObjectURL(blobUrl);
+        img.onload = () => { console.log("[bench-preview] image loaded"); URL.revokeObjectURL(blobUrl); };
+        img.onerror = (ev) => console.error("[bench-preview] image load error", ev);
         img.src = blobUrl;
         preview.hidden = false;
+        console.log("[bench-preview] preview shown, hidden=", preview.hidden);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("[bench-preview] fetch failed:", err);
         row.removeAttribute("data-summary-url");
         if (currentUrl === url) { preview.hidden = true; currentUrl = null; }
       });
