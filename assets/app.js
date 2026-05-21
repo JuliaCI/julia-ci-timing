@@ -6499,6 +6499,73 @@ function updateBenchTable() {
   }
 }
 
+function getNotesForBenchmark(group, name) {
+  const label = group + "/" + name;
+  return BenchCore.getMethodologyChanges().filter((c) => c.benchmarks.has(label));
+}
+
+function getNotesForGroup(group) {
+  const prefix = group + "/";
+  return BenchCore.getMethodologyChanges().filter((c) => {
+    for (const b of c.benchmarks) if (b.startsWith(prefix)) return true;
+    return false;
+  });
+}
+
+function renderNotesCell(notes) {
+  if (!notes.length) return `<td class="bench-notes-cell"></td>`;
+  const ids = notes.map((c) => c.id).join(",");
+  return `<td class="bench-notes-cell"><span class="bench-notes-badge" data-note-ids="${escapeHtml(ids)}">${notes.length}</span></td>`;
+}
+
+function buildNotesTooltipHtml(changes) {
+  let html = "";
+  for (const c of changes) {
+    html += `<div class="bench-notes-entry">`;
+    html += `<div>${escapeHtml(c.description)}</div>`;
+    html += `<div class="bench-notes-meta">Effective: ${escapeHtml(c.firstValidDate)}`;
+    if (c.url) html += ` &middot; ${escapeHtml(c.url)}`;
+    html += `</div>`;
+    html += `</div>`;
+  }
+  return html;
+}
+
+function positionNotesTooltip(x, y) {
+  const tooltip = document.getElementById("bench-notes-tooltip");
+  if (!tooltip) return;
+  const pad = 12;
+  const tw = tooltip.offsetWidth || 280;
+  const th = tooltip.offsetHeight || 80;
+  let px = x + pad;
+  let py = y + pad;
+  if (px + tw > window.innerWidth - pad) px = x - tw - pad;
+  if (py + th > window.innerHeight - pad) py = y - th - pad;
+  tooltip.style.left = px + "px";
+  tooltip.style.top = py + "px";
+}
+
+function attachBenchNotesBadgeHandlers(tbody) {
+  const tooltip = document.getElementById("bench-notes-tooltip");
+  if (!tooltip) return;
+  tbody.querySelectorAll(".bench-notes-badge").forEach((badge) => {
+    badge.addEventListener("mouseenter", (e) => {
+      const ids = (badge.dataset.noteIds || "").split(",").filter(Boolean);
+      const changes = BenchCore.getMethodologyChanges().filter((c) => ids.includes(c.id));
+      if (!changes.length) return;
+      tooltip.innerHTML = buildNotesTooltipHtml(changes);
+      tooltip.hidden = false;
+      positionNotesTooltip(e.clientX, e.clientY);
+      setBenchMethodologyHighlight(true);
+    });
+    badge.addEventListener("mousemove", (e) => positionNotesTooltip(e.clientX, e.clientY));
+    badge.addEventListener("mouseleave", () => {
+      tooltip.hidden = true;
+      setBenchMethodologyHighlight(false);
+    });
+  });
+}
+
 function formatBenchDelta(d) {
   if (d == null) return "—";
   const pct = d * 100;
@@ -6815,10 +6882,11 @@ async function renderBenchNoisyTable() {
                 <th class="bench-time-header" onclick="sortBenchNoisyTable('latest')">Latest${arrow("latest")}</th>
                 <th class="bench-noise-header" onclick="sortBenchNoisyTable('noise')" title="Median |Δ%| between consecutive runs in selected range">Noise${arrow("noise")}</th>
                 <th onclick="sortBenchNoisyTable('samples')" title="Number of consecutive run pairs used">Samples${arrow("samples")}</th>
+                <th class="bench-notes-header" title="Methodology changes affecting this benchmark">Notes</th>
             </tr>`;
 
   if (benchSelectedGroups.size === 0) {
-    tbody.innerHTML = '<tr><td colspan="5">No groups selected</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6">No groups selected</td></tr>';
     return;
   }
 
@@ -6828,7 +6896,7 @@ async function renderBenchNoisyTable() {
   if (needsLoad) {
     benchNoisyLoading = true;
     tbody.innerHTML =
-      '<tr><td colspan="5" class="loading">Loading per-benchmark history…</td></tr>';
+      '<tr><td colspan="6" class="loading">Loading per-benchmark history…</td></tr>';
     try {
       await ensureAllGroupDetail();
     } finally {
@@ -6895,7 +6963,7 @@ async function renderBenchNoisyTable() {
   if (rows.length === 0) {
     const minNote = minNs > 0 ? ` with median ≥ ${minNs} ns` : "";
     tbody.innerHTML =
-      '<tr><td colspan="5">No benchmarks above ' +
+      '<tr><td colspan="6">No benchmarks above ' +
       BENCH_NOISY_TABLE_MIN_PCT +
       `% noise${minNote} in the selected range</td></tr>`;
     benchNoisyVisible = new Set();
@@ -6922,16 +6990,18 @@ async function renderBenchNoisyTable() {
 
   let html = "";
   if (totalQualifying > BENCH_NOISY_MAX_SERIES) {
-    html += `<tr class="bench-noisy-note"><td colspan="5">Showing top ${BENCH_NOISY_MAX_SERIES} of ${totalQualifying} noisy benchmarks. Narrow the time range or deselect groups to refine.</td></tr>`;
+    html += `<tr class="bench-noisy-note"><td colspan="6">Showing top ${BENCH_NOISY_MAX_SERIES} of ${totalQualifying} noisy benchmarks. Narrow the time range or deselect groups to refine.</td></tr>`;
   }
   for (const row of displayRows) {
     const label = row.group + "/" + row.name;
     html += `<tr class="bench-detail-row" data-bench-label="${escapeHtml(label)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(row.name)}" style="cursor: pointer;" title="${escapeHtml(label)}">`;
+    const noisyNotes = getNotesForBenchmark(row.group, row.name);
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td>${escapeHtml(row.name)}</td>`;
     html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
     html += `<td class="bench-noise-cell">${formatNoise(row.noise)}</td>`;
     html += `<td>${row.samples}</td>`;
+    html += renderNotesCell(noisyNotes);
     html += `</tr>`;
   }
   tbody.innerHTML = html;
@@ -6941,6 +7011,7 @@ async function renderBenchNoisyTable() {
     tr.onmouseenter = () => highlightBenchDataset(label);
     tr.onmouseleave = () => clearBenchHighlight();
   });
+  attachBenchNotesBadgeHandlers(tbody);
 }
 
 function renderBenchGroupsTable() {
@@ -6959,10 +7030,11 @@ function renderBenchGroupsTable() {
                 <th class="bench-trend-header" onclick="sortBenchTable('trendAbs')" title="Percent change from first to last value in the selected range; sorted by magnitude">Trend${arrow("trendAbs")}</th>
                 <th onclick="sortBenchTable('count')">Benchmarks${arrow("count")}</th>
                 <th class="bench-noise-header" title="Median |Δ%| between consecutive runs (per-benchmark, expand to see)">Noise</th>
+                <th class="bench-notes-header" title="Methodology changes affecting this benchmark">Notes</th>
             </tr>`;
 
   if (reports.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8">No data in selected range</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9">No data in selected range</td></tr>';
     return;
   }
 
@@ -7052,12 +7124,14 @@ function renderBenchGroupsTable() {
     html += `<td class="bench-trend"><strong>${formatTrendPct(overall.trend)}</strong></td>`;
     html += `<td></td>`;
     html += `<td></td>`;
+    html += `<td></td>`;
     html += `</tr>`;
   }
   for (const row of rows) {
     if (!benchSelectedGroups.has(row.group)) continue;
     const isExpanded = benchExpandedGroups.has(row.group);
     const expandClass = isExpanded ? "expandable expanded" : "expandable";
+    const groupNotes = getNotesForGroup(row.group);
     html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}" onclick="toggleExpandGroup('${escapeHtml(row.group)}')">`;
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
@@ -7067,6 +7141,7 @@ function renderBenchGroupsTable() {
     html += `<td class="bench-trend">${formatTrendPct(row.trend)}</td>`;
     html += `<td>${row.count}</td>`;
     html += `<td></td>`;
+    html += renderNotesCell(groupNotes);
     html += `</tr>`;
 
     // Show individual benchmarks when expanded
@@ -7119,6 +7194,7 @@ function renderBenchGroupsTable() {
             ? "bench-detail-row bench-hidden"
             : "bench-detail-row";
           html += `<tr class="${detailClass}" data-bench-label="${escapeHtml(row.group + "/" + b.name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(b.name)}" style="cursor: pointer;" title="${escapeHtml(b.name)}">`;
+          const benchNotes = getNotesForBenchmark(b.group, b.name);
           html += `<td>${escapeHtml(b.name)}</td>`;
           html += `<td class="bench-time">${formatTime(b.latest)}</td>`;
           html += `<td class="bench-time">${formatTime(b.avg)}</td>`;
@@ -7127,6 +7203,7 @@ function renderBenchGroupsTable() {
           html += `<td class="bench-trend">${formatTrendPct(b.trend)}</td>`;
           html += `<td></td>`;
           html += `<td class="bench-noise-cell">${formatNoise(b.noise)}</td>`;
+          html += renderNotesCell(benchNotes);
           html += `</tr>`;
         }
       }
@@ -7149,6 +7226,7 @@ function renderBenchGroupsTable() {
     tr.onmouseenter = () => highlightBenchDataset(label);
     tr.onmouseleave = () => clearBenchHighlight();
   });
+  attachBenchNotesBadgeHandlers(tbody);
 }
 
 // === PkgEval State ===
