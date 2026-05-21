@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>Julia Performance</title>
+    <meta
+      name="description"
+      content="Julia language performance dashboard: nightly Nanosoldier benchmarks, Buildkite CI build/test timing, and PkgEval results."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Julia Performance" />
+    <meta
+      property="og:description"
+      content="Nightly benchmarks, CI build timing, and PkgEval results for the Julia language."
+    />
+    <meta property="og:url" content="https://perf.julialang.org/" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <script>
+      // Apply saved theme as early as possible to avoid FOUC
+      (function () {
+        try {
+          const t = localStorage.getItem("theme");
+          if (t === "dark" || t === "light") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="apple-touch-icon" href="favicon.svg" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <div class="toolbar" role="toolbar" aria-label="Dashboard controls">
+      <h1>
+        <img src="favicon.svg" alt="Julia Performance" class="julia-logo" /><a
+          href="https://github.com/JuliaLang"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="link-muted"
+          >JuliaLang</a
+        >
+        /
+        <a
+          href="https://github.com/JuliaLang/julia"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="link-inherit"
+          >julia</a
+        >
+      </h1>
+      <div class="tab-nav" role="tablist" aria-label="Dashboard pages">
+        <div class="tab-group">
+          <span class="tab-group-label">Benchmarks</span>
+          <div class="tab-group-buttons">
+            <button
+              class="tab-btn active"
+              id="tab-perf"
+              role="tab"
+              aria-selected="true"
+              aria-controls="perf-view"
+              tabindex="0"
+              onclick="switchTab('perf')"
+              title="Side-by-side benchmark comparison between two commits"
+            >
+              Diff
+            </button>
+            <button
+              class="tab-btn"
+              id="tab-benchmarks"
+              role="tab"
+              aria-selected="false"
+              aria-controls="benchmarks-view"
+              tabindex="-1"
+              onclick="switchTab('benchmarks')"
+              title="Time-series of nightly Nanosoldier benchmark results"
+            >
+              History
+            </button>
+          </div>
+        </div>
+        <button
+          class="tab-btn"
+          id="tab-ci-timing"
+          role="tab"
+          aria-selected="false"
+          aria-controls="ci-timing-view"
+          tabindex="-1"
+          onclick="switchTab('ci-timing')"
+          title="Buildkite CI job timing per host and platform"
+        >
+          CI Timing
+        </button>
+        <button
+          class="tab-btn"
+          id="tab-pkgeval"
+          role="tab"
+          aria-selected="false"
+          aria-controls="pkgeval-view"
+          tabindex="-1"
+          onclick="switchTab('pkgeval')"
+          title="PkgEval results: package test pass/fail rates per Julia version"
+        >
+          PkgEval
+        </button>
+      </div>
+      <button
+        class="btn btn-icon"
+        id="theme-toggle"
+        onclick="cycleTheme()"
+        aria-label="Toggle theme"
+        title="Theme: system"
+      >
+        ◑
+      </button>
+      <button
+        class="btn btn-icon"
+        onclick="toggleShortcutsHelp()"
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts"
+      >
+        ?
+      </button>
+      <span class="updated" id="last-updated" aria-live="polite"></span>
+      <a
+        href="https://github.com/JuliaCI/julia-ci-timing/commit/__BUILD_COMMIT__"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="updated link-no-underline"
+        id="build-commit"
+        title="Site build commit"
+        >__BUILD_COMMIT_SHORT__</a
+      >
+      <a
+        href="https://github.com/JuliaCI/julia-ci-timing"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="btn btn-link"
+        aria-label="View source on GitHub"
+        >GitHub</a
+      >
+    </div>
+
+    <div class="warning-banner" id="stale-data-warning" role="alert">
+      <div class="warning-banner-icon">⚠️</div>
+      <div class="warning-banner-content">
+        <div class="warning-banner-title">Data May Be Stale</div>
+        <div class="warning-banner-text">
+          This site hasn't been updated in more than 3 days. Please
+          <a
+            href="https://github.com/JuliaCI/julia-ci-timing/issues/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            >report an issue</a
+          >
+          to let us know.
+        </div>
+      </div>
+      <button
+        class="warning-banner-close"
+        onclick="
+          document
+            .getElementById('stale-data-warning')
+            .classList.remove('visible')
+        "
+        aria-label="Close warning"
+      >
+        ×
+      </button>
+    </div>
+
+    <div class="comparison-banner" id="comparison-banner" role="alert">
+      <h2 id="comparison-title"></h2>
+      <div class="comparison-summary" id="comparison-summary"></div>
+      <button
+        class="comparison-close"
+        onclick="clearComparison()"
+        aria-label="Close comparison"
+      >
+        ×
+      </button>
+    </div>
+
+    <div
+      class="popup-overlay"
+      id="popup-overlay"
+      onclick="closePopup(event)"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="popup-title"
+      aria-hidden="true"
+    >
+      <div class="popup" onclick="event.stopPropagation()">
+        <button
+          class="popup-close"
+          onclick="closePopupOverlay()"
+          aria-label="Close dialog"
+        >
+          ×
+        </button>
+        <h3 id="popup-title">Job Details</h3>
+        <div class="popup-info">
+          <div>
+            <span class="label">Job:</span> <span id="popup-job"></span>
+          </div>
+          <div>
+            <span class="label">Status:</span> <span id="popup-state"></span>
+          </div>
+          <div id="popup-retry-row" style="display: none">
+            <span class="label">Attempt:</span> <span id="popup-retry"></span>
+          </div>
+          <div>
+            <span class="label">Duration:</span>
+            <span id="popup-duration"></span>
+          </div>
+          <div>
+            <span class="label">Agent:</span> <span id="popup-agent"></span>
+          </div>
+          <div>
+            <span class="label">Date:</span> <span id="popup-date"></span>
+          </div>
+          <div>
+            <span class="label">Commit:</span>
+            <a id="popup-github-link" href="#" target="_blank"
+              ><code id="popup-commit"></code
+            ></a>
+          </div>
+          <div>
+            <span class="label">Title:</span> <span id="popup-message"></span>
+          </div>
+          <div>
+            <span class="label">Author:</span> <span id="popup-author"></span>
+          </div>
+          <div>
+            <span class="label">Build:</span>
+            <a id="popup-buildkite-link" href="#" target="_blank"
+              ><span id="popup-build"></span
+            ></a>
+          </div>
+          <div id="popup-coverage-links" style="display: none">
+            <span class="label">Coverage:</span>
+            <span id="popup-coverage-value"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="popup-overlay"
+      id="bench-methodology-popup-overlay"
+      onclick="if(event.target.id==='bench-methodology-popup-overlay') closeBenchMethodologyPopup()"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="bench-methodology-popup-title"
+      aria-hidden="true"
+    >
+      <div id="bench-methodology-popup" class="popup" style="max-width:560px;max-height:80vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+        <button
+          class="popup-close"
+          onclick="closeBenchMethodologyPopup()"
+          aria-label="Close"
+        >×</button>
+        <h3 id="bench-methodology-popup-title" class="popup-drag-handle" style="cursor:move;user-select:none">Benchmark Methodology Changes</h3>
+        <div class="popup-info" id="bench-methodology-popup-body" style="overflow-y:auto;flex:1;min-height:0"></div>
+      </div>
+    </div>
+
+    <div
+      class="shortcuts-overlay"
+      id="shortcuts-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-title"
+      aria-hidden="true"
+      onclick="
+        if (event.target.id === 'shortcuts-overlay') toggleShortcutsHelp();
+      "
+    >
+      <div class="shortcuts-panel">
+        <h3 id="shortcuts-title">Keyboard Shortcuts</h3>
+        <div class="shortcuts-list">
+          <span class="shortcut-key">?</span>
+          <span class="shortcut-desc">Show this help</span>
+          <span class="shortcut-key">Esc</span>
+          <span class="shortcut-desc">Close popups/dialogs</span>
+          <span class="shortcut-key">r</span>
+          <span class="shortcut-desc">Reset zoom/view</span>
+          <span class="shortcut-key">a</span>
+          <span class="shortcut-desc">Select all jobs</span>
+          <span class="shortcut-key">n</span>
+          <span class="shortcut-desc">Deselect all jobs</span>
+        </div>
+      </div>
+    </div>
+
+    <main
+      class="main view-hidden"
+      id="ci-timing-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-timing"
+      tabindex="0"
+    >
+      <div class="ci-toolbar" id="ci-timing-controls">
+        <span
+          class="ci-subview-toggle"
+          role="group"
+          aria-label="CI Timing view"
+        >
+          <button
+            class="btn btn-primary"
+            id="ci-subview-jobs"
+            onclick="setCITimingSubview('jobs')"
+            title="Per-job timing chart"
+          >
+            Jobs
+          </button>
+          <button
+            class="btn"
+            id="ci-subview-workers"
+            onclick="setCITimingSubview('workers')"
+            title="Worker presence and downtime history"
+          >
+            Workers
+          </button>
+        </span>
+        <select
+          class="time-select"
+          id="time-range"
+          onchange="setTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="custom" disabled>Custom</option>
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="120">Last 120 days</option>
+          <option value="240">Last 240 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="0">All time</option>
+        </select>
+        <button
+          class="btn btn-primary"
+          id="btn-reset-zoom"
+          onclick="resetZoom()"
+          aria-label="Reset chart"
+          style="display: none"
+        >
+          Reset chart
+        </button>
+        <select
+          class="time-select"
+          id="line-type"
+          onchange="setLineType(this.value)"
+          aria-label="Line type"
+        >
+          <option value="raw">Raw data</option>
+          <option value="7" selected>7-day avg</option>
+          <option value="30">30-day avg</option>
+          <option value="90">90-day avg</option>
+        </select>
+        <div class="checkbox-dropdown" id="state-filter-dropdown">
+          <button
+            class="checkbox-dropdown-btn"
+            onclick="toggleStateDropdown(event)"
+            aria-label="State filter"
+          >
+            <span id="state-filter-label">States (3/4)</span>
+          </button>
+          <div class="checkbox-dropdown-menu" id="state-filter-menu">
+            <label class="checkbox-dropdown-item"
+              ><input
+                type="checkbox"
+                checked
+                onchange="toggleStateFilter('passed', this)"
+              />
+              Passed</label
+            >
+            <label class="checkbox-dropdown-item"
+              ><input
+                type="checkbox"
+                checked
+                onchange="toggleStateFilter('failed', this)"
+              />
+              Failed</label
+            >
+            <label class="checkbox-dropdown-item"
+              ><input
+                type="checkbox"
+                checked
+                onchange="toggleStateFilter('timed_out', this)"
+              />
+              Timed out</label
+            >
+            <label class="checkbox-dropdown-item"
+              ><input
+                type="checkbox"
+                onchange="toggleStateFilter('canceled', this)"
+              />
+              Canceled</label
+            >
+          </div>
+        </div>
+        <div class="checkbox-dropdown" id="host-filter-dropdown">
+          <button
+            class="checkbox-dropdown-btn"
+            onclick="toggleHostDropdown(event)"
+            aria-label="Host filter"
+          >
+            <span id="host-filter-label">All hosts</span>
+          </button>
+          <div class="checkbox-dropdown-menu" id="host-filter-menu"></div>
+        </div>
+      </div>
+      <div class="ci-body">
+        <aside class="sidebar" aria-label="Job selection">
+        <div class="job-matrix-wrapper">
+          <div
+            class="section-header"
+            id="section-matrix"
+            onclick="toggleSection(this)"
+          >
+            <span class="section-header-text">Platform Matrix</span>
+          </div>
+          <div class="collapsible-content">
+            <div
+              class="job-matrix"
+              id="job-matrix"
+              role="grid"
+              aria-label="Platform and test type matrix"
+            >
+              <div class="loading">Loading...</div>
+            </div>
+          </div>
+        </div>
+        <div class="job-list-section">
+          <div
+            class="section-header"
+            id="section-jobs"
+            onclick="toggleSection(this)"
+          >
+            <span class="section-header-text"
+              >Jobs (<span id="job-count-mobile">0/0</span>)</span
+            >
+            <span
+              class="section-header-actions"
+              onclick="event.stopPropagation()"
+            >
+              <button class="btn btn-small" onclick="selectAllJobs()">
+                All
+              </button>
+              <button class="btn btn-small" onclick="deselectAllJobs()">
+                None
+              </button>
+            </span>
+          </div>
+          <div class="collapsible-content">
+            <div class="job-list-header">
+              <span>Jobs (<span id="job-count">0/0</span>)</span>
+              <span class="job-list-actions">
+                <button
+                  class="btn btn-small"
+                  id="btn-all"
+                  onclick="selectAllJobs()"
+                  aria-label="Select all jobs"
+                >
+                  All
+                </button>
+                <button
+                  class="btn btn-small"
+                  id="btn-none"
+                  onclick="deselectAllJobs()"
+                  aria-label="Deselect all jobs"
+                >
+                  None
+                </button>
+              </span>
+            </div>
+            <div
+              class="job-list"
+              id="job-list"
+              role="listbox"
+              aria-label="Available jobs"
+            >
+              <div class="loading">Loading jobs...</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="chart-container">
+          <div class="chart-wrapper">
+            <div class="loading-overlay" id="chart-loading">
+              <span class="loading">Loading chart data...</span>
+            </div>
+            <canvas
+              id="timing-chart"
+              role="img"
+              aria-label="CI timing chart"
+            ></canvas>
+          </div>
+        </div>
+        <div class="stats-wrapper" id="stats-wrapper" style="height: 150px">
+          <div
+            class="resize-handle"
+            id="resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize stats panel"
+          ></div>
+          <div class="stats-bar">
+            <table role="table" aria-label="Job statistics">
+              <thead id="stats-thead">
+                <tr>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="job"
+                    onclick="handleStatsTableSort('job')"
+                  >
+                    Job/Report <span class="sort-indicator">▲</span>
+                  </th>
+                  <th scope="col">Hosts</th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="passRate"
+                    title="Pass rate in last 14 days"
+                    onclick="handleStatsTableSort('passRate')"
+                  >
+                    Pass Rate <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="trend"
+                    title="Trend over selected time range"
+                    onclick="handleStatsTableSort('trend')"
+                  >
+                    Trend <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="median"
+                    onclick="handleStatsTableSort('median')"
+                  >
+                    Median <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="min"
+                    onclick="handleStatsTableSort('min')"
+                  >
+                    Min <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="max"
+                    onclick="handleStatsTableSort('max')"
+                  >
+                    Max <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="std"
+                    onclick="handleStatsTableSort('std')"
+                  >
+                    σ <span class="sort-indicator">▲</span>
+                  </th>
+                  <th
+                    scope="col"
+                    class="sortable"
+                    data-sort="n"
+                    onclick="handleStatsTableSort('n')"
+                  >
+                    n <span class="sort-indicator">▲</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="stats-tbody">
+                <tr>
+                  <td colspan="9" class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="workers-view view-hidden" id="workers-view">
+          <div class="workers-toolbar">
+            <span class="workers-help"
+              >Each row is a Buildkite agent. Cells show jobs run per day
+              (across all pipelines); empty stretches are downtime.</span
+            >
+            <span class="workers-legend" aria-hidden="true">
+              <span class="workers-legend-item"
+                ><span class="wcell-sample wcell-ok"></span> ran jobs</span
+              >
+              <span class="workers-legend-item"
+                ><span class="wcell-sample wcell-failed"></span> some
+                failed</span
+              >
+              <span class="workers-legend-item"
+                ><span class="wcell-sample wcell-empty"></span> no jobs</span
+              >
+            </span>
+          </div>
+          <div class="workers-grid-wrapper" id="workers-grid">
+            <div class="loading">Loading worker history...</div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </main>
+
+    <div
+      id="perf-view"
+      role="tabpanel"
+      aria-labelledby="tab-perf"
+      tabindex="0"
+      style="flex: 1; min-height: 0; background: white; color-scheme: light"
+    >
+      <iframe
+        id="perf-iframe"
+        src="https://tealquaternion.camdvr.org/"
+        style="width: 100%; height: 100%; border: none; display: block"
+        title="Julia Perf"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+        referrerpolicy="no-referrer"
+        onload="if (window.applyTheme) applyTheme();"
+      ></iframe>
+    </div>
+
+    <div
+      class="pkgeval-main view-hidden"
+      id="pkgeval-view"
+      role="tabpanel"
+      aria-labelledby="tab-pkgeval"
+      tabindex="0"
+    >
+      <div class="pkgeval-toolbar">
+        <select
+          class="time-select"
+          id="pkgeval-time-range"
+          onchange="setPkgevalTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="730">Last 2 years</option>
+          <option value="0" selected>All time</option>
+        </select>
+        <button
+          class="btn"
+          id="pkgeval-btn-proportional"
+          onclick="togglePkgevalProportional()"
+        >
+          Show %
+        </button>
+        <button
+          class="btn btn-primary"
+          id="pkgeval-btn-reset-zoom"
+          onclick="pkgevalChart && pkgevalChart.resetZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <span class="updated" id="pkgeval-last-updated"></span>
+      </div>
+      <div class="pkgeval-chart-area">
+        <div class="pkgeval-chart-container">
+          <div class="pkgeval-chart-wrapper">
+            <div class="loading-overlay" id="pkgeval-chart-loading">
+              <span class="loading">Loading pkgeval data...</span>
+            </div>
+            <canvas id="pkgeval-chart"></canvas>
+          </div>
+        </div>
+        <div
+          class="resize-handle resize-handle-pkgeval"
+          id="pkgeval-resize-handle"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize pkgeval table"
+        ></div>
+        <div class="pkgeval-stats" id="pkgeval-stats" style="height: 280px">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Version</th>
+                <th class="num">Total</th>
+                <th class="num pe-ok">OK</th>
+                <th class="num pe-fail">Fail</th>
+                <th class="num pe-crash">Crash</th>
+                <th class="num pe-skip">Skip</th>
+                <th class="num pe-kill">Kill</th>
+              </tr>
+            </thead>
+            <tbody id="pkgeval-stats-tbody">
+              <tr>
+                <td colspan="8" class="loading">Loading...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="benchmarks-main view-hidden"
+      id="benchmarks-view"
+      role="tabpanel"
+      aria-labelledby="tab-benchmarks"
+      tabindex="0"
+    >
+      <div class="benchmarks-toolbar">
+        <select
+          class="time-select"
+          id="bench-time-range"
+          onchange="setBenchTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="15">Last 15 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365" selected>Last 365 days</option>
+          <option value="730">Last 2 years</option>
+          <option value="0">All time</option>
+        </select>
+        <select
+          class="time-select"
+          id="bench-stat-type"
+          onchange="setBenchStatType(this.value)"
+          aria-label="Statistic type"
+        >
+          <option value="minimum" selected>Minimum</option>
+          <option value="mean">Mean</option>
+        </select>
+        <button class="btn" id="bench-btn-all" onclick="selectAllGroups()">
+          All groups
+        </button>
+        <button class="btn" id="bench-btn-none" onclick="deselectAllGroups()">
+          None
+        </button>
+        <span
+          class="bench-table-view-toggle"
+          role="group"
+          aria-label="Table view"
+        >
+          <button
+            class="btn btn-primary"
+            id="bench-view-runs"
+            onclick="setBenchTableView('runs')"
+          >
+            By run
+          </button>
+          <button
+            class="btn"
+            id="bench-view-groups"
+            onclick="setBenchTableView('groups')"
+          >
+            By group
+          </button>
+          <button
+            class="btn"
+            id="bench-view-noisy"
+            onclick="setBenchTableView('noisy')"
+            title="Rank individual benchmarks by historical noise (median |Δ%| between consecutive runs)"
+          >
+            Noisy
+          </button>
+        </span>
+        <label
+          class="bench-noisy-min-ns-label"
+          id="bench-noisy-min-ns-label"
+          for="bench-noisy-min-ns"
+          hidden
+          title="Hide benchmarks whose median time in the selected range is below this many nanoseconds. Filters out near-no-op benchmarks where 1 CPU cycle (~0.5ns) registers as huge percent noise."
+        >
+          Min latency:
+          <input
+            type="number"
+            min="0"
+            step="1"
+            id="bench-noisy-min-ns"
+            value="50"
+            onchange="setBenchNoisyMinNs(this.value)"
+          />
+          ns
+        </label>
+        <button
+          class="btn btn-primary"
+          id="bench-btn-reset-zoom"
+          onclick="benchChart && benchChart.resetZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <button
+          class="btn btn-none"
+          id="bench-btn-methodology-info"
+          onclick="openBenchMethodologyPopup()"
+          onmouseenter="setBenchMethodologyHighlight(true)"
+          onmouseleave="setBenchMethodologyHighlight(false)"
+          onfocus="setBenchMethodologyHighlight(true)"
+          onblur="setBenchMethodologyHighlight(false)"
+          aria-label="Benchmark methodology change details"
+          title="View details about which benchmarks changed and when"
+        >Notes</button>
+      </div>
+      <div class="benchmarks-content">
+        <div class="benchmarks-sidebar" id="bench-group-list">
+          <div class="group-header">Benchmark Groups</div>
+          <div class="loading">Loading...</div>
+        </div>
+        <div class="benchmarks-chart-area">
+          <div class="benchmarks-chart-container">
+            <div class="benchmarks-chart-wrapper">
+              <div class="loading-overlay" id="bench-chart-loading">
+                <span class="loading">Loading benchmark data...</span>
+              </div>
+              <canvas id="benchmarks-chart"></canvas>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-bench"
+            id="bench-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize benchmarks table"
+          ></div>
+          <div class="benchmarks-stats" id="bench-stats" style="height: 280px">
+            <table>
+              <thead id="bench-stats-thead"></thead>
+              <tbody id="bench-stats-tbody">
+                <tr>
+                  <td colspan="6" class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="assets/bench-core.js"></script>
+    <script src="assets/app.js"></script>
+    <div id="bench-row-preview" hidden>
+      <img id="bench-row-preview-img" alt="Benchmark summary" />
+    </div>
+  </body>
+</html>

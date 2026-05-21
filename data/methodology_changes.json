@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "changes": [
+    {
+      "id": "bb-344-sparse-transpose-materialize",
+      "merged_date": "2026-05-11",
+      "first_valid_date": "2026-05-17",
+      "description": "BaseBenchmarks #344: sparse transpose/adjoint benchmarks now wrap in copy(...) to materialise the result instead of just constructing a lazy Transpose/Adjoint wrapper.",
+      "url": "https://github.com/JuliaCI/BaseBenchmarks.jl/pull/344",
+      "benchmarks": [
+        "sparse/transpose/('transpose', '(600, 600)')",
+        "sparse/transpose/('transpose', '(600, 400)')",
+        "sparse/transpose/('transpose', '(20000, 20000)')",
+        "sparse/transpose/('transpose', '(20000, 10000)')",
+        "sparse/transpose/('adjoint', '(600, 600)')",
+        "sparse/transpose/('adjoint', '(600, 400)')",
+        "sparse/transpose/('adjoint', '(20000, 20000)')",
+        "sparse/transpose/('adjoint', '(20000, 10000)')"
+      ]
+    }
+  ]
+}

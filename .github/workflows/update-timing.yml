@@ -1,0 +1,102 @@
+name: Update CI Timing Data
+
+on:
+  schedule:
+    # Run every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  fetch-and-update:
+    # Only run data fetch on schedule, manual trigger, or workflow/fetcher changes
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'fetch_timing.jl') || contains(github.event.head_commit.modified, 'fetch_benchmarks.jl') || contains(github.event.head_commit.modified, 'fetch_pkgeval.jl') || contains(github.event.head_commit.modified, '.github/workflows/update-timing.yml')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v3
+
+      - name: Cache NanosoldierReports clone
+        uses: actions/cache@v5
+        with:
+          path: .cache/NanosoldierReports
+          key: nanosoldier-reports-${{ github.run_id }}
+          restore-keys: |
+            nanosoldier-reports-
+
+      - name: Install dependencies
+        run: |
+          julia --color=yes --project -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Fetch timing data
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+        run: |
+          julia --color=yes --project fetch_timing.jl
+
+      - name: Fetch benchmark data
+        run: |
+          julia --color=yes --project fetch_benchmarks.jl
+
+      - name: Fetch pkgeval data
+        run: |
+          julia --color=yes --project fetch_pkgeval.jl
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update timing data"
+            git push
+          fi
+
+  deploy-pages:
+    # Always deploy on push, but wait for fetch-and-update if it ran
+    if: always() && (needs.fetch-and-update.result == 'success' || needs.fetch-and-update.result == 'skipped')
+    needs: fetch-and-update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main  # Get latest after data update
+
+      - name: Inject build commit
+        run: |
+          COMMIT=$(git rev-parse HEAD)
+          SHORT=$(git rev-parse --short HEAD)
+          echo "Injecting commit: $SHORT ($COMMIT)"
+          sed -i "s|__BUILD_COMMIT__|$COMMIT|g" index.html
+          sed -i "s|__BUILD_COMMIT_SHORT__|$SHORT|g" index.html
+          grep -o 'build-commit.*' index.html | head -1
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
