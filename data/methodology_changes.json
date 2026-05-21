@@ -4,7 +4,7 @@
     {
       "id": "bb-344-sparse-transpose-materialize",
       "merged_date": "2026-05-11",
-      "first_valid_date": "2026-05-17",
+      "first_valid_date": "2026-05-16",
       "description": "BaseBenchmarks #344: sparse transpose/adjoint benchmarks now wrap in copy(...) to materialise the result instead of just constructing a lazy Transpose/Adjoint wrapper.",
       "url": "https://github.com/JuliaCI/BaseBenchmarks.jl/pull/344",
       "benchmarks": [
