@@ -5425,7 +5425,7 @@ let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 // Whether to draw vertical methodology-change annotations on the chart.
 // Toggled by Notes button hover/focus and while the methodology popup is open.
 let benchShowMethodologyAnnotations = false;
-let benchTableView = "runs"; // 'groups', 'runs', or 'noisy'
+let benchTableView = "groups"; // 'groups', 'runs', or 'noisy'
 let benchNoisyLoading = false;
 let benchNoisySortCol = "noise"; // 'group', 'name', 'latest', 'noise', 'samples'
 let benchNoisySortAsc = false;
@@ -5515,8 +5515,8 @@ function updateBenchURL() {
   } else {
     url.searchParams.delete("bs");
   }
-  // Benchmark table view (default runs)
-  if (benchTableView !== "runs") {
+  // Benchmark table view (default groups)
+  if (benchTableView !== "groups") {
     url.searchParams.set("bv", benchTableView);
   } else {
     url.searchParams.delete("bv");
@@ -5569,7 +5569,7 @@ function applyBenchURLParams() {
   const bv = params.get("bv");
   if (bv === "groups") {
     benchTableView = "groups";
-    benchSortCol = "latest";
+    benchSortCol = "trendAbs";
     benchSortAsc = false;
     document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
     document.getElementById("bench-view-groups")?.classList.add("btn-primary");
@@ -6474,7 +6474,7 @@ function setBenchTableView(view) {
     benchSortCol = "date";
     benchSortAsc = false;
   } else if (view === "groups") {
-    benchSortCol = "latest";
+    benchSortCol = "trendAbs";
     benchSortAsc = false;
   } else {
     benchNoisySortCol = "noise";
