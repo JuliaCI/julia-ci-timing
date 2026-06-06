@@ -1637,11 +1637,15 @@ function updateStateFilterLabel() {
 document.addEventListener("click", (e) => {
   const hostDropdown = document.getElementById("host-filter-dropdown");
   const stateDropdown = document.getElementById("state-filter-dropdown");
+  const packagesMinorDropdown = document.getElementById("packages-minor-dropdown");
   if (hostDropdown && !hostDropdown.contains(e.target)) {
     hostDropdown.classList.remove("open");
   }
   if (stateDropdown && !stateDropdown.contains(e.target)) {
     stateDropdown.classList.remove("open");
+  }
+  if (packagesMinorDropdown && !packagesMinorDropdown.contains(e.target)) {
+    packagesMinorDropdown.classList.remove("open");
   }
 });
 
@@ -5323,6 +5327,7 @@ const DASHBOARD_PARAMS = new Set([
   "pp", // pkgeval proportional toggle
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
+  "edv", // ecosystem downloads Julia minor filter
   "perf", // legacy: full iframe path
 ]);
 
@@ -7276,6 +7281,19 @@ let packagesDownloadsData = null;
 let packagesDownloadsChart = null;
 let packagesTimeRangeDays = 365;
 let packagesClientType = "all";
+let packagesSelectedMinors = new Set(); // empty = all
+let packagesAvailableMinors = [];
+
+function parsePackagesMinorRank(minorKey) {
+  const m = /^(\d+)\.(\d+)$/.exec(minorKey);
+  if (!m) return Number.MAX_SAFE_INTEGER;
+  return parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
+}
+
+function getMinorFromTag(tag) {
+  const minorMatch = /^v(\d+\.\d+)\./.exec(tag || "");
+  return minorMatch ? minorMatch[1] : null;
+}
 
 function setPackagesTimeRange(val) {
   packagesTimeRangeDays = parseInt(val, 10);
@@ -7293,6 +7311,101 @@ function setPackagesClientType(val) {
   updatePackagesURL();
 }
 
+function setPackagesMinorFilter(val) {
+  // Backward-compatible wrapper: accept a single value and map to multiselect state.
+  if (!val || val === "all") {
+    packagesSelectedMinors.clear();
+  } else {
+    packagesSelectedMinors = new Set([val]);
+  }
+  updatePackagesDownloadsChart();
+  populatePackagesMinorFilterOptions();
+  updatePackagesURL();
+}
+
+function togglePackagesMinorDropdown(event) {
+  event.stopPropagation();
+  const dropdown = document.getElementById("packages-minor-dropdown");
+  dropdown?.classList.toggle("open");
+  // Close other dropdowns if open
+  document.getElementById("state-filter-dropdown")?.classList.remove("open");
+  document.getElementById("host-filter-dropdown")?.classList.remove("open");
+}
+
+function togglePackagesMinorFilter(minor, checkbox) {
+  if (minor === "__all__") {
+    packagesSelectedMinors.clear();
+  } else if (checkbox.checked) {
+    packagesSelectedMinors.add(minor);
+  } else {
+    packagesSelectedMinors.delete(minor);
+  }
+  populatePackagesMinorFilterOptions();
+  updatePackagesDownloadsChart();
+  updatePackagesURL();
+}
+
+function updatePackagesMinorFilterLabel() {
+  const label = document.getElementById("packages-minor-filter-label");
+  if (!label) return;
+  const total = packagesAvailableMinors.length;
+  const selectedCount = packagesSelectedMinors.size;
+  if (selectedCount === 0 || selectedCount === total) {
+    label.textContent = "All julia minor versions";
+  } else if (selectedCount === 1) {
+    const minor = [...packagesSelectedMinors][0];
+    label.textContent = `Julia ${minor}.x only`;
+  } else {
+    label.textContent = `Minors (${selectedCount}/${total})`;
+  }
+}
+
+function populatePackagesMinorFilterOptions() {
+  const menu = document.getElementById("packages-minor-filter-menu");
+  if (!menu) return;
+  const mixRows = packagesDownloadsData?.version_mix || [];
+  const minors = new Set();
+  for (const row of mixRows) {
+    for (const minor of Object.keys(row.minors || {})) minors.add(minor);
+  }
+  packagesAvailableMinors = [...minors].sort(
+    (a, b) => parsePackagesMinorRank(b) - parsePackagesMinorRank(a),
+  );
+
+  // Keep only still-available selections.
+  packagesSelectedMinors = new Set(
+    [...packagesSelectedMinors].filter((minor) =>
+      packagesAvailableMinors.includes(minor),
+    ),
+  );
+
+  menu.innerHTML = "";
+
+  const allItem = document.createElement("label");
+  allItem.className = "checkbox-dropdown-item";
+  const allChecked =
+    packagesSelectedMinors.size === 0 ||
+    packagesSelectedMinors.size === packagesAvailableMinors.length;
+  allItem.innerHTML = `<input type="checkbox" ${allChecked ? "checked" : ""} onchange="togglePackagesMinorFilter('__all__', this)"> All julia minor versions`;
+  menu.appendChild(allItem);
+
+  if (packagesAvailableMinors.length > 0) {
+    const divider = document.createElement("div");
+    divider.className = "checkbox-dropdown-divider";
+    menu.appendChild(divider);
+  }
+
+  for (const minor of packagesAvailableMinors) {
+    const item = document.createElement("label");
+    item.className = "checkbox-dropdown-item";
+    const checked = packagesSelectedMinors.has(minor);
+    item.innerHTML = `<input type="checkbox" ${checked ? "checked" : ""} onchange="togglePackagesMinorFilter('${escapeHtml(minor)}', this)"> Julia ${escapeHtml(minor)}.x`;
+    menu.appendChild(item);
+  }
+
+  updatePackagesMinorFilterLabel();
+}
+
 function updatePackagesURL() {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(activeTab));
@@ -7305,6 +7418,18 @@ function updatePackagesURL() {
     url.searchParams.set("edc", packagesClientType);
   } else {
     url.searchParams.delete("edc");
+  }
+  if (packagesSelectedMinors.size > 0) {
+    const selected = [...packagesSelectedMinors].sort(
+      (a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b),
+    );
+    if (selected.length > 0) {
+      url.searchParams.set("edv", selected.map(encodeURIComponent).join(","));
+    } else {
+      url.searchParams.delete("edv");
+    }
+  } else {
+    url.searchParams.delete("edv");
   }
   history.replaceState(null, "", url);
 }
@@ -7325,6 +7450,16 @@ function applyPackagesURLParams() {
     packagesClientType = edc;
     const sel = document.getElementById("packages-client-type");
     if (sel) sel.value = edc;
+  }
+  const edv = params.get("edv");
+  if (edv === null || edv === "" || edv === "all") {
+    packagesSelectedMinors.clear();
+  } else {
+    const parsed = edv
+      .split(",")
+      .map((value) => decodeURIComponent(value.trim()))
+      .filter((value) => /^(\d+)\.(\d+)$/.test(value));
+    packagesSelectedMinors = new Set(parsed);
   }
 }
 
@@ -7352,13 +7487,13 @@ async function loadPackagesDownloadsData() {
       (series.length ? series[series.length - 1].date : null);
 
     const updatedEl = document.getElementById("packages-last-updated");
-    if (updatedEl && packagesDownloadsData.maxDate) {
-      updatedEl.textContent = `Through ${packagesDownloadsData.maxDate} (UTC)`;
-      updatedEl.title =
-        "Source: data/packages_downloads_summary.json.gz";
+    if (updatedEl) {
+      updatedEl.textContent = "";
+      updatedEl.title = "";
     }
 
     if (loadingEl) loadingEl.style.display = "none";
+    populatePackagesMinorFilterOptions();
     updatePackagesDownloadsChart();
   } catch (err) {
     console.error("Failed to load ecosystem packages downloads:", err);
@@ -7413,9 +7548,16 @@ function updatePackagesDownloadsChart() {
   const sortedMinors = [...minorTotals.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([minor]) => minor);
+  const hasMinorSelection = packagesSelectedMinors.size > 0;
+  const eligibleMinors = hasMinorSelection
+    ? sortedMinors.filter((minor) => packagesSelectedMinors.has(minor))
+    : sortedMinors;
   const MAX_MINOR_BANDS = 8;
-  const displayedMinors = sortedMinors.slice(0, MAX_MINOR_BANDS);
-  const hasOther = sortedMinors.length > displayedMinors.length;
+  const displayedMinors = hasMinorSelection
+    ? eligibleMinors
+    : eligibleMinors.slice(0, MAX_MINOR_BANDS);
+  const hasOther =
+    !hasMinorSelection && sortedMinors.length > displayedMinors.length;
 
   const minorSeries = new Map();
   for (const minor of displayedMinors) {
@@ -7461,55 +7603,63 @@ function updatePackagesDownloadsChart() {
     return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
   };
 
-  const parseMinorRank = (minorKey) => {
-    const m = /^(\d+)\.(\d+)$/.exec(minorKey);
-    if (!m) return Number.MAX_SAFE_INTEGER;
-    return parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
-  };
-
   const minDate = rows[0].date;
   const maxDate = rows[rows.length - 1].date;
   const allJuliaTags = (packagesDownloadsData?.julia_tags || []).filter(
     (tag) => tag && tag.date && tag.tag,
   );
   const juliaTags = allJuliaTags.filter(
-    (tag) => tag.date >= minDate && tag.date <= maxDate,
+    (tag) => {
+      if (tag.date < minDate || tag.date > maxDate) return false;
+      if (!hasMinorSelection) return true;
+      const minor = getMinorFromTag(tag.tag);
+      return minor != null && packagesSelectedMinors.has(minor);
+    },
   );
 
   const firstTagByMinor = new Map();
   for (const tag of allJuliaTags) {
-    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
-    const minorKey = minorMatch ? minorMatch[1] : tag.tag;
+    const minorKey = getMinorFromTag(tag.tag) || tag.tag;
     if (!firstTagByMinor.has(minorKey)) {
       firstTagByMinor.set(minorKey, tag.tag);
     }
   }
 
   const tagMinorKeys = [...new Set(juliaTags.map((tag) => {
-    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
-    return minorMatch ? minorMatch[1] : tag.tag;
-  }))].sort((a, b) => parseMinorRank(a) - parseMinorRank(b));
+    return getMinorFromTag(tag.tag) || tag.tag;
+  }))].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
 
   const orderedDisplayMinors = [...displayedMinors].sort(
-    (a, b) => parseMinorRank(a) - parseMinorRank(b),
+    (a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b),
   );
 
+  // Build a stable color index from all known minor versions so colors do not
+  // shift when filters change.
+  const allKnownMinorKeys = [...new Set((packagesDownloadsData?.version_mix || []).flatMap(
+    (row) => Object.keys(row.minors || {}),
+  ))].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+  const minorColorIndex = new Map();
+  for (let i = 0; i < allKnownMinorKeys.length; i++) {
+    minorColorIndex.set(allKnownMinorKeys[i], i);
+  }
+
   const allColorMinorKeys = [...new Set([...orderedDisplayMinors, ...tagMinorKeys])]
-    .sort((a, b) => parseMinorRank(a) - parseMinorRank(b));
+    .sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
   const minorColors = new Map();
   const tagMinorLane = new Map();
   const laneStart = 44;
   const laneStep = 50;
   for (let i = 0; i < allColorMinorKeys.length; i++) {
-    minorColors.set(allColorMinorKeys[i], colorForMinorIndex(i));
+    const minorKey = allColorMinorKeys[i];
+    const colorIdx = minorColorIndex.get(minorKey) ?? i;
+    minorColors.set(minorKey, colorForMinorIndex(colorIdx));
     tagMinorLane.set(allColorMinorKeys[i], laneStart - i * laneStep);
   }
 
   const tagAnnotations = {};
   for (let i = 0; i < juliaTags.length; i++) {
     const tag = juliaTags[i];
-    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
-    const minorKey = minorMatch ? minorMatch[1] : tag.tag;
+    const minorKey = getMinorFromTag(tag.tag) || tag.tag;
     const minorColor = minorColors.get(minorKey) || textColor;
     const laneYAdjust = tagMinorLane.get(minorKey) ?? 8;
     const isFirstOfMinor = firstTagByMinor.get(minorKey) === tag.tag;
@@ -7551,7 +7701,7 @@ function updatePackagesDownloadsChart() {
       label: `Julia ${minor}.x`,
       data: minorSeries.get(minor),
       borderColor: "transparent",
-      backgroundColor: colorToRgba(c, 0.8),
+      backgroundColor: colorToRgba(c, 0.9),
       borderWidth: 0,
       pointRadius: 0,
       pointHitRadius: 0,
@@ -7566,7 +7716,7 @@ function updatePackagesDownloadsChart() {
       label: "Other versions",
       data: otherSeries,
       borderColor: "transparent",
-      backgroundColor: colorToRgba(isDark ? "#6e7681" : "#8c959f", 0.8),
+      backgroundColor: colorToRgba(isDark ? "#6e7681" : "#8c959f", 0.9),
       borderWidth: 0,
       pointRadius: 0,
       pointHitRadius: 0,

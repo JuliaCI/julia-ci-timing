@@ -693,6 +693,16 @@
           <option value="user">User only</option>
           <option value="ci">CI only</option>
         </select>
+        <div class="checkbox-dropdown" id="packages-minor-dropdown">
+          <button
+            class="checkbox-dropdown-btn"
+            onclick="togglePackagesMinorDropdown(event)"
+            aria-label="Julia minor version filter"
+          >
+            <span id="packages-minor-filter-label">All julia minor versions</span>
+          </button>
+          <div class="checkbox-dropdown-menu" id="packages-minor-filter-menu"></div>
+        </div>
         <span class="updated" id="packages-last-updated"></span>
       </div>
       <div class="pkgeval-chart-area">
