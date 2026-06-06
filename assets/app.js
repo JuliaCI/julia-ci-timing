@@ -5272,7 +5272,7 @@ const TAB_URL_MAP = {
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
   "ci-workers": "ci-workers",
-  packages: "ecosystem-packages",
+  packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
 };
 
@@ -5321,8 +5321,8 @@ const DASHBOARD_PARAMS = new Set([
   "bpc", // bench show pre-change data
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
-  "ept", // ecosystem packages time range
-  "epc", // ecosystem packages client type
+  "edt", // ecosystem downloads time range
+  "edc", // ecosystem downloads client type
   "perf", // legacy: full iframe path
 ]);
 
@@ -7297,34 +7297,34 @@ function updatePackagesURL() {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(activeTab));
   if (packagesTimeRangeDays !== 365) {
-    url.searchParams.set("ept", packagesTimeRangeDays);
+    url.searchParams.set("edt", packagesTimeRangeDays);
   } else {
-    url.searchParams.delete("ept");
+    url.searchParams.delete("edt");
   }
   if (packagesClientType !== "all") {
-    url.searchParams.set("epc", packagesClientType);
+    url.searchParams.set("edc", packagesClientType);
   } else {
-    url.searchParams.delete("epc");
+    url.searchParams.delete("edc");
   }
   history.replaceState(null, "", url);
 }
 
 function applyPackagesURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const ept = params.get("ept");
-  if (ept !== null) {
-    const days = parseInt(ept, 10);
+  const edt = params.get("edt");
+  if (edt !== null) {
+    const days = parseInt(edt, 10);
     if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
       packagesTimeRangeDays = days;
       const sel = document.getElementById("packages-time-range");
       if (sel) sel.value = days;
     }
   }
-  const epc = params.get("epc");
-  if (epc === "all" || epc === "user" || epc === "ci") {
-    packagesClientType = epc;
+  const edc = params.get("edc");
+  if (edc === "all" || edc === "user" || edc === "ci") {
+    packagesClientType = edc;
     const sel = document.getElementById("packages-client-type");
-    if (sel) sel.value = epc;
+    if (sel) sel.value = edc;
   }
 }
 
