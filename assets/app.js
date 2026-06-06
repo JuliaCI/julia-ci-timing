@@ -5328,6 +5328,7 @@ const DASHBOARD_PARAMS = new Set([
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
+  "edp", // ecosystem downloads proportional toggle
   "perf", // legacy: full iframe path
 ]);
 
@@ -7283,6 +7284,7 @@ let packagesTimeRangeDays = 365;
 let packagesClientType = "all";
 let packagesSelectedMinors = new Set(); // empty = all
 let packagesAvailableMinors = [];
+let packagesProportional = false;
 
 function parsePackagesMinorRank(minorKey) {
   const m = /^(\d+)\.(\d+)$/.exec(minorKey);
@@ -7306,6 +7308,16 @@ function setPackagesClientType(val) {
     packagesClientType = val;
   } else {
     packagesClientType = "all";
+  }
+  updatePackagesDownloadsChart();
+  updatePackagesURL();
+}
+
+function togglePackagesProportional() {
+  packagesProportional = !packagesProportional;
+  const btn = document.getElementById("packages-btn-proportional");
+  if (btn) {
+    btn.textContent = packagesProportional ? "Show counts" : "Show %";
   }
   updatePackagesDownloadsChart();
   updatePackagesURL();
@@ -7431,6 +7443,11 @@ function updatePackagesURL() {
   } else {
     url.searchParams.delete("edv");
   }
+  if (packagesProportional) {
+    url.searchParams.set("edp", "1");
+  } else {
+    url.searchParams.delete("edp");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -7460,6 +7477,11 @@ function applyPackagesURLParams() {
       .map((value) => decodeURIComponent(value.trim()))
       .filter((value) => /^(\d+)\.(\d+)$/.test(value));
     packagesSelectedMinors = new Set(parsed);
+  }
+  if (params.get("edp") === "1") {
+    packagesProportional = true;
+    const btn = document.getElementById("packages-btn-proportional");
+    if (btn) btn.textContent = "Show counts";
   }
 }
 
@@ -7727,11 +7749,27 @@ function updatePackagesDownloadsChart() {
     });
   }
 
+  let displayDatasets = bandDatasets;
+  if (packagesProportional) {
+    const dayTotals = new Array(rows.length).fill(0);
+    for (const ds of bandDatasets) {
+      for (let i = 0; i < rows.length; i++) {
+        dayTotals[i] += Number(ds.data[i] || 0);
+      }
+    }
+    displayDatasets = bandDatasets.map((ds) => ({
+      ...ds,
+      data: ds.data.map((v, i) =>
+        dayTotals[i] > 0 ? (Number(v || 0) / dayTotals[i]) * 100 : 0,
+      ),
+    }));
+  }
+
   const config = {
     type: "line",
     data: {
       labels: rows.map((r) => r.date),
-      datasets: bandDatasets,
+      datasets: displayDatasets,
     },
     options: {
       responsive: true,
@@ -7749,8 +7787,12 @@ function updatePackagesDownloadsChart() {
         },
         tooltip: {
           callbacks: {
-            label: (ctx) =>
-              ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString()}`,
+            label: (ctx) => {
+              if (packagesProportional) {
+                return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toFixed(1)}%`;
+              }
+              return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString()}`;
+            },
           },
         },
         annotation: {
@@ -7767,14 +7809,20 @@ function updatePackagesDownloadsChart() {
         y: {
           stacked: true,
           beginAtZero: true,
+          max: packagesProportional ? 100 : undefined,
           grid: { display: false },
           ticks: {
             color: textColor,
-            callback: (v) => Number(v).toLocaleString(),
+            callback: (v) =>
+              packagesProportional
+                ? `${Number(v).toFixed(0)}%`
+                : Number(v).toLocaleString(),
           },
           title: {
             display: true,
-            text: "Daily package downloads",
+            text: packagesProportional
+              ? "Daily package downloads (%)"
+              : "Daily package downloads",
             color: textColor,
           },
         },
