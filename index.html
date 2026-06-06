@@ -129,6 +129,18 @@
           <div class="tab-group-buttons">
             <button
               class="tab-btn"
+              id="tab-packages"
+              role="tab"
+              aria-selected="false"
+              aria-controls="packages-view"
+              tabindex="-1"
+              onclick="switchTab('packages')"
+              title="Aggregated package downloads over time"
+            >
+              Packages
+            </button>
+            <button
+              class="tab-btn"
               id="tab-pkgeval"
               role="tab"
               aria-selected="false"
@@ -649,6 +661,50 @@
         referrerpolicy="no-referrer"
         onload="if (window.applyTheme) applyTheme();"
       ></iframe>
+    </div>
+
+    <div
+      class="pkgeval-main view-hidden"
+      id="packages-view"
+      role="tabpanel"
+      aria-labelledby="tab-packages"
+      tabindex="0"
+    >
+      <div class="pkgeval-toolbar">
+        <select
+          class="time-select"
+          id="packages-time-range"
+          onchange="setPackagesTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365" selected>Last 365 days</option>
+          <option value="730">Last 2 years</option>
+          <option value="0">All time</option>
+        </select>
+        <select
+          class="time-select"
+          id="packages-client-type"
+          onchange="setPackagesClientType(this.value)"
+          aria-label="Client type"
+        >
+          <option value="all" selected>All clients</option>
+          <option value="user">User only</option>
+          <option value="ci">CI only</option>
+        </select>
+        <span class="updated" id="packages-last-updated"></span>
+      </div>
+      <div class="pkgeval-chart-area">
+        <div class="pkgeval-chart-container">
+          <div class="pkgeval-chart-wrapper">
+            <div class="loading-overlay" id="packages-chart-loading">
+              <span class="loading">Loading package download data...</span>
+            </div>
+            <canvas id="packages-chart"></canvas>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div

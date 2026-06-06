@@ -11,6 +11,7 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
 
 - `fetch_benchmarks.jl` — Nanosoldier benchmark history
 - `fetch_pkgeval.jl` — PkgEval reports
+- `fetch_packages.jl` — Package download aggregates from public package-server rollups
 - `fetch_timing.jl` — Buildkite job timings (`julia-master`, `julia-master-scheduled`)
 
 ## PR comparison

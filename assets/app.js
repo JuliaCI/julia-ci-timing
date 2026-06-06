@@ -5272,6 +5272,7 @@ const TAB_URL_MAP = {
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
   "ci-workers": "ci-workers",
+  packages: "ecosystem-packages",
   pkgeval: "ecosystem-pkgeval",
 };
 
@@ -5280,6 +5281,7 @@ const LEGACY_TAB_ALIASES = new Set([
   "benchmarks",
   "ci-timing",
   "ci-workers",
+  "packages",
   "pkgeval",
 ]);
 
@@ -5319,6 +5321,8 @@ const DASHBOARD_PARAMS = new Set([
   "bpc", // bench show pre-change data
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
+  "ept", // ecosystem packages time range
+  "epc", // ecosystem packages client type
   "perf", // legacy: full iframe path
 ]);
 
@@ -5392,6 +5396,7 @@ function switchTab(tab) {
   const tabIds = {
     "ci-timing": "tab-ci-timing",
     "ci-workers": "tab-ci-workers",
+    packages: "tab-packages",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
     perf: "tab-perf",
@@ -5419,6 +5424,9 @@ function switchTab(tab) {
     .getElementById("benchmarks-view")
     .classList.toggle("view-hidden", tab !== "benchmarks");
   document
+    .getElementById("packages-view")
+    .classList.toggle("view-hidden", tab !== "packages");
+  document
     .getElementById("pkgeval-view")
     .classList.toggle("view-hidden", tab !== "pkgeval");
   document
@@ -5431,6 +5439,9 @@ function switchTab(tab) {
   }
   if (tab === "pkgeval" && !pkgevalData) {
     loadPkgevalData();
+  }
+  if (tab === "packages" && !packagesDownloadsData) {
+    loadPackagesDownloadsData();
   }
 
   // Update tab in URL
@@ -7260,6 +7271,339 @@ function renderBenchGroupsTable() {
   attachBenchNotesBadgeHandlers(tbody);
 }
 
+// === Ecosystem Packages State ===
+let packagesDownloadsData = null;
+let packagesDownloadsChart = null;
+let packagesTimeRangeDays = 365;
+let packagesClientType = "all";
+
+function setPackagesTimeRange(val) {
+  packagesTimeRangeDays = parseInt(val, 10);
+  updatePackagesDownloadsChart();
+  updatePackagesURL();
+}
+
+function setPackagesClientType(val) {
+  if (val === "all" || val === "user" || val === "ci") {
+    packagesClientType = val;
+  } else {
+    packagesClientType = "all";
+  }
+  updatePackagesDownloadsChart();
+  updatePackagesURL();
+}
+
+function updatePackagesURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  if (packagesTimeRangeDays !== 365) {
+    url.searchParams.set("ept", packagesTimeRangeDays);
+  } else {
+    url.searchParams.delete("ept");
+  }
+  if (packagesClientType !== "all") {
+    url.searchParams.set("epc", packagesClientType);
+  } else {
+    url.searchParams.delete("epc");
+  }
+  history.replaceState(null, "", url);
+}
+
+function applyPackagesURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const ept = params.get("ept");
+  if (ept !== null) {
+    const days = parseInt(ept, 10);
+    if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+      packagesTimeRangeDays = days;
+      const sel = document.getElementById("packages-time-range");
+      if (sel) sel.value = days;
+    }
+  }
+  const epc = params.get("epc");
+  if (epc === "all" || epc === "user" || epc === "ci") {
+    packagesClientType = epc;
+    const sel = document.getElementById("packages-client-type");
+    if (sel) sel.value = epc;
+  }
+}
+
+function getPackagesFilteredSeries() {
+  if (!packagesDownloadsData || !packagesDownloadsData.series.length) return [];
+  const cutoff = new Date();
+  if (packagesTimeRangeDays > 0) {
+    cutoff.setDate(cutoff.getDate() - packagesTimeRangeDays);
+  }
+  return packagesDownloadsData.series.filter((row) => {
+    if (packagesTimeRangeDays > 0 && new Date(row.date) < cutoff) return false;
+    return true;
+  });
+}
+
+async function loadPackagesDownloadsData() {
+  const loadingEl = document.getElementById("packages-chart-loading");
+  try {
+    packagesDownloadsData = await loadGzipJson(
+      "data/packages_downloads_summary.json.gz",
+    );
+    const series = packagesDownloadsData.series || [];
+    packagesDownloadsData.maxDate =
+      packagesDownloadsData.maxDate ||
+      (series.length ? series[series.length - 1].date : null);
+
+    const updatedEl = document.getElementById("packages-last-updated");
+    if (updatedEl && packagesDownloadsData.maxDate) {
+      updatedEl.textContent = `Through ${packagesDownloadsData.maxDate} (UTC)`;
+      updatedEl.title =
+        "Source: data/packages_downloads_summary.json.gz";
+    }
+
+    if (loadingEl) loadingEl.style.display = "none";
+    updatePackagesDownloadsChart();
+  } catch (err) {
+    console.error("Failed to load ecosystem packages downloads:", err);
+    if (loadingEl) {
+      loadingEl.innerHTML =
+        '<span class="error">Failed to load package downloads. Run <code>julia fetch_packages.jl</code> to generate data.</span>';
+    }
+  }
+}
+
+function updatePackagesDownloadsChart() {
+  const rows = getPackagesFilteredSeries();
+  if (!rows.length) return;
+
+  const isDark = isDarkMode();
+  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const lineColor = isDark ? "#58a6ff" : "#0969da";
+
+  const values = rows.map((r) => {
+    if (packagesClientType === "user") return r.user;
+    if (packagesClientType === "ci") return r.ci;
+    return r.all;
+  });
+
+  const minDate = rows[0].date;
+  const maxDate = rows[rows.length - 1].date;
+  const juliaTags = (packagesDownloadsData?.julia_tags || []).filter((tag) => {
+    if (!tag || !tag.date || !tag.tag) return false;
+    return tag.date >= minDate && tag.date <= maxDate;
+  });
+  const allJuliaTags = (packagesDownloadsData?.julia_tags || []).filter(
+    (tag) => tag && tag.date && tag.tag,
+  );
+
+  // Track the first (earliest) release we have for each minor version.
+  const firstTagByMinor = new Map();
+  for (const tag of allJuliaTags) {
+    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
+    const minorKey = minorMatch ? minorMatch[1] : tag.tag;
+    if (!firstTagByMinor.has(minorKey)) {
+      firstTagByMinor.set(minorKey, tag.tag);
+    }
+  }
+
+  const tagAnnotations = {};
+  const tagMarkers = [];
+  const minorPalette = isDark
+    ? ["#58a6ff", "#3fb950", "#d2a8ff", "#f2cc60", "#ff7b72", "#79c0ff"]
+    : ["#0969da", "#1a7f37", "#8250df", "#9a6700", "#cf222e", "#1b7c83"];
+  const minorVersionColors = new Map();
+  const minorVersionLane = new Map();
+  let nextMinorColorIdx = 0;
+
+  const parseMinorRank = (minorKey) => {
+    const m = /^(\d+)\.(\d+)$/.exec(minorKey);
+    if (!m) return Number.MAX_SAFE_INTEGER;
+    return parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
+  };
+
+  const sortedMinorKeys = [...new Set(juliaTags.map((tag) => {
+    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
+    return minorMatch ? minorMatch[1] : tag.tag;
+  }))].sort((a, b) => parseMinorRank(a) - parseMinorRank(b));
+
+  const laneStart = 44;
+  const laneStep = 50;
+  for (let i = 0; i < sortedMinorKeys.length; i++) {
+    // Lower minor versions sit lower in the chart labels.
+    minorVersionLane.set(sortedMinorKeys[i], laneStart - i * laneStep);
+  }
+
+  for (let i = 0; i < juliaTags.length; i++) {
+    const tag = juliaTags[i];
+    const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
+    const minorKey = minorMatch ? minorMatch[1] : tag.tag;
+    if (!minorVersionColors.has(minorKey)) {
+      minorVersionColors.set(
+        minorKey,
+        minorPalette[nextMinorColorIdx % minorPalette.length],
+      );
+      nextMinorColorIdx++;
+    }
+    const minorColor = minorVersionColors.get(minorKey);
+    const laneYAdjust = minorVersionLane.get(minorKey) ?? 8;
+    const isFirstOfMinor = firstTagByMinor.get(minorKey) === tag.tag;
+    tagMarkers.push({
+      date: tag.date,
+      tag: tag.tag,
+      title: isFirstOfMinor
+        ? `${tag.tag} (${tag.date}) - first ${minorKey} release`
+        : `${tag.tag} (${tag.date})`,
+    });
+
+    tagAnnotations[`julia-tag-${i}`] = {
+      type: "line",
+      xMin: tag.date,
+      xMax: tag.date,
+      borderColor: colorToRgba(
+        minorColor,
+        isFirstOfMinor ? (isDark ? 0.65 : 0.55) : isDark ? 0.38 : 0.3,
+      ),
+      borderWidth: isFirstOfMinor ? 2 : 1,
+      borderDash: isFirstOfMinor ? [] : [3, 3],
+      label: {
+        display: true,
+        content: tag.tag,
+        enabled: true,
+        z: 100,
+        rotation: 0,
+        yAdjust: laneYAdjust,
+        color: minorColor,
+        backgroundColor: isDark
+          ? "rgba(13, 17, 23, 0.9)"
+          : "rgba(255, 255, 255, 0.9)",
+        padding: 2,
+        borderRadius: 0,
+        font: {
+          size: 11,
+          weight: isFirstOfMinor ? "700" : "500",
+        },
+      },
+    };
+  }
+
+  const config = {
+    type: "line",
+    data: {
+      labels: rows.map((r) => r.date),
+      datasets: [
+        {
+          label:
+            packagesClientType === "all"
+              ? "Package downloads"
+              : `Package downloads (${packagesClientType})`,
+          data: values,
+          borderColor: lineColor,
+          backgroundColor: lineColor + "33",
+          fill: true,
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHitRadius: 8,
+          tension: 0.15,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      onHover: (evt) => {
+        const canvasEl = evt?.native?.target;
+        if (!canvasEl) return;
+
+        const chartRef = evt?.chart || packagesDownloadsChart;
+        const xScale = chartRef?.scales?.x;
+        if (!xScale || tagMarkers.length === 0) {
+          canvasEl.style.cursor = "";
+          canvasEl.removeAttribute("title");
+          return;
+        }
+
+        const mx = Number.isFinite(evt?.x)
+          ? evt.x
+          : Number.isFinite(evt?.native?.offsetX)
+            ? evt.native.offsetX
+            : null;
+        if (mx == null) {
+          canvasEl.style.cursor = "";
+          canvasEl.removeAttribute("title");
+          return;
+        }
+
+        const thresholdPx = 6;
+        let best = null;
+        let bestDist = Infinity;
+        for (const marker of tagMarkers) {
+          const px = xScale.getPixelForValue(marker.date);
+          if (!Number.isFinite(px)) continue;
+          const d = Math.abs(px - mx);
+          if (d <= thresholdPx && d < bestDist) {
+            bestDist = d;
+            best = marker;
+          }
+        }
+
+        if (best) {
+          canvasEl.style.cursor = "help";
+          canvasEl.title = best.title;
+        } else {
+          canvasEl.style.cursor = "";
+          canvasEl.removeAttribute("title");
+        }
+      },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: textColor,
+            usePointStyle: true,
+            pointStyle: "line",
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) =>
+              ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString()}`,
+          },
+        },
+        annotation: {
+          annotations: tagAnnotations,
+        },
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
+          grid: { color: gridColor },
+          ticks: { color: textColor, maxRotation: 0, autoSkip: true },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: gridColor },
+          ticks: {
+            color: textColor,
+            callback: (v) => Number(v).toLocaleString(),
+          },
+          title: {
+            display: true,
+            text: "Daily package downloads",
+            color: textColor,
+          },
+        },
+      },
+    },
+  };
+
+  const canvas = document.getElementById("packages-chart");
+  if (packagesDownloadsChart) {
+    packagesDownloadsChart.destroy();
+  }
+  packagesDownloadsChart = new Chart(canvas, config);
+}
+
 // === PkgEval State ===
 let pkgevalData = null;
 let pkgevalChart = null;
@@ -7595,6 +7939,7 @@ loadData();
 
 // Apply benchmark URL params before potential tab switch
 applyBenchURLParams();
+applyPackagesURLParams();
 applyPkgevalURLParams();
 applyPerfURLParams();
 
@@ -7655,6 +8000,7 @@ window
     if (currentTheme() === "system") applyTheme();
     if (selectedJobs.size > 0) updateChart();
     if (benchChart) updateBenchChart();
+    if (packagesDownloadsChart) updatePackagesDownloadsChart();
     if (pkgevalChart) updatePkgevalChart();
   });
 
@@ -7703,6 +8049,7 @@ function applyTheme() {
   }
   if (selectedJobs.size > 0) updateChart();
   if (benchChart) updateBenchChart();
+  if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
 }
 function cycleTheme() {
