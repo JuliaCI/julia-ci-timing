@@ -2081,6 +2081,9 @@ body {
   border-bottom: 1px solid var(--color-border-default);
   flex-shrink: 0;
 }
+.packages-prerelease-headline {
+  font-weight: 600;
+}
 .pkgeval-chart-area {
   flex: 1;
   display: flex;

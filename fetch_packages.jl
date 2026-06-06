@@ -93,6 +93,66 @@ function fetch_recent_stable_julia_tags(; years::Int=2)
     return tags
 end
 
+function is_prerelease_julia_tag(tag::AbstractString)
+    s = lowercase(tag)
+    return occursin(r"^v\d+\.\d+\.\d+-(alpha|beta|rc)", s)
+end
+
+function fetch_recent_prerelease_julia_tags(; years::Int=2)
+    cutoff = now(Dates.UTC) - Dates.Year(years)
+    tags = Vector{Dict{String,Any}}()
+    page = 1
+
+    while true
+        url = JULIA_RELEASES_API * "&page=$(page)"
+        resp = HTTP.get(url;
+            retry=true,
+            retries=3,
+            connect_timeout=30,
+            readtimeout=120,
+            headers=Dict("User-Agent" => "julia-ci-timing-fetcher"),
+        )
+        resp.status == 200 || error("Failed to fetch Julia releases: HTTP $(resp.status)")
+        releases = JSON3.read(resp.body)
+        isempty(releases) && break
+
+        for release in releases
+            draft = get(release, :draft, false)
+            draft && continue
+
+            tag = String(get(release, :tag_name, ""))
+            is_prerelease_julia_tag(tag) || continue
+
+            published_raw = String(get(release, :published_at, ""))
+            isempty(published_raw) && continue
+            published_dt = parse_github_datetime(published_raw)
+            published_dt === nothing && continue
+            published_utc = DateTime(published_dt)
+            published_utc < cutoff && continue
+
+            push!(tags, Dict(
+                "tag" => tag,
+                "date" => Dates.format(Date(published_utc), dateformat"yyyy-mm-dd"),
+                "published_at" => Dates.format(published_utc, dateformat"yyyy-mm-ddTHH:MM:SS"),
+                "url" => String(get(release, :html_url, "")),
+            ))
+        end
+
+        oldest_on_page = let last_release = releases[end]
+            raw = String(get(last_release, :published_at, ""))
+            parse_github_datetime(raw)
+        end
+        if oldest_on_page !== nothing && oldest_on_page < cutoff
+            break
+        end
+
+        page += 1
+    end
+
+    sort!(tags; by = x -> x["date"])
+    return tags
+end
+
 function parse_csv_line(line::AbstractString)
     out = String[]
     io = IOBuffer()
@@ -134,6 +194,25 @@ function parse_csv_line(line::AbstractString)
     return out
 end
 
+function classify_julia_version_channel(version_prefix::AbstractString)
+    s = lowercase(strip(version_prefix))
+    if occursin("-dev", s)
+        return "exclude"
+    end
+    if occursin(r"-alpha", s)
+        return "alpha"
+    elseif occursin(r"-beta", s)
+        return "beta"
+    elseif occursin(r"-rc", s)
+        return "rc"
+    elseif occursin(r"^\d+\.\d+\.\d+$", s)
+        return "stable"
+    else
+        # Keep unknown prerelease-like variants visible but separate.
+        return "other"
+    end
+end
+
 function load_existing(output_dir::AbstractString)
     path = joinpath(output_dir, "packages_downloads_summary.json.gz")
     if !isfile(path)
@@ -144,6 +223,22 @@ function load_existing(output_dir::AbstractString)
     catch e
         @warn "Failed to read existing packages summary, rebuilding" error=e
         return nothing
+    end
+end
+
+function normalize_for_compare(x)
+    if x isa AbstractDict
+        out = Dict{String,Any}()
+        for (k, v) in pairs(x)
+            ks = String(k)
+            ks == "generated_at" && continue
+            out[ks] = normalize_for_compare(v)
+        end
+        return out
+    elseif x isa AbstractVector
+        return [normalize_for_compare(v) for v in x]
+    else
+        return x
     end
 end
 
@@ -209,6 +304,12 @@ function main()
     # )
     version_mix = Dict{String,Dict{String,Any}}()
 
+    # date => Dict(
+    #   "totals" => Dict("all" => Int, "user" => Int, "ci" => Int),
+    #   "channels" => Dict(channel => Dict("all" => Int, "user" => Int, "ci" => Int))
+    # )
+    version_stage_mix = Dict{String,Dict{String,Any}}()
+
     for line in @view version_lines[2:end]
         row = parse_csv_line(strip(line))
         length(row) >= 6 || continue
@@ -226,6 +327,8 @@ function main()
         m = match(r"^(\d+)\.(\d+)\.", version_prefix)
         m === nothing && continue
         minor = string(m.captures[1], ".", m.captures[2])
+        channel = classify_julia_version_channel(version_prefix)
+        channel == "exclude" && continue
 
         bucket = get!(version_mix, date) do
             Dict{String,Any}(
@@ -252,6 +355,32 @@ function main()
         elseif client_type == "ci"
             minor_bucket["ci"] += successes
         end
+
+        stage_bucket = get!(version_stage_mix, date) do
+            Dict{String,Any}(
+                "totals" => Dict("all" => 0, "user" => 0, "ci" => 0),
+                "channels" => Dict{String,Any}(),
+            )
+        end
+
+        stage_totals = stage_bucket["totals"]::Dict{String,Int}
+        stage_totals["all"] += successes
+        if client_type == "user"
+            stage_totals["user"] += successes
+        elseif client_type == "ci"
+            stage_totals["ci"] += successes
+        end
+
+        channels_dict = stage_bucket["channels"]::Dict{String,Any}
+        channel_bucket = get!(channels_dict, channel) do
+            Dict("all" => 0, "user" => 0, "ci" => 0)
+        end
+        channel_bucket["all"] += successes
+        if client_type == "user"
+            channel_bucket["user"] += successes
+        elseif client_type == "ci"
+            channel_bucket["ci"] += successes
+        end
     end
 
     sorted_dates = sort!(collect(keys(totals)))
@@ -273,6 +402,15 @@ function main()
         ) for d in mix_dates
     ]
 
+    stage_mix_dates = sort!(collect(keys(version_stage_mix)))
+    version_stage_mix_series = Any[
+        Dict(
+            "date" => d,
+            "totals" => version_stage_mix[d]["totals"],
+            "channels" => version_stage_mix[d]["channels"],
+        ) for d in stage_mix_dates
+    ]
+
     existing = load_existing(output_dir)
     if existing !== nothing
         old_len = length(get(existing, :series, Any[]))
@@ -284,6 +422,8 @@ function main()
 
     @info "Fetching recent stable Julia tags" years=2
     julia_tags = fetch_recent_stable_julia_tags(; years=2)
+    @info "Fetching recent prerelease Julia tags" years=2
+    julia_prerelease_tags = fetch_recent_prerelease_julia_tags(; years=2)
 
     payload = Dict(
         "generated_at" => Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
@@ -292,12 +432,23 @@ function main()
         "julia_tags_source" => "https://api.github.com/repos/JuliaLang/julia/releases",
         "julia_tags_window_years" => 2,
         "julia_tags" => julia_tags,
+        "julia_prerelease_tags" => julia_prerelease_tags,
         "maxDate" => isempty(sorted_dates) ? nothing : sorted_dates[end],
         "series" => series,
         "version_mix" => version_mix_series,
+        "version_stage_mix" => version_stage_mix_series,
     )
 
     out_path = joinpath(output_dir, "packages_downloads_summary.json.gz")
+    if existing !== nothing
+        old_norm = normalize_for_compare(existing)
+        new_norm = normalize_for_compare(payload)
+        if old_norm == new_norm
+            @info "Package downloads summary unchanged; keeping existing file" path=out_path
+            return 0
+        end
+    end
+
     json_bytes = Vector{UInt8}(JSON3.write(payload))
     write(out_path, transcode(GzipCompressor, json_bytes))
     @info "Wrote package downloads summary" path=out_path bytes=filesize(out_path)

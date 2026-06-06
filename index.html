@@ -693,6 +693,15 @@
           <option value="user">User only</option>
           <option value="ci">CI only</option>
         </select>
+        <select
+          class="time-select"
+          id="packages-view-mode"
+          onchange="setPackagesViewMode(this.value)"
+          aria-label="Downloads view mode"
+        >
+          <option value="minor" selected>Minor bands</option>
+          <option value="prerelease-testing">Prerelease testing</option>
+        </select>
         <button
           class="btn"
           id="packages-btn-proportional"
@@ -711,6 +720,7 @@
           </button>
           <div class="checkbox-dropdown-menu" id="packages-minor-filter-menu"></div>
         </div>
+        <span class="updated packages-prerelease-headline" id="packages-prerelease-headline"></span>
         <span class="updated" id="packages-last-updated"></span>
       </div>
       <div class="pkgeval-chart-area">

@@ -5329,6 +5329,7 @@ const DASHBOARD_PARAMS = new Set([
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
   "edp", // ecosystem downloads proportional toggle
+  "edm", // ecosystem downloads view mode
   "perf", // legacy: full iframe path
 ]);
 
@@ -7290,6 +7291,7 @@ let packagesClientType = "all";
 let packagesSelectedMinors = new Set(); // empty = all
 let packagesAvailableMinors = [];
 let packagesProportional = false;
+let packagesViewMode = "minor"; // "minor" | "prerelease-testing"
 
 function parsePackagesMinorRank(minorKey) {
   const m = /^(\d+)\.(\d+)$/.exec(minorKey);
@@ -7317,6 +7319,32 @@ function setPackagesClientType(val) {
   updatePackagesDownloadsChart();
   updatePackagesURL();
 }
+
+function updatePackagesControlVisibility() {
+  const isPrereleaseTesting = packagesViewMode === "prerelease-testing";
+  const minorDropdown = document.getElementById("packages-minor-dropdown");
+  const proportionalBtn = document.getElementById("packages-btn-proportional");
+  const prereleaseHeadline = document.getElementById("packages-prerelease-headline");
+  if (minorDropdown) minorDropdown.style.display = isPrereleaseTesting ? "none" : "";
+  if (proportionalBtn) proportionalBtn.style.display = isPrereleaseTesting ? "none" : "";
+  if (prereleaseHeadline) prereleaseHeadline.style.display = isPrereleaseTesting ? "" : "none";
+}
+
+function setPackagesPrereleaseHeadline(text) {
+  const headline = document.getElementById("packages-prerelease-headline");
+  if (!headline) return;
+  headline.textContent = text;
+}
+
+function setPackagesViewMode(val) {
+  packagesViewMode = val === "prerelease-testing" ? "prerelease-testing" : "minor";
+  const sel = document.getElementById("packages-view-mode");
+  if (sel) sel.value = packagesViewMode;
+  updatePackagesControlVisibility();
+  updatePackagesDownloadsChart();
+  updatePackagesURL();
+}
+window.setPackagesViewMode = setPackagesViewMode;
 
 function togglePackagesProportional() {
   packagesProportional = !packagesProportional;
@@ -7454,6 +7482,11 @@ function updatePackagesURL() {
   } else {
     url.searchParams.delete("edp");
   }
+  if (packagesViewMode !== "minor") {
+    url.searchParams.set("edm", packagesViewMode);
+  } else {
+    url.searchParams.delete("edm");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -7489,6 +7522,13 @@ function applyPackagesURLParams() {
     const btn = document.getElementById("packages-btn-proportional");
     if (btn) btn.textContent = "Show counts";
   }
+  const edm = params.get("edm");
+  if (edm === "prerelease-testing" || edm === "minor") {
+    packagesViewMode = edm;
+    const sel = document.getElementById("packages-view-mode");
+    if (sel) sel.value = edm;
+  }
+  updatePackagesControlVisibility();
 }
 
 function getPackagesFilteredSeries() {
@@ -7534,6 +7574,7 @@ async function loadPackagesDownloadsData() {
 
 function updatePackagesDownloadsChart() {
   const rows = getPackagesFilteredSeries();
+  setPackagesPrereleaseHeadline("");
   if (!rows.length) return;
 
   const isDark = isDarkMode();
@@ -7546,6 +7587,338 @@ function updatePackagesDownloadsChart() {
     if (packagesClientType === "ci") return r.ci;
     return r.all;
   });
+  const hasMinorSelection = packagesSelectedMinors.size > 0;
+
+  if (packagesViewMode === "prerelease-testing") {
+    const stageRows = packagesDownloadsData?.version_stage_mix || [];
+    const stageByDate = new Map(stageRows.map((r) => [r.date, r]));
+    const stageLabels = ["stable", "rc", "beta", "alpha", "other"];
+    const prereleaseLabels = ["rc", "beta", "alpha", "other"];
+    const stageDisplayNames = {
+      rc: "RC",
+      beta: "Beta",
+      alpha: "Alpha",
+      other: "Other prerelease",
+    };
+    const stageColors = {
+      rc: isDark ? "#58a6ff" : "#0969da",
+      beta: isDark ? "#d29922" : "#9a6700",
+      alpha: isDark ? "#bc8cff" : "#8250df",
+      other: isDark ? "#8b949e" : "#57606a",
+    };
+
+    const key = packagesClientType === "all" ? "all" : packagesClientType;
+    const stageSeries = new Map(
+      stageLabels.map((s) => [s, new Array(rows.length).fill(0)]),
+    );
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const stage = stageByDate.get(row.date);
+      if (!stage) continue;
+      for (const s of stageLabels) {
+        const raw = stage.channels?.[s]?.[key] || 0;
+        stageSeries.get(s)[i] = Number(raw || 0);
+      }
+    }
+
+    const dayTotals = new Array(rows.length).fill(0);
+    for (let i = 0; i < rows.length; i++) {
+      for (const s of stageLabels) {
+        dayTotals[i] += Number(stageSeries.get(s)?.[i] || 0);
+      }
+    }
+
+    const shareSeries = new Map();
+    for (const s of prereleaseLabels) {
+      const vals = stageSeries.get(s) || new Array(rows.length).fill(0);
+      shareSeries.set(
+        s,
+        vals.map((v, i) =>
+          dayTotals[i] > 0 ? (Number(v || 0) / dayTotals[i]) * 100 : 0,
+        ),
+      );
+    }
+
+    const hasValues = (arr) => arr.some((v) => Number(v || 0) > 0);
+    const presentStages = prereleaseLabels.filter((s) =>
+      hasValues(shareSeries.get(s) || []),
+    );
+    if (!presentStages.length) return;
+
+    const displayDatasets = presentStages.map((s) => ({
+      label: stageDisplayNames[s],
+      data: shareSeries.get(s),
+      borderColor: "transparent",
+      backgroundColor: colorToRgba(stageColors[s], 0.9),
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 8,
+      tension: 0,
+      fill: true,
+      stack: "prerelease-testing",
+      order: 2,
+    }));
+
+    const latestIdx = rows.length - 1;
+    const latestDate = rows[latestIdx]?.date;
+    const latestTotalPrerelease = presentStages.reduce(
+      (sum, s) => sum + Number(shareSeries.get(s)?.[latestIdx] || 0),
+      0,
+    );
+    const prereleaseTotals = rows.map((_, i) =>
+      presentStages.reduce(
+        (sum, s) => sum + Number(shareSeries.get(s)?.[i] || 0),
+        0,
+      ),
+    );
+    const trailingWindow = prereleaseTotals.slice(-7);
+    const weeklyAvgPrerelease = trailingWindow.length
+      ? trailingWindow.reduce((sum, v) => sum + v, 0) / trailingWindow.length
+      : 0;
+    setPackagesPrereleaseHeadline(
+      `Prerelease testing last 7d avg: ${weeklyAvgPrerelease.toFixed(1)}%`,
+    );
+
+    const minDate = rows[0]?.date;
+    const maxDate = latestDate;
+    const allJuliaTags = [
+      ...(packagesDownloadsData?.julia_tags || []),
+      ...(packagesDownloadsData?.julia_prerelease_tags || []),
+    ]
+      .filter(
+        (tag) =>
+          tag &&
+          tag.date &&
+          tag.tag &&
+          (!minDate || tag.date >= minDate) &&
+          (!maxDate || tag.date <= maxDate),
+      )
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+    const stableJuliaTags = (packagesDownloadsData?.julia_tags || [])
+      .filter(
+        (tag) =>
+          tag &&
+          tag.date &&
+          tag.tag &&
+          (!minDate || tag.date >= minDate) &&
+          (!maxDate || tag.date <= maxDate),
+      )
+      .filter((tag) => {
+        if (!hasMinorSelection) return true;
+        const minor = getMinorFromTag(tag.tag);
+        return minor != null && packagesSelectedMinors.has(minor);
+      })
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+    const colorForMinorIndex = (idx) => {
+      const hue = Math.round((idx * 137.508) % 360);
+      const saturation = isDark ? 80 : 74;
+      const baseLightness = isDark ? 66 : 46;
+      const lightnessJitter = (idx % 3) * (isDark ? 6 : 5) - (isDark ? 6 : 5);
+      const lightness = Math.max(
+        isDark ? 52 : 34,
+        Math.min(isDark ? 78 : 58, baseLightness + lightnessJitter),
+      );
+      return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+    };
+
+    const firstTagByMinor = new Map();
+    for (const tag of stableJuliaTags) {
+      const minorKey = getMinorFromTag(tag.tag) || tag.tag;
+      if (!firstTagByMinor.has(minorKey)) {
+        firstTagByMinor.set(minorKey, tag.tag);
+      }
+    }
+    for (const tag of allJuliaTags) {
+      const minorKey = getMinorFromTag(tag.tag) || tag.tag;
+      if (!firstTagByMinor.has(minorKey)) {
+        firstTagByMinor.set(minorKey, tag.tag);
+      }
+    }
+
+    const tagMinorKeys = [
+      ...new Set(
+        allJuliaTags.map((tag) => getMinorFromTag(tag.tag) || tag.tag),
+      ),
+    ].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+
+    const stableTagMinorKeys = [
+      ...new Set(
+        stableJuliaTags.map((tag) => getMinorFromTag(tag.tag) || tag.tag),
+      ),
+    ].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+
+    const allKnownMinorKeys = [
+      ...new Set(
+        (packagesDownloadsData?.version_mix || []).flatMap((row) =>
+          Object.keys(row.minors || {}),
+        ),
+      ),
+    ].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+
+    const minorColorIndex = new Map();
+    for (let i = 0; i < allKnownMinorKeys.length; i++) {
+      minorColorIndex.set(allKnownMinorKeys[i], i);
+    }
+
+    const minorColors = new Map();
+    const tagMinorLane = new Map();
+    const laneTop = 44;
+    const laneBottom = 8;
+    const laneMinorKeys = [
+      ...new Set([...stableTagMinorKeys, ...tagMinorKeys]),
+    ].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+    const laneStep =
+      laneMinorKeys.length > 1
+        ? (laneTop - laneBottom) / (laneMinorKeys.length - 1)
+        : 0;
+    for (let i = 0; i < laneMinorKeys.length; i++) {
+      const minorKey = laneMinorKeys[i];
+      const colorIdx = minorColorIndex.get(minorKey) ?? i;
+      minorColors.set(minorKey, colorForMinorIndex(colorIdx));
+      tagMinorLane.set(minorKey, laneTop - i * laneStep);
+    }
+
+    for (const minorKey of tagMinorKeys) {
+      if (minorColors.has(minorKey)) continue;
+      const colorIdx = minorColorIndex.get(minorKey);
+      minorColors.set(
+        minorKey,
+        colorForMinorIndex(colorIdx != null ? colorIdx : minorColors.size),
+      );
+    }
+
+    const prereleaseAnnotations = {};
+    for (let i = 0; i < allJuliaTags.length; i++) {
+      const tag = allJuliaTags[i];
+      const minorKey = getMinorFromTag(tag.tag) || tag.tag;
+      const minorColor = minorColors.get(minorKey) || textColor;
+      const laneYAdjust = tagMinorLane.get(minorKey) ?? 8;
+      const isFirstOfMinor = firstTagByMinor.get(minorKey) === tag.tag;
+
+      prereleaseAnnotations[`julia-tag-${i}`] = {
+        type: "line",
+        xMin: tag.date,
+        xMax: tag.date,
+        borderColor: colorToRgba(
+          minorColor,
+          isFirstOfMinor ? (isDark ? 0.65 : 0.55) : isDark ? 0.38 : 0.3,
+        ),
+        borderWidth: isFirstOfMinor ? 2 : 1,
+        borderDash: isFirstOfMinor ? [] : [3, 3],
+        label: {
+          display: true,
+          content: tag.tag,
+          enabled: true,
+          z: 100,
+          rotation: 0,
+          yAdjust: laneYAdjust,
+          color: minorColor,
+          backgroundColor: isDark
+            ? "rgba(13, 17, 23, 0.9)"
+            : "rgba(255, 255, 255, 0.9)",
+          padding: 2,
+          borderRadius: 0,
+          font: {
+            size: 11,
+            weight: isFirstOfMinor ? "700" : "500",
+          },
+        },
+      };
+    }
+
+    if (latestDate) {
+      prereleaseAnnotations.latestPrereleasePct = {
+        type: "point",
+        xValue: latestDate,
+        yValue: latestTotalPrerelease,
+        radius: 0,
+        label: {
+          display: true,
+          content: `${latestTotalPrerelease.toFixed(1)}% prerelease`,
+          position: "right",
+          xAdjust: 8,
+          yAdjust: -6,
+          color: textColor,
+          backgroundColor: isDark
+            ? "rgba(13, 17, 23, 0.9)"
+            : "rgba(255, 255, 255, 0.92)",
+          borderColor: colorToRgba(isDark ? "#ff7b72" : "#cf222e", 0.7),
+          borderWidth: 1,
+          padding: 3,
+          borderRadius: 4,
+          font: {
+            size: 11,
+            weight: "600",
+          },
+        },
+      };
+    }
+
+    const prereleaseConfig = {
+      type: "line",
+      data: {
+        labels: rows.map((r) => r.date),
+        datasets: displayDatasets,
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            labels: {
+              color: textColor,
+              usePointStyle: true,
+              pointStyle: "rect",
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) =>
+                ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toFixed(1)}%`,
+            },
+          },
+          annotation: {
+            annotations: prereleaseAnnotations,
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
+            grid: { display: false },
+            ticks: { color: textColor, maxRotation: 0, autoSkip: true },
+          },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            max: undefined,
+            grid: { display: false },
+            ticks: {
+              color: textColor,
+              callback: (v) => `${Number(v).toFixed(0)}%`,
+            },
+            title: {
+              display: true,
+              text: "Prerelease share of Julia version requests",
+              color: textColor,
+            },
+          },
+        },
+      },
+    };
+
+    const prereleaseCanvas = document.getElementById("packages-chart");
+    if (packagesDownloadsChart) {
+      packagesDownloadsChart.destroy();
+    }
+    packagesDownloadsChart = new Chart(prereleaseCanvas, prereleaseConfig);
+    return;
+  }
 
   // Build per-day minor-version shares from cached julia_versions_by_date rollup,
   // then project them onto package totals so stacked bands sum to package downloads.
@@ -7576,7 +7949,6 @@ function updatePackagesDownloadsChart() {
   const sortedMinors = [...minorTotals.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([minor]) => minor);
-  const hasMinorSelection = packagesSelectedMinors.size > 0;
   const eligibleMinors = hasMinorSelection
     ? sortedMinors.filter((minor) => packagesSelectedMinors.has(minor))
     : sortedMinors;
