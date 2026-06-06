@@ -7322,6 +7322,7 @@ function togglePackagesProportional() {
   updatePackagesDownloadsChart();
   updatePackagesURL();
 }
+window.togglePackagesProportional = togglePackagesProportional;
 
 function setPackagesMinorFilter(val) {
   // Backward-compatible wrapper: accept a single value and map to multiselect state.
