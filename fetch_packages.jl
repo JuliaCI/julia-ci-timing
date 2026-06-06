@@ -13,6 +13,8 @@ using CodecZlib: GzipCompressor, GzipDecompressor
 
 const SOURCE_URL =
     "https://julialang-logs.s3.amazonaws.com/public_outputs/current/resource_types_by_date.csv.gz"
+const JULIA_VERSIONS_URL =
+    "https://julialang-logs.s3.amazonaws.com/public_outputs/current/julia_versions_by_date.csv.gz"
 const JULIA_RELEASES_API = "https://api.github.com/repos/JuliaLang/julia/releases?per_page=100"
 
 function is_stable_julia_tag(tag::AbstractString)
@@ -194,6 +196,64 @@ function main()
         end
     end
 
+    @info "Fetching Julia version rollup for minor-version mix" url=JULIA_VERSIONS_URL
+    versions_resp = HTTP.get(JULIA_VERSIONS_URL; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    versions_resp.status == 200 || error("Failed to fetch julia_versions_by_date rollup: HTTP $(versions_resp.status)")
+    versions_csv = String(transcode(GzipDecompressor, versions_resp.body))
+    version_lines = split(versions_csv, '\n'; keepempty=false)
+    length(version_lines) >= 2 || error("julia_versions_by_date CSV appears empty")
+
+    # date => Dict(
+    #   "totals" => Dict("all" => Int, "user" => Int, "ci" => Int),
+    #   "minors" => Dict(minor => Dict("all" => Int, "user" => Int, "ci" => Int))
+    # )
+    version_mix = Dict{String,Dict{String,Any}}()
+
+    for line in @view version_lines[2:end]
+        row = parse_csv_line(strip(line))
+        length(row) >= 6 || continue
+
+        version_prefix = row[1]
+        client_type = row[2]
+        date = row[3]
+        successes = try
+            parse(Int, row[6])
+        catch
+            0
+        end
+        successes == 0 && continue
+
+        m = match(r"^(\d+)\.(\d+)\.", version_prefix)
+        m === nothing && continue
+        minor = string(m.captures[1], ".", m.captures[2])
+
+        bucket = get!(version_mix, date) do
+            Dict{String,Any}(
+                "totals" => Dict("all" => 0, "user" => 0, "ci" => 0),
+                "minors" => Dict{String,Any}(),
+            )
+        end
+
+        totals_dict = bucket["totals"]::Dict{String,Int}
+        totals_dict["all"] += successes
+        if client_type == "user"
+            totals_dict["user"] += successes
+        elseif client_type == "ci"
+            totals_dict["ci"] += successes
+        end
+
+        minors_dict = bucket["minors"]::Dict{String,Any}
+        minor_bucket = get!(minors_dict, minor) do
+            Dict("all" => 0, "user" => 0, "ci" => 0)
+        end
+        minor_bucket["all"] += successes
+        if client_type == "user"
+            minor_bucket["user"] += successes
+        elseif client_type == "ci"
+            minor_bucket["ci"] += successes
+        end
+    end
+
     sorted_dates = sort!(collect(keys(totals)))
     series = Any[
         Dict(
@@ -202,6 +262,15 @@ function main()
             "user" => totals[d]["user"],
             "ci" => totals[d]["ci"],
         ) for d in sorted_dates
+    ]
+
+    mix_dates = sort!(collect(keys(version_mix)))
+    version_mix_series = Any[
+        Dict(
+            "date" => d,
+            "totals" => version_mix[d]["totals"],
+            "minors" => version_mix[d]["minors"],
+        ) for d in mix_dates
     ]
 
     existing = load_existing(output_dir)
@@ -219,11 +288,13 @@ function main()
     payload = Dict(
         "generated_at" => Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
         "source" => SOURCE_URL,
+        "julia_versions_source" => JULIA_VERSIONS_URL,
         "julia_tags_source" => "https://api.github.com/repos/JuliaLang/julia/releases",
         "julia_tags_window_years" => 2,
         "julia_tags" => julia_tags,
         "maxDate" => isempty(sorted_dates) ? nothing : sorted_dates[end],
         "series" => series,
+        "version_mix" => version_mix_series,
     )
 
     out_path = joinpath(output_dir, "packages_downloads_summary.json.gz")

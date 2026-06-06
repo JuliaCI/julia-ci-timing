@@ -7384,17 +7384,98 @@ function updatePackagesDownloadsChart() {
     return r.all;
   });
 
+  // Build per-day minor-version shares from cached julia_versions_by_date rollup,
+  // then project them onto package totals so stacked bands sum to package downloads.
+  const versionMixRows = packagesDownloadsData?.version_mix || [];
+  const mixByDate = new Map(versionMixRows.map((r) => [r.date, r]));
+  const minorTotals = new Map();
+
+  const mixKey = packagesClientType === "all" ? "all" : packagesClientType;
+  for (const row of rows) {
+    const mix = mixByDate.get(row.date);
+    const totalPkgs =
+      packagesClientType === "user"
+        ? row.user
+        : packagesClientType === "ci"
+          ? row.ci
+          : row.all;
+    const totalMix = mix?.totals?.[mixKey] || 0;
+    if (!mix || totalMix <= 0 || totalPkgs <= 0) continue;
+
+    for (const [minor, counts] of Object.entries(mix.minors || {})) {
+      const v = counts?.[mixKey] || 0;
+      if (v <= 0) continue;
+      const est = (v / totalMix) * totalPkgs;
+      minorTotals.set(minor, (minorTotals.get(minor) || 0) + est);
+    }
+  }
+
+  const sortedMinors = [...minorTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([minor]) => minor);
+  const MAX_MINOR_BANDS = 8;
+  const displayedMinors = sortedMinors.slice(0, MAX_MINOR_BANDS);
+  const hasOther = sortedMinors.length > displayedMinors.length;
+
+  const minorSeries = new Map();
+  for (const minor of displayedMinors) {
+    minorSeries.set(minor, new Array(rows.length).fill(0));
+  }
+  const otherSeries = new Array(rows.length).fill(0);
+
+  for (let idx = 0; idx < rows.length; idx++) {
+    const row = rows[idx];
+    const mix = mixByDate.get(row.date);
+    const totalPkgs =
+      packagesClientType === "user"
+        ? row.user
+        : packagesClientType === "ci"
+          ? row.ci
+          : row.all;
+    const totalMix = mix?.totals?.[mixKey] || 0;
+    if (!mix || totalMix <= 0 || totalPkgs <= 0) continue;
+
+    for (const [minor, counts] of Object.entries(mix.minors || {})) {
+      const v = counts?.[mixKey] || 0;
+      if (v <= 0) continue;
+      const est = (v / totalMix) * totalPkgs;
+      if (minorSeries.has(minor)) {
+        minorSeries.get(minor)[idx] = est;
+      } else {
+        otherSeries[idx] += est;
+      }
+    }
+  }
+
+  const colorForMinorIndex = (idx) => {
+    // Golden-angle hue spacing gives well-separated colors as the number of
+    // minor versions changes.
+    const hue = Math.round((idx * 137.508) % 360);
+    const saturation = isDark ? 80 : 74;
+    const baseLightness = isDark ? 66 : 46;
+    const lightnessJitter = (idx % 3) * (isDark ? 6 : 5) - (isDark ? 6 : 5);
+    const lightness = Math.max(
+      isDark ? 52 : 34,
+      Math.min(isDark ? 78 : 58, baseLightness + lightnessJitter),
+    );
+    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  };
+
+  const parseMinorRank = (minorKey) => {
+    const m = /^(\d+)\.(\d+)$/.exec(minorKey);
+    if (!m) return Number.MAX_SAFE_INTEGER;
+    return parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
+  };
+
   const minDate = rows[0].date;
   const maxDate = rows[rows.length - 1].date;
-  const juliaTags = (packagesDownloadsData?.julia_tags || []).filter((tag) => {
-    if (!tag || !tag.date || !tag.tag) return false;
-    return tag.date >= minDate && tag.date <= maxDate;
-  });
   const allJuliaTags = (packagesDownloadsData?.julia_tags || []).filter(
     (tag) => tag && tag.date && tag.tag,
   );
+  const juliaTags = allJuliaTags.filter(
+    (tag) => tag.date >= minDate && tag.date <= maxDate,
+  );
 
-  // Track the first (earliest) release we have for each minor version.
   const firstTagByMinor = new Map();
   for (const tag of allJuliaTags) {
     const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
@@ -7404,54 +7485,34 @@ function updatePackagesDownloadsChart() {
     }
   }
 
-  const tagAnnotations = {};
-  const tagMarkers = [];
-  const minorPalette = isDark
-    ? ["#58a6ff", "#3fb950", "#d2a8ff", "#f2cc60", "#ff7b72", "#79c0ff"]
-    : ["#0969da", "#1a7f37", "#8250df", "#9a6700", "#cf222e", "#1b7c83"];
-  const minorVersionColors = new Map();
-  const minorVersionLane = new Map();
-  let nextMinorColorIdx = 0;
-
-  const parseMinorRank = (minorKey) => {
-    const m = /^(\d+)\.(\d+)$/.exec(minorKey);
-    if (!m) return Number.MAX_SAFE_INTEGER;
-    return parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
-  };
-
-  const sortedMinorKeys = [...new Set(juliaTags.map((tag) => {
+  const tagMinorKeys = [...new Set(juliaTags.map((tag) => {
     const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
     return minorMatch ? minorMatch[1] : tag.tag;
   }))].sort((a, b) => parseMinorRank(a) - parseMinorRank(b));
 
+  const orderedDisplayMinors = [...displayedMinors].sort(
+    (a, b) => parseMinorRank(a) - parseMinorRank(b),
+  );
+
+  const allColorMinorKeys = [...new Set([...orderedDisplayMinors, ...tagMinorKeys])]
+    .sort((a, b) => parseMinorRank(a) - parseMinorRank(b));
+  const minorColors = new Map();
+  const tagMinorLane = new Map();
   const laneStart = 44;
   const laneStep = 50;
-  for (let i = 0; i < sortedMinorKeys.length; i++) {
-    // Lower minor versions sit lower in the chart labels.
-    minorVersionLane.set(sortedMinorKeys[i], laneStart - i * laneStep);
+  for (let i = 0; i < allColorMinorKeys.length; i++) {
+    minorColors.set(allColorMinorKeys[i], colorForMinorIndex(i));
+    tagMinorLane.set(allColorMinorKeys[i], laneStart - i * laneStep);
   }
 
+  const tagAnnotations = {};
   for (let i = 0; i < juliaTags.length; i++) {
     const tag = juliaTags[i];
     const minorMatch = /^v(\d+\.\d+)\./.exec(tag.tag);
     const minorKey = minorMatch ? minorMatch[1] : tag.tag;
-    if (!minorVersionColors.has(minorKey)) {
-      minorVersionColors.set(
-        minorKey,
-        minorPalette[nextMinorColorIdx % minorPalette.length],
-      );
-      nextMinorColorIdx++;
-    }
-    const minorColor = minorVersionColors.get(minorKey);
-    const laneYAdjust = minorVersionLane.get(minorKey) ?? 8;
+    const minorColor = minorColors.get(minorKey) || textColor;
+    const laneYAdjust = tagMinorLane.get(minorKey) ?? 8;
     const isFirstOfMinor = firstTagByMinor.get(minorKey) === tag.tag;
-    tagMarkers.push({
-      date: tag.date,
-      tag: tag.tag,
-      title: isFirstOfMinor
-        ? `${tag.tag} (${tag.date}) - first ${minorKey} release`
-        : `${tag.tag} (${tag.date})`,
-    });
 
     tagAnnotations[`julia-tag-${i}`] = {
       type: "line",
@@ -7484,83 +7545,56 @@ function updatePackagesDownloadsChart() {
     };
   }
 
+  const bandDatasets = orderedDisplayMinors.map((minor) => {
+    const c = minorColors.get(minor) || textColor;
+    return {
+      label: `Julia ${minor}.x`,
+      data: minorSeries.get(minor),
+      borderColor: "transparent",
+      backgroundColor: colorToRgba(c, 0.8),
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      tension: 0,
+      fill: true,
+      stack: "minor-bands",
+      order: 2,
+    };
+  });
+  if (hasOther) {
+    bandDatasets.push({
+      label: "Other versions",
+      data: otherSeries,
+      borderColor: "transparent",
+      backgroundColor: colorToRgba(isDark ? "#6e7681" : "#8c959f", 0.8),
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      tension: 0,
+      fill: true,
+      stack: "minor-bands",
+      order: 2,
+    });
+  }
+
   const config = {
     type: "line",
     data: {
       labels: rows.map((r) => r.date),
-      datasets: [
-        {
-          label:
-            packagesClientType === "all"
-              ? "Package downloads"
-              : `Package downloads (${packagesClientType})`,
-          data: values,
-          borderColor: lineColor,
-          backgroundColor: lineColor + "33",
-          fill: true,
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHitRadius: 8,
-          tension: 0.15,
-        },
-      ],
+      datasets: bandDatasets,
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
       interaction: { mode: "index", intersect: false },
-      onHover: (evt) => {
-        const canvasEl = evt?.native?.target;
-        if (!canvasEl) return;
-
-        const chartRef = evt?.chart || packagesDownloadsChart;
-        const xScale = chartRef?.scales?.x;
-        if (!xScale || tagMarkers.length === 0) {
-          canvasEl.style.cursor = "";
-          canvasEl.removeAttribute("title");
-          return;
-        }
-
-        const mx = Number.isFinite(evt?.x)
-          ? evt.x
-          : Number.isFinite(evt?.native?.offsetX)
-            ? evt.native.offsetX
-            : null;
-        if (mx == null) {
-          canvasEl.style.cursor = "";
-          canvasEl.removeAttribute("title");
-          return;
-        }
-
-        const thresholdPx = 6;
-        let best = null;
-        let bestDist = Infinity;
-        for (const marker of tagMarkers) {
-          const px = xScale.getPixelForValue(marker.date);
-          if (!Number.isFinite(px)) continue;
-          const d = Math.abs(px - mx);
-          if (d <= thresholdPx && d < bestDist) {
-            bestDist = d;
-            best = marker;
-          }
-        }
-
-        if (best) {
-          canvasEl.style.cursor = "help";
-          canvasEl.title = best.title;
-        } else {
-          canvasEl.style.cursor = "";
-          canvasEl.removeAttribute("title");
-        }
-      },
       plugins: {
         legend: {
           display: true,
           labels: {
             color: textColor,
             usePointStyle: true,
-            pointStyle: "line",
+            pointStyle: "rect",
           },
         },
         tooltip: {
@@ -7577,12 +7611,13 @@ function updatePackagesDownloadsChart() {
         x: {
           type: "time",
           time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
-          grid: { color: gridColor },
+          grid: { display: false },
           ticks: { color: textColor, maxRotation: 0, autoSkip: true },
         },
         y: {
+          stacked: true,
           beginAtZero: true,
-          grid: { color: gridColor },
+          grid: { display: false },
           ticks: {
             color: textColor,
             callback: (v) => Number(v).toLocaleString(),
