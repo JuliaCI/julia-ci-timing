@@ -1223,12 +1223,8 @@ function updateURL() {
   } else {
     url.searchParams.delete("l");
   }
-  // Add CI Timing sub-view if not default
-  if (ciSubview !== "jobs") {
-    url.searchParams.set("cv", ciSubview);
-  } else {
-    url.searchParams.delete("cv");
-  }
+  // cv is legacy; tab now fully identifies CI timing/workers.
+  url.searchParams.delete("cv");
   // Add expanded jobs if any
   if (expandedJobs.size > 0) {
     const expandedIndices = [...expandedJobs]
@@ -5271,6 +5267,35 @@ async function refreshData() {
 // === Tab Navigation ===
 let activeTab = "perf";
 
+const TAB_URL_MAP = {
+  perf: "benchmarks-diff",
+  benchmarks: "benchmarks-history",
+  "ci-timing": "ci-timing",
+  "ci-workers": "ci-workers",
+  pkgeval: "ecosystem-pkgeval",
+};
+
+const LEGACY_TAB_ALIASES = new Set([
+  "perf",
+  "benchmarks",
+  "ci-timing",
+  "ci-workers",
+  "pkgeval",
+]);
+
+function tabToURLValue(tab) {
+  return TAB_URL_MAP[tab] || TAB_URL_MAP.perf;
+}
+
+function tabFromURLValue(value) {
+  if (!value) return null;
+  for (const [tabName, tabValue] of Object.entries(TAB_URL_MAP)) {
+    if (tabValue === value) return tabName;
+  }
+  if (LEGACY_TAB_ALIASES.has(value)) return value;
+  return null;
+}
+
 const PERF_ORIGIN = "https://tealquaternion.camdvr.org";
 
 // URL params owned by this dashboard. Anything NOT in this set is treated as
@@ -5357,9 +5382,16 @@ window.addEventListener("message", (event) => {
 });
 
 function switchTab(tab) {
+  if (tab === "ci-workers") {
+    setCITimingSubview("workers", { updateUrl: false });
+  } else if (tab === "ci-timing") {
+    setCITimingSubview("jobs", { updateUrl: false });
+  }
+
   activeTab = tab;
   const tabIds = {
     "ci-timing": "tab-ci-timing",
+    "ci-workers": "tab-ci-workers",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
     perf: "tab-perf",
@@ -5372,13 +5404,15 @@ function switchTab(tab) {
     btn.setAttribute("tabindex", selected ? "0" : "-1");
   }
 
+  const isCITab = tab === "ci-timing" || tab === "ci-workers";
+
   document
     .getElementById("ci-timing-view")
-    .classList.toggle("view-hidden", tab !== "ci-timing");
+    .classList.toggle("view-hidden", !isCITab);
   // Hide CI-timing-specific banners
   for (const id of ["stale-data-warning", "comparison-banner"]) {
     const el = document.getElementById(id);
-    if (el) el.style.display = tab === "ci-timing" ? "" : "none";
+    if (el) el.style.display = isCITab ? "" : "none";
   }
 
   document
@@ -5401,11 +5435,8 @@ function switchTab(tab) {
 
   // Update tab in URL
   const url = new URL(window.location);
-  if (tab !== "perf") {
-    url.searchParams.set("tab", tab);
-  } else {
-    url.searchParams.delete("tab");
-  }
+  url.searchParams.set("tab", tabToURLValue(tab));
+  url.searchParams.delete("cv");
   history.replaceState(null, "", url);
 }
 
@@ -5502,7 +5533,7 @@ function formatNoise(noisePct) {
 function updateBenchURL() {
   const url = new URL(window.location);
   // Tab
-  url.searchParams.set("tab", activeTab);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
   // Benchmark time range (default 365)
   if (benchTimeRangeDays !== 365) {
     url.searchParams.set("bt", benchTimeRangeDays);
@@ -7252,7 +7283,7 @@ function setPkgevalTimeRange(val) {
 
 function updatePkgevalURL() {
   const url = new URL(window.location);
-  url.searchParams.set("tab", activeTab);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
   if (pkgevalTimeRangeDays !== 0) {
     url.searchParams.set("pt", pkgevalTimeRangeDays);
   } else {
@@ -7567,9 +7598,15 @@ applyPkgevalURLParams();
 applyPerfURLParams();
 
 // Switch to correct tab if URL says so
-const urlTab = new URLSearchParams(window.location.search).get("tab");
-if (urlTab === "ci-timing" || urlTab === "benchmarks" || urlTab === "pkgeval") {
-  switchTab(urlTab);
+const startupParams = new URLSearchParams(window.location.search);
+const rawUrlTab = startupParams.get("tab");
+let parsedUrlTab = tabFromURLValue(rawUrlTab);
+// Legacy compatibility: old links used tab=ci-timing&cv=workers.
+if (parsedUrlTab === "ci-timing" && startupParams.get("cv") === "workers") {
+  parsedUrlTab = "ci-workers";
+}
+if (parsedUrlTab) {
+  switchTab(parsedUrlTab);
 } else {
   // Default tab is 'perf' — ensure it initializes (loads iframe, etc.)
   switchTab("perf");

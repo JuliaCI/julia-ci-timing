@@ -95,30 +95,52 @@
             </button>
           </div>
         </div>
-        <button
-          class="tab-btn"
-          id="tab-ci-timing"
-          role="tab"
-          aria-selected="false"
-          aria-controls="ci-timing-view"
-          tabindex="-1"
-          onclick="switchTab('ci-timing')"
-          title="Buildkite CI job timing per host and platform"
-        >
-          CI Timing
-        </button>
-        <button
-          class="tab-btn"
-          id="tab-pkgeval"
-          role="tab"
-          aria-selected="false"
-          aria-controls="pkgeval-view"
-          tabindex="-1"
-          onclick="switchTab('pkgeval')"
-          title="PkgEval results: package test pass/fail rates per Julia version"
-        >
-          PkgEval
-        </button>
+        <div class="tab-group">
+          <span class="tab-group-label">CI</span>
+          <div class="tab-group-buttons">
+            <button
+              class="tab-btn"
+              id="tab-ci-timing"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-timing')"
+              title="Buildkite CI job timing per host and platform"
+            >
+              Timing
+            </button>
+            <button
+              class="tab-btn"
+              id="tab-ci-workers"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-workers')"
+              title="CI worker activity and downtime history"
+            >
+              Workers
+            </button>
+          </div>
+        </div>
+        <div class="tab-group">
+          <span class="tab-group-label">Ecosystem</span>
+          <div class="tab-group-buttons">
+            <button
+              class="tab-btn"
+              id="tab-pkgeval"
+              role="tab"
+              aria-selected="false"
+              aria-controls="pkgeval-view"
+              tabindex="-1"
+              onclick="switchTab('pkgeval')"
+              title="PkgEval results: package test pass/fail rates per Julia version"
+            >
+              PkgEval
+            </button>
+          </div>
+        </div>
       </div>
       <button
         class="btn btn-icon"
@@ -313,32 +335,10 @@
       class="main view-hidden"
       id="ci-timing-view"
       role="tabpanel"
-      aria-labelledby="tab-ci-timing"
+      aria-labelledby="tab-ci-timing tab-ci-workers"
       tabindex="0"
     >
       <div class="ci-toolbar" id="ci-timing-controls">
-        <span
-          class="ci-subview-toggle"
-          role="group"
-          aria-label="CI Timing view"
-        >
-          <button
-            class="btn btn-primary"
-            id="ci-subview-jobs"
-            onclick="setCITimingSubview('jobs')"
-            title="Per-job timing chart"
-          >
-            Jobs
-          </button>
-          <button
-            class="btn"
-            id="ci-subview-workers"
-            onclick="setCITimingSubview('workers')"
-            title="Worker presence and downtime history"
-          >
-            Workers
-          </button>
-        </span>
         <select
           class="time-select"
           id="time-range"
