@@ -5415,6 +5415,11 @@ function switchTab(tab) {
     btn.setAttribute("tabindex", selected ? "0" : "-1");
   }
 
+  document.querySelectorAll(".tab-nav .tab-group").forEach((group) => {
+    const hasActiveTab = !!group.querySelector(".tab-btn.active");
+    group.classList.toggle("active-group", hasActiveTab);
+  });
+
   const isCITab = tab === "ci-timing" || tab === "ci-workers";
 
   document
