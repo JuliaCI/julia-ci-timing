@@ -264,6 +264,9 @@ function renderWorkerPresence() {
     const total = agentTotal.get(agent) || 0;
     const latestMs = agentLatest.get(agent);
 
+    // Flag workers that haven't run a master job in more than a day.
+    const offline = !latestMs || now.getTime() - latestMs > 24 * 60 * 60 * 1000;
+
     let longestGap = 0;
     let lastIdx = -1;
     for (let i = 0; i < days.length; i++) {
@@ -284,9 +287,9 @@ function renderWorkerPresence() {
       `${longestGap}d` +
       (trailingGap > 0 ? ` (silent ${trailingGap}d)` : "");
 
-    parts.push("<tr>");
+    parts.push(`<tr class="${offline ? "workers-offline" : ""}">`);
     parts.push(
-      `<td class="workers-label" title="${escapeHtml(agent)}">${escapeHtml(agent)}</td>`,
+      `<td class="workers-label" title="${escapeHtml(agent)}">${offline ? '<span class="workers-offline-dot" title="Offline >1d" aria-label="Offline more than a day"></span>' : ""}${escapeHtml(agent)}</td>`,
     );
     parts.push(`<td class="workers-summary">${escapeHtml(lastSeenStr)}</td>`);
     parts.push(`<td class="workers-summary num">${total}</td>`);

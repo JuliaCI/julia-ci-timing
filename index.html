@@ -619,6 +619,15 @@
           </div>
         </div>
         <div class="workers-view view-hidden" id="workers-view">
+          <div class="workers-note" role="note">
+            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
+            <span
+              >Based only on CI runs for <strong>master</strong> commits;
+              pull-request builds are excluded. Workers that primarily run PR
+              jobs may appear idle here, so this is not a complete picture of
+              worker activity.</span
+            >
+          </div>
           <div class="workers-toolbar">
             <span class="workers-help"
               >Each row is a Buildkite agent. Cells show jobs run per day
@@ -634,6 +643,10 @@
               >
               <span class="workers-legend-item"
                 ><span class="wcell-sample wcell-empty"></span> no jobs</span
+              >
+              <span class="workers-legend-item"
+                ><span class="wcell-sample wcell-offline"></span> offline
+                &gt;1d</span
               >
             </span>
           </div>
