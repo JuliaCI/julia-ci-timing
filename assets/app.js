@@ -5470,7 +5470,7 @@ function switchTab(tab) {
 let benchData = null;
 let benchChart = null;
 let benchSelectedGroups = new Set();
-let benchTimeRangeDays = 365;
+let benchTimeRangeDays = 15;
 let benchStatType = "minimum";
 let benchSortCol = "date";
 let benchSortAsc = false;
@@ -5561,7 +5561,7 @@ function updateBenchURL() {
   // Tab
   url.searchParams.set("tab", tabToURLValue(activeTab));
   // Benchmark time range (default 365)
-  if (benchTimeRangeDays !== 365) {
+  if (benchTimeRangeDays !== 15) {
     url.searchParams.set("bt", benchTimeRangeDays);
   } else {
     url.searchParams.delete("bt");
@@ -6133,6 +6133,47 @@ function nanosoldierReportUrl(type, dateOrPath) {
   return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${yyyy}-${mm}/${dd}/report.md`;
 }
 
+// Latest methodology-change boundary (ms timestamp) among `notes`, or null.
+function benchNotesFadeTs(notes) {
+  let ts = null;
+  for (const c of notes) {
+    if (!c.firstValidDate) continue;
+    const t = new Date(c.firstValidDate).getTime();
+    if (ts == null || t > ts) ts = t;
+  }
+  return ts;
+}
+
+// Semi-transparent variant of a color; handles the hsl() strings from
+// generateColors and the hex colors used elsewhere.
+function fadeColor(color, alpha) {
+  if (color.startsWith("hsl(")) {
+    return color.replace("hsl(", "hsla(").replace(")", `, ${alpha})`);
+  }
+  return (
+    color +
+    Math.round(alpha * 255)
+      .toString(16)
+      .padStart(2, "0")
+  );
+}
+
+// Fade the portion of a dataset before the latest methodology change that
+// affects it, so pre-change history reads as not directly comparable.
+function applyBenchNoteFade(dataset, color, notes) {
+  const ts = benchNotesFadeTs(notes);
+  if (ts == null) return dataset;
+  const faded = fadeColor(color, 0.3);
+  dataset.segment = {
+    borderColor: (ctx) => (ctx.p0.parsed.x < ts ? faded : undefined),
+  };
+  const pointColor = (ctx) =>
+    ctx.raw && ctx.raw.x.getTime() < ts ? faded : color;
+  dataset.pointBackgroundColor = pointColor;
+  dataset.pointBorderColor = pointColor;
+  return dataset;
+}
+
 function updateBenchChart() {
   const reports = getFilteredReports();
   if (reports.length === 0) {
@@ -6200,17 +6241,23 @@ function updateBenchChart() {
 
       const data = multiSeries ? BenchCore.toPercentOfBaseline(rawPoints) : rawPoints;
 
-      datasets.push({
-        label,
-        data,
-        borderColor: color,
-        backgroundColor: color + "22",
-        borderWidth: 1.5,
-        pointRadius: manySeries ? 0 : 2,
-        pointHoverRadius: 5,
-        fill: false,
-        tension: 0.1,
-      });
+      datasets.push(
+        applyBenchNoteFade(
+          {
+            label,
+            data,
+            borderColor: color,
+            backgroundColor: color + "22",
+            borderWidth: 1.5,
+            pointRadius: manySeries ? 0 : 2,
+            pointHoverRadius: 5,
+            fill: false,
+            tension: 0.1,
+          },
+          color,
+          getNotesForBenchmark(group, name),
+        ),
+      );
     }
   } else {
   // Build per-group geomean lines from each selected group's per-benchmark
@@ -6237,18 +6284,27 @@ function updateBenchChart() {
         ? BenchCore.toPercentOfBaseline(overallRaw)
         : overallRaw;
       const overallColor = isDark ? "#f0f6fc" : "#1f2328";
-      datasets.push({
-        label: "Overall",
-        data: overallData,
-        borderColor: overallColor,
-        backgroundColor: overallColor + "22",
-        borderWidth: 2.5,
-        pointRadius: 3,
-        pointHoverRadius: 6,
-        fill: false,
-        tension: 0.1,
-        order: -1,
-      });
+      const overallNotes = [...groupSeries.keys()].flatMap((g) =>
+        getNotesForGroup(g),
+      );
+      datasets.push(
+        applyBenchNoteFade(
+          {
+            label: "Overall",
+            data: overallData,
+            borderColor: overallColor,
+            backgroundColor: overallColor + "22",
+            borderWidth: 2.5,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            fill: false,
+            tension: 0.1,
+            order: -1,
+          },
+          overallColor,
+          overallNotes,
+        ),
+      );
     }
   }
 
@@ -6259,17 +6315,23 @@ function updateBenchChart() {
       ? BenchCore.toPercentOfBaseline(rawPoints)
       : rawPoints;
 
-    datasets.push({
-      label: group,
-      data,
-      borderColor: color,
-      backgroundColor: color + "22",
-      borderWidth: 1.5,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.1,
-    });
+    datasets.push(
+      applyBenchNoteFade(
+        {
+          label: group,
+          data,
+          borderColor: color,
+          backgroundColor: color + "22",
+          borderWidth: 1.5,
+          pointRadius: 2,
+          pointHoverRadius: 5,
+          fill: false,
+          tension: 0.1,
+        },
+        color,
+        getNotesForGroup(group),
+      ),
+    );
   }
 
   // Additionally plot individual benchmarks for expanded groups
@@ -6304,17 +6366,23 @@ function updateBenchChart() {
 
         const data = multiSeries ? BenchCore.toPercentOfBaseline(rawPoints) : rawPoints;
 
-        datasets.push({
-          label: `${group}/${name}`,
-          data,
-          borderColor: color,
-          backgroundColor: color + "22",
-          borderWidth: 1.5,
-          pointRadius: 2,
-          pointHoverRadius: 5,
-          fill: false,
-          tension: 0.1,
-        });
+        datasets.push(
+          applyBenchNoteFade(
+            {
+              label: `${group}/${name}`,
+              data,
+              borderColor: color,
+              backgroundColor: color + "22",
+              borderWidth: 1.5,
+              pointRadius: 2,
+              pointHoverRadius: 5,
+              fill: false,
+              tension: 0.1,
+            },
+            color,
+            getNotesForBenchmark(group, name),
+          ),
+        );
       }
     }
   }
