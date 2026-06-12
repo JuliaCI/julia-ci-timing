@@ -408,6 +408,17 @@ function update_group_detail(output_dir, group, new_reports)
             end
         end
 
+        # Backfilled dates can predate existing entries; keep series date-sorted.
+        if !issorted(merged_dates)
+            perm = sortperm(merged_dates)
+            merged_dates = merged_dates[perm]
+            merged_commits = merged_commits[perm]
+            merged_date_paths = merged_date_paths[perm]
+            for name in sorted_names
+                merged_benchmarks[name] = merged_benchmarks[name][perm]
+            end
+        end
+
         existing_dict = existing isa Dict ? existing : Dict{String, Any}(String(k) => v for (k, v) in pairs(existing))
         existing_dict[stat_type] = SortedDict(
             "dates" => merged_dates,
@@ -419,6 +430,33 @@ function update_group_detail(output_dir, group, new_reports)
     end
 
     write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)); gzip=true)
+end
+
+# Dates present in the per-group detail files for some stat but missing for
+# `stat` — i.e. dates that need re-parsing to backfill a newly added stat.
+function dates_missing_stat(output_dir, stat)
+    benchdir = joinpath(output_dir, "benchmarks")
+    isdir(benchdir) || return Set{String}()
+    all_dates = Set{String}()
+    have = Set{String}()
+    for f in readdir(benchdir)
+        endswith(f, ".json.gz") || continue
+        local d
+        try
+            d = JSON3.read(transcode(GzipDecompressor, read(joinpath(benchdir, f))))
+        catch e
+            @warn "Failed to read group detail" file=f error=e
+            continue
+        end
+        for (st, block) in pairs(d)
+            haskey(block, :dates) || continue
+            for dt in block[:dates]
+                push!(all_dates, String(dt))
+                String(st) == stat && push!(have, String(dt))
+            end
+        end
+    end
+    return setdiff(all_dates, have)
 end
 
 function write_if_changed(filepath, data; gzip=false)
@@ -456,7 +494,15 @@ function main()
 
     all_dates = enumerate_report_dates(by_date_dir)
 
-    new_dates = filter(d -> date_path_to_date(d) ∉ known_dates, all_dates)
+    # Dates needing a re-parse because a stat (e.g. "mean", added later) is
+    # missing from the per-group detail files.
+    backfill_dates = union((dates_missing_stat("data", st) for st in ("minimum", "mean"))...)
+    isempty(backfill_dates) || @info "Dates to backfill for missing stats" count=length(backfill_dates)
+
+    new_dates = filter(all_dates) do d
+        date = date_path_to_date(d)
+        date ∉ known_dates || date in backfill_dates
+    end
     @info "New reports to parse" count=length(new_dates)
 
     new_reports = []
