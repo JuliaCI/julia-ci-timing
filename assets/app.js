@@ -5305,7 +5305,7 @@ function tabFromURLValue(value) {
   return null;
 }
 
-const PERF_ORIGIN = "https://tealquaternion.camdvr.org";
+const PERF_ORIGIN = "https://rustserver.perf.julialang.org";
 
 // URL params owned by this dashboard. Anything NOT in this set is treated as
 // belonging to the embedded julia-perf site and forwarded to/from the iframe
