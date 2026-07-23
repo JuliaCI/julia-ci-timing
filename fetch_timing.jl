@@ -39,43 +39,13 @@ function api_get(endpoint; token=get_token(), params=Dict())
     return JSON3.read(resp.body)
 end
 
-function fetch_builds(; branch="master", per_page=100, max_pages=30, fully_captured_below=0)
-    builds = []
-    
-    for page in 1:max_pages
-        params = Dict(
-            "branch" => branch,
-            "per_page" => per_page,
-            "page" => page
-        )
-        data = api_get("organizations/$BUILDKITE_ORG/pipelines/$PIPELINE/builds"; params)
-        data === nothing && break
-        isempty(data) && break
-
-        new_in_page = 0
-        oldest_in_page = typemax(Int)
-        for build in data
-            oldest_in_page = min(oldest_in_page, build.number)
-            # Only skip builds that are definitely fully captured (below threshold)
-            if build.number >= fully_captured_below
-                push!(builds, build)
-                new_in_page += 1
-            end
-        end
-        @info "Fetched page $page (julia-master)" new_or_updated=new_in_page skipped=length(data)-new_in_page oldest=oldest_in_page threshold=fully_captured_below
-
-        # If we've gone past the threshold and all builds are known, we can stop
-        if oldest_in_page < fully_captured_below && new_in_page == 0
-            @info "Reached fully captured region, stopping early"
-            break
-        end
-    end
-    return builds
-end
-
 const SCHEDULED_PIPELINE = "julia-master-scheduled"
+# Since July 2026 Julia CI runs on the julia-ci pipeline (julia-master and
+# julia-master-scheduled are dead; the old scheduled pipeline still fires
+# daily but fails at launch). See JuliaCI/julia-buildkite#544.
+const CI_PIPELINE = "julia-ci"
 
-function fetch_scheduled_builds(; branch="master", per_page=100, max_pages=10, fully_captured_below=0)
+function fetch_pipeline_builds(pipeline; branch="master", per_page=100, max_pages=30, fully_captured_below=0)
     builds = []
     for page in 1:max_pages
         params = Dict(
@@ -83,7 +53,7 @@ function fetch_scheduled_builds(; branch="master", per_page=100, max_pages=10, f
             "per_page" => per_page,
             "page" => page
         )
-        data = api_get("organizations/$BUILDKITE_ORG/pipelines/$SCHEDULED_PIPELINE/builds"; params)
+        data = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds"; params)
         data === nothing && break
         isempty(data) && break
 
@@ -97,7 +67,7 @@ function fetch_scheduled_builds(; branch="master", per_page=100, max_pages=10, f
                 new_in_page += 1
             end
         end
-        @info "Fetched page $page (julia-master-scheduled)" new_or_updated=new_in_page skipped=length(data)-new_in_page oldest=oldest_in_page threshold=fully_captured_below
+        @info "Fetched page $page ($pipeline)" new_or_updated=new_in_page skipped=length(data)-new_in_page oldest=oldest_in_page threshold=fully_captured_below
 
         # If we've gone past the threshold and all builds are known, we can stop
         if oldest_in_page < fully_captured_below && new_in_page == 0
@@ -271,31 +241,32 @@ end
 # Get the minimum build number we should consider "fully captured"
 # This is based on the oldest build in the most recent N entries of key jobs
 function get_fully_captured_threshold(existing_data; key_jobs=[":linux: test x86_64-linux-gnu", ":linux: build x86_64-linux-gnu"], lookback=50)
-    master_min = typemax(Int)
-    scheduled_min = typemax(Int)
+    # Minimum build number among the most recent `lookback` records of each
+    # pipeline (records are sorted newest-first)
+    mins = Dict{String, Int}()
     jobs = get(existing_data, :jobs, Dict())
-    
+
     for job_name in key_jobs
         job = get(jobs, Symbol(job_name), nothing)
         job === nothing && continue
         recent = get(job, :recent, [])
         isempty(recent) && continue
-        
-        # Look at the last N entries and find the minimum build number
-        for r in recent[1:min(lookback, length(recent))]
+
+        seen = Dict{String, Int}()
+        for r in recent
             build = get(r, :build, nothing)
             build === nothing && continue
-            pipeline = get(r, :pipeline, "julia-master")
-            if pipeline == "julia-master-scheduled"
-                scheduled_min = min(scheduled_min, build)
-            else
-                master_min = min(master_min, build)
-            end
+            pipeline = String(get(r, :pipeline, "julia-master"))
+            count = get(seen, pipeline, 0)
+            count >= lookback && continue
+            seen[pipeline] = count + 1
+            mins[pipeline] = min(get(mins, pipeline, typemax(Int)), build)
         end
     end
-    
-    return (master=master_min == typemax(Int) ? 0 : master_min, 
-            scheduled=scheduled_min == typemax(Int) ? 0 : scheduled_min)
+
+    return (master=get(mins, PIPELINE, 0),
+            scheduled=get(mins, SCHEDULED_PIPELINE, 0),
+            ci=get(mins, CI_PIPELINE, 0))
 end
 
 # Fetch coverage data from Coveralls and Codecov APIs
@@ -448,12 +419,15 @@ function generate_json_output(job_timings; output_dir="data", coverage_data=Dict
         existing_job = get(existing_jobs, Symbol(name), nothing)
         if existing_job !== nothing
             existing_recent = get(existing_job, :recent, [])
-            # Use (build, retry) tuple to identify unique job runs
-            new_keys = Set((r["build"], get(r, "retry", 0)) for r in new_records)
+            # Use (pipeline, build, retry) tuple to identify unique job runs
+            # (build numbers are only unique within a pipeline, and julia-ci
+            # numbering restarted from 1)
+            new_keys = Set((r["pipeline"], r["build"], get(r, "retry", 0)) for r in new_records)
             for old in existing_recent
                 build = get(old, :build, nothing)
                 retry = get(old, :retry, 0)
-                if build !== nothing && (build, retry) ∉ new_keys
+                old_pipeline = String(get(old, :pipeline, "julia-master"))
+                if build !== nothing && (old_pipeline, build, retry) ∉ new_keys
                     push!(new_records, SortedDict(
                         "agent" => get(old, :agent, ""),
                         "author" => get(old, :author, ""),
@@ -550,31 +524,35 @@ function main()
     
     # Get threshold: builds below this number are fully captured (have all expected jobs)
     threshold = get_fully_captured_threshold(existing)
-    @info "Fully captured threshold" master=threshold.master scheduled=threshold.scheduled
+    @info "Fully captured threshold" master=threshold.master scheduled=threshold.scheduled ci=threshold.ci
 
     @info "Fetching builds from Buildkite..."
-    builds = fetch_builds(; max_pages=30, fully_captured_below=threshold.master)
+    ci_builds = fetch_pipeline_builds(CI_PIPELINE; max_pages=30, fully_captured_below=threshold.ci)
+    @info "Fetched julia-ci builds" count=length(ci_builds)
+
+    builds = fetch_pipeline_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master)
     @info "Fetched julia-master builds" count=length(builds)
 
-    scheduled_builds = fetch_scheduled_builds(; max_pages=10, fully_captured_below=threshold.scheduled)
+    scheduled_builds = fetch_pipeline_builds(SCHEDULED_PIPELINE; max_pages=10, fully_captured_below=threshold.scheduled)
     @info "Fetched julia-master-scheduled builds" count=length(scheduled_builds)
 
-    if isempty(builds) && isempty(scheduled_builds) && threshold.master == 0 && threshold.scheduled == 0
+    if isempty(ci_builds) && isempty(builds) && isempty(scheduled_builds) &&
+       threshold.master == 0 && threshold.scheduled == 0 && threshold.ci == 0
         @error "No builds fetched and no existing data - check your token and permissions"
         return 1
     end
 
     @info "Extracting job timings..."
-    master_timings = extract_job_timings(builds, "julia-master")
-    scheduled_timings = extract_job_timings(scheduled_builds, "julia-master-scheduled")
+    job_timings = extract_job_timings(builds, PIPELINE)
 
-    # Merge timings from both pipelines
-    job_timings = master_timings
-    for (name, timings) in scheduled_timings
-        if haskey(job_timings, name)
-            append!(job_timings[name], timings)
-        else
-            job_timings[name] = timings
+    # Merge timings from all pipelines
+    for (pipeline, pipeline_builds) in ((SCHEDULED_PIPELINE, scheduled_builds), (CI_PIPELINE, ci_builds))
+        for (name, timings) in extract_job_timings(pipeline_builds, pipeline)
+            if haskey(job_timings, name)
+                append!(job_timings[name], timings)
+            else
+                job_timings[name] = timings
+            end
         end
     end
     @info "Found jobs in new builds" count=length(job_timings)
