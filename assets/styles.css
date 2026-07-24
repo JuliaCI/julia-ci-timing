@@ -2211,3 +2211,59 @@ body {
 .pkgeval-stats .pe-kill {
   color: var(--color-attention-fg);
 }
+
+/* Per-commit averages view */
+.commits-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.commits-chart-container {
+  position: relative;
+  flex: 0 0 auto;
+  height: min(440px, 55vh);
+  padding: 8px 12px;
+}
+.commits-chart-container .chart-wrapper {
+  position: relative;
+  height: 100%;
+}
+.commits-regressions {
+  padding: 4px 12px 16px;
+}
+.commits-reg-title {
+  font-size: 14px;
+  margin: 8px 0 2px;
+}
+.commits-reg-help {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  margin: 0 0 8px;
+}
+.commits-reg-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.commits-reg-table th,
+.commits-reg-table td {
+  text-align: left;
+  padding: 4px 10px 4px 0;
+  border-bottom: 1px solid var(--color-border-default);
+  white-space: nowrap;
+}
+.commits-reg-table th {
+  color: var(--color-fg-muted);
+  font-weight: 600;
+}
+.commits-reg-pct {
+  color: var(--color-danger-fg);
+  font-weight: 600;
+}
+.commits-reg-table td.commits-reg-msg {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: var(--color-fg-muted);
+}

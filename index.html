@@ -112,6 +112,18 @@
             </button>
             <button
               class="tab-btn"
+              id="tab-ci-commits"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-commits')"
+              title="Per-commit average build and test times with regression highlights"
+            >
+              Commits
+            </button>
+            <button
+              class="tab-btn"
               id="tab-ci-workers"
               role="tab"
               aria-selected="false"
@@ -652,6 +664,33 @@
           </div>
           <div class="workers-grid-wrapper" id="workers-grid">
             <div class="loading">Loading worker history...</div>
+          </div>
+        </div>
+        <div class="commits-view view-hidden" id="commits-view">
+          <div class="workers-note" role="note">
+            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
+            <span
+              >Each dot is one <strong>master</strong> commit: the median
+              across platforms of its passed build (or test) job durations,
+              each normalized by that job's median over the selected time
+              range (1.00&nbsp;= typical). The solid line is a rolling median
+              over ~11 commits — step changes show up there, not in the noisy
+              dots. <strong>▲&nbsp;markers</strong> flag where a sustained
+              shift beyond the local noise level begins (±1 commit); click a
+              dot to open its commit.</span
+            >
+          </div>
+          <div class="commits-chart-container">
+            <div class="chart-wrapper">
+              <canvas
+                id="commits-chart"
+                role="img"
+                aria-label="Per-commit average build and test times relative to median"
+              ></canvas>
+            </div>
+          </div>
+          <div class="commits-regressions" id="commits-regressions">
+            <div class="loading">Loading...</div>
           </div>
         </div>
       </div>

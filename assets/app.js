@@ -103,9 +103,10 @@ function refreshAllUI() {
   updateStatsTable();
   updateToolbarButtons();
   if (ciSubview === "workers") renderWorkerPresence();
+  if (ciSubview === "commits") renderCommitsView();
 }
 
-// CI Timing sub-view: 'jobs' (default) or 'workers'
+// CI Timing sub-view: 'jobs' (default), 'commits', or 'workers'
 let ciSubview = "jobs";
 const CI_WORKER_HIDDEN_CONTROL_IDS = [
   "line-type",
@@ -115,12 +116,15 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
 ];
 
 function setCITimingSubview(name, { updateUrl = true } = {}) {
-  if (name !== "jobs" && name !== "workers") name = "jobs";
+  if (name !== "jobs" && name !== "workers" && name !== "commits")
+    name = "jobs";
   ciSubview = name;
+  const isJobs = name === "jobs";
   const isWorkers = name === "workers";
+  const isCommits = name === "commits";
   const jobsBtn = document.getElementById("ci-subview-jobs");
   const workersBtn = document.getElementById("ci-subview-workers");
-  if (jobsBtn) jobsBtn.classList.toggle("btn-primary", !isWorkers);
+  if (jobsBtn) jobsBtn.classList.toggle("btn-primary", isJobs);
   if (workersBtn) workersBtn.classList.toggle("btn-primary", isWorkers);
 
   const view = document.getElementById("ci-timing-view");
@@ -128,20 +132,23 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
     const sidebar = view.querySelector(".sidebar");
     const chart = view.querySelector(".chart-container");
     const stats = view.querySelector(".stats-wrapper");
-    if (sidebar) sidebar.classList.toggle("view-hidden", isWorkers);
-    if (chart) chart.classList.toggle("view-hidden", isWorkers);
-    if (stats) stats.classList.toggle("view-hidden", isWorkers);
+    if (sidebar) sidebar.classList.toggle("view-hidden", !isJobs);
+    if (chart) chart.classList.toggle("view-hidden", !isJobs);
+    if (stats) stats.classList.toggle("view-hidden", !isJobs);
   }
   const workersView = document.getElementById("workers-view");
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
+  const commitsView = document.getElementById("commits-view");
+  if (commitsView) commitsView.classList.toggle("view-hidden", !isCommits);
 
-  // Hide controls that don't apply to the workers view
+  // Hide controls that don't apply to the workers/commits views
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
     const el = document.getElementById(id);
-    if (el) el.classList.toggle("view-hidden", isWorkers);
+    if (el) el.classList.toggle("view-hidden", !isJobs);
   }
 
   if (isWorkers) renderWorkerPresence();
+  if (isCommits) renderCommitsView();
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
 
@@ -313,6 +320,373 @@ function renderWorkerPresence() {
   }
   parts.push("</tbody></table>");
   container.innerHTML = parts.join("");
+}
+
+// === Per-commit averages sub-view ===
+// Averages passed platform build/test job durations per master commit,
+// normalizing each job by its own median over the window so the
+// cross-platform mean is insensitive to which platforms ran.
+let commitsChart = null;
+
+const COMMITS_SERIES_COLORS = {
+  // Validated 2-color categorical palette (CVD-safe on both surfaces)
+  light: { build: "#0969da", test: "#bc4c00", regression: "#cf222e" },
+  dark: { build: "#388bfd", test: "#db6d28", regression: "#f85149" },
+};
+
+function median(values) {
+  if (values.length === 0) return NaN;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Per-commit cross-platform normalized averages for one category
+// ('build' or 'test'). Returns points sorted by date.
+function computeCommitSeries(category) {
+  const cutoff = getTimeRangeCutoff();
+  const MIN_RUNS_PER_JOB = 8; // below this the job median is unstable
+  const MIN_JOBS_PER_COMMIT = 3;
+
+  // commit -> { dateMs, message, perJob: Map(job -> [normalized]), rawSum, rawN }
+  const commits = new Map();
+
+  for (const [name, job] of Object.entries(data.jobs)) {
+    const { group, type } = classifyJob(name);
+    if (type !== category || !platformOrder.includes(group)) continue;
+
+    const runs = [];
+    for (const r of job.recent || []) {
+      if (getRunState(r) !== "passed" || (r.retry || 0) > 0) continue;
+      const t = Date.parse(r.date);
+      if (isNaN(t) || (cutoff && t < cutoff.getTime())) continue;
+      runs.push({ ...r, t });
+    }
+    if (runs.length < MIN_RUNS_PER_JOB) continue;
+    const jobMedian = median(runs.map((r) => r.duration));
+    if (!(jobMedian > 0)) continue;
+
+    for (const r of runs) {
+      let entry = commits.get(r.commit);
+      if (!entry) {
+        entry = {
+          dateMs: r.t,
+          message: "",
+          perJob: new Map(),
+          rawSum: 0,
+          rawN: 0,
+        };
+        commits.set(r.commit, entry);
+      }
+      if (r.t < entry.dateMs) entry.dateMs = r.t;
+      if (!entry.message && r.message && r.message !== "Scheduled build") {
+        entry.message = r.message;
+      }
+      let norms = entry.perJob.get(name);
+      if (!norms) {
+        norms = [];
+        entry.perJob.set(name, norms);
+      }
+      norms.push(r.duration / jobMedian);
+      entry.rawSum += r.duration;
+      entry.rawN++;
+    }
+  }
+
+  const points = [];
+  for (const [commit, e] of commits) {
+    if (e.perJob.size < MIN_JOBS_PER_COMMIT) continue;
+    // Median across jobs so one platform's outlier can't move the point
+    const perJobMeans = [];
+    for (const norms of e.perJob.values()) {
+      perJobMeans.push(norms.reduce((a, b) => a + b, 0) / norms.length);
+    }
+    points.push({
+      commit,
+      x: e.dateMs,
+      y: median(perJobMeans),
+      n: e.perJob.size,
+      rawMean: e.rawSum / e.rawN,
+      message: e.message,
+    });
+  }
+  points.sort((a, b) => a.x - b.x);
+  return points;
+}
+
+// Rolling median over 2*half+1 commits; the trend line that makes step
+// changes visible against the noisy per-commit dots.
+function rollingMedian(points, half = 5) {
+  return points.map((p, i) => ({
+    x: p.x,
+    y: median(
+      points
+        .slice(Math.max(0, i - half), Math.min(points.length, i + half + 1))
+        .map((q) => q.y),
+    ),
+  }));
+}
+
+// Flag points where a sustained shift in the series median starts.
+// Compares the median of the W commits before vs. after each candidate and
+// requires the increase to exceed both a 4% floor and ~3 standard errors of
+// a W-sample median estimated from the local MAD, so single noisy commits
+// and slow drifts are not flagged.
+function detectCommitRegressions(points) {
+  const W = 12;
+  const flagged = new Map(); // index -> pct increase
+  if (points.length < 2 * W + 1) return flagged;
+  const ys = points.map((p) => p.y);
+  let i = W;
+  while (i <= ys.length - W) {
+    const before = ys.slice(i - W, i);
+    const after = ys.slice(i, i + W);
+    const mBefore = median(before);
+    const mAfter = median(after);
+    const residuals = [
+      ...before.map((v) => Math.abs(v - mBefore)),
+      ...after.map((v) => Math.abs(v - mAfter)),
+    ];
+    const sigma = 1.4826 * median(residuals); // MAD -> sigma
+    // std-err of a W-sample median ~ 1.2533*sigma/sqrt(W); difference of
+    // two medians -> *sqrt(2)
+    const threshold = Math.max(
+      0.04 * mBefore,
+      (3.0 * 1.2533 * sigma * Math.sqrt(2)) / Math.sqrt(W),
+    );
+    if (mAfter - mBefore >= threshold) {
+      // The window test fires as soon as the after-window median crosses,
+      // which can be several commits before the actual step. Refine by
+      // scanning forward for the first commit where the series settles on
+      // the slow side of the midpoint (two consecutive slow points, so a
+      // single noisy commit can't claim the flag).
+      const mid = (mBefore + mAfter) / 2;
+      let bestJ = i;
+      for (let j = Math.max(1, i - 2); j < Math.min(ys.length - 1, i + W); j++) {
+        if (ys[j] >= mid && ys[j + 1] >= mid) {
+          bestJ = j;
+          break;
+        }
+      }
+      // Recompute the magnitude at the refined boundary
+      const b2 = median(ys.slice(Math.max(0, bestJ - W), bestJ));
+      const a2 = median(ys.slice(bestJ, bestJ + W));
+      flagged.set(bestJ, ((a2 - b2) / b2) * 100);
+      i = bestJ + W; // skip past this shift so it isn't flagged repeatedly
+    } else {
+      i++;
+    }
+  }
+  return flagged;
+}
+
+function renderCommitsView() {
+  const canvas = document.getElementById("commits-chart");
+  const tableEl = document.getElementById("commits-regressions");
+  if (!canvas || !tableEl) return;
+  if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
+    tableEl.innerHTML = '<div class="loading">Loading data...</div>';
+    return;
+  }
+
+  const isDark = isDarkMode();
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+
+  const datasets = [];
+  const meta = {}; // "datasetIndex-dataIndex" -> point
+  const regressionRows = [];
+
+  // Chart.js needs an rgba() string for the translucent raw dots
+  const hexToRgba = (hex, alpha) => {
+    const v = parseInt(hex.slice(1), 16);
+    return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
+  };
+
+  for (const category of ["build", "test"]) {
+    const points = computeCommitSeries(category);
+    const flagged = detectCommitRegressions(points);
+    const label = category === "build" ? "Build" : "Test";
+    const color = colors[category];
+    const trend = rollingMedian(points);
+
+    // Faint per-commit dots (hoverable/clickable)
+    const dsIdx = datasets.length;
+    datasets.push({
+      label: `${label} (commits)`,
+      data: points,
+      parsing: false,
+      showLine: false,
+      backgroundColor: hexToRgba(color, 0.35),
+      borderColor: "transparent",
+      pointRadius: 2.5,
+      pointHoverRadius: 6,
+      pointHoverBackgroundColor: color,
+    });
+    points.forEach((p, i) => {
+      meta[`${dsIdx}-${i}`] = p;
+    });
+
+    // Rolling-median trend line: this is where step changes are visible
+    datasets.push({
+      label,
+      data: trend,
+      parsing: false,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 2.5,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      pointHoverRadius: 0,
+      tension: 0,
+    });
+
+    const regPoints = [];
+    for (const [i, pct] of flagged) {
+      const p = {
+        ...points[i],
+        y: trend[i].y, // anchor the marker to the trend, not the noisy dot
+        pointY: points[i].y,
+        regressionPct: pct,
+        series: label,
+        // Detection is only certain to ~±1 CI run, so the candidate range
+        // starts two runs back: a GitHub compare of rangeStart...commit then
+        // contains every candidate (compare excludes its left endpoint).
+        rangeStart: i > 1 ? points[i - 2].commit : null,
+      };
+      regPoints.push(p);
+      regressionRows.push(p);
+    }
+    if (regPoints.length > 0) {
+      const regIdx = datasets.length;
+      datasets.push({
+        label: `${label} regression`,
+        data: regPoints,
+        parsing: false,
+        showLine: false,
+        pointStyle: "triangle",
+        pointRadius: 9,
+        pointHoverRadius: 11,
+        pointBackgroundColor: color,
+        pointBorderColor: colors.regression,
+        pointBorderWidth: 3,
+      });
+      regPoints.forEach((p, i) => {
+        meta[`${regIdx}-${i}`] = p;
+      });
+    }
+  }
+
+  if (commitsChart) commitsChart.destroy();
+  commitsChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "nearest", intersect: false },
+      plugins: {
+        legend: {
+          labels: {
+            color: textColor,
+            usePointStyle: true,
+            // Show only the trend lines in the legend
+            filter: (item) =>
+              !item.text.includes("regression") &&
+              !item.text.includes("(commits)"),
+          },
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const m = items.length && meta[`${items[0].datasetIndex}-${items[0].dataIndex}`];
+              return m ? `${m.commit} — ${m.message || "(no message)"}` : "";
+            },
+            label: (ctx) => {
+              const m = meta[`${ctx.datasetIndex}-${ctx.dataIndex}`];
+              if (!m) return null;
+              const series = ctx.dataset.label
+                .replace(" regression", "")
+                .replace(" (commits)", "");
+              const value = m.pointY != null ? m.pointY : m.y;
+              const lines = [
+                `${series}: ${value.toFixed(3)}× median ` +
+                  `(avg ${formatDuration(m.rawMean)} across ${m.n} jobs)`,
+              ];
+              if (m.regressionPct != null) {
+                lines.push(
+                  `⚠ sustained +${m.regressionPct.toFixed(1)}% shift starts near here`,
+                );
+              }
+              return lines;
+            },
+          },
+        },
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const el = elements[0];
+        const m = meta[`${el.datasetIndex}-${el.index}`];
+        if (m) {
+          window.open(
+            `https://github.com/JuliaLang/julia/commit/${m.commit}`,
+            "_blank",
+            "noopener",
+          );
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: {
+            displayFormats: { day: "MMM d", week: "MMM d", month: "MMM yyyy" },
+          },
+          ticks: { color: textColor, maxRotation: 45 },
+          grid: { color: gridColor },
+        },
+        y: {
+          title: {
+            display: true,
+            text: "duration vs. window median (1.00 = typical)",
+            color: textColor,
+          },
+          ticks: { color: textColor },
+          grid: { color: gridColor },
+        },
+      },
+    },
+  });
+
+  // Regressions table (also the non-color encoding of the highlights)
+  if (regressionRows.length === 0) {
+    tableEl.innerHTML =
+      '<div class="workers-empty">No sustained regressions detected in the selected time range.</div>';
+    return;
+  }
+  regressionRows.sort((a, b) => b.x - a.x);
+  const rows = regressionRows
+    .map((p) => {
+      const range = p.rangeStart
+        ? `<a href="https://github.com/JuliaLang/julia/compare/${escapeHtml(p.rangeStart)}...${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.rangeStart)}…${escapeHtml(p.commit)}</code></a>`
+        : `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.commit)}</code></a>`;
+      return `<tr>
+        <td>${new Date(p.x).toISOString().slice(0, 10)}</td>
+        <td>${range}</td>
+        <td>${escapeHtml(p.series)}</td>
+        <td class="commits-reg-pct">+${p.regressionPct.toFixed(1)}%</td>
+        <td class="commits-reg-msg">${escapeHtml(p.message || "")}</td>
+      </tr>`;
+    })
+    .join("");
+  tableEl.innerHTML = `
+    <h3 class="commits-reg-title">⚠ Detected regressions (sustained shifts)</h3>
+    <p class="commits-reg-help">Each range spans the detection uncertainty (~±1 CI run); the compare link lists every candidate commit. Message shown is the flagged commit's.</p>
+    <table class="commits-reg-table" aria-label="Detected timing regressions">
+      <thead><tr><th>Date</th><th>Commit range</th><th>Series</th><th>Change</th><th>Message</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function toggleJobsSelection(jobs) {
@@ -1537,6 +1911,7 @@ function setTimeRange(days) {
   updateChart();
   updateStatsTable();
   if (ciSubview === "workers") renderWorkerPresence();
+  if (ciSubview === "commits") renderCommitsView();
   updateURL();
 }
 
@@ -5278,6 +5653,7 @@ const TAB_URL_MAP = {
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
+  "ci-commits": "ci-commits",
   "ci-workers": "ci-workers",
   packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
@@ -5287,6 +5663,7 @@ const LEGACY_TAB_ALIASES = new Set([
   "perf",
   "benchmarks",
   "ci-timing",
+  "ci-commits",
   "ci-workers",
   "packages",
   "pkgeval",
@@ -5398,6 +5775,8 @@ window.addEventListener("message", (event) => {
 function switchTab(tab) {
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
+  } else if (tab === "ci-commits") {
+    setCITimingSubview("commits", { updateUrl: false });
   } else if (tab === "ci-timing") {
     setCITimingSubview("jobs", { updateUrl: false });
   }
@@ -5405,6 +5784,7 @@ function switchTab(tab) {
   activeTab = tab;
   const tabIds = {
     "ci-timing": "tab-ci-timing",
+    "ci-commits": "tab-ci-commits",
     "ci-workers": "tab-ci-workers",
     packages: "tab-packages",
     benchmarks: "tab-benchmarks",
@@ -5424,7 +5804,8 @@ function switchTab(tab) {
     group.classList.toggle("active-group", hasActiveTab);
   });
 
-  const isCITab = tab === "ci-timing" || tab === "ci-workers";
+  const isCITab =
+    tab === "ci-timing" || tab === "ci-commits" || tab === "ci-workers";
 
   document
     .getElementById("ci-timing-view")
@@ -8684,6 +9065,7 @@ window
     if (benchChart) updateBenchChart();
     if (packagesDownloadsChart) updatePackagesDownloadsChart();
     if (pkgevalChart) updatePkgevalChart();
+    if (commitsChart) renderCommitsView();
   });
 
 function currentTheme() {
@@ -8733,6 +9115,7 @@ function applyTheme() {
   if (benchChart) updateBenchChart();
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
+  if (commitsChart) renderCommitsView();
 }
 function cycleTheme() {
   const order = ["system", "dark", "light"];
