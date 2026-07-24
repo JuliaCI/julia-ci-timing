@@ -122,10 +122,6 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   const isJobs = name === "jobs";
   const isWorkers = name === "workers";
   const isCommits = name === "commits";
-  const jobsBtn = document.getElementById("ci-subview-jobs");
-  const workersBtn = document.getElementById("ci-subview-workers");
-  if (jobsBtn) jobsBtn.classList.toggle("btn-primary", isJobs);
-  if (workersBtn) workersBtn.classList.toggle("btn-primary", isWorkers);
 
   const view = document.getElementById("ci-timing-view");
   if (view) {
@@ -683,10 +679,12 @@ function renderCommitsView() {
   tableEl.innerHTML = `
     <h3 class="commits-reg-title">⚠ Detected regressions (sustained shifts)</h3>
     <p class="commits-reg-help">Each range spans the detection uncertainty (~±1 CI run); the compare link lists every candidate commit. Message shown is the flagged commit's.</p>
+    <div class="commits-reg-table-wrapper">
     <table class="commits-reg-table" aria-label="Detected timing regressions">
       <thead><tr><th>Date</th><th>Commit range</th><th>Series</th><th>Change</th><th>Message</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>
+    </div>`;
 }
 
 function toggleJobsSelection(jobs) {
@@ -738,7 +736,9 @@ const emojiTextMap = {
 };
 
 function convertEmoji(text) {
-  let result = text;
+  // The result is used as innerHTML, so escape first; emoji codes are
+  // alphanumeric-plus-colons and unaffected by the escaping.
+  let result = escapeHtml(text);
   // First, replace with Buildkite images
   for (const [code, url] of Object.entries(emojiImageMap)) {
     result = result.replaceAll(
@@ -1547,6 +1547,7 @@ function decodeSelection(param) {
       const indices = part
         .slice(1)
         .split("_")
+        .filter((s) => s !== "") // bare "i" must not select index 0
         .map(Number)
         .filter((n) => !isNaN(n));
       selections.indices.push(...indices);
@@ -1595,7 +1596,7 @@ function updateURL() {
     url.searchParams.delete("y");
   }
   // Add line type if not default
-  if (lineType !== "raw") {
+  if (lineType !== DEFAULT_LINE_TYPE) {
     url.searchParams.set("l", lineType);
   } else {
     url.searchParams.delete("l");
@@ -1625,7 +1626,8 @@ function updateURL() {
     // Encode as which states are visible (inverse of excluded)
     const allStates = ["passed", "failed", "timed_out", "canceled"];
     const visible = allStates.filter((s) => !excludedStates.has(s));
-    url.searchParams.set("st", visible.join("_"));
+    // "." separator: "_" would split "timed_out" apart on parse
+    url.searchParams.set("st", visible.join("."));
   } else {
     url.searchParams.delete("st");
   }
@@ -1723,8 +1725,12 @@ function applyURLParams() {
   const st = params.get("st");
   if (st !== null) {
     const allStates = ["passed", "failed", "timed_out", "canceled"];
+    // "." is the current separator; legacy links used "_", which splits
+    // "timed_out" apart, so parse those by substring match instead.
     const visibleStates = st
-      ? st.split("_").filter((s) => allStates.includes(s))
+      ? st.includes(".")
+        ? st.split(".").filter((s) => allStates.includes(s))
+        : allStates.filter((s) => st.includes(s))
       : [];
     excludedStates.clear();
     for (const state of allStates) {
@@ -1804,8 +1810,8 @@ function applyComparisonParam() {
     // Populate baseline values from our data
     for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
       const job = data?.jobs?.[jobName];
-      if (job?.stats?.median) {
-        jobData.baseline = job.stats.median;
+      if (job?.stats?.median_seconds) {
+        jobData.baseline = job.stats.median_seconds;
       }
     }
     updateComparisonBanner();
@@ -2093,12 +2099,17 @@ function updateHostFilterUI() {
     menu.appendChild(divider);
   }
 
-  // Add individual host checkboxes
+  // Add individual host checkboxes (built via DOM APIs — host names come
+  // from the Buildkite API and must not be interpolated into HTML)
   for (const host of allHosts) {
     const item = document.createElement("label");
     item.className = "checkbox-dropdown-item";
-    const included = !excludedHosts.has(host);
-    item.innerHTML = `<input type="checkbox" ${included ? "checked" : ""} onchange="toggleHostFilter('${host.replace(/'/g, "\\'")}', this)"> ${host}`;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !excludedHosts.has(host);
+    checkbox.addEventListener("change", () => toggleHostFilter(host, checkbox));
+    item.appendChild(checkbox);
+    item.appendChild(document.createTextNode(` ${host}`));
     menu.appendChild(item);
   }
 
@@ -2692,7 +2703,9 @@ function updateChart() {
 
       const dsIdx = datasets.length;
       datasets.push({
-        label: `${jobName} (PR #${comparisonData.build})`,
+        label: comparisonData.pr
+          ? `${jobName} (PR #${comparisonData.pr})`
+          : `${jobName} (build ${comparisonData.build})`,
         data: [{ x: comparisonDate, y: jobData.duration }],
         borderColor: "transparent",
         backgroundColor: color,
@@ -3080,8 +3093,8 @@ function updateChart() {
           },
         },
         y: {
-          min: customYMin || undefined,
-          max: customYMax || undefined,
+          min: customYMin ?? undefined,
+          max: customYMax ?? undefined,
           title: {
             display: true,
             text: "Duration",
@@ -3896,10 +3909,10 @@ document.addEventListener("keydown", (e) => {
     if (customXMin !== null || customYMin !== null) resetZoom();
   } else if (e.key === "a") {
     e.preventDefault();
-    selectAllJobs();
+    if (data) selectAllJobs();
   } else if (e.key === "n") {
     e.preventDefault();
-    deselectAllJobs();
+    if (data) deselectAllJobs();
   }
 });
 
@@ -4252,7 +4265,7 @@ function updateStatsTable() {
               ? -maxShift + (2 * maxShift * i) / (displayAgents.length - 1)
               : 0;
           const hostColor = shiftHue(color, hueShift);
-          return `<span class="color-dot" style="background: ${hostColor}" title="${agent}: ${count} runs"></span>`;
+          return `<span class="color-dot" style="background: ${hostColor}" title="${escapeHtml(agent)}: ${count} runs"></span>`;
         })
         .join("");
       if (agents.length > maxDotsShown) {
@@ -4409,7 +4422,8 @@ function updateStatsTable() {
         const allHostRuns = job.recent.filter((r) => {
           if (r.agent !== agent) return false;
           const date = new Date(r.date);
-          return date >= rangeMin && date <= rangeMax;
+          // rangeMin/rangeMax are null for "All time"
+          return (!rangeMin || date >= rangeMin) && (!rangeMax || date <= rangeMax);
         });
         const hostFilteredRuns = allHostRuns.filter((r) => {
           const runState = getRunState(r);
@@ -4528,7 +4542,7 @@ function updateStatsTable() {
           ? '<td class="comparison-col comparison-col-first"></td><td class="comparison-col"></td><td class="comparison-col"></td>'
           : "";
         hostRow.innerHTML = `
-                            <td><span class="color-dot" style="background: ${hostColor}"></span> ${agent}</td>
+                            <td><span class="color-dot" style="background: ${hostColor}"></span> ${escapeHtml(agent)}</td>
                             <td></td>
                             <td>${hostPrHtml}</td>
                             ${hostTrendCell}
@@ -5365,7 +5379,10 @@ async function loadData() {
     // Render empty matrix skeleton immediately
     renderMatrixSkeleton();
 
-    const resp = await fetch("data/timing_summary.json.gz");
+    // no-cache like loadGzipJson: always revalidate against the server
+    const resp = await fetch("data/timing_summary.json.gz", {
+      cache: "no-cache",
+    });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
     // Stream and parse JSON progressively (decompress gzip on the fly)
@@ -5634,8 +5651,10 @@ async function refreshData() {
       updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
       updatedEl.title = data.generated_at;
       checkStaleData(data.generated_at);
-      updateChart();
-      updateStatsTable();
+      // Rebuild all derived state (job matrix/index, colors, pass rates,
+      // breakages, sidebar) — new jobs can appear and caches go stale
+      populateJobSelector();
+      refreshAllUI();
     } else {
       // Update the "ago" time even if data hasn't changed
       const updatedEl = document.getElementById("last-updated");
@@ -5697,6 +5716,7 @@ const DASHBOARD_PARAMS = new Set([
   "e", // expanded jobs in stats table
   "st", // state filter
   "c", // comparison build pair
+  "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "tab", // active tab
   "bt", // bench time range
   "bs", // bench stat type
@@ -5853,7 +5873,7 @@ let benchChart = null;
 let benchSelectedGroups = new Set();
 let benchTimeRangeDays = 15;
 let benchStatType = "minimum";
-let benchSortCol = "date";
+let benchSortCol = "trendAbs"; // default view is "groups", which has no date column
 let benchSortAsc = false;
 let benchGroupColors = {};
 let benchExpandedGroups = new Set();
@@ -6011,6 +6031,14 @@ function applyBenchURLParams() {
     benchSortAsc = false;
     document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
     document.getElementById("bench-view-groups")?.classList.add("btn-primary");
+  } else if (bv === "runs") {
+    benchTableView = "runs";
+    benchSortCol = "date";
+    benchSortAsc = false;
+    document
+      .getElementById("bench-view-groups")
+      ?.classList.remove("btn-primary");
+    document.getElementById("bench-view-runs")?.classList.add("btn-primary");
   } else if (bv === "noisy") {
     benchTableView = "noisy";
     document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
@@ -6086,7 +6114,9 @@ function openBenchMethodologyPopup() {
       html += `<div style="margin-bottom:12px">`;
       html += `<div><span class="label">Effective from:</span> ${escapeHtml(change.firstValidDate)}</div>`;
       html += `<div><span class="label">Description:</span> ${escapeHtml(change.description)}</div>`;
-      html += `<div><span class="label">Reference:</span> <a href="${escapeHtml(change.url)}" target="_blank" rel="noopener">${escapeHtml(change.url)}</a></div>`;
+      // Only link http(s) URLs (blocks javascript: etc. from the data file)
+      const safeUrl = /^https?:\/\//i.test(change.url || "") ? change.url : null;
+      html += `<div><span class="label">Reference:</span> ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">${escapeHtml(safeUrl)}</a>` : escapeHtml(change.url || "")}</div>`;
       html += `<div style="margin-top:6px"><span class="label">Affected benchmarks (${change.benchmarks.size}):</span><ul style="margin:4px 0 0 16px;padding:0;font-size:9px;white-space:nowrap">`;
       for (const bench of [...change.benchmarks].sort()) {
         html += `<li><code>${escapeHtml(bench)}</code></li>`;
@@ -6327,13 +6357,19 @@ function populateBenchGroupList(groups) {
     const countKey = benchStatType + "_count";
     const testCount = latest?.by_group?.[group]?.[countKey];
     const countLabel = testCount != null ? testCount : "";
-    html += `<div class="group-item ${isSelected ? "selected" : ""}" onclick="toggleBenchGroup('${escapeHtml(group)}')" title="${escapeHtml(group)}">`;
+    // data-group + delegated listener below: escapeHtml can't make a value
+    // safe inside an inline onclick JS string (entities are decoded before
+    // the JS engine parses the handler)
+    html += `<div class="group-item ${isSelected ? "selected" : ""}" data-group="${escapeHtml(group)}" title="${escapeHtml(group)}">`;
     html += `<span class="color-dot" style="background: ${benchGroupColors[group] || "#888"}"></span>`;
     html += `<span>${escapeHtml(group)}</span>`;
     html += `<span class="group-counts"><span class="bench-count">${countLabel}</span></span>`;
     html += `</div>`;
   }
   container.innerHTML = html;
+  for (const el of container.querySelectorAll(".group-item[data-group]")) {
+    el.addEventListener("click", () => toggleBenchGroup(el.dataset.group));
+  }
 }
 
 function toggleBenchGroup(group) {
@@ -7200,9 +7236,9 @@ function renderBenchRunsTable() {
       : "—";
     const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : "—";
     const summaryUrl = row.date_path
-      ? `https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/benchmark/by_date/${row.date_path}/summary.png`
+      ? `https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/benchmark/by_date/${row.date_path.split("/").map(encodeURIComponent).join("/")}/summary.png`
       : "";
-    html += `<tr${summaryUrl ? ` data-summary-url="${summaryUrl}"` : ""}>`;
+    html += `<tr${summaryUrl ? ` data-summary-url="${escapeHtml(summaryUrl)}"` : ""}>`;
     html += `<td>${escapeHtml(row.date)}</td>`;
     html += `<td>${commitDisplay}</td>`;
     html += `<td>${reportDisplay}</td>`;
@@ -7220,6 +7256,10 @@ function renderBenchRunsTable() {
 }
 
 function attachBenchRowHoverPreview(tbody) {
+  // Attach once: the tbody element persists across re-renders (only its
+  // innerHTML changes), so repeated calls would stack duplicate listeners
+  if (tbody.dataset.hoverPreviewAttached) return;
+  tbody.dataset.hoverPreviewAttached = "true";
   const preview = document.getElementById("bench-row-preview");
   const img = document.getElementById("bench-row-preview-img");
   let currentUrl = null;
@@ -7638,7 +7678,7 @@ function renderBenchGroupsTable() {
     const isExpanded = benchExpandedGroups.has(row.group);
     const expandClass = isExpanded ? "expandable expanded" : "expandable";
     const groupNotes = getNotesForGroup(row.group);
-    html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}" onclick="toggleExpandGroup('${escapeHtml(row.group)}')">`;
+    html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}">`;
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
     html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
@@ -7721,6 +7761,7 @@ function renderBenchGroupsTable() {
   // Attach hover highlight listeners
   tbody.querySelectorAll("tr[data-bench-group]").forEach((tr) => {
     const group = tr.dataset.benchGroup;
+    tr.onclick = () => toggleExpandGroup(group);
     tr.onmouseenter = () => highlightBenchGroup(group);
     tr.onmouseleave = () => clearBenchHighlight();
   });
@@ -8027,7 +8068,14 @@ async function loadPackagesDownloadsData() {
 function updatePackagesDownloadsChart() {
   const rows = getPackagesFilteredSeries();
   setPackagesPrereleaseHeadline("");
-  if (!rows.length) return;
+  if (!rows.length) {
+    // Don't leave a chart from the previous filter on screen
+    if (packagesDownloadsChart) {
+      packagesDownloadsChart.destroy();
+      packagesDownloadsChart = null;
+    }
+    return;
+  }
 
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
@@ -8095,7 +8143,13 @@ function updatePackagesDownloadsChart() {
     const presentStages = prereleaseLabels.filter((s) =>
       hasValues(shareSeries.get(s) || []),
     );
-    if (!presentStages.length) return;
+    if (!presentStages.length) {
+      if (packagesDownloadsChart) {
+        packagesDownloadsChart.destroy();
+        packagesDownloadsChart = null;
+      }
+      return;
+    }
 
     const displayDatasets = presentStages.map((s) => ({
       label: stageDisplayNames[s],
@@ -8753,7 +8807,14 @@ async function loadPkgevalData() {
 
 function updatePkgevalChart() {
   const reports = getPkgevalFilteredReports();
-  if (!reports.length) return;
+  if (!reports.length) {
+    // Don't leave a chart from the previous filter on screen
+    if (pkgevalChart) {
+      pkgevalChart.destroy();
+      pkgevalChart = null;
+    }
+    return;
+  }
 
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
@@ -8984,7 +9045,7 @@ function updatePkgevalTable() {
     const url = nanosoldierReportUrl("pkgeval", r.date_path || r.date);
     const t = r.total || 0;
     const pct = (v) => (t > 0 ? ((v / t) * 100).toFixed(1) : "0.0");
-    html += `<tr data-date="${escapeHtml(r.date)}" onclick="window.open('${url}', '_blank', 'noopener')">`;
+    html += `<tr data-date="${escapeHtml(r.date)}" data-report-url="${escapeHtml(url)}">`;
     html += `<td>${escapeHtml(r.date)}</td>`;
     html += `<td>${escapeHtml(r.version || "")}</td>`;
     html += `<td class="num">${t.toLocaleString()}</td>`;
@@ -8996,6 +9057,9 @@ function updatePkgevalTable() {
     html += "</tr>";
   }
   tbody.innerHTML = html;
+  tbody.querySelectorAll("tr[data-report-url]").forEach((tr) => {
+    tr.onclick = () => window.open(tr.dataset.reportUrl, "_blank", "noopener");
+  });
 }
 
 loadData();
@@ -9060,12 +9124,9 @@ setInterval(() => {
 window
   .matchMedia("(prefers-color-scheme: dark)")
   .addEventListener("change", () => {
+    // applyTheme() re-renders every chart itself; when a forced light/dark
+    // theme is set the OS flip changes nothing, so skip the re-render.
     if (currentTheme() === "system") applyTheme();
-    if (selectedJobs.size > 0) updateChart();
-    if (benchChart) updateBenchChart();
-    if (packagesDownloadsChart) updatePackagesDownloadsChart();
-    if (pkgevalChart) updatePkgevalChart();
-    if (commitsChart) renderCommitsView();
   });
 
 function currentTheme() {

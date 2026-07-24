@@ -13,6 +13,12 @@ permissions:
   pages: write
   id-token: write
 
+# One update at a time: a push-triggered run racing a scheduled run could
+# otherwise deploy stale data over fresh or fail the data push.
+concurrency:
+  group: update-timing
+  cancel-in-progress: false
+
 jobs:
   fetch-and-update:
     # Only run data fetch on schedule, manual trigger, or workflow/fetcher changes
@@ -68,6 +74,8 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update timing data"
+            # main may have advanced during the long fetch step
+            git pull --rebase origin main
             git push
           fi
 

@@ -19,6 +19,8 @@
   --color-attention-fg: #9a6700;
   --color-attention-subtle: rgba(212, 167, 44, 0.4);
   --color-attention-emphasis: #bf8700;
+  --color-attention-muted: #d4a72c;
+  --color-canvas-overlay: #ffffff;
   --color-neutral-subtle: rgba(175, 184, 193, 0.1);
   --color-btn-bg: #f6f8fa;
   --color-btn-border: rgba(31, 35, 40, 0.15);
@@ -46,14 +48,16 @@
     --color-accent-fg: #58a6ff;
     --color-accent-emphasis: #1f6feb;
     --color-success-fg: #3fb950;
-    --color-success-subtle: rgba(46, 160, 67, 1);
+    --color-success-subtle: rgba(46, 160, 67, 0.15);
     --color-danger-fg: #f85149;
-    --color-danger-subtle: rgba(248, 81, 73, 1);
+    --color-danger-subtle: rgba(248, 81, 73, 0.15);
     --color-severe-fg: #db6d28;
     --color-attention-fg: #d29922;
     --color-attention-subtle: rgba(210, 153, 34, 0.5);
     --color-attention-emphasis: #f0b429;
-    --color-neutral-subtle: rgba(110, 118, 129, 1);
+    --color-attention-muted: rgba(187, 128, 9, 0.4);
+    --color-canvas-overlay: #161b22;
+    --color-neutral-subtle: rgba(110, 118, 129, 0.1);
     --color-btn-bg: #21262d;
     --color-btn-border: rgba(240, 246, 252, 0.1);
     --color-btn-hover-bg: #30363d;
@@ -78,14 +82,16 @@
   --color-accent-fg: #58a6ff;
   --color-accent-emphasis: #1f6feb;
   --color-success-fg: #3fb950;
-  --color-success-subtle: rgba(46, 160, 67, 1);
+  --color-success-subtle: rgba(46, 160, 67, 0.15);
   --color-danger-fg: #f85149;
-  --color-danger-subtle: rgba(248, 81, 73, 1);
+  --color-danger-subtle: rgba(248, 81, 73, 0.15);
   --color-severe-fg: #db6d28;
   --color-attention-fg: #d29922;
   --color-attention-subtle: rgba(210, 153, 34, 0.5);
   --color-attention-emphasis: #f0b429;
-  --color-neutral-subtle: rgba(110, 118, 129, 1);
+  --color-attention-muted: rgba(187, 128, 9, 0.4);
+  --color-canvas-overlay: #161b22;
+  --color-neutral-subtle: rgba(110, 118, 129, 0.1);
   --color-btn-bg: #21262d;
   --color-btn-border: rgba(240, 246, 252, 0.1);
   --color-btn-hover-bg: #30363d;
@@ -1329,22 +1335,6 @@ body {
 .link-inherit:hover {
   text-decoration: underline;
 }
-.header-separator {
-  color: var(--color-fg-muted);
-  font-weight: 300;
-}
-.branch-badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 6px;
-  margin-left: 6px;
-  background: var(--color-accent-subtle);
-  color: var(--color-accent-fg);
-  border-radius: 12px;
-  vertical-align: middle;
-  cursor: help;
-}
 .link-no-underline {
   text-decoration: none;
 }
@@ -1696,20 +1686,6 @@ body {
   text-align: center;
   color: var(--color-fg-muted);
 }
-.ci-subview-toggle {
-  display: inline-flex;
-}
-.ci-subview-toggle .btn {
-  border-radius: 0;
-}
-.ci-subview-toggle .btn:first-child {
-  border-top-left-radius: 6px;
-  border-bottom-left-radius: 6px;
-}
-.ci-subview-toggle .btn:last-child {
-  border-top-right-radius: 6px;
-  border-bottom-right-radius: 6px;
-}
 
 /* Benchmarks view */
 .benchmarks-main {
@@ -1869,9 +1845,6 @@ body {
 .benchmarks-stats tr:hover {
   background: var(--color-neutral-muted);
 }
-.benchmarks-stats tr.selected-group {
-  background: var(--color-accent-subtle);
-}
 .benchmarks-stats td.bench-time {
   text-align: right;
 }
@@ -1908,16 +1881,6 @@ body {
   font-size: 12px;
   color: var(--color-fg-muted, var(--color-fg-default));
   white-space: nowrap;
-}
-.bench-methodology-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--color-fg-muted, var(--color-fg-default));
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
 }
 .bench-noisy-min-ns-label[hidden] {
   display: none;
@@ -2228,6 +2191,12 @@ body {
 }
 .commits-chart-container .chart-wrapper {
   position: relative;
+  /* Neutralize the absolute-positioning offsets from the base rule */
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  width: 100%;
   height: 100%;
 }
 .commits-regressions {
@@ -2241,6 +2210,9 @@ body {
   font-size: 12px;
   color: var(--color-fg-muted);
   margin: 0 0 8px;
+}
+.commits-reg-table-wrapper {
+  overflow-x: auto;
 }
 .commits-reg-table {
   border-collapse: collapse;
