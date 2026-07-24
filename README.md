@@ -1,7 +1,7 @@
 # Julia Performance
 
 Dashboard for Julia language performance: nightly benchmarks (Nanosoldier),
-[CI build/test timing](https://buildkite.com/julialang/julia-master), and PkgEval results.
+[CI build/test timing](https://buildkite.com/julialang/julia-ci), and PkgEval results.
 
 **Live:** <https://JuliaCI.github.io/julia-ci-timing/> (also at <https://perf.julialang.org/>)
 
@@ -12,7 +12,9 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
 - `fetch_benchmarks.jl` — Nanosoldier benchmark history
 - `fetch_pkgeval.jl` — PkgEval reports
 - `fetch_packages.jl` — Package download aggregates from public package-server rollups
-- `fetch_timing.jl` — Buildkite job timings (`julia-master`, `julia-master-scheduled`)
+- `fetch_timing.jl` — Buildkite job timings (`julia-ci`, plus the legacy
+  `julia-master` and `julia-master-scheduled` pipelines, which stopped
+  receiving builds in July 2026)
 
 ## PR comparison
 

@@ -34,10 +34,26 @@
       })();
     </script>
     <link rel="apple-touch-icon" href="favicon.svg" />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+      integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
+      integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"
+      integrity="sha384-dwwI6ICEN/0ZQlS5owhUa/6ZzvwUPmjH45bFVCAcjgjTulbHJvlE+TGU3g1k0N3R"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"
+      integrity="sha384-3N9GHhCtN3CQef6tNfqgZlv7sQLYIkcChN+uaTZ7xVdzKYp/SjBNPxa92+hM7EAY"
+      crossorigin="anonymous"
+    ></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -66,9 +82,9 @@
         >
       </h1>
       <div class="tab-nav" role="tablist" aria-label="Dashboard pages">
-        <div class="tab-group">
-          <span class="tab-group-label">Benchmarks</span>
-          <div class="tab-group-buttons">
+        <div class="tab-group" role="presentation">
+          <span class="tab-group-label" aria-hidden="true">Benchmarks</span>
+          <div class="tab-group-buttons" role="presentation">
             <button
               class="tab-btn active"
               id="tab-perf"
@@ -95,9 +111,9 @@
             </button>
           </div>
         </div>
-        <div class="tab-group">
-          <span class="tab-group-label">CI</span>
-          <div class="tab-group-buttons">
+        <div class="tab-group" role="presentation">
+          <span class="tab-group-label" aria-hidden="true">CI</span>
+          <div class="tab-group-buttons" role="presentation">
             <button
               class="tab-btn"
               id="tab-ci-timing"
@@ -136,9 +152,9 @@
             </button>
           </div>
         </div>
-        <div class="tab-group">
-          <span class="tab-group-label">Ecosystem</span>
-          <div class="tab-group-buttons">
+        <div class="tab-group" role="presentation">
+          <span class="tab-group-label" aria-hidden="true">Ecosystem</span>
+          <div class="tab-group-buttons" role="presentation">
             <button
               class="tab-btn"
               id="tab-packages"
@@ -359,7 +375,7 @@
       class="main view-hidden"
       id="ci-timing-view"
       role="tabpanel"
-      aria-labelledby="tab-ci-timing tab-ci-workers"
+      aria-labelledby="tab-ci-timing tab-ci-commits tab-ci-workers"
       tabindex="0"
     >
       <div class="ci-toolbar" id="ci-timing-controls">
@@ -467,7 +483,7 @@
             <div
               class="job-matrix"
               id="job-matrix"
-              role="grid"
+              role="group"
               aria-label="Platform and test type matrix"
             >
               <div class="loading">Loading...</div>
@@ -520,7 +536,7 @@
             <div
               class="job-list"
               id="job-list"
-              role="listbox"
+              role="group"
               aria-label="Available jobs"
             >
               <div class="loading">Loading jobs...</div>
@@ -768,7 +784,7 @@
             onclick="togglePackagesMinorDropdown(event)"
             aria-label="Julia minor version filter"
           >
-            <span id="packages-minor-filter-label">All julia minor versions</span>
+            <span id="packages-minor-filter-label">All Julia minor versions</span>
           </button>
           <div class="checkbox-dropdown-menu" id="packages-minor-filter-menu"></div>
         </div>
