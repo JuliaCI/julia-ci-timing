@@ -25,7 +25,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'fetch_timing.jl') || contains(github.event.head_commit.modified, 'fetch_benchmarks.jl') || contains(github.event.head_commit.modified, 'fetch_pkgeval.jl') || contains(github.event.head_commit.modified, 'fetch_packages.jl') || contains(github.event.head_commit.modified, '.github/workflows/update-timing.yml')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v3
@@ -88,7 +88,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: main  # Get latest after data update
 
