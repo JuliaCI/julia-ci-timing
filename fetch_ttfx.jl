@@ -19,8 +19,9 @@ const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
 const API_BASE = "https://api.buildkite.com/v2"
 const OUTPUT = joinpath("data", "ttfx_summary.json.gz")
-# Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml)
-const TTFX_JOB = r"\bTTFX\s+(\S+)"
+# Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml); the
+# triplet keeps the group's "Launch TTFX benchmark jobs" step from matching
+const TTFX_JOB = r"\bTTFX\s+([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this
 const METRICS = ("precompile", "load", "run", "warm")
@@ -70,6 +71,8 @@ function load_existing()
         if isfile(OUTPUT)
             data = JSON3.read(transcode(GzipDecompressor, read(OUTPUT)))
             rows = [Dict{String,Any}(String(k) => v for (k, v) in pairs(r)) for r in get(data, :builds, [])]
+            # Rows an earlier version made from the launch step, which has no artifacts
+            filter!(r -> match(r"^[a-z0-9_]+-[a-z0-9_-]+$", String(get(r, "triplet", ""))) !== nothing, rows)
             @info "Loaded existing TTFX summary" rows=length(rows)
             return rows
         end

@@ -9153,12 +9153,14 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric) {
   return Math.exp(s / tasks.length);
 }
 
-// The selected tasks measured in every build of the range that measured
-// anything at all: the suite line's composition must not move over time.
-function ttfxCommonTasks(builds, tasks) {
+// The selected tasks with a value for `metric` in every build of the range
+// that measured anything at all: the suite line's composition must not move
+// over time. Per metric, since a task's run can round to 0 while its
+// precompile is fine.
+function ttfxCommonTasks(builds, tasks, metric = ttfxMetric) {
   const measured = builds.filter((b) => b.tasks && Object.keys(b.tasks).length > 0);
   if (!measured.length) return [];
-  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t) != null));
+  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric) != null));
 }
 
 function formatTtfxSeconds(s) {
@@ -9368,7 +9370,7 @@ function populateTtfxTaskList() {
     // data-task + delegated listener: see populateBenchGroupList
     html += `<div class="group-item ${selected ? "selected" : ""} ${failedMsg ? "failed" : ""}" data-task="${escapeHtml(t)}" title="${escapeHtml(title)}">`;
     html += `<span class="color-dot" style="background: ${ttfxTaskColors[t] || "#888"}"></span>`;
-    html += `<span>${escapeHtml(t)}</span>`;
+    html += `<span class="task-name">${escapeHtml(t)}</span>`;
     html += `<span class="task-latest">${escapeHtml(latestLabel)}</span>`;
     html += `</div>`;
   }
@@ -9588,8 +9590,7 @@ function updateTtfxChart() {
 function updateTtfxSummaryCharts() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
-  const common = ttfxCommonTasks(builds, tasks);
-  if (!builds.length || common.length < 1) {
+  if (!builds.length || !tasks.length) {
     destroyTtfxCharts();
     return;
   }
@@ -9606,6 +9607,7 @@ function updateTtfxSummaryCharts() {
   };
   for (const [metric, m] of Object.entries(TTFX_METRICS)) {
     const canvas = document.getElementById("ttfx-chart-" + metric);
+    const common = ttfxCommonTasks(builds, tasks, metric);
     const options = ttfxChartOptions({
       metricLabel: m.label,
       title: `${m.label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
@@ -9675,7 +9677,8 @@ function updateTtfxTable() {
 function renderTtfxBuildsTable() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
-  const common = ttfxCommonTasks(builds, tasks);
+  const common = {};
+  for (const metric of Object.keys(TTFX_METRICS)) common[metric] = ttfxCommonTasks(builds, tasks, metric);
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metricCols = Object.entries(TTFX_METRICS);
@@ -9683,8 +9686,8 @@ function renderTtfxBuildsTable() {
     "<tr><th>Date</th><th>Commit</th><th>Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
     metricCols
       .map(
-        ([, m]) =>
-          `<th class="num" title="Geometric mean over the ${common.length} selected tasks measured in every build of the range">${m.label}</th>`,
+        ([key, m]) =>
+          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${m.label.toLowerCase()} value in every build of the range">${m.label}</th>`,
       )
       .join("") +
     "<th>Message</th></tr>";
@@ -9707,7 +9710,7 @@ function renderTtfxBuildsTable() {
     html += `<td>${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const [key] of metricCols) {
-      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common, key))}</td>`;
+      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}</td>`;
     }
     html += `<td class="msg" title="${escapeHtml(b.message || "")}">${escapeHtml(b.message || "")}</td>`;
     html += "</tr>";
