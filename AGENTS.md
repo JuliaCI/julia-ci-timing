@@ -27,6 +27,24 @@ corresponds to the i-th `dates`/`commits` entry. `nothing` (or 0)
 means the benchmark was missing on that date, so always filter
 those out before computing anything. Times are nanoseconds.
 
+TTFX history (the CI → TTFX tab) is `data/ttfx_summary.json.gz`, written
+by `fetch_ttfx.jl` from the artifacts of the `TTFX` job on every julia-ci
+master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
+
+```text
+{
+  "tasks":  ["Package/Task", ...],
+  "builds": [ { "build", "job_id", "commit", "date", "version", "state",
+                "tasks":  { "Package/Task": [precompile, load, run, warm] },
+                "failed": { "Package/Task": "error" } }, ... ]
+}
+```
+
+Times are seconds, the minimum over the job's ABBA blocks; `load` and
+`run` are the cold first run of the task script, `warm` the best total
+of the later runs. `builds` is sorted by date. A build whose job failed
+before uploading has an empty `tasks`.
+
 ## Analysis helpers (`analysis/`)
 
 All scripts activate the repo's `Project.toml` automatically. Run

@@ -3883,6 +3883,11 @@ makeResizablePanel({
   targetId: "pkgeval-stats",
   storageKey: "pkgeval-stats-height",
 });
+makeResizablePanel({
+  handleId: "ttfx-resize-handle",
+  targetId: "ttfx-stats",
+  storageKey: "ttfx-stats-height",
+});
 
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
@@ -5674,6 +5679,7 @@ const TAB_URL_MAP = {
   "ci-timing": "ci-timing",
   "ci-commits": "ci-commits",
   "ci-workers": "ci-workers",
+  "ci-ttfx": "ci-ttfx",
   packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
 };
@@ -5730,6 +5736,13 @@ const DASHBOARD_PARAMS = new Set([
   "edv", // ecosystem downloads Julia minor filter
   "edp", // ecosystem downloads proportional toggle
   "edm", // ecosystem downloads view mode
+  "tm", // ttfx metric
+  "tt", // ttfx time range
+  "tn", // ttfx normalized (% change) toggle
+  "tk", // ttfx selected tasks
+  "tx", // ttfx excluded tasks (when most are selected)
+  "tv", // ttfx table view
+  "ts", // ttfx chart mode (summary or per task)
   "perf", // legacy: full iframe path
 ]);
 
@@ -5806,6 +5819,7 @@ function switchTab(tab) {
     "ci-timing": "tab-ci-timing",
     "ci-commits": "tab-ci-commits",
     "ci-workers": "tab-ci-workers",
+    "ci-ttfx": "tab-ci-ttfx",
     packages: "tab-packages",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
@@ -5846,6 +5860,9 @@ function switchTab(tab) {
     .getElementById("pkgeval-view")
     .classList.toggle("view-hidden", tab !== "pkgeval");
   document
+    .getElementById("ttfx-view")
+    .classList.toggle("view-hidden", tab !== "ci-ttfx");
+  document
     .getElementById("perf-view")
     .classList.toggle("view-hidden", tab !== "perf");
   document.body.classList.toggle("tab-perf-active", tab === "perf");
@@ -5855,6 +5872,9 @@ function switchTab(tab) {
   }
   if (tab === "pkgeval" && !pkgevalData) {
     loadPkgevalData();
+  }
+  if (tab === "ci-ttfx" && !ttfxData) {
+    loadTtfxData();
   }
   if (tab === "packages" && !packagesDownloadsData) {
     loadPackagesDownloadsData();
@@ -9062,12 +9082,752 @@ function updatePkgevalTable() {
   });
 }
 
+// === CI TTFX (Julia-TTFX-Snippets on every master build) ===
+// data/ttfx_summary.json.gz, from fetch_ttfx.jl: one row per julia-ci TTFX
+// job, with each task's per-metric minimum over the job's ABBA blocks as
+// [precompile, load, run, warm] seconds. Failed tasks are in row.failed.
+let ttfxData = null;
+let ttfxChart = null; // per-task chart
+let ttfxSummaryCharts = {}; // metric => chart, summary mode
+let ttfxMode = "summary"; // "summary" | "tasks"
+let ttfxMetric = "precompile";
+let ttfxTimeRangeDays = 90;
+let ttfxNormalized = false;
+let ttfxSelectedTasks = new Set();
+let ttfxTaskColors = {};
+let ttfxTableView = "builds"; // "builds" | "tasks"
+let ttfxTaskSortCol = "latest";
+let ttfxTaskSortAsc = false;
+
+const TTFX_METRICS = {
+  precompile: { label: "Precompile", index: 0 },
+  load: { label: "Load (cold)", index: 1 },
+  run: { label: "Run (cold)", index: 2 },
+  warm: { label: "Load+run (warm)", index: 3 },
+};
+const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
+const TTFX_SUITE_LABEL = "Suite geomean";
+
+function ttfxJobUrl(b) {
+  return `https://buildkite.com/julialang/julia-ci/builds/${b.build}#${b.job_id}`;
+}
+
+// Row dates are "yyyy-mm-dd HH:MM" in UTC (Buildkite created_at)
+function ttfxBuildTime(b) {
+  return new Date(b.date.replace(" ", "T") + ":00Z").getTime();
+}
+
+function ttfxValue(b, task, metric = ttfxMetric) {
+  const v = b.tasks && b.tasks[task];
+  if (!v) return null;
+  const x = v[TTFX_METRICS[metric].index];
+  return x == null || !(x > 0) ? null : x;
+}
+
+function ttfxAllTasks() {
+  return ttfxData ? ttfxData.tasks || [] : [];
+}
+
+function getTtfxFilteredBuilds() {
+  if (!ttfxData) return [];
+  const builds = ttfxData.builds || [];
+  if (ttfxTimeRangeDays === 0) return builds;
+  const cutoff = Date.now() - ttfxTimeRangeDays * 86400 * 1000;
+  return builds.filter((b) => ttfxBuildTime(b) >= cutoff);
+}
+
+function ttfxSelectedList() {
+  return ttfxAllTasks().filter((t) => ttfxSelectedTasks.has(t));
+}
+
+// Geometric mean of `metric` over `tasks` in one build; null unless every
+// task has a value, so the number always describes the same set of tasks.
+function ttfxGeomean(b, tasks, metric = ttfxMetric) {
+  if (!tasks.length) return null;
+  let s = 0;
+  for (const t of tasks) {
+    const v = ttfxValue(b, t, metric);
+    if (v == null) return null;
+    s += Math.log(v);
+  }
+  return Math.exp(s / tasks.length);
+}
+
+// The selected tasks measured in every build of the range that measured
+// anything at all: the suite line's composition must not move over time.
+function ttfxCommonTasks(builds, tasks) {
+  const measured = builds.filter((b) => b.tasks && Object.keys(b.tasks).length > 0);
+  if (!measured.length) return [];
+  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t) != null));
+}
+
+function formatTtfxSeconds(s) {
+  if (s == null) return "–";
+  if (s >= 100) return s.toFixed(0) + "s";
+  if (s >= 10) return s.toFixed(1) + "s";
+  return s.toFixed(2) + "s";
+}
+
+function formatTtfxPct(p) {
+  if (p == null || !isFinite(p)) return "–";
+  return (p > 0 ? "+" : "") + p.toFixed(1) + "%";
+}
+
+function ttfxPctClass(p) {
+  if (p == null || !isFinite(p) || Math.abs(p) < 5) return "";
+  return p > 0 ? "ttfx-up" : "ttfx-down";
+}
+
+function setTtfxMetric(val) {
+  if (!TTFX_METRICS[val]) return;
+  ttfxMetric = val;
+  document.getElementById("ttfx-metric").value = val;
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function setTtfxTimeRange(val) {
+  ttfxTimeRangeDays = parseInt(val, 10);
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function toggleTtfxNormalized() {
+  ttfxNormalized = !ttfxNormalized;
+  document.getElementById("ttfx-btn-normalize").textContent = ttfxNormalized
+    ? "Show seconds"
+    : "Show %";
+  updateTtfxChart();
+  updateTtfxURL();
+}
+
+function setTtfxTableView(view) {
+  ttfxTableView = view === "tasks" ? "tasks" : "builds";
+  for (const v of ["builds", "tasks"]) {
+    document
+      .getElementById("ttfx-view-" + v)
+      .classList.toggle("btn-primary", v === ttfxTableView);
+  }
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function toggleTtfxTask(task) {
+  if (ttfxSelectedTasks.has(task)) ttfxSelectedTasks.delete(task);
+  else ttfxSelectedTasks.add(task);
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function selectAllTtfxTasks() {
+  ttfxSelectedTasks = new Set(ttfxAllTasks());
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function deselectAllTtfxTasks() {
+  ttfxSelectedTasks.clear();
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function updateTtfxURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  const setOrDelete = (k, v, isDefault) => {
+    if (isDefault) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  };
+  setOrDelete("tm", ttfxMetric, ttfxMetric === "precompile");
+  setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
+  setOrDelete("tn", "1", !ttfxNormalized);
+  setOrDelete("tv", ttfxTableView, ttfxTableView === "builds");
+  setOrDelete("ts", ttfxMode, ttfxMode === "summary");
+  // Whichever of the selected or the excluded tasks is the shorter list
+  const all = ttfxAllTasks();
+  const selected = ttfxSelectedList();
+  const excluded = all.filter((t) => !ttfxSelectedTasks.has(t));
+  const useExcluded = excluded.length < selected.length;
+  setOrDelete("tk", selected.join(","), !ttfxData || useExcluded || !excluded.length);
+  setOrDelete("tx", excluded.join(","), !ttfxData || !useExcluded || !excluded.length);
+  history.replaceState(null, "", url);
+}
+
+// Task selection is applied once the data is loaded (the task list is in it)
+let ttfxURLTasks = null;
+let ttfxURLExcluded = null;
+
+function applyTtfxURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const tm = params.get("tm");
+  if (tm && TTFX_METRICS[tm]) {
+    ttfxMetric = tm;
+    document.getElementById("ttfx-metric").value = tm;
+  }
+  const tt = params.get("tt");
+  if (tt !== null) {
+    const days = parseInt(tt, 10);
+    if (TTFX_TIME_RANGES.includes(days)) {
+      ttfxTimeRangeDays = days;
+      document.getElementById("ttfx-time-range").value = days;
+    }
+  }
+  if (params.get("tn") === "1") {
+    ttfxNormalized = true;
+    document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
+  }
+  if (params.get("ts") === "tasks") {
+    ttfxMode = "tasks";
+    document.getElementById("ttfx-mode-summary").classList.remove("btn-primary");
+    document.getElementById("ttfx-mode-tasks").classList.add("btn-primary");
+    document.getElementById("ttfx-summary-grid").hidden = true;
+    document.getElementById("ttfx-single").hidden = false;
+  }
+  const tv = params.get("tv");
+  if (tv === "tasks") {
+    ttfxTableView = "tasks";
+    document.getElementById("ttfx-view-builds").classList.remove("btn-primary");
+    document.getElementById("ttfx-view-tasks").classList.add("btn-primary");
+  }
+  const tk = params.get("tk");
+  if (tk !== null) ttfxURLTasks = tk.split(",").filter(Boolean);
+  const tx = params.get("tx");
+  if (tx !== null) ttfxURLExcluded = new Set(tx.split(",").filter(Boolean));
+}
+
+async function loadTtfxData() {
+  try {
+    ttfxData = await loadGzipJson("data/ttfx_summary.json.gz");
+
+    const updatedEl = document.getElementById("ttfx-last-updated");
+    updatedEl.textContent = `Updated ${timeAgo(ttfxData.generated_at)}`;
+    updatedEl.title = ttfxData.generated_at;
+
+    const tasks = ttfxAllTasks();
+    const colors = generateColors(tasks.length);
+    ttfxTaskColors = {};
+    tasks.forEach((t, i) => (ttfxTaskColors[t] = colors[i]));
+    const known = new Set(tasks);
+    ttfxSelectedTasks =
+      ttfxURLTasks !== null
+        ? new Set(ttfxURLTasks.filter((t) => known.has(t)))
+        : ttfxURLExcluded !== null
+          ? new Set(tasks.filter((t) => !ttfxURLExcluded.has(t)))
+          : new Set(tasks);
+    ttfxURLTasks = null;
+    ttfxURLExcluded = null;
+
+    document.getElementById("ttfx-chart-loading").style.display = "none";
+    populateTtfxTaskList();
+    updateTtfxChart();
+    updateTtfxTable();
+  } catch (err) {
+    console.error("Failed to load TTFX data:", err);
+    document.getElementById("ttfx-chart-loading").innerHTML =
+      '<span class="error">No TTFX data. It appears once the update workflow has run <code>fetch_ttfx.jl</code> against a julia-ci build with a finished TTFX job.</span>';
+    document.getElementById("ttfx-task-list").innerHTML =
+      '<div class="group-header">Tasks</div><div class="error">Failed to load</div>';
+    document.getElementById("ttfx-stats-tbody").innerHTML =
+      '<tr><td class="error">Failed to load data</td></tr>';
+  }
+}
+
+// Latest build in range with any measurement, for the sidebar and tables
+function ttfxLatestMeasured(builds) {
+  for (let i = builds.length - 1; i >= 0; i--) {
+    const b = builds[i];
+    if (b.tasks && Object.keys(b.tasks).length > 0) return b;
+  }
+  return null;
+}
+
+function populateTtfxTaskList() {
+  const container = document.getElementById("ttfx-task-list");
+  const tasks = ttfxAllTasks();
+  const latest = ttfxLatestMeasured(getTtfxFilteredBuilds());
+  const metricLabel = TTFX_METRICS[ttfxMetric].label.toLowerCase();
+
+  let html = `<div class="group-header">Tasks (${ttfxSelectedTasks.size}/${tasks.length})</div>`;
+  for (const t of tasks) {
+    const selected = ttfxSelectedTasks.has(t);
+    const failedMsg = latest && latest.failed && latest.failed[t];
+    const v = latest ? ttfxValue(latest, t) : null;
+    const latestLabel = failedMsg ? "failed" : v == null ? "" : formatTtfxSeconds(v);
+    const title = failedMsg
+      ? `${t}: fails on the latest build: ${failedMsg}`
+      : `${t}${v != null ? `: ${metricLabel} ${formatTtfxSeconds(v)} on the latest build` : ""}`;
+    // data-task + delegated listener: see populateBenchGroupList
+    html += `<div class="group-item ${selected ? "selected" : ""} ${failedMsg ? "failed" : ""}" data-task="${escapeHtml(t)}" title="${escapeHtml(title)}">`;
+    html += `<span class="color-dot" style="background: ${ttfxTaskColors[t] || "#888"}"></span>`;
+    html += `<span>${escapeHtml(t)}</span>`;
+    html += `<span class="task-latest">${escapeHtml(latestLabel)}</span>`;
+    html += `</div>`;
+  }
+  container.innerHTML = html;
+  for (const el of container.querySelectorAll(".group-item[data-task]")) {
+    el.addEventListener("click", () => toggleTtfxTask(el.dataset.task));
+    el.addEventListener("mouseenter", () => highlightTtfxDataset(el.dataset.task));
+    el.addEventListener("mouseleave", () => highlightTtfxDataset(null));
+  }
+}
+
+// Dim every dataset but `label`; null restores
+function highlightTtfxDataset(label) {
+  if (!ttfxChart) return;
+  for (const ds of ttfxChart.data.datasets) {
+    const on = label === null || ds.label === label;
+    ds.borderColor = on ? ds._color : fadeColor(ds._color, 0.12);
+    ds.backgroundColor = ds.borderColor;
+  }
+  ttfxChart.update("none");
+}
+
+function highlightTtfxRow(build) {
+  const tbody = document.getElementById("ttfx-stats-tbody");
+  const prev = tbody.querySelector("tr.highlight");
+  if (prev) prev.classList.remove("highlight");
+  if (build == null) return;
+  const row = tbody.querySelector(`tr[data-build="${build}"]`);
+  if (!row) return;
+  row.classList.add("highlight");
+  const container = tbody.closest(".ttfx-stats");
+  const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
+  const rowRect = row.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
+  if (rowRect.top < containerRect.top + headerHeight || rowRect.bottom > containerRect.bottom) {
+    container.scrollTo({ top: row.offsetTop - headerHeight - 4, behavior: "smooth" });
+  }
+}
+
+// Chart options shared by the per-task chart and the summary panels.
+// `normalized` series are % change from the first build in range.
+function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
+  const isDark = isDarkMode();
+  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const fmt = ttfxNormalized ? formatTtfxPct : formatTtfxSeconds;
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    normalized: true,
+    // One point at a time: with every task on the chart an index tooltip
+    // would list them all
+    interaction: { mode: "nearest", intersect: false },
+    elements: { line: { tension: 0 } },
+    plugins: {
+      title: title
+        ? { display: true, text: title, color: textColor, font: { size: 12, weight: "600" }, padding: { top: 2, bottom: 6 } }
+        : { display: false },
+      legend: {
+        display: legendDisplay,
+        labels: {
+          color: textColor,
+          usePointStyle: true,
+          pointStyle: "circle",
+          boxWidth: 8,
+          boxHeight: 8,
+          padding: 12,
+        },
+      },
+      tooltip: {
+        usePointStyle: true,
+        boxPadding: 4,
+        callbacks: {
+          title: (items) => {
+            if (!items.length) return "";
+            const b = items[0].raw.build;
+            return `${b.date}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
+          },
+          label: (item) => {
+            const ds = item.dataset;
+            const label = ds._common ? `${ds.label} (${ds._common} tasks)` : ds.label;
+            return ` ${label}: ${fmt(item.raw.y)}`;
+          },
+          footer: (items) => {
+            if (!items.length) return "";
+            const b = items[0].raw.build;
+            const failed = b.failed ? Object.keys(b.failed).length : 0;
+            const lines = [];
+            const chart = items[0].chart;
+            const suite = chart.data.datasets.find((d) => d._common);
+            if (suite && !items[0].dataset._common) {
+              const p = suite.data.find((q) => q.build === b);
+              if (p) lines.push(`${TTFX_SUITE_LABEL} (${suite._common} tasks): ${fmt(p.y)}`);
+            }
+            lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
+            if (b.message) lines.push(b.message);
+            lines.push("Click to open the Buildkite job");
+            return lines;
+          },
+        },
+      },
+      zoom: {
+        pan: { enabled: true, mode: "x", onPanComplete: onZoomChange },
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          drag: {
+            enabled: true,
+            backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
+          },
+          mode: "x",
+          onZoomComplete: onZoomChange,
+        },
+      },
+    },
+    onClick: (evt, elements, chart) => {
+      if (!elements.length) return;
+      const b = chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
+      if (b) window.open(ttfxJobUrl(b), "_blank", "noopener");
+    },
+    onHover: (evt, elements, chart) => {
+      evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
+      if (ttfxTableView !== "builds") return;
+      const b = elements.length
+        ? chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build
+        : null;
+      highlightTtfxRow(b ? b.build : null);
+    },
+    scales: {
+      x: {
+        type: "time",
+        time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
+        grid: { color: gridColor },
+        ticks: { color: textColor, maxRotation: 0, autoSkip: true },
+      },
+      y: {
+        grid: { color: gridColor },
+        ticks: { color: textColor, callback: (v) => (ttfxNormalized ? formatTtfxPct(v) : v + "s") },
+        title: {
+          display: true,
+          text: ttfxNormalized
+            ? `${metricLabel}, % change from first build in range`
+            : `${metricLabel} (seconds)`,
+          color: textColor,
+        },
+      },
+    },
+  };
+}
+
+// In % mode every series is rebased to its first point in range
+function ttfxRebase(pts) {
+  if (!ttfxNormalized || !pts.length) return pts;
+  const base = pts[0].y;
+  return pts.map((p) => ({ ...p, y: (p.y / base - 1) * 100 }));
+}
+
+function ttfxSuiteDataset(builds, common, metric) {
+  const isDark = isDarkMode();
+  const suiteColor = isDark ? "#e6edf3" : "#1f2328";
+  const pts = [];
+  for (const b of builds) {
+    const y = ttfxGeomean(b, common, metric);
+    if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
+  }
+  return {
+    label: TTFX_SUITE_LABEL,
+    data: ttfxRebase(pts),
+    _color: suiteColor,
+    _common: common.length,
+    borderColor: suiteColor,
+    backgroundColor: suiteColor,
+    borderWidth: 2.5,
+    pointRadius: 2.5,
+    order: 0,
+  };
+}
+
+function destroyTtfxCharts() {
+  if (ttfxChart) {
+    ttfxChart.destroy();
+    ttfxChart = null;
+  }
+  for (const k of Object.keys(ttfxSummaryCharts)) {
+    ttfxSummaryCharts[k].destroy();
+    delete ttfxSummaryCharts[k];
+  }
+}
+
+function resetTtfxZoom() {
+  if (ttfxChart) ttfxChart.resetZoom();
+  for (const c of Object.values(ttfxSummaryCharts)) c.resetZoom();
+  document.getElementById("ttfx-btn-reset-zoom").style.display = "none";
+}
+
+function setTtfxMode(mode) {
+  ttfxMode = mode === "tasks" ? "tasks" : "summary";
+  for (const m of ["summary", "tasks"]) {
+    document.getElementById("ttfx-mode-" + m).classList.toggle("btn-primary", m === ttfxMode);
+  }
+  document.getElementById("ttfx-summary-grid").hidden = ttfxMode !== "summary";
+  document.getElementById("ttfx-single").hidden = ttfxMode !== "tasks";
+  destroyTtfxCharts();
+  updateTtfxChart();
+  updateTtfxURL();
+}
+
+function updateTtfxChart() {
+  if (ttfxMode === "summary") updateTtfxSummaryCharts();
+  else updateTtfxTaskChart();
+}
+
+// One panel per metric: the geometric mean over the selected tasks that
+// every build in range measured. Zoom and pan are mirrored across panels.
+function updateTtfxSummaryCharts() {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const common = ttfxCommonTasks(builds, tasks);
+  if (!builds.length || common.length < 1) {
+    destroyTtfxCharts();
+    return;
+  }
+  let syncing = false;
+  const onZoomChange = ({ chart }) => {
+    document.getElementById("ttfx-btn-reset-zoom").style.display = "";
+    if (syncing) return;
+    syncing = true;
+    const { min, max } = chart.scales.x;
+    for (const other of Object.values(ttfxSummaryCharts)) {
+      if (other !== chart) other.zoomScale("x", { min, max }, "none");
+    }
+    syncing = false;
+  };
+  for (const [metric, m] of Object.entries(TTFX_METRICS)) {
+    const canvas = document.getElementById("ttfx-chart-" + metric);
+    const options = ttfxChartOptions({
+      metricLabel: m.label,
+      title: `${m.label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
+      legendDisplay: false,
+      onZoomChange,
+    });
+    options.scales.y.title.display = false;
+    if (ttfxSummaryCharts[metric]) ttfxSummaryCharts[metric].destroy();
+    ttfxSummaryCharts[metric] = new Chart(canvas, {
+      type: "line",
+      data: { datasets: [ttfxSuiteDataset(builds, common, metric)] },
+      options,
+    });
+  }
+}
+
+function updateTtfxTaskChart() {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const canvas = document.getElementById("ttfx-chart");
+  if (!builds.length || !tasks.length) {
+    destroyTtfxCharts();
+    return;
+  }
+
+  const datasets = [];
+  const common = ttfxCommonTasks(builds, tasks);
+  if (common.length >= 2) datasets.push(ttfxSuiteDataset(builds, common, ttfxMetric));
+  for (const t of tasks) {
+    const pts = [];
+    for (const b of builds) {
+      const y = ttfxValue(b, t);
+      if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
+    }
+    if (!pts.length) continue;
+    const color = ttfxTaskColors[t] || "#888";
+    datasets.push({
+      label: t,
+      data: ttfxRebase(pts),
+      _color: color,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 1,
+      pointRadius: 1.5,
+      order: 1,
+    });
+  }
+
+  const options = ttfxChartOptions({
+    metricLabel: TTFX_METRICS[ttfxMetric].label,
+    title: null,
+    legendDisplay: datasets.length <= 12,
+    onZoomChange: () => {
+      document.getElementById("ttfx-btn-reset-zoom").style.display = "";
+    },
+  });
+  if (ttfxChart) ttfxChart.destroy();
+  ttfxChart = new Chart(canvas, { type: "line", data: { datasets }, options });
+}
+
+function updateTtfxTable() {
+  if (!ttfxData) return;
+  if (ttfxTableView === "tasks") renderTtfxTasksTable();
+  else renderTtfxBuildsTable();
+}
+
+function renderTtfxBuildsTable() {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const common = ttfxCommonTasks(builds, tasks);
+  const thead = document.getElementById("ttfx-stats-thead");
+  const tbody = document.getElementById("ttfx-stats-tbody");
+  const metricCols = Object.entries(TTFX_METRICS);
+  thead.innerHTML =
+    "<tr><th>Date</th><th>Commit</th><th>Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
+    metricCols
+      .map(
+        ([, m]) =>
+          `<th class="num" title="Geometric mean over the ${common.length} selected tasks measured in every build of the range">${m.label}</th>`,
+      )
+      .join("") +
+    "<th>Message</th></tr>";
+  if (!builds.length) {
+    tbody.innerHTML = '<tr><td colspan="9">No data</td></tr>';
+    return;
+  }
+  let html = "";
+  for (const b of builds.slice().reverse()) {
+    const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
+    const failed = b.failed ? Object.keys(b.failed) : [];
+    const nRun = nOk + failed.length;
+    const tasksTitle = failed.length
+      ? "Failed: " + failed.map((t) => `${t}: ${b.failed[t]}`).join("\n")
+      : nRun ? "All tasks measured" : `Job ${b.state}: no results`;
+    const stateClass = nRun === 0 || failed.length ? "ttfx-failed" : "";
+    html += `<tr data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
+    html += `<td>${escapeHtml(b.date)}</td>`;
+    html += `<td><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
+    html += `<td>${escapeHtml(b.version || "")}</td>`;
+    html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
+    for (const [key] of metricCols) {
+      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common, key))}</td>`;
+    }
+    html += `<td class="msg" title="${escapeHtml(b.message || "")}">${escapeHtml(b.message || "")}</td>`;
+    html += "</tr>";
+  }
+  tbody.innerHTML = html;
+  tbody.querySelectorAll("tr[data-job-url]").forEach((tr) => {
+    tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
+  });
+}
+
+function sortTtfxTasksTable(col) {
+  if (ttfxTaskSortCol === col) ttfxTaskSortAsc = !ttfxTaskSortAsc;
+  else {
+    ttfxTaskSortCol = col;
+    ttfxTaskSortAsc = col === "task";
+  }
+  renderTtfxTasksTable();
+}
+
+function renderTtfxTasksTable() {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const thead = document.getElementById("ttfx-stats-thead");
+  const tbody = document.getElementById("ttfx-stats-tbody");
+  const metricLabel = TTFX_METRICS[ttfxMetric].label;
+  const cols = [
+    ["task", "Task", ""],
+    ["latest", "Latest", "num"],
+    ["median", "Median", "num"],
+    ["min", "Min", "num"],
+    ["max", "Max", "num"],
+    ["change", "Change", "num"],
+    ["n", "Builds", "num"],
+  ];
+  thead.innerHTML =
+    "<tr>" +
+    cols
+      .map(([key, label, cls]) => {
+        const arrow = ttfxTaskSortCol === key ? (ttfxTaskSortAsc ? " ▲" : " ▼") : "";
+        const title =
+          key === "change"
+            ? "Latest vs first build in range"
+            : key === "task" ? "" : `${metricLabel} over the builds in range`;
+        return `<th class="sortable ${cls}" data-col="${key}" title="${title}">${label}${arrow}</th>`;
+      })
+      .join("") +
+    "</tr>";
+  thead.querySelectorAll("th[data-col]").forEach((th) => {
+    th.onclick = () => sortTtfxTasksTable(th.dataset.col);
+  });
+
+  const rows = [];
+  const latestBuild = ttfxLatestMeasured(builds);
+  for (const t of tasks) {
+    const vals = [];
+    for (const b of builds) {
+      const v = ttfxValue(b, t);
+      if (v != null) vals.push(v);
+    }
+    const failedMsg = latestBuild && latestBuild.failed && latestBuild.failed[t];
+    if (!vals.length && !failedMsg) continue;
+    const sorted = vals.slice().sort((a, b) => a - b);
+    rows.push({
+      task: t,
+      latest: vals.length ? vals[vals.length - 1] : null,
+      median: vals.length ? sorted[Math.floor(sorted.length / 2)] : null,
+      min: vals.length ? sorted[0] : null,
+      max: vals.length ? sorted[sorted.length - 1] : null,
+      change: vals.length >= 2 ? (vals[vals.length - 1] / vals[0] - 1) * 100 : null,
+      n: vals.length,
+      failedMsg,
+    });
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7">No data</td></tr>';
+    return;
+  }
+  const col = ttfxTaskSortCol;
+  rows.sort((a, b) => {
+    let r;
+    if (col === "task") r = a.task.localeCompare(b.task);
+    else {
+      const av = a[col], bv = b[col];
+      if (av == null && bv == null) r = 0;
+      else if (av == null) r = 1;
+      else if (bv == null) r = -1;
+      else r = av - bv;
+      if (av == null || bv == null) return r; // nulls last either way
+    }
+    return ttfxTaskSortAsc ? r : -r;
+  });
+
+  let html = "";
+  for (const r of rows) {
+    html += `<tr data-task="${escapeHtml(r.task)}">`;
+    html += `<td><span class="color-dot" style="background:${ttfxTaskColors[r.task] || "#888"};margin-right:6px"></span>${escapeHtml(r.task)}`;
+    if (r.failedMsg) html += ` <span class="ttfx-failed" title="${escapeHtml(r.failedMsg)}">fails on latest</span>`;
+    html += `</td>`;
+    for (const k of ["latest", "median", "min", "max"]) {
+      html += `<td class="num">${formatTtfxSeconds(r[k])}</td>`;
+    }
+    html += `<td class="num ${ttfxPctClass(r.change)}">${formatTtfxPct(r.change)}</td>`;
+    html += `<td class="num">${r.n}</td>`;
+    html += "</tr>";
+  }
+  tbody.innerHTML = html;
+  tbody.querySelectorAll("tr[data-task]").forEach((tr) => {
+    tr.addEventListener("mouseenter", () => highlightTtfxDataset(tr.dataset.task));
+    tr.addEventListener("mouseleave", () => highlightTtfxDataset(null));
+    tr.onclick = () => toggleTtfxTask(tr.dataset.task);
+  });
+}
+
 loadData();
 
 // Apply benchmark URL params before potential tab switch
 applyBenchURLParams();
 applyPackagesURLParams();
 applyPkgevalURLParams();
+applyTtfxURLParams();
 applyPerfURLParams();
 
 // Switch to correct tab if URL says so
@@ -9176,6 +9936,7 @@ function applyTheme() {
   if (benchChart) updateBenchChart();
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
+  if (ttfxData) updateTtfxChart();
   if (commitsChart) renderCommitsView();
 }
 function cycleTheme() {

@@ -150,6 +150,18 @@
             >
               Workers
             </button>
+            <button
+              class="tab-btn"
+              id="tab-ci-ttfx"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ttfx-view"
+              tabindex="-1"
+              onclick="switchTab('ci-ttfx')"
+              title="Time-to-first-X on every master build: package precompile, load and run times of the Julia-TTFX-Snippets tasks"
+            >
+              TTFX
+            </button>
           </div>
         </div>
         <div class="tab-group" role="presentation">
@@ -876,6 +888,155 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="ttfx-main view-hidden"
+      id="ttfx-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-ttfx"
+      tabindex="0"
+    >
+      <div class="ttfx-toolbar">
+        <span class="bench-table-view-toggle" role="group" aria-label="Chart view">
+          <button
+            class="btn btn-primary"
+            id="ttfx-mode-summary"
+            onclick="setTtfxMode('summary')"
+            title="Every metric at once: the geometric mean over the selected tasks, one panel per metric"
+          >
+            Summary
+          </button>
+          <button
+            class="btn"
+            id="ttfx-mode-tasks"
+            onclick="setTtfxMode('tasks')"
+            title="One metric, one line per selected task"
+          >
+            Per task
+          </button>
+        </span>
+        <select
+          class="time-select"
+          id="ttfx-metric"
+          onchange="setTtfxMetric(this.value)"
+          aria-label="Metric"
+          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs."
+        >
+          <option value="precompile" selected>Precompile</option>
+          <option value="load">Load (cold)</option>
+          <option value="run">Run (cold)</option>
+          <option value="warm">Load+run (warm)</option>
+        </select>
+        <select
+          class="time-select"
+          id="ttfx-time-range"
+          onchange="setTtfxTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90" selected>Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="0">All time</option>
+        </select>
+        <button
+          class="btn"
+          id="ttfx-btn-normalize"
+          onclick="toggleTtfxNormalized()"
+          title="Plot every series as % change from its first build in the range"
+        >
+          Show %
+        </button>
+        <button class="btn" id="ttfx-btn-all" onclick="selectAllTtfxTasks()">
+          All tasks
+        </button>
+        <button class="btn" id="ttfx-btn-none" onclick="deselectAllTtfxTasks()">
+          None
+        </button>
+        <span
+          class="bench-table-view-toggle"
+          role="group"
+          aria-label="Table view"
+        >
+          <button
+            class="btn btn-primary"
+            id="ttfx-view-builds"
+            onclick="setTtfxTableView('builds')"
+            title="One row per master build: suite geometric means over the selected tasks"
+          >
+            By build
+          </button>
+          <button
+            class="btn"
+            id="ttfx-view-tasks"
+            onclick="setTtfxTableView('tasks')"
+            title="One row per task: the selected metric over the builds in range"
+          >
+            By task
+          </button>
+        </span>
+        <button
+          class="btn btn-primary"
+          id="ttfx-btn-reset-zoom"
+          onclick="resetTtfxZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <a
+          class="btn btn-link"
+          href="https://github.com/JuliaCI/julia-buildkite/blob/main/utilities/ttfx/README.md"
+          target="_blank"
+          rel="noopener"
+          title="How the TTFX job measures each task"
+          >Method</a
+        >
+        <span class="updated" id="ttfx-last-updated"></span>
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-sidebar" id="ttfx-task-list">
+          <div class="group-header">Tasks</div>
+          <div class="loading">Loading...</div>
+        </div>
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="ttfx-chart-loading">
+                <span class="loading">Loading TTFX data...</span>
+              </div>
+              <div class="ttfx-summary-grid" id="ttfx-summary-grid">
+                <div class="ttfx-panel"><canvas id="ttfx-chart-precompile"></canvas></div>
+                <div class="ttfx-panel"><canvas id="ttfx-chart-load"></canvas></div>
+                <div class="ttfx-panel"><canvas id="ttfx-chart-run"></canvas></div>
+                <div class="ttfx-panel"><canvas id="ttfx-chart-warm"></canvas></div>
+              </div>
+              <div class="ttfx-single" id="ttfx-single" hidden>
+                <canvas id="ttfx-chart"></canvas>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="ttfx-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize TTFX table"
+          ></div>
+          <div class="ttfx-stats" id="ttfx-stats" style="height: 280px">
+            <table>
+              <thead id="ttfx-stats-thead"></thead>
+              <tbody id="ttfx-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
