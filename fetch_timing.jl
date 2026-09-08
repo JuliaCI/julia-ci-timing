@@ -24,14 +24,37 @@ function get_token()
     return token
 end
 
+
+# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
+# when the server sends one. HTTP.jl's own retry layer never sees a status
+# code once status_exception is off, so this loop covers those.
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+    local resp
+    for attempt in 1:attempts
+        resp = try
+            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+        catch e
+            attempt == attempts && rethrow()
+            @warn "Request failed, retrying" url attempt error=e
+            sleep(2.0^attempt)
+            continue
+        end
+        (resp.status == 429 || resp.status >= 500) || return resp
+        attempt == attempts && return resp
+        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
+        @warn "Retrying after HTTP $(resp.status)" url wait attempt
+        sleep(wait)
+    end
+    return resp
+end
+
 function api_get(endpoint; token=get_token(), params=Dict())
     url = "$API_BASE/$endpoint"
     if !isempty(params)
         query = join(["$k=$v" for (k, v) in params], "&")
         url = "$url?$query"
     end
-    headers = ["Authorization" => "Bearer $token"]
-    resp = HTTP.get(url, headers; status_exception=false)
+    resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
     if resp.status != 200
         @warn "API request failed" url resp.status String(resp.body)
         return nothing
@@ -54,7 +77,12 @@ function fetch_pipeline_builds(pipeline; branch="master", per_page=100, max_page
             "page" => page
         )
         data = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds"; params)
-        data === nothing && break
+        if data === nothing
+            # Merging a partial listing would let the next run's threshold skip
+            # the builds behind the failed page for good; try again next run
+            @warn "Page $page of $pipeline failed; skipping this pipeline for this run"
+            return nothing
+        end
         isempty(data) && break
 
         new_in_page = 0
@@ -116,7 +144,7 @@ function extract_job_timings(builds, pipeline::String)
         # Extract commit message (first line only)
         raw_message = get(build, :message, "")
         message = isnothing(raw_message) ? "" : split(String(raw_message), '\n')[1]
-        message = length(message) > 80 ? message[1:77] * "..." : message
+        message = length(message) > 80 ? first(message, 77) * "..." : message
 
         # Extract author from creator
         creator = get(build, :creator, nothing)
@@ -210,7 +238,10 @@ function load_existing_data(output_dir)
             return data
         end
     catch e
-        @warn "Failed to load existing data, starting fresh" error=e
+        # Starting fresh here would commit a summary holding only the builds
+        # still on Buildkite over the whole history
+        @error "Failed to load existing data; refusing to rebuild from scratch" error=e
+        rethrow()
     end
     return Dict{String, Any}()
 end
@@ -527,13 +558,17 @@ function main()
     @info "Fully captured threshold" master=threshold.master scheduled=threshold.scheduled ci=threshold.ci
 
     @info "Fetching builds from Buildkite..."
-    ci_builds = fetch_pipeline_builds(CI_PIPELINE; max_pages=30, fully_captured_below=threshold.ci)
+    ci_builds = something(fetch_pipeline_builds(CI_PIPELINE; max_pages=30, fully_captured_below=threshold.ci), [])
     @info "Fetched julia-ci builds" count=length(ci_builds)
 
-    builds = fetch_pipeline_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master)
+    # The legacy pipelines stopped receiving builds in July 2026; once their
+    # history is in the summary there is nothing to page for
+    builds = threshold.master > 0 ? [] :
+        something(fetch_pipeline_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master), [])
     @info "Fetched julia-master builds" count=length(builds)
 
-    scheduled_builds = fetch_pipeline_builds(SCHEDULED_PIPELINE; max_pages=10, fully_captured_below=threshold.scheduled)
+    scheduled_builds = threshold.scheduled > 0 ? [] :
+        something(fetch_pipeline_builds(SCHEDULED_PIPELINE; max_pages=10, fully_captured_below=threshold.scheduled), [])
     @info "Fetched julia-master-scheduled builds" count=length(scheduled_builds)
 
     if isempty(ci_builds) && isempty(builds) && isempty(scheduled_builds) &&

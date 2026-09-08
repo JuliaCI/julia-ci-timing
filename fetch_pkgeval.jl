@@ -45,11 +45,34 @@ function date_path_to_date(path::String)
     "$(parts[1])-$(lpad(parts[2], 2, '0'))"
 end
 
+
+# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
+# when the server sends one. HTTP.jl's own retry layer never sees a status
+# code once status_exception is off, so this loop covers those.
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+    local resp
+    for attempt in 1:attempts
+        resp = try
+            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+        catch e
+            attempt == attempts && rethrow()
+            @warn "Request failed, retrying" url attempt error=e
+            sleep(2.0^attempt)
+            continue
+        end
+        (resp.status == 429 || resp.status >= 500) || return resp
+        attempt == attempts && return resp
+        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
+        @warn "Retrying after HTTP $(resp.status)" url wait attempt
+        sleep(wait)
+    end
+    return resp
+end
+
 function fetch_db_json(date_path::String)
     url = "$RAW_BASE/$date_path/db.json"
     try
-        resp = HTTP.get(url; retry=true, retries=3, connect_timeout=15, readtimeout=30,
-                        status_exception=false)
+        resp = http_get_retry(url; connect_timeout=15, readtimeout=30)
         resp.status == 200 || return nothing
         return JSON3.read(String(resp.body))
     catch e
