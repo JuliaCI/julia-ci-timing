@@ -5,6 +5,14 @@ Dashboard for Julia language performance: nightly benchmarks (Nanosoldier),
 
 **Live:** <https://JuliaCI.github.io/julia-ci-timing/> (also at <https://perf.julialang.org/>)
 
+Short paths open a tab directly and forward any other query parameters:
+[/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
+[/timing](https://perf.julialang.org/timing), [/commits](https://perf.julialang.org/commits),
+[/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
+[/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval).
+Each is a small redirect page under a directory of that name; the `?tab=` URLs
+they resolve to keep working as before.
+
 ## Data
 
 Fetched by the Julia scripts in this repo and cached under `data/`:

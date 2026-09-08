@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Julia Performance: CI: TTFX</title>
+    <meta name="robots" content="noindex" />
+    <!-- Shorthand for ../?tab=ci-ttfx. Any other query parameters and the
+         fragment are carried over, so /ttfx?tt=30 opens that view. -->
+    <script>
+      (function () {
+        var p = new URLSearchParams(location.search);
+        p.set("tab", "ci-ttfx");
+        location.replace("../?" + p.toString() + location.hash);
+      })();
+    </script>
+    <meta http-equiv="refresh" content="0; url=../?tab=ci-ttfx" />
+  </head>
+  <body>
+    <a href="../?tab=ci-ttfx">Julia Performance: CI: TTFX</a>
+  </body>
+</html>

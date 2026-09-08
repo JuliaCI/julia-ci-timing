@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Julia Performance: Ecosystem: Downloads</title>
+    <meta name="robots" content="noindex" />
+    <!-- Shorthand for ../?tab=ecosystem-downloads. Any other query parameters and the
+         fragment are carried over, so /downloads?tt=30 opens that view. -->
+    <script>
+      (function () {
+        var p = new URLSearchParams(location.search);
+        p.set("tab", "ecosystem-downloads");
+        location.replace("../?" + p.toString() + location.hash);
+      })();
+    </script>
+    <meta http-equiv="refresh" content="0; url=../?tab=ecosystem-downloads" />
+  </head>
+  <body>
+    <a href="../?tab=ecosystem-downloads">Julia Performance: Ecosystem: Downloads</a>
+  </body>
+</html>
