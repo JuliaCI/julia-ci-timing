@@ -5269,14 +5269,15 @@ function toggleSection(header) {
 
 // Restore collapsed section states from localStorage (mobile only)
 function restoreSectionStates() {
-  const isMobile = window.innerWidth <= 480;
+  const isMobile = window.innerWidth <= 768;
   document.querySelectorAll(".section-header[id]").forEach((header) => {
     const content = header.nextElementSibling;
     if (isMobile) {
-      // On mobile, restore saved state
+      // On mobile, restore saved state; collapsed until the user opens a
+      // section, so the chart is the first thing on screen
       try {
         const saved = localStorage.getItem(`section-${header.id}`);
-        if (saved === "1") {
+        if (saved === "1" || saved === null) {
           header.classList.add("collapsed");
           if (content) content.classList.add("collapsed");
         } else {
@@ -8107,6 +8108,8 @@ function updatePackagesDownloadsChart() {
     return;
   }
 
+  // Release labels collide on a phone-width chart; the lines stay
+  const showTagLabels = window.innerWidth > 600;
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
   const textColor = isDark ? "#8b949e" : "#656d76";
@@ -8344,7 +8347,7 @@ function updatePackagesDownloadsChart() {
         borderWidth: isFirstOfMinor ? 2 : 1,
         borderDash: isFirstOfMinor ? [] : [3, 3],
         label: {
-          display: true,
+          display: showTagLabels,
           content: tag.tag,
           enabled: true,
           z: 100,
@@ -8611,7 +8614,7 @@ function updatePackagesDownloadsChart() {
       borderWidth: isFirstOfMinor ? 2 : 1,
       borderDash: isFirstOfMinor ? [] : [3, 3],
       label: {
-        display: true,
+        display: showTagLabels,
         content: tag.tag,
         enabled: true,
         z: 100,
@@ -9074,13 +9077,13 @@ function updatePkgevalTable() {
     const pct = (v) => (t > 0 ? ((v / t) * 100).toFixed(1) : "0.0");
     html += `<tr data-date="${escapeHtml(r.date)}" data-report-url="${escapeHtml(url)}">`;
     html += `<td>${escapeHtml(r.date)}</td>`;
-    html += `<td>${escapeHtml(r.version || "")}</td>`;
+    html += `<td class="col-secondary">${escapeHtml(r.version || "")}</td>`;
     html += `<td class="num">${t.toLocaleString()}</td>`;
     html += `<td class="num pe-ok">${(r.ok || 0).toLocaleString()} <small>(${pct(r.ok || 0)}%)</small></td>`;
     html += `<td class="num pe-fail">${(r.fail || 0).toLocaleString()} <small>(${pct(r.fail || 0)}%)</small></td>`;
     html += `<td class="num pe-crash">${(r.crash || 0).toLocaleString()} <small>(${pct(r.crash || 0)}%)</small></td>`;
-    html += `<td class="num pe-skip">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
-    html += `<td class="num pe-kill">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
+    html += `<td class="num pe-skip col-secondary">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
+    html += `<td class="num pe-kill col-secondary">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;
@@ -9517,7 +9520,8 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
       },
       y: {
         grid: { color: gridColor },
-        ticks: { color: textColor, callback: (v) => (ttfxNormalized ? formatTtfxPct(v) : v + "s") },
+        // Tick values carry float noise (13.600000000000001) on fine steps
+        ticks: { color: textColor, callback: (v) => (ttfxNormalized ? formatTtfxPct(v) : parseFloat(v.toFixed(4)) + "s") },
         title: {
           display: true,
           text: ttfxNormalized
@@ -9690,14 +9694,14 @@ function renderTtfxBuildsTable() {
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metricCols = Object.entries(TTFX_METRICS);
   thead.innerHTML =
-    "<tr><th>Date</th><th>Commit</th><th>Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
+    "<tr><th>Date</th><th>Commit</th><th class=\"col-secondary\">Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
     metricCols
       .map(
         ([key, m]) =>
           `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${m.label.toLowerCase()} value in every build of the range">${m.label}</th>`,
       )
       .join("") +
-    "<th>Message</th></tr>";
+    '<th class="col-secondary">Message</th></tr>';
   if (!builds.length) {
     tbody.innerHTML = '<tr><td colspan="9">No data</td></tr>';
     return;
@@ -9714,12 +9718,12 @@ function renderTtfxBuildsTable() {
     html += `<tr data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
     html += `<td>${escapeHtml(b.date)}</td>`;
     html += `<td><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
-    html += `<td>${escapeHtml(b.version || "")}</td>`;
+    html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const [key] of metricCols) {
       html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}</td>`;
     }
-    html += `<td class="msg" title="${escapeHtml(b.message || "")}">${escapeHtml(b.message || "")}</td>`;
+    html += `<td class="msg col-secondary" title="${escapeHtml(b.message || "")}">${escapeHtml(b.message || "")}</td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;
@@ -9746,11 +9750,11 @@ function renderTtfxTasksTable() {
   const cols = [
     ["task", "Task", ""],
     ["latest", "Latest", "num"],
-    ["median", "Median", "num"],
-    ["min", "Min", "num"],
-    ["max", "Max", "num"],
+    ["median", "Median", "num col-secondary"],
+    ["min", "Min", "num col-secondary"],
+    ["max", "Max", "num col-secondary"],
     ["change", "Change", "num"],
-    ["n", "Builds", "num"],
+    ["n", "Builds", "num col-secondary"],
   ];
   thead.innerHTML =
     "<tr>" +
@@ -9817,10 +9821,10 @@ function renderTtfxTasksTable() {
     if (r.failedMsg) html += ` <span class="ttfx-failed" title="${escapeHtml(r.failedMsg)}">fails on latest</span>`;
     html += `</td>`;
     for (const k of ["latest", "median", "min", "max"]) {
-      html += `<td class="num">${formatTtfxSeconds(r[k])}</td>`;
+      html += `<td class="num ${k === "latest" ? "" : "col-secondary"}">${formatTtfxSeconds(r[k])}</td>`;
     }
     html += `<td class="num ${ttfxPctClass(r.change)}">${formatTtfxPct(r.change)}</td>`;
-    html += `<td class="num">${r.n}</td>`;
+    html += `<td class="num col-secondary">${r.n}</td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;
@@ -9889,6 +9893,15 @@ setInterval(() => {
     updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
   }
 }, AGO_UPDATE_INTERVAL);
+
+// The downloads chart decides at render time whether its release labels fit
+let packagesResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(packagesResizeTimer);
+  packagesResizeTimer = setTimeout(() => {
+    if (packagesDownloadsChart) updatePackagesDownloadsChart();
+  }, 250);
+});
 
 // Re-render chart when color scheme changes
 window

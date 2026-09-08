@@ -585,7 +585,7 @@ body {
   width: calc(100% - 28px);
 }
 .chart-wrapper canvas {
-  touch-action: none; /* Let Chart.js handle all touch events */
+  touch-action: pan-y; /* Chart.js gets horizontal pan and pinch; the page keeps vertical scroll */
   max-width: 100% !important;
 }
 
@@ -855,7 +855,7 @@ body {
 }
 
 /* Tablet responsive */
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-height: 500px) {
   html,
   body {
     overflow: auto;
@@ -887,9 +887,20 @@ body {
     font-size: 10px;
     order: 10;
   }
+  /* The three tab groups need about 520px; below that the last group
+     wraps onto a second row instead of being clipped */
   .tab-nav {
     margin-right: 0;
     order: 5;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .tab-group {
+    flex: 1 1 auto;
+  }
+  .tab-group + .tab-group {
+    border-top: 1px solid var(--color-btn-border);
+    margin-top: -1px;
   }
   .tab-btn {
     padding: 3px 8px;
@@ -944,7 +955,7 @@ body {
   }
 
   .chart-container {
-    min-height: 300px;
+    min-height: max(300px, 45vh);
     padding: 8px;
     display: flex;
     flex-direction: column;
@@ -987,7 +998,8 @@ body {
     margin-bottom: 0;
     margin-right: 4px;
   }
-  .toolbar h1 a:first-of-type {
+  .toolbar h1 a:first-of-type,
+  .toolbar h1 .repo-separator {
     display: none; /* Hide "JuliaLang /" on narrow screens */
   }
   .julia-logo {
@@ -1146,6 +1158,61 @@ body {
 
 /* Touch device optimizations */
 @media (hover: none) and (pointer: coarse) {
+  /* Touch targets: 36px rows and buttons, and a 12px floor on the text that
+     the desktop layout sets at 8 to 10px */
+  .tab-btn {
+    min-height: 38px;
+  }
+  .btn,
+  .btn-icon,
+  .time-select,
+  .checkbox-dropdown-btn {
+    min-height: 36px;
+  }
+  .job-item,
+  .group-item {
+    min-height: 36px;
+  }
+  .matrix-table th,
+  .matrix-table td {
+    padding: 8px 4px;
+  }
+  .stats-bar th,
+  .stats-bar td,
+  .stats-bar tr.host-row td,
+  .pkgeval-stats th,
+  .pkgeval-stats td,
+  .ttfx-stats th,
+  .ttfx-stats td,
+  .benchmarks-stats th,
+  .benchmarks-stats td,
+  .workers-table th,
+  .workers-table td {
+    padding: 9px 10px;
+  }
+  .matrix-table,
+  .matrix-table th,
+  .matrix-table td,
+  .job-item,
+  .job-item .job-median,
+  .pass-rate,
+  .failure-indicator,
+  .matrix-cell .failure-indicator,
+  .matrix-cell .breakage-indicator,
+  .job-group-header,
+  .group-item,
+  .group-item .group-counts,
+  .task-latest,
+  .tab-group-label,
+  .toolbar .updated,
+  .stats-bar th,
+  .stats-bar td,
+  .stats-bar tr.host-row td,
+  .pkgeval-stats td,
+  .ttfx-stats td,
+  .benchmarks-stats td {
+    font-size: 12px;
+  }
   .matrix-cell:active {
     background: var(--color-accent-emphasis);
     color: white;
@@ -1159,6 +1226,14 @@ body {
   }
   .stats-bar tr:active td {
     background: var(--color-neutral-muted);
+  }
+}
+
+/* Secondary table columns (versions, spreads, messages) are dropped on
+   narrow screens so the important ones fit without sideways scrolling */
+@media (max-width: 600px) {
+  .col-secondary {
+    display: none;
   }
 }
 
@@ -1697,6 +1772,7 @@ body {
 }
 .benchmarks-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 6px 16px;
@@ -1802,7 +1878,7 @@ body {
   overflow: hidden;
 }
 .benchmarks-chart-wrapper canvas {
-  touch-action: none;
+  touch-action: pan-y;
   max-width: 100% !important;
 }
 .benchmarks-stats {
@@ -2036,7 +2112,7 @@ body {
   font-size: 11px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-height: 500px) {
   .benchmarks-content {
     flex-direction: column;
   }
@@ -2074,6 +2150,7 @@ body {
 }
 .pkgeval-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 6px 16px;
@@ -2105,7 +2182,7 @@ body {
   overflow: hidden;
 }
 .pkgeval-chart-wrapper canvas {
-  touch-action: none;
+  touch-action: pan-y;
   max-width: 100% !important;
 }
 .pkgeval-stats {
@@ -2318,7 +2395,7 @@ body {
   overflow: hidden;
 }
 .ttfx-chart-wrapper canvas {
-  touch-action: none;
+  touch-action: pan-y;
   max-width: 100% !important;
 }
 .ttfx-summary-grid {
@@ -2414,18 +2491,26 @@ body {
 .ttfx-stats .ttfx-down {
   color: var(--color-success-fg);
 }
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-height: 500px) {
   .ttfx-summary-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(4, 1fr);
+    grid-template-rows: repeat(4, minmax(160px, 1fr));
   }
   .ttfx-content {
     flex-direction: column;
   }
   .ttfx-sidebar {
     width: 100%;
-    max-height: 30vh;
+    max-height: 150px;
     border-right: none;
     border-bottom: 1px solid var(--color-border-default);
+  }
+  /* The wrapper is absolutely positioned, so the container has to reserve
+     the height: one chart, or four stacked panels */
+  .ttfx-chart-container {
+    min-height: 320px;
+  }
+  .ttfx-chart-container:has(.ttfx-summary-grid:not([hidden])) {
+    min-height: 700px;
   }
 }
