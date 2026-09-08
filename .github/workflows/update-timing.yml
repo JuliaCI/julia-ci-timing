@@ -96,6 +96,8 @@ jobs:
           julia --color=yes --project fetch_pkgeval.jl
 
       - name: Fetch package downloads data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           julia --color=yes --project fetch_packages.jl
 

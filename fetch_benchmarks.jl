@@ -432,13 +432,14 @@ function update_group_detail(output_dir, group, new_reports)
     write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)); gzip=true)
 end
 
-# Dates present in the per-group detail files for some stat but missing for
-# `stat` — i.e. dates that need re-parsing to backfill a newly added stat.
+# Dates present in a per-group detail file for some stat but missing for
+# `stat` in that same file, i.e. dates that need re-parsing to backfill a
+# newly added stat. Decided per file: a date one group has for `stat` says
+# nothing about the others.
 function dates_missing_stat(output_dir, stat)
     benchdir = joinpath(output_dir, "benchmarks")
     isdir(benchdir) || return Set{String}()
-    all_dates = Set{String}()
-    have = Set{String}()
+    missing_dates = Set{String}()
     for f in readdir(benchdir)
         endswith(f, ".json.gz") || continue
         local d
@@ -448,6 +449,8 @@ function dates_missing_stat(output_dir, stat)
             @warn "Failed to read group detail" file=f error=e
             continue
         end
+        all_dates = Set{String}()
+        have = Set{String}()
         for (st, block) in pairs(d)
             haskey(block, :dates) || continue
             for dt in block[:dates]
@@ -455,8 +458,9 @@ function dates_missing_stat(output_dir, stat)
                 String(st) == stat && push!(have, String(dt))
             end
         end
+        union!(missing_dates, setdiff(all_dates, have))
     end
-    return setdiff(all_dates, have)
+    return missing_dates
 end
 
 # Structural comparison that ignores key order and generated_at: the summary is

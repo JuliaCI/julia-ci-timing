@@ -36,10 +36,34 @@ function get_token()
     return token
 end
 
+
+# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
+# when the server sends one. HTTP.jl's own retry layer never sees a status
+# code once status_exception is off, so this loop covers those.
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+    local resp
+    for attempt in 1:attempts
+        resp = try
+            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+        catch e
+            attempt == attempts && rethrow()
+            @warn "Request failed, retrying" url attempt error=e
+            sleep(2.0^attempt)
+            continue
+        end
+        (resp.status == 429 || resp.status >= 500) || return resp
+        attempt == attempts && return resp
+        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
+        @warn "Retrying after HTTP $(resp.status)" url wait attempt
+        sleep(wait)
+    end
+    return resp
+end
+
 function api_get(endpoint; token=get_token(), params=Dict())
     url = "$API_BASE/$endpoint"
     isempty(params) || (url *= "?" * join(["$k=$v" for (k, v) in params], "&"))
-    resp = HTTP.get(url, ["Authorization" => "Bearer $token"]; status_exception=false, retry=true, retries=3)
+    resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
     if resp.status != 200
         @warn "API request failed" url resp.status String(resp.body)
         return nothing
@@ -50,10 +74,9 @@ end
 # The artifact download endpoint answers with a redirect to a signed storage URL; follow
 # it by hand so the API token is not sent along to the storage host.
 function download_artifact(download_url; token=get_token())
-    resp = HTTP.get(download_url, ["Authorization" => "Bearer $token"];
-                    status_exception=false, redirect=false, retry=true, retries=3)
+    resp = http_get_retry(download_url, ["Authorization" => "Bearer $token"]; redirect=false)
     if resp.status in (301, 302, 303, 307, 308)
-        resp = HTTP.get(HTTP.header(resp, "Location"); status_exception=false, retry=true, retries=3)
+        resp = http_get_retry(HTTP.header(resp, "Location"))
     end
     if resp.status != 200
         @warn "Artifact download failed" download_url resp.status
@@ -153,17 +176,24 @@ function build_row(build, job, results, meta)
     )
 end
 
+# (results, meta) for a job, each nothing when the job uploaded no such
+# artifact; nothing altogether when the listing or a download failed, so the
+# caller leaves the job for the next run instead of recording an empty row.
 function fetch_job_artifacts(build, job)
     artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds/$(build.number)/jobs/$(job.id)/artifacts")
-    artifacts === nothing && return nothing, nothing
+    artifacts === nothing && return nothing
     function get_json(path)
         i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
-        i === nothing && return nothing
+        i === nothing && return missing
         body = download_artifact(String(artifacts[i].download_url))
         body === nothing && return nothing
         return JSON3.read(body)
     end
-    return get_json("ttfx/results.json"), get_json("ttfx/results-meta.json")
+    results = get_json("ttfx/results.json")
+    results === nothing && return nothing
+    meta = get_json("ttfx/results-meta.json")
+    meta === nothing && return nothing
+    return (results === missing ? nothing : results, meta === missing ? nothing : meta)
 end
 
 # New rows for finished TTFX jobs not in `known`. Builds are listed newest first; stop
@@ -171,7 +201,10 @@ end
 # any row exists, once a page has no TTFX job at all (the job only exists from a point on).
 function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
     rows = Dict{String,Any}[]
-    min_known = isempty(known) ? typemax(Int) : minimum(parse(Int, first(split(k, ':'))) for k in known)
+    # Everything older than the 50 newest known builds counts as captured, so
+    # the pages walked per run do not grow with the history
+    known_builds = sort!(unique(parse(Int, first(split(k, ':'))) for k in known); rev=true)
+    min_known = isempty(known_builds) ? typemax(Int) : known_builds[min(50, end)]
     seen_any = false
     for page in 1:max_pages
         params = Dict("branch" => BRANCH, "per_page" => per_page, "page" => page)
@@ -191,7 +224,12 @@ function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
                 key in known && continue
                 String(get(job, :state, "")) in FINISHED_STATES || continue
                 @info "Fetching TTFX results" build=build.number job=String(name) state=String(job.state)
-                results, meta = fetch_job_artifacts(build, job)
+                fetched = fetch_job_artifacts(build, job)
+                if fetched === nothing
+                    @warn "Could not fetch the artifacts; the job is retried next run" build=build.number
+                    continue
+                end
+                results, meta = fetched
                 if results === nothing
                     @info "No results artifact" build=build.number
                 end
