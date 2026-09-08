@@ -1,7 +1,7 @@
 # Julia Performance
 
 Dashboard for Julia language performance: nightly benchmarks (Nanosoldier),
-[CI build/test timing](https://buildkite.com/julialang/julia-ci), and PkgEval results.
+[CI build/test timing](https://buildkite.com/julialang/julia-ci) and TTFX results, and PkgEval results.
 
 **Live:** <https://JuliaCI.github.io/julia-ci-timing/> (also at <https://perf.julialang.org/>)
 
@@ -15,6 +15,10 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
 - `fetch_timing.jl` — Buildkite job timings (`julia-ci`, plus the legacy
   `julia-master` and `julia-master-scheduled` pipelines, which stopped
   receiving builds in July 2026)
+- `fetch_ttfx.jl` — TTFX results (package precompile, load and run times of the
+  [Julia-TTFX-Snippets](https://github.com/tecosaur/Julia-TTFX-Snippets) tasks)
+  from the `TTFX` job on every `julia-ci` master build, see
+  [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
 
 ## PR comparison
 
