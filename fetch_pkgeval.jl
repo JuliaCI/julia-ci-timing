@@ -129,6 +129,19 @@ function load_existing(output_dir)
     return (nothing, Set{String}())
 end
 
+# Structural comparison, so key order and the generated_at stamp do not count
+function normalize_for_compare(x)
+    if x isa AbstractDict
+        return Dict{String,Any}(String(k) => normalize_for_compare(v) for (k, v) in pairs(x))
+    elseif x isa AbstractVector
+        return Any[normalize_for_compare(v) for v in x]
+    else
+        return x
+    end
+end
+reports_unchanged(existing_data, reports) =
+    normalize_for_compare(get(existing_data, :reports, [])) == normalize_for_compare(reports)
+
 function main()
     output_dir = "data"
     mkpath(output_dir)
@@ -175,6 +188,10 @@ function main()
     )
 
     output_path = joinpath(output_dir, "pkgeval_summary.json.gz")
+    if existing_data !== nothing && isfile(output_path) && reports_unchanged(existing_data, sorted_reports)
+        @info "No changes to data, skipping write" file=output_path
+        return 0
+    end
     json_bytes = Vector{UInt8}(JSON3.write(summary))
     gz_bytes = transcode(GzipCompressor, json_bytes)
     write(output_path, gz_bytes)

@@ -976,48 +976,47 @@ function tDistributionPValue(t, df) {
   return Math.min(1, Math.max(0, betaI));
 }
 
-// Regularized incomplete beta function approximation
+// Regularized incomplete beta function I_x(a, b), continued fraction from
+// Numerical Recipes (betacf). The caller keeps x below the symmetry point so
+// the fraction converges quickly.
 function betaIncomplete(x, a, b) {
   if (x <= 0) return 0;
   if (x >= 1) return 1;
 
-  // Use series expansion for small x
   const lnBeta = gammaLn(a) + gammaLn(b) - gammaLn(a + b);
-  const front = Math.exp(Math.log(x) * a + Math.log(1 - x) * b - lnBeta) / a;
+  const front = Math.exp(a * Math.log(x) + b * Math.log(1 - x) - lnBeta);
 
-  // Lentz's algorithm for continued fraction
-  const maxIter = 100;
+  const maxIter = 200;
   const eps = 1e-10;
-
-  let f = 1,
-    c = 1,
-    d = 0;
-  for (let m = 0; m <= maxIter; m++) {
+  const tiny = 1e-30;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1;
+  let d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < tiny) d = tiny;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= maxIter; m++) {
     const m2 = 2 * m;
-
-    // Even step
-    let aa = m === 0 ? 1 : (m * (b - m) * x) / ((a + m2 - 1) * (a + m2));
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
     d = 1 + aa * d;
-    if (Math.abs(d) < 1e-30) d = 1e-30;
+    if (Math.abs(d) < tiny) d = tiny;
     c = 1 + aa / c;
-    if (Math.abs(c) < 1e-30) c = 1e-30;
+    if (Math.abs(c) < tiny) c = tiny;
     d = 1 / d;
-    f *= d * c;
-
-    // Odd step
-    aa = -((a + m) * (a + b + m) * x) / ((a + m2) * (a + m2 + 1));
+    h *= d * c;
+    aa = -((a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
     d = 1 + aa * d;
-    if (Math.abs(d) < 1e-30) d = 1e-30;
+    if (Math.abs(d) < tiny) d = tiny;
     c = 1 + aa / c;
-    if (Math.abs(c) < 1e-30) c = 1e-30;
+    if (Math.abs(c) < tiny) c = tiny;
     d = 1 / d;
-    const delta = d * c;
-    f *= delta;
-
-    if (Math.abs(delta - 1) < eps) break;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < eps) break;
   }
-
-  return front * f;
+  return (front * h) / a;
 }
 
 // Log gamma function approximation (Lanczos)
@@ -1940,6 +1939,9 @@ function setCustomZoom(xMin, xMax, yMin, yMax) {
   const select = document.getElementById("time-range");
   select.value = "custom";
   document.getElementById("btn-reset-zoom").style.display = "";
+  // The table and host list describe the visible range, so they follow the zoom
+  updateHostFilterUI();
+  updateStatsTable();
   updateURL();
 }
 
@@ -1965,7 +1967,9 @@ function handleZoomPanComplete({ chart }) {
 
 function resetZoom() {
   clearCustomZoom();
+  updateHostFilterUI();
   updateChart();
+  updateStatsTable();
   updateURL();
 }
 
@@ -3906,10 +3910,16 @@ document.addEventListener("keydown", (e) => {
   )
     return;
 
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
   if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
     e.preventDefault();
     toggleShortcutsHelp();
-  } else if (e.key === "r") {
+    return;
+  }
+  // The remaining shortcuts act on the CI timing chart and job list
+  if (!activeTab.startsWith("ci-") || activeTab === "ci-ttfx") return;
+  if (e.key === "r") {
     e.preventDefault();
     if (customXMin !== null || customYMin !== null) resetZoom();
   } else if (e.key === "a") {
@@ -8655,17 +8665,14 @@ function updatePackagesDownloadsChart() {
 
   let displayDatasets = bandDatasets;
   if (packagesProportional) {
-    const dayTotals = new Array(rows.length).fill(0);
-    for (const ds of bandDatasets) {
-      for (let i = 0; i < rows.length; i++) {
-        dayTotals[i] += Number(ds.data[i] || 0);
-      }
-    }
+    // Share of the day's total downloads (the bands are estimated from that
+    // total), so a filtered selection shows its real share rather than 100%
     displayDatasets = bandDatasets.map((ds) => ({
       ...ds,
-      data: ds.data.map((v, i) =>
-        dayTotals[i] > 0 ? (Number(v || 0) / dayTotals[i]) * 100 : 0,
-      ),
+      data: ds.data.map((v, i) => {
+        const total = Number(values[i] || 0);
+        return total > 0 ? (Number(v || 0) / total) * 100 : 0;
+      }),
     }));
   }
 

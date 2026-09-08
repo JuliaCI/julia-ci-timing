@@ -459,24 +459,44 @@ function dates_missing_stat(output_dir, stat)
     return setdiff(all_dates, have)
 end
 
+# Structural comparison that ignores key order and generated_at: the summary is
+# stamped on every run, and rewriting a file that only differs there is a commit
+# of unchanged data.
+function normalize_for_compare(x)
+    if x isa AbstractDict
+        out = Dict{String,Any}()
+        for (k, v) in pairs(x)
+            ks = String(k)
+            ks == "generated_at" && continue
+            out[ks] = normalize_for_compare(v)
+        end
+        return out
+    elseif x isa AbstractVector
+        return Any[normalize_for_compare(v) for v in x]
+    else
+        return x
+    end
+end
+unchanged(existing_json::AbstractString, new_json::AbstractString) =
+    normalize_for_compare(JSON3.read(existing_json)) == normalize_for_compare(JSON3.read(new_json))
+
 function write_if_changed(filepath, data; gzip=false)
     new_json = JSON3.write(data)
     if gzip
         filepath = replace(filepath, r"\.json$" => ".json.gz")
-        new_bytes = transcode(GzipCompressor, Vector{UInt8}(new_json))
         if isfile(filepath)
-            existing = read(filepath)
-            if existing == new_bytes
+            existing = String(transcode(GzipDecompressor, read(filepath)))
+            if unchanged(existing, new_json)
                 @info "No changes, skipping write" file=filepath
                 return
             end
         end
-        write(filepath, new_bytes)
+        write(filepath, transcode(GzipCompressor, Vector{UInt8}(new_json)))
         @info "Wrote" file=filepath size=filesize(filepath)
     else
         if isfile(filepath)
             existing = read(filepath, String)
-            if existing == new_json
+            if unchanged(existing, new_json)
                 @info "No changes, skipping write" file=filepath
                 return
             end
