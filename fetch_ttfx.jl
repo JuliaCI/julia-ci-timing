@@ -254,8 +254,8 @@ end
 
 function write_summary(rows; output=OUTPUT)
     sort!(rows; by=r -> (r["date"], r["build"]))
-    task_names = sort!(unique(vcat([collect(keys(r["tasks"])) for r in rows]...,
-                                   [collect(keys(r["failed"])) for r in rows]...)))
+    # Rows read back from the file carry Symbol keys, new rows String keys
+    task_names = sort!(unique(String[String(k) for r in rows for d in (r["tasks"], r["failed"]) for k in keys(d)]))
     summary = Dict{String,Any}(
         "generated_at" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
         "pipeline" => CI_PIPELINE,

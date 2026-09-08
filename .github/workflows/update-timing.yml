@@ -60,6 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The branch tip, not the pushed commit: a data commit made while
+          # this run was queued would otherwise conflict on the binary files
+          ref: main
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v3
@@ -119,8 +123,10 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update timing data"
-            # main may have advanced during the long fetch step
-            git pull --rebase origin main
+            # main may have advanced during the long fetch step. Should a
+            # data commit have landed in between, this run's files (theirs,
+            # in rebase terms) win rather than failing the run.
+            git pull --rebase -X theirs origin main
             git push
           fi
 
