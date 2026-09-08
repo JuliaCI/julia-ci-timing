@@ -189,6 +189,9 @@ function main()
         return count_statuses(db, date_path)
     end
     new_reports = filter(!isnothing, results)
+    # The concurrent fetches leave pooled keep-alive connections whose idle
+    # monitors otherwise die noisily when the process exits
+    HTTP.Connections.closeall()
 
     reports_by_date = Dict{String,Any}()
     if existing_data !== nothing
