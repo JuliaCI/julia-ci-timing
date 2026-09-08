@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 6 52 52">
+  <!-- Julia dots as chronograph subdials (green top, red bottom-left, purple bottom-right) -->
+  <circle cx="32" cy="17" r="11" fill="#389826"/>
+  <circle cx="17" cy="41" r="11" fill="#CB3C33"/>
+  <circle cx="47" cy="41" r="11" fill="#9558B2"/>
+
+  <!-- Outer timing ticks ring -->
+  <g stroke="#4493f8" stroke-width="2" stroke-linecap="round">
+    <line x1="32" y1="7" x2="32" y2="12"/>
+    <line x1="44.5" y1="10.5" x2="41" y2="14.5"/>
+    <line x1="54.5" y1="19.5" x2="49.5" y2="23"/>
+    <line x1="57" y1="32" x2="52" y2="32"/>
+    <line x1="54.5" y1="44.5" x2="49.5" y2="41"/>
+    <line x1="44.5" y1="53.5" x2="41" y2="49.5"/>
+    <line x1="32" y1="57" x2="32" y2="52"/>
+    <line x1="19.5" y1="53.5" x2="23" y2="49.5"/>
+    <line x1="9.5" y1="44.5" x2="14.5" y2="41"/>
+    <line x1="7" y1="32" x2="12" y2="32"/>
+    <line x1="9.5" y1="19.5" x2="14.5" y2="23"/>
+    <line x1="19.5" y1="10.5" x2="23" y2="14.5"/>
+  </g>
+
+  <!-- Stopwatch hands -->
+  <line x1="32" y1="32" x2="32" y2="12" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="32" x2="48" y2="43" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Center dot -->
+  <circle cx="32" cy="32" r="2" fill="#fff"/>
+</svg>
