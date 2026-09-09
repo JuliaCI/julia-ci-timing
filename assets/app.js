@@ -634,14 +634,7 @@ function renderCommitsView() {
         }
       },
       scales: {
-        x: {
-          type: "time",
-          time: {
-            displayFormats: { day: "MMM d", week: "MMM d", month: "MMM yyyy" },
-          },
-          ticks: { color: textColor, maxRotation: 45 },
-          grid: { color: gridColor },
-        },
+        x: timeAxis({ textColor, gridColor }),
         y: {
           title: {
             display: true,
@@ -838,6 +831,171 @@ function formatDuration(seconds) {
   const hours = Math.floor(mins / 60);
   const remainMins = mins % 60;
   return remainMins > 0 ? `${hours}h ${remainMins}m` : `${hours}h`;
+}
+
+// === Shared time x axis ===
+// Chart.js's time scale picks a unit and formats every tick in isolation,
+// so a chart zoomed to a few days reads "1AM 4AM 7AM" with no date on it.
+// timeAxis() replaces that with major/minor ticks at calendar-aligned
+// "nice" steps chosen for the visible range and the chart width, and
+// labels each major with the coarser unit (date, year) only on the first
+// tick and where it changes. Every time-series chart uses it so the axes
+// read the same across views.
+const TIME_UNIT_MS = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, month: 30 * 864e5, year: 365 * 864e5 };
+const TIME_TICK_STEPS = [
+  { major: [1, "second"], minor: null },
+  { major: [5, "second"], minor: [1, "second"] },
+  { major: [10, "second"], minor: [2, "second"] },
+  { major: [15, "second"], minor: [5, "second"] },
+  { major: [30, "second"], minor: [10, "second"] },
+  { major: [1, "minute"], minor: [15, "second"] },
+  { major: [2, "minute"], minor: [30, "second"] },
+  { major: [5, "minute"], minor: [1, "minute"] },
+  { major: [10, "minute"], minor: [2, "minute"] },
+  { major: [15, "minute"], minor: [5, "minute"] },
+  { major: [30, "minute"], minor: [10, "minute"] },
+  { major: [1, "hour"], minor: [15, "minute"] },
+  { major: [2, "hour"], minor: [30, "minute"] },
+  { major: [3, "hour"], minor: [1, "hour"] },
+  { major: [6, "hour"], minor: [2, "hour"] },
+  { major: [12, "hour"], minor: [3, "hour"] },
+  { major: [1, "day"], minor: [6, "hour"] },
+  { major: [2, "day"], minor: [1, "day"] },
+  { major: [7, "day"], minor: [1, "day"] },
+  { major: [14, "day"], minor: [7, "day"] },
+  { major: [1, "month"], minor: [7, "day"] },
+  { major: [2, "month"], minor: [1, "month"] },
+  { major: [3, "month"], minor: [1, "month"] },
+  { major: [6, "month"], minor: [1, "month"] },
+  { major: [1, "year"], minor: [3, "month"] },
+  { major: [2, "year"], minor: [6, "month"] },
+  { major: [5, "year"], minor: [1, "year"] },
+  { major: [10, "year"], minor: [2, "year"] },
+];
+const TIME_LABEL_PX = { second: 110, minute: 80, hour: 80, day: 60, month: 60, year: 50 };
+const TIME_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Local-time calendar arithmetic so ticks stay on midnight / the 1st
+// across DST changes and month lengths
+function timeFloor(t, [n, unit]) {
+  const d = new Date(t);
+  const div = (v) => Math.floor(v / n) * n;
+  switch (unit) {
+    case "second": d.setSeconds(div(d.getSeconds()), 0); break;
+    case "minute": d.setMinutes(div(d.getMinutes()), 0, 0); break;
+    case "hour": d.setHours(div(d.getHours()), 0, 0, 0); break;
+    case "day":
+      d.setHours(0, 0, 0, 0);
+      // Week steps start on Sunday
+      if (n >= 7) d.setDate(d.getDate() - d.getDay());
+      break;
+    case "month": d.setMonth(div(d.getMonth()), 1); d.setHours(0, 0, 0, 0); break;
+    case "year": d.setFullYear(div(d.getFullYear()), 0, 1); d.setHours(0, 0, 0, 0); break;
+  }
+  return d.getTime();
+}
+
+function timeAdd(t, [n, unit]) {
+  const d = new Date(t);
+  switch (unit) {
+    case "second": d.setSeconds(d.getSeconds() + n); break;
+    case "minute": d.setMinutes(d.getMinutes() + n); break;
+    case "hour": d.setHours(d.getHours() + n); break;
+    case "day": d.setDate(d.getDate() + n); break;
+    case "month": d.setMonth(d.getMonth() + n); break;
+    case "year": d.setFullYear(d.getFullYear() + n); break;
+  }
+  return d.getTime();
+}
+
+function pad2(v) {
+  return String(v).padStart(2, "0");
+}
+
+// options: textColor, gridColor, minorGridColor, tooltipFormat, plus any
+// Chart.js scale options to merge on top (min, max, grid.display, ...)
+function timeAxis({ textColor, gridColor, minorGridColor, tooltipFormat = "yyyy-MM-dd HH:mm", ...overrides } = {}) {
+  if (!minorGridColor && gridColor) {
+    // Half the alpha of the major grid; gridColor is hex or rgba()
+    minorGridColor = gridColor.startsWith("rgba(")
+      ? gridColor.replace(/,\s*([\d.]+)\)$/, (m, a) => `, ${parseFloat(a) / 2})`)
+      : fadeColor(gridColor, 0.5);
+  }
+  let step = TIME_TICK_STEPS[TIME_TICK_STEPS.length - 1];
+
+  function buildTicks(axis) {
+    const range = axis.max - axis.min;
+    if (!isFinite(range) || range <= 0) return;
+    // Finest step whose labels ("Sep 8 10:00", "Aug 18", "2025") fit
+    // the width; floor(width / labelPx) majors at most
+    const width = axis.maxWidth || axis.width || 800;
+    step =
+      TIME_TICK_STEPS.find((s) => {
+        const [n, unit] = s.major;
+        const maxMajors = Math.max(3, Math.floor(width / TIME_LABEL_PX[unit]));
+        return range / (n * TIME_UNIT_MS[unit]) <= maxMajors;
+      }) || TIME_TICK_STEPS[TIME_TICK_STEPS.length - 1];
+    const ticks = [];
+    const push = (value, major) => {
+      if (value >= axis.min && value <= axis.max) ticks.push({ value, major, minor: !major });
+    };
+    let t = timeFloor(axis.min, step.major);
+    for (let guard = 0; t <= axis.max && guard < 500; guard++) {
+      const next = timeAdd(t, step.major);
+      push(t, true);
+      if (step.minor) {
+        const minorMs = step.minor[0] * TIME_UNIT_MS[step.minor[1]];
+        // Minors are stepped from each major so they never drift; one
+        // landing within half a step of the next major is dropped
+        for (let m = timeAdd(t, step.minor); m < next - minorMs / 2; m = timeAdd(m, step.minor)) push(m, false);
+      }
+      t = next;
+    }
+    if (ticks.length) axis.ticks = ticks;
+  }
+
+  function label(value, index, ticks) {
+    const tick = ticks[index];
+    if (!tick || tick.minor) return "";
+    const d = new Date(value);
+    let prev = null;
+    for (let i = index - 1; i >= 0 && !prev; i--) if (ticks[i].major) prev = new Date(ticks[i].value);
+    const unit = step.major[1];
+    const md = `${TIME_MONTHS[d.getMonth()]} ${d.getDate()}`;
+    if (unit === "second" || unit === "minute" || unit === "hour") {
+      const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      const time = unit === "second" ? `${hm}:${pad2(d.getSeconds())}` : hm;
+      const newDay = !prev || prev.toDateString() !== d.toDateString();
+      return newDay ? `${md} ${time}` : time;
+    }
+    const newYear = !prev || prev.getFullYear() !== d.getFullYear();
+    if (unit === "day") return newYear ? `${md} '${String(d.getFullYear()).slice(-2)}` : md;
+    if (unit === "month") return newYear ? `${TIME_MONTHS[d.getMonth()]} ${d.getFullYear()}` : TIME_MONTHS[d.getMonth()];
+    return String(d.getFullYear());
+  }
+
+  const { grid: gridOverrides, ticks: tickOverrides, time: timeOverrides, ...rest } = overrides;
+  return {
+    type: "time",
+    time: { tooltipFormat, ...timeOverrides },
+    afterBuildTicks: buildTicks,
+    ticks: {
+      color: textColor,
+      maxRotation: 0,
+      // Tick density is already fitted to the width; autoSkip would drop
+      // majors while keeping unlabelled minors. The time scale runs it
+      // anyway when source is "auto", hence "data" (we replace the ticks).
+      autoSkip: false,
+      source: "data",
+      callback: label,
+      ...tickOverrides,
+    },
+    grid: {
+      color: (ctx) => (ctx.tick && ctx.tick.minor ? minorGridColor : gridColor),
+      ...gridOverrides,
+    },
+    ...rest,
+  };
 }
 
 /**
@@ -2886,216 +3044,13 @@ function updateChart() {
         },
       },
       scales: {
-        x: {
-          type: "time",
+        x: timeAxis({
+          textColor,
+          gridColor,
+          minorGridColor: isDark ? "rgba(48, 54, 61, 0.5)" : "rgba(208, 215, 222, 0.5)",
           min: xMin,
           max: xMax,
-          time: {
-            displayFormats: {
-              second: "HH:mm:ss",
-              minute: "HH:mm",
-              hour: "MMM d HH:mm",
-              day: "MMM d",
-              week: "MMM d",
-              month: "MMM yyyy",
-            },
-          },
-          ticks: {
-            color: textColor,
-            maxRotation: 45,
-            callback: function (value, index, ticks) {
-              // Hide labels for minor ticks
-              if (ticks[index] && ticks[index].minor) {
-                return "";
-              }
-
-              const date = new Date(value);
-              const months = [
-                "Jan",
-                "Feb",
-                "Mar",
-                "Apr",
-                "May",
-                "Jun",
-                "Jul",
-                "Aug",
-                "Sep",
-                "Oct",
-                "Nov",
-                "Dec",
-              ];
-
-              // Determine time range to decide format (only count major ticks)
-              const majorTicks = ticks.filter((t) => !t.minor);
-              const rangeMs =
-                majorTicks.length >= 2
-                  ? majorTicks[majorTicks.length - 1].value -
-                    majorTicks[0].value
-                  : Infinity;
-              const MINUTE = 60 * 1000;
-              const HOUR = 60 * MINUTE;
-              const DAY = 24 * HOUR;
-
-              const hours = date.getHours().toString().padStart(2, "0");
-              const mins = date.getMinutes().toString().padStart(2, "0");
-              const secs = date.getSeconds().toString().padStart(2, "0");
-
-              // Find previous major tick for date comparison
-              let prevMajorTick = null;
-              for (let i = index - 1; i >= 0; i--) {
-                if (!ticks[i].minor) {
-                  prevMajorTick = ticks[i];
-                  break;
-                }
-              }
-              const prevDate = prevMajorTick
-                ? new Date(prevMajorTick.value)
-                : null;
-              const isFirstMajor = !prevMajorTick;
-
-              // For ranges under 10 minutes, show seconds
-              if (rangeMs < 10 * MINUTE) {
-                const timeStr = `${hours}:${mins}:${secs}`;
-                if (isFirstMajor) {
-                  return `${months[date.getMonth()]} ${date.getDate()} ${timeStr}`;
-                }
-                if (prevDate && prevDate.getDate() !== date.getDate()) {
-                  return `${months[date.getMonth()]} ${date.getDate()} ${timeStr}`;
-                }
-                return timeStr;
-              }
-
-              // For ranges under 3 days, show time (hours:minutes)
-              if (rangeMs < 3 * DAY) {
-                const timeStr = `${hours}:${mins}`;
-                // Show date on first tick or when date changes
-                if (isFirstMajor) {
-                  return `${months[date.getMonth()]} ${date.getDate()} ${timeStr}`;
-                }
-                if (prevDate && prevDate.getDate() !== date.getDate()) {
-                  return `${months[date.getMonth()]} ${date.getDate()} ${timeStr}`;
-                }
-                return timeStr;
-              }
-
-              // Default: day-level labels
-              const label = `${months[date.getMonth()]} ${date.getDate()}`;
-              // Show year on first tick and when year changes
-              if (isFirstMajor) {
-                return `${label} '${date.getFullYear().toString().slice(-2)}`;
-              }
-              if (prevDate && prevDate.getFullYear() !== date.getFullYear()) {
-                return `${label} '${date.getFullYear().toString().slice(-2)}`;
-              }
-              return label;
-            },
-          },
-          grid: {
-            color: (ctx) => {
-              // Minor grid lines are lighter
-              if (ctx.tick && ctx.tick.minor) {
-                return isDark
-                  ? "rgba(48, 54, 61, 0.5)"
-                  : "rgba(208, 215, 222, 0.5)";
-              }
-              return gridColor;
-            },
-          },
-          afterBuildTicks: (axis) => {
-            const rangeMs = axis.max - axis.min;
-            const SECOND = 1000;
-            const MINUTE = 60 * SECOND;
-            const HOUR = 60 * MINUTE;
-            const DAY = 24 * HOUR;
-
-            // Nice intervals from seconds to years, with minor tick subdivisions
-            const niceStepsWithMinor = [
-              { step: 5 * SECOND, minor: SECOND },
-              { step: 10 * SECOND, minor: 2 * SECOND },
-              { step: 15 * SECOND, minor: 5 * SECOND },
-              { step: 30 * SECOND, minor: 10 * SECOND },
-              { step: MINUTE, minor: 15 * SECOND },
-              { step: 2 * MINUTE, minor: 30 * SECOND },
-              { step: 5 * MINUTE, minor: MINUTE },
-              { step: 10 * MINUTE, minor: 2 * MINUTE },
-              { step: 15 * MINUTE, minor: 5 * MINUTE },
-              { step: 30 * MINUTE, minor: 10 * MINUTE },
-              { step: HOUR, minor: 15 * MINUTE },
-              { step: 2 * HOUR, minor: 30 * MINUTE },
-              { step: 4 * HOUR, minor: HOUR },
-              { step: 6 * HOUR, minor: 2 * HOUR },
-              { step: 12 * HOUR, minor: 3 * HOUR },
-              { step: DAY, minor: 6 * HOUR },
-              { step: 2 * DAY, minor: DAY },
-              { step: 7 * DAY, minor: DAY },
-              { step: 14 * DAY, minor: 7 * DAY },
-              { step: 30 * DAY, minor: 7 * DAY },
-              { step: 60 * DAY, minor: 14 * DAY },
-              { step: 90 * DAY, minor: 30 * DAY },
-              { step: 180 * DAY, minor: 30 * DAY },
-              { step: 365 * DAY, minor: 90 * DAY },
-            ];
-
-            // Find smallest step that gives <= 12 major ticks
-            const config = niceStepsWithMinor.find(
-              (c) => rangeMs / c.step <= 12,
-            ) || { step: 30 * DAY, minor: 7 * DAY };
-            const step = config.step;
-            const minorStep = config.minor;
-
-            // Round min to appropriate boundary
-            const minDate = new Date(axis.min);
-            let minTick;
-
-            if (step < MINUTE) {
-              // Align to second boundary
-              minDate.setMilliseconds(0);
-              minTick = minDate.getTime();
-            } else if (step < HOUR) {
-              // Align to minute boundary
-              minDate.setSeconds(0, 0);
-              minTick = minDate.getTime();
-            } else if (step < DAY) {
-              // Align to hour boundary
-              minDate.setMinutes(0, 0, 0);
-              minTick = minDate.getTime();
-            } else if (step < 7 * DAY) {
-              // Align to day boundary
-              minDate.setHours(0, 0, 0, 0);
-              minTick = minDate.getTime();
-            } else if (step < 60 * DAY) {
-              // Align to week boundary (Sunday)
-              minDate.setHours(0, 0, 0, 0);
-              minTick = minDate.getTime();
-              const dayOfWeek = minDate.getDay();
-              minTick -= dayOfWeek * DAY;
-            } else if (step < 365 * DAY) {
-              // Align to month boundary (1st of month)
-              minDate.setDate(1);
-              minDate.setHours(0, 0, 0, 0);
-              minTick = minDate.getTime();
-            } else {
-              // Align to year boundary (Jan 1)
-              minDate.setMonth(0, 1);
-              minDate.setHours(0, 0, 0, 0);
-              minTick = minDate.getTime();
-            }
-
-            // Move to first tick after axis.min
-            while (minTick < axis.min) minTick += minorStep;
-
-            // Generate ticks with minor flag
-            const ticks = [];
-            for (let v = minTick; v <= axis.max; v += minorStep) {
-              // Check if this is a major tick (aligned to step)
-              const isMajor =
-                Math.abs(v % step) < minorStep / 2 ||
-                Math.abs((v % step) - step) < minorStep / 2;
-              ticks.push({ value: v, major: isMajor, minor: !isMajor });
-            }
-            if (ticks.length > 0) axis.ticks = ticks;
-          },
-        },
+        }),
         y: {
           min: customYMin ?? undefined,
           max: customYMax ?? undefined,
@@ -6879,15 +6834,7 @@ function updateBenchChart() {
         intersect: false,
       },
       scales: {
-        x: {
-          type: "time",
-          time: {
-            unit: "week",
-            displayFormats: { week: "MMM d", month: "MMM yyyy" },
-          },
-          grid: { color: gridColor },
-          ticks: { color: textColor, maxRotation: 0 },
-        },
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
         y: yAxis,
       },
       plugins: {
@@ -8426,12 +8373,7 @@ function updatePackagesDownloadsChart() {
           },
         },
         scales: {
-          x: {
-            type: "time",
-            time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
-            grid: { display: false },
-            ticks: { color: textColor, maxRotation: 0, autoSkip: true },
-          },
+          x: timeAxis({ textColor, tooltipFormat: "yyyy-MM-dd", grid: { display: false } }),
           y: {
             stacked: true,
             beginAtZero: true,
@@ -8714,12 +8656,7 @@ function updatePackagesDownloadsChart() {
         },
       },
       scales: {
-        x: {
-          type: "time",
-          time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
-          grid: { display: false },
-          ticks: { color: textColor, maxRotation: 0, autoSkip: true },
-        },
+        x: timeAxis({ textColor, tooltipFormat: "yyyy-MM-dd", grid: { display: false } }),
         y: {
           stacked: true,
           beginAtZero: true,
@@ -9006,12 +8943,7 @@ function updatePkgevalChart() {
         );
       },
       scales: {
-        x: {
-          type: "time",
-          time: { unit: "month", tooltipFormat: "yyyy-MM-dd" },
-          grid: { color: gridColor },
-          ticks: { color: textColor, maxRotation: 0, autoSkip: true },
-        },
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
         y: {
           stacked: true,
           grid: { color: gridColor },
@@ -9512,12 +9444,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
       highlightTtfxRow(b ? b.build : null);
     },
     scales: {
-      x: {
-        type: "time",
-        time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
-        grid: { color: gridColor },
-        ticks: { color: textColor, maxRotation: 0, autoSkip: true },
-      },
+      x: timeAxis({ textColor, gridColor }),
       y: {
         grid: { color: gridColor },
         // Tick values carry float noise (13.600000000000001) on fine steps
