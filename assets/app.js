@@ -9049,6 +9049,10 @@ const TTFX_METRICS = {
 };
 const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
 const TTFX_SUITE_LABEL = "Suite geomean";
+// Floor on the y span so a flat series is not stretched to fill the panel:
+// +-10% of the midpoint in seconds mode, +-10 points in % mode
+const TTFX_MIN_Y_SPAN_REL = 0.2;
+const TTFX_MIN_Y_SPAN_PCT = 20;
 
 function ttfxJobUrl(b) {
   return `https://buildkite.com/julialang/julia-ci/builds/${b.build}#${b.job_id}`;
@@ -9447,6 +9451,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
       x: timeAxis({ textColor, gridColor }),
       y: {
         grid: { color: gridColor },
+        afterDataLimits: ttfxEnforceMinYSpan,
         // Tick values carry float noise (13.600000000000001) on fine steps
         ticks: { color: textColor, callback: (v) => (ttfxNormalized ? formatTtfxPct(v) : parseFloat(v.toFixed(4)) + "s") },
         title: {
@@ -9459,6 +9464,18 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
       },
     },
   };
+}
+
+// Runs after Chart.js has found the data extent (and again on every x zoom,
+// which refits y), so widen symmetrically about the midpoint when the
+// visible span is below the floor
+function ttfxEnforceMinYSpan(axis) {
+  if (!isFinite(axis.min) || !isFinite(axis.max)) return;
+  const mid = (axis.min + axis.max) / 2;
+  const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
+  if (axis.max - axis.min >= minSpan) return;
+  axis.min = mid - minSpan / 2;
+  axis.max = mid + minSpan / 2;
 }
 
 // In % mode every series is rebased to its first point in range
