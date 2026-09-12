@@ -148,9 +148,244 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
 
+// === Agent snapshots (Workers tab) ===
+// data/agents/, from fetch_agents.jl: latest.json holds the latest details per
+// agent and history-YYYY-MM.ndjson one line per update run listing the agent
+// names connected then. Unlike the job grid this covers every queue and
+// pipeline, PR builds included.
+let agentsData = null;
+let agentsDataPromise = null;
+let agentsChart = null;
+
+async function loadAgentsData() {
+  const resp = await fetch("data/agents/latest.json", { cache: "no-cache" });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const latest = await resp.json();
+  const agents = latest.agents || {};
+  // Every month file from the earliest first_seen to now; a month with no
+  // snapshots has no file and is skipped
+  let earliest = Date.parse(latest.generated_at || "") || Date.now();
+  for (const rec of Object.values(agents)) {
+    const t = Date.parse(rec.first_seen || "");
+    if (!isNaN(t) && t < earliest) earliest = t;
+  }
+  const months = [];
+  const cursor = new Date(earliest);
+  cursor.setUTCDate(1);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const end = new Date();
+  while (cursor <= end && months.length < 24) {
+    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  const texts = await Promise.all(
+    months.map((m) =>
+      fetch(`data/agents/history-${m}.ndjson`, { cache: "no-cache" }).then((r) =>
+        r.ok ? r.text() : "",
+      ),
+    ),
+  );
+  const snapshots = [];
+  for (const text of texts) {
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        snapshots.push(JSON.parse(line));
+      } catch (err) {
+        console.warn("Skipping malformed agent snapshot line", err);
+      }
+    }
+  }
+  snapshots.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+  return { generated_at: latest.generated_at, agents, snapshots };
+}
+const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const AGENTS_QUEUE_COLORS = {
+  light: { build: "#0969da", test: "#bc4c00", launch: "#8250df", other: "#656d76" },
+  dark: { build: "#388bfd", test: "#db6d28", launch: "#a371f7", other: "#8b949e" },
+};
+
+async function renderAgentsSection() {
+  const section = document.getElementById("agents-section");
+  if (!section) return;
+  if (!agentsData) {
+    if (!agentsDataPromise) {
+      agentsDataPromise = loadAgentsData()
+        .then((d) => {
+          agentsData = d;
+        })
+        .catch((err) => {
+          console.error("Failed to load agent snapshots:", err);
+          agentsData = { error: true };
+        });
+    }
+    await agentsDataPromise;
+  }
+  const tableEl = document.getElementById("agents-table");
+  const summaryEl = document.getElementById("agents-summary");
+  const updatedEl = document.getElementById("agents-updated");
+  const snapshots = (agentsData && agentsData.snapshots) || [];
+  if (agentsData.error || snapshots.length === 0) {
+    tableEl.innerHTML =
+      '<div class="workers-empty">No agent snapshots yet. They appear once the update workflow has run <code>fetch_agents.jl</code> with a Buildkite token that has the <code>read_agents</code> scope.</div>';
+    summaryEl.textContent = "";
+    updatedEl.textContent = "";
+    section.classList.add("agents-section-empty");
+    return;
+  }
+  section.classList.remove("agents-section-empty");
+  const agents = agentsData.agents || {};
+  const queueOf = (name) => {
+    const q = agents[name] && agents[name].queue;
+    return q === "build" || q === "test" || q === "launch" ? q : "other";
+  };
+
+  const latest = snapshots[snapshots.length - 1];
+  const latestMs = Date.parse(latest.time);
+  updatedEl.textContent = `Snapshot ${timeAgo(latest.time)}`;
+  updatedEl.title = latest.time;
+
+  // Summary: connected now, per queue, and how many are missing
+  const connected = new Set(latest.connected);
+  const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
+  for (const name of connected) perQueue[queueOf(name)]++;
+  const rows = [];
+  for (const [name, rec] of Object.entries(agents)) {
+    const lastSeenMs = Date.parse(rec.last_seen || "");
+    const isConnected = connected.has(name);
+    if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_MISSING_WINDOW_MS)) continue;
+    const queue = queueOf(name);
+    let status;
+    if (isConnected) status = "connected";
+    else if (rec.state === "lost" || rec.state === "stopping") status = rec.state;
+    else if (queue === "launch") status = "idle";
+    else status = "missing";
+    rows.push({ name, rec, queue, status, lastSeenMs });
+  }
+  const missing = rows.filter((r) => r.status === "missing" || r.status === "lost").length;
+  const queueParts = ["build", "test", "launch", "other"]
+    .filter((q) => perQueue[q] > 0)
+    .map((q) => `${q} ${perQueue[q]}`);
+  summaryEl.innerHTML =
+    `<strong>${connected.size}</strong> connected (${queueParts.join(", ")})` +
+    (missing > 0
+      ? `, <strong class="agents-missing-count">${missing} missing</strong>`
+      : ", none missing");
+
+  renderAgentsChart(snapshots, queueOf);
+
+  // Live table: missing first, then by queue and name
+  const statusOrder = { missing: 0, lost: 0, stopping: 1, idle: 2, connected: 3 };
+  rows.sort(
+    (a, b) =>
+      statusOrder[a.status] - statusOrder[b.status] ||
+      a.queue.localeCompare(b.queue) ||
+      a.name.localeCompare(b.name),
+  );
+  const parts = ['<table class="agents-table"><thead><tr>'];
+  parts.push(
+    "<th>Agent</th><th>Host</th><th>Queue</th><th>OS / arch</th><th>Status</th><th>Current job</th><th>Since</th>",
+  );
+  parts.push("</tr></thead><tbody>");
+  for (const { name, rec, queue, status, lastSeenMs } of rows) {
+    const flagged = status === "missing" || status === "lost";
+    let statusText;
+    if (status === "connected") statusText = "connected";
+    else if (status === "idle") statusText = "idle (ephemeral)";
+    else statusText = `${status}, last seen ${isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString())}`;
+    const job = rec.job;
+    let jobText = "";
+    if (job && job.name) {
+      const where = job.pipeline ? `${job.pipeline}${job.build ? " #" + job.build : ""}: ` : "";
+      jobText = where + job.name.replace(/:[a-z0-9_]+:\s*/g, "");
+    }
+    const since =
+      status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
+    parts.push(`<tr class="${flagged ? "agents-missing" : ""}">`);
+    parts.push(
+      `<td class="agents-name"><span class="agents-dot agents-dot-${escapeHtml(status)}"></span>${escapeHtml(name)}</td>`,
+    );
+    parts.push(`<td>${escapeHtml(rec.hostname || "")}</td>`);
+    parts.push(`<td>${escapeHtml(rec.queue || "")}</td>`);
+    parts.push(`<td>${escapeHtml([rec.os, rec.arch].filter(Boolean).join(" / "))}</td>`);
+    parts.push(`<td>${escapeHtml(statusText)}</td>`);
+    parts.push(`<td class="agents-job" title="${escapeHtml(jobText)}">${escapeHtml(jobText)}</td>`);
+    parts.push(`<td title="${escapeHtml(rec.connected_at || "")}">${escapeHtml(since)}</td>`);
+    parts.push("</tr>");
+  }
+  parts.push("</tbody></table>");
+  tableEl.innerHTML = parts.join("");
+}
+
+// Connected agents per queue over the selected time range, one point per snapshot
+function renderAgentsChart(snapshots, queueOf) {
+  const canvas = document.getElementById("agents-chart");
+  if (!canvas || typeof Chart === "undefined") return;
+  const cutoff = getTimeRangeCutoff();
+  const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
+  const series = { build: [], test: [], launch: [], other: [] };
+  for (const snap of snapshots) {
+    const t = Date.parse(snap.time);
+    if (isNaN(t) || t < cutoffMs) continue;
+    const counts = { build: 0, test: 0, launch: 0, other: 0 };
+    for (const name of snap.connected) counts[queueOf(name)]++;
+    for (const q of Object.keys(series)) series[q].push({ x: t, y: counts[q] });
+  }
+  const isDark = isDarkMode();
+  const colors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const datasets = Object.entries(series)
+    .filter(([q, pts]) => pts.some((p) => p.y > 0))
+    .map(([q, pts]) => ({
+      label: q,
+      data: pts,
+      borderColor: colors[q],
+      backgroundColor: colors[q],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      pointHitRadius: 6,
+      stepped: true,
+    }));
+  if (agentsChart) {
+    agentsChart.destroy();
+    agentsChart = null;
+  }
+  agentsChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: { position: "right", labels: { color: textColor, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            title: (items) =>
+              items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
+            label: (item) => `${item.dataset.label}: ${item.parsed.y} connected`,
+          },
+        },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor }),
+        y: {
+          beginAtZero: true,
+          ticks: { color: textColor, precision: 0 },
+          grid: { color: gridColor },
+          title: { display: true, text: "agents", color: textColor },
+        },
+      },
+    },
+  });
+}
+
 function renderWorkerPresence() {
   const container = document.getElementById("workers-grid");
   if (!container) return;
+  renderAgentsSection();
   if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
     container.innerHTML = '<div class="workers-empty">No data loaded yet.</div>';
     return;

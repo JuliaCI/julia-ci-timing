@@ -27,6 +27,10 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
   [Julia-TTFX-Snippets](https://github.com/tecosaur/Julia-TTFX-Snippets) tasks)
   from the `TTFX` job on every `julia-ci` master build, see
   [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
+- `fetch_agents.jl` — a snapshot of the connected Buildkite agents on every run
+  (the token needs the `read_agents` scope), appended as one line to a monthly
+  `data/agents/history-*.ndjson`, for the Workers tab's live agent table and
+  connected-agents-per-queue history
 
 ## PR comparison
 

@@ -45,6 +45,28 @@ Times are seconds, the minimum over the job's ABBA blocks; `load` and
 of the later runs. `builds` is sorted by date. A build whose job failed
 before uploading has an empty `tasks`.
 
+Agent snapshots (the CI → Workers tab) live under `data/agents/`, written
+by `fetch_agents.jl` from the Buildkite agents API on every update run.
+`history-YYYY-MM.ndjson` is append-only, one line per run:
+
+```text
+{ "time": "2026-09-12T02:00:00Z", "connected": ["<agent name>", ...] }
+```
+
+and `latest.json` holds the latest details of every agent seen in the
+last year, keys sorted:
+
+```text
+{ "generated_at": "...",
+  "agents": { "<agent name>": { "hostname", "queue", "os", "arch", "version",
+                                "state", "connected_at", "first_seen", "last_seen",
+                                "job": { "name", "pipeline", "build", "started_at" } | null } } }
+```
+
+`state` is the API's connection state at the last listing and `job` is
+only set for agents connected in the latest snapshot. Month files older
+than a year are deleted.
+
 ## Analysis helpers (`analysis/`)
 
 All scripts activate the repo's `Project.toml` automatically. Run

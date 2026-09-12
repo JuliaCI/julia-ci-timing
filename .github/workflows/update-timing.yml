@@ -111,6 +111,12 @@ jobs:
         run: |
           julia --color=yes --project fetch_ttfx.jl
 
+      - name: Snapshot Buildkite agents
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+        run: |
+          julia --color=yes --project fetch_agents.jl
+
       - name: Commit updated data
         # A failed fetcher must not discard what the others wrote; the push
         # of that commit deploys it in a fresh run
