@@ -665,9 +665,13 @@
               <span class="updated" id="agents-updated"></span>
               <span class="agents-help"
                 >Snapshots of the Buildkite agents API taken by every update
-                run, all queues and pipelines. An agent seen in the last week
-                but not in the latest snapshot is flagged as missing; launch
-                agents are ephemeral and not flagged.</span
+                run, all queues and pipelines. The build, test, launch and
+                default queues have no resident agents: each host starts one
+                agent per job and it disconnects when the job ends, so they are
+                listed per host with the slots seen mid-job, and a host is
+                flagged once no slot of it has run a job for 3 days. Any other
+                agent seen in the last week but not in the latest snapshot is
+                flagged as missing.</span
               >
             </div>
             <div class="agents-chart-wrapper">

@@ -1632,10 +1632,12 @@ body {
   border-radius: 50%;
   vertical-align: middle;
 }
-.agents-dot-connected {
+.agents-dot-connected,
+.agents-dot-running {
   background: #2ea043;
 }
-.agents-dot-missing {
+.agents-dot-missing,
+.agents-dot-quiet {
   background: #d1242f;
 }
 .agents-dot-lost,

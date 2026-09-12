@@ -14,7 +14,10 @@
 #                           keys so the rewrite each run diffs cleanly.
 #
 # The site draws connected agents per queue over time from the history and flags
-# agents that were connected recently but are not now.
+# agents that were connected recently but are not now. The build, test, launch and
+# default queues are the exception: their hosts start one agent per job (see
+# JuliaCI/sandboxed-buildkite-agent), so a listing only shows the slots mid-job
+# and the site judges those per host, by the last snapshot any slot appeared in.
 #
 # Needs a token with the read_agents scope. Without it the script warns and exits
 # cleanly so a missing scope does not fail the workflow and block deploys.

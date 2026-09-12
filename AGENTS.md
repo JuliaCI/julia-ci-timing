@@ -67,6 +67,13 @@ last year, keys sorted:
 only set for agents connected in the latest snapshot. Month files older
 than a year are deleted.
 
+The `build`, `test` and `launch` queues (the Julia cluster) and the Secure
+cluster's `default` queue have no resident agents: each host's scheduler (JuliaCI/sandboxed-buildkite-agent) starts one
+agent per job with `--acquire-job`, named `<group>-<host>.<slot>`, and it
+disconnects when the job ends. A snapshot only lists the slots mid-job, so
+an absent `tester-amdci4.3` means an idle slot, not a down host; the site
+folds those names per host and flags a host only after days without a job.
+
 ## Analysis helpers (`analysis/`)
 
 All scripts activate the repo's `Project.toml` automatically. Run

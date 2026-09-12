@@ -200,10 +200,26 @@ async function loadAgentsData() {
   return { generated_at: latest.generated_at, agents, snapshots };
 }
 const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// The build, test and launch queues (the Julia cluster) and the Secure cluster's
+// default queue have no resident agents: each host's scheduler
+// (JuliaCI/sandboxed-buildkite-agent) starts one agent per job with
+// --acquire-job, named <group>-<host>.<slot>, and it disconnects when the job
+// ends. A snapshot therefore only sees the slots mid-job, so those queues are
+// listed per host and a host is flagged only when no slot of it has run a job
+// for a while.
+const AGENTS_PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
+const AGENTS_QUIET_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+const AGENTS_HOST_RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
 const AGENTS_QUEUE_COLORS = {
   light: { build: "#0969da", test: "#bc4c00", launch: "#8250df", other: "#656d76" },
   dark: { build: "#388bfd", test: "#db6d28", launch: "#a371f7", other: "#8b949e" },
 };
+
+function agentJobText(job) {
+  if (!job || !job.name) return "";
+  const where = job.pipeline ? `${job.pipeline}${job.build ? " #" + job.build : ""}: ` : "";
+  return where + job.name.replace(/:[a-z0-9_]+:\s*/g, "");
+}
 
 async function renderAgentsSection() {
   const section = document.getElementById("agents-section");
@@ -250,32 +266,58 @@ async function renderAgentsSection() {
   const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
   for (const name of connected) perQueue[queueOf(name)]++;
   const rows = [];
+  // Per-job queues: one row per host, folding the slot suffix of the agent name
+  const hosts = new Map();
   for (const [name, rec] of Object.entries(agents)) {
     const lastSeenMs = Date.parse(rec.last_seen || "");
     const isConnected = connected.has(name);
-    if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_MISSING_WINDOW_MS)) continue;
     const queue = queueOf(name);
+    if (AGENTS_PER_JOB_QUEUES.has(queue)) {
+      if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_HOST_RETAIN_MS)) continue;
+      const key = name.replace(/\.\d+$/, "");
+      let host = hosts.get(key);
+      if (!host) {
+        host = { name: key, rec, queue, slots: 0, running: 0, jobs: [], lastSeenMs: NaN };
+        hosts.set(key, host);
+      }
+      host.slots++;
+      if (isNaN(host.lastSeenMs) || lastSeenMs > host.lastSeenMs) host.lastSeenMs = lastSeenMs;
+      if (isConnected) {
+        host.running++;
+        host.rec = rec;
+        if (rec.job) host.jobs.push(agentJobText(rec.job));
+      }
+      continue;
+    }
+    if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_MISSING_WINDOW_MS)) continue;
     let status;
     if (isConnected) status = "connected";
     else if (rec.state === "lost" || rec.state === "stopping") status = rec.state;
-    else if (queue === "launch") status = "idle";
     else status = "missing";
     rows.push({ name, rec, queue, status, lastSeenMs });
   }
+  for (const host of hosts.values()) {
+    if (host.running > 0) host.status = "running";
+    else if (latestMs - host.lastSeenMs > AGENTS_QUIET_WINDOW_MS) host.status = "quiet";
+    else host.status = "idle";
+    rows.push(host);
+  }
   const missing = rows.filter((r) => r.status === "missing" || r.status === "lost").length;
+  const quiet = rows.filter((r) => r.status === "quiet").length;
   const queueParts = ["build", "test", "launch", "other"]
     .filter((q) => perQueue[q] > 0)
     .map((q) => `${q} ${perQueue[q]}`);
+  const flagged = [];
+  if (missing > 0) flagged.push(`<strong class="agents-missing-count">${missing} missing</strong>`);
+  if (quiet > 0) flagged.push(`<strong class="agents-missing-count">${quiet} host${quiet === 1 ? "" : "s"} quiet</strong>`);
   summaryEl.innerHTML =
     `<strong>${connected.size}</strong> connected (${queueParts.join(", ")})` +
-    (missing > 0
-      ? `, <strong class="agents-missing-count">${missing} missing</strong>`
-      : ", none missing");
+    (flagged.length ? ", " + flagged.join(", ") : ", none missing");
 
   renderAgentsChart(snapshots, queueOf);
 
-  // Live table: missing first, then by queue and name
-  const statusOrder = { missing: 0, lost: 0, stopping: 1, idle: 2, connected: 3 };
+  // Live table: flagged first, then by queue and name
+  const statusOrder = { missing: 0, lost: 0, quiet: 0, stopping: 1, running: 2, connected: 2, idle: 3 };
   rows.sort(
     (a, b) =>
       statusOrder[a.status] - statusOrder[b.status] ||
@@ -287,21 +329,28 @@ async function renderAgentsSection() {
     "<th>Agent</th><th>Host</th><th>Queue</th><th>OS / arch</th><th>Status</th><th>Current job</th><th>Since</th>",
   );
   parts.push("</tr></thead><tbody>");
-  for (const { name, rec, queue, status, lastSeenMs } of rows) {
-    const flagged = status === "missing" || status === "lost";
+  for (const row of rows) {
+    const { name, rec, status, lastSeenMs } = row;
+    const flaggedRow = status === "missing" || status === "lost" || status === "quiet";
+    const lastSeen = isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString());
     let statusText;
     if (status === "connected") statusText = "connected";
-    else if (status === "idle") statusText = "idle (ephemeral)";
-    else statusText = `${status}, last seen ${isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString())}`;
-    const job = rec.job;
-    let jobText = "";
-    if (job && job.name) {
-      const where = job.pipeline ? `${job.pipeline}${job.build ? " #" + job.build : ""}: ` : "";
-      jobText = where + job.name.replace(/:[a-z0-9_]+:\s*/g, "");
+    else if (status === "running") statusText = `${row.running} running (${row.slots} slot${row.slots === 1 ? "" : "s"} seen)`;
+    else if (status === "idle") statusText = `idle, last job seen ${lastSeen}`;
+    else if (status === "quiet") statusText = `no job seen since ${lastSeen}`;
+    else statusText = `${status}, last seen ${lastSeen}`;
+    let jobText;
+    if (row.jobs) {
+      // Identical jobs on several slots collapse to one entry with a count
+      const counts = new Map();
+      for (const j of row.jobs) counts.set(j, (counts.get(j) || 0) + 1);
+      jobText = [...counts].map(([j, n]) => (n > 1 ? `${j} ×${n}` : j)).join("; ");
+    } else {
+      jobText = agentJobText(rec.job);
     }
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
-    parts.push(`<tr class="${flagged ? "agents-missing" : ""}">`);
+    parts.push(`<tr class="${flaggedRow ? "agents-missing" : ""}">`);
     parts.push(
       `<td class="agents-name"><span class="agents-dot agents-dot-${escapeHtml(status)}"></span>${escapeHtml(name)}</td>`,
     );
@@ -310,7 +359,7 @@ async function renderAgentsSection() {
     parts.push(`<td>${escapeHtml([rec.os, rec.arch].filter(Boolean).join(" / "))}</td>`);
     parts.push(`<td>${escapeHtml(statusText)}</td>`);
     parts.push(`<td class="agents-job" title="${escapeHtml(jobText)}">${escapeHtml(jobText)}</td>`);
-    parts.push(`<td title="${escapeHtml(rec.connected_at || "")}">${escapeHtml(since)}</td>`);
+    parts.push(`<td title="${escapeHtml(status === "connected" ? rec.connected_at || "" : "")}">${escapeHtml(since)}</td>`);
     parts.push("</tr>");
   }
   parts.push("</tbody></table>");
@@ -365,7 +414,8 @@ function renderAgentsChart(snapshots, queueOf) {
           callbacks: {
             title: (items) =>
               items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
-            label: (item) => `${item.dataset.label}: ${item.parsed.y} connected`,
+            label: (item) =>
+              `${item.dataset.label}: ${item.parsed.y} ${AGENTS_PER_JOB_QUEUES.has(item.dataset.label) ? "running" : "connected"}`,
           },
         },
       },
