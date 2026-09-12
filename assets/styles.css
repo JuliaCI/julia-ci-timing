@@ -1702,10 +1702,6 @@ body {
 .wcell-sample.wcell-empty {
   background: transparent;
 }
-.wcell-sample.wcell-offline {
-  background: var(--color-attention-subtle, #fff8c5);
-  border-color: var(--color-attention-muted, #d4a72c);
-}
 .workers-grid-wrapper {
   flex: 1;
   min-height: 0;
@@ -1755,33 +1751,15 @@ body {
 .workers-table td:nth-child(2) {
   position: sticky;
   left: 220px;
-  width: 90px;
-  min-width: 90px;
-  max-width: 90px;
-  z-index: 1;
-}
-.workers-table th:nth-child(3),
-.workers-table td:nth-child(3) {
-  position: sticky;
-  left: 310px;
   width: 60px;
   min-width: 60px;
   max-width: 60px;
-  z-index: 1;
-}
-.workers-table th:nth-child(4),
-.workers-table td:nth-child(4) {
-  position: sticky;
-  left: 370px;
-  width: 140px;
-  min-width: 140px;
-  max-width: 140px;
   z-index: 1;
   border-right: 1px solid var(--color-border-default);
 }
 /* Header cells in sticky columns must outrank body sticky cells so they
    stay on top when scrolling both axes. */
-.workers-table thead th:nth-child(-n + 4) {
+.workers-table thead th:nth-child(-n + 2) {
   z-index: 3;
 }
 .workers-table td.workers-label {
@@ -1799,22 +1777,6 @@ body {
 }
 .workers-table td.workers-summary.num {
   text-align: right;
-}
-.workers-table tr.workers-offline td:nth-child(-n + 4) {
-  background: var(--color-attention-subtle, #fff8c5);
-}
-.workers-table tr.workers-offline td.workers-label {
-  color: var(--color-attention-fg, #9a6700);
-  font-weight: 600;
-}
-.workers-offline-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--color-attention-emphasis, #bf8700);
-  vertical-align: middle;
 }
 .workers-cells-cell {
   padding: 0 !important;
@@ -2228,11 +2190,7 @@ body {
   .workers-table th:nth-child(1),
   .workers-table td:nth-child(1),
   .workers-table th:nth-child(2),
-  .workers-table td:nth-child(2),
-  .workers-table th:nth-child(3),
-  .workers-table td:nth-child(3),
-  .workers-table th:nth-child(4),
-  .workers-table td:nth-child(4) {
+  .workers-table td:nth-child(2) {
     position: static;
   }
 }

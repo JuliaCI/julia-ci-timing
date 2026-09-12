@@ -413,7 +413,6 @@ function renderWorkerPresence() {
 
   // Aggregate runs per agent per UTC day
   const agentDays = new Map(); // agent -> Map<dayKey, {count, failed}>
-  const agentLatest = new Map();
   const agentTotal = new Map();
   const startMs = startDate.getTime();
   for (const job of Object.values(data.jobs)) {
@@ -433,8 +432,6 @@ function renderWorkerPresence() {
       if (r.state && r.state !== "passed") e.failed++;
       m.set(dayKey, e);
       agentTotal.set(r.agent, (agentTotal.get(r.agent) || 0) + 1);
-      const prev = agentLatest.get(r.agent);
-      if (!prev || t > prev) agentLatest.set(r.agent, t);
     }
   }
 
@@ -464,9 +461,9 @@ function renderWorkerPresence() {
   else cellW = 16;
   const cellH = 14;
 
-  // Sort agents by most recent activity (descending)
+  // Busiest hosts first
   const agents = [...agentDays.keys()].sort(
-    (a, b) => (agentLatest.get(b) || 0) - (agentLatest.get(a) || 0),
+    (a, b) => (agentTotal.get(b) || 0) - (agentTotal.get(a) || 0) || a.localeCompare(b),
   );
 
   // Month label positions (one label per first-of-month, plus the first day)
@@ -486,7 +483,7 @@ function renderWorkerPresence() {
     `<table class="workers-table" style="--workers-cell-w:${cellW}px">`,
   );
   parts.push("<thead><tr>");
-  parts.push('<th>Worker</th><th>Last seen</th><th>Runs</th><th>Longest gap</th>');
+  parts.push("<th>Host</th><th>Runs</th>");
   parts.push(
     `<th class="workers-cells-cell"><div class="workers-month-row" style="width:${stripWidth}px">`,
   );
@@ -500,38 +497,12 @@ function renderWorkerPresence() {
   for (const agent of agents) {
     const m = agentDays.get(agent);
     const total = agentTotal.get(agent) || 0;
-    const latestMs = agentLatest.get(agent);
 
-    // Flag workers that haven't run a master job in more than a day.
-    const offline = !latestMs || now.getTime() - latestMs > 24 * 60 * 60 * 1000;
-
-    let longestGap = 0;
-    let lastIdx = -1;
-    for (let i = 0; i < days.length; i++) {
-      if (m.has(days[i])) {
-        if (lastIdx >= 0) {
-          const gap = i - lastIdx - 1;
-          if (gap > longestGap) longestGap = gap;
-        }
-        lastIdx = i;
-      }
-    }
-    const trailingGap = lastIdx >= 0 ? days.length - 1 - lastIdx : days.length;
-
-    const lastSeenStr = latestMs
-      ? timeAgo(new Date(latestMs).toISOString())
-      : "—";
-    const gapStr =
-      `${longestGap}d` +
-      (trailingGap > 0 ? ` (silent ${trailingGap}d)` : "");
-
-    parts.push(`<tr class="${offline ? "workers-offline" : ""}">`);
+    parts.push("<tr>");
     parts.push(
-      `<td class="workers-label" title="${escapeHtml(agent)}">${offline ? '<span class="workers-offline-dot" title="Offline >1d" aria-label="Offline more than a day"></span>' : ""}${escapeHtml(agent)}</td>`,
+      `<td class="workers-label" title="${escapeHtml(agent)}">${escapeHtml(agent)}</td>`,
     );
-    parts.push(`<td class="workers-summary">${escapeHtml(lastSeenStr)}</td>`);
     parts.push(`<td class="workers-summary num">${total}</td>`);
-    parts.push(`<td class="workers-summary num">${escapeHtml(gapStr)}</td>`);
     parts.push(
       `<td class="workers-cells-cell"><div class="workers-row" style="width:${stripWidth}px;height:${cellH}px">`,
     );
