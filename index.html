@@ -658,19 +658,31 @@
           </div>
         </div>
         <div class="workers-view view-hidden" id="workers-view">
-          <div class="workers-note" role="note">
-            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
-            <span
-              >Based only on CI runs for <strong>master</strong> commits;
-              pull-request builds are excluded. Workers that primarily run PR
-              jobs may appear idle here, so this is not a complete picture of
-              worker activity.</span
-            >
+          <div class="agents-section" id="agents-section">
+            <div class="agents-header">
+              <span class="agents-title">Connected agents</span>
+              <span class="agents-summary" id="agents-summary"></span>
+              <span class="updated" id="agents-updated"></span>
+              <span class="agents-help"
+                >Snapshots of the Buildkite agents API taken by every update
+                run, all queues and pipelines. An agent seen in the last week
+                but not in the latest snapshot is flagged as missing; launch
+                agents are ephemeral and not flagged.</span
+              >
+            </div>
+            <div class="agents-chart-wrapper">
+              <canvas id="agents-chart"></canvas>
+            </div>
+            <div class="agents-table-wrapper" id="agents-table">
+              <div class="loading">Loading agent snapshots...</div>
+            </div>
           </div>
           <div class="workers-toolbar">
             <span class="workers-help"
-              >Each row is a Buildkite agent. Cells show jobs run per day
-              (across all pipelines); empty stretches are downtime.</span
+              >Jobs run per host per day on <strong>master</strong> builds
+              (pull-request builds are not included, so an empty cell is not
+              downtime; see the snapshots above for that). Red marks a day
+              with non-passing jobs on that host.</span
             >
             <span class="workers-legend" aria-hidden="true">
               <span class="workers-legend-item"
@@ -681,11 +693,8 @@
                 failed</span
               >
               <span class="workers-legend-item"
-                ><span class="wcell-sample wcell-empty"></span> no jobs</span
-              >
-              <span class="workers-legend-item"
-                ><span class="wcell-sample wcell-offline"></span> offline
-                &gt;1d</span
+                ><span class="wcell-sample wcell-empty"></span> no master
+                jobs</span
               >
             </span>
           </div>
