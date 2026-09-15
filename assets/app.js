@@ -350,7 +350,7 @@ async function renderAgentsSection() {
     }
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
-    parts.push(`<tr class="${flaggedRow ? "agents-missing" : ""}">`);
+    parts.push(`<tr class="${flaggedRow ? "agents-missing" : ""}" data-queue="${escapeHtml(row.queue)}">`);
     parts.push(
       `<td class="agents-name"><span class="agents-dot agents-dot-${escapeHtml(status)}"></span>${escapeHtml(name)}</td>`,
     );
@@ -364,6 +364,21 @@ async function renderAgentsSection() {
   }
   parts.push("</tbody></table>");
   tableEl.innerHTML = parts.join("");
+  tableEl.querySelectorAll("tr[data-queue]").forEach((tr) => {
+    tr.addEventListener("mouseenter", () => highlightAgentsQueue(tr.dataset.queue));
+    tr.addEventListener("mouseleave", () => highlightAgentsQueue(null));
+  });
+}
+
+// Dim every queue line but `queue`; null restores
+function highlightAgentsQueue(queue) {
+  if (!agentsChart) return;
+  for (const ds of agentsChart.data.datasets) {
+    const on = queue === null || ds.label === queue;
+    ds.borderColor = on ? ds._color : fadeColor(ds._color, 0.15);
+    ds.borderWidth = queue !== null && on ? 2.5 : 1.5;
+  }
+  agentsChart.update("none");
 }
 
 // Connected agents per queue over the selected time range, one point per snapshot
@@ -389,6 +404,7 @@ function renderAgentsChart(snapshots, queueOf) {
     .map(([q, pts]) => ({
       label: q,
       data: pts,
+      _color: colors[q],
       borderColor: colors[q],
       backgroundColor: colors[q],
       borderWidth: 1.5,
@@ -807,11 +823,13 @@ function renderCommitsView() {
         // contains every candidate (compare excludes its left endpoint).
         rangeStart: i > 1 ? points[i - 2].commit : null,
       };
+      p.markers = [{ datasetIndex: dsIdx, index: i }];
       regPoints.push(p);
       regressionRows.push(p);
     }
     if (regPoints.length > 0) {
       const regIdx = datasets.length;
+      regPoints.forEach((p, i) => p.markers.push({ datasetIndex: regIdx, index: i }));
       datasets.push({
         label: `${label} regression`,
         data: regPoints,
@@ -912,11 +930,11 @@ function renderCommitsView() {
   }
   regressionRows.sort((a, b) => b.x - a.x);
   const rows = regressionRows
-    .map((p) => {
+    .map((p, i) => {
       const range = p.rangeStart
         ? `<a href="https://github.com/JuliaLang/julia/compare/${escapeHtml(p.rangeStart)}...${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.rangeStart)}…${escapeHtml(p.commit)}</code></a>`
         : `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.commit)}</code></a>`;
-      return `<tr>
+      return `<tr data-row="${i}">
         <td>${new Date(p.x).toISOString().slice(0, 10)}</td>
         <td>${range}</td>
         <td>${escapeHtml(p.series)}</td>
@@ -934,6 +952,11 @@ function renderCommitsView() {
       <tbody>${rows}</tbody>
     </table>
     </div>`;
+  tableEl.querySelectorAll("tr[data-row]").forEach((tr) => {
+    const p = regressionRows[Number(tr.dataset.row)];
+    tr.addEventListener("mouseenter", () => setChartActivePoints(commitsChart, p.markers, p.markers.slice(-1)));
+    tr.addEventListener("mouseleave", () => setChartActivePoints(commitsChart, []));
+  });
 }
 
 function toggleJobsSelection(jobs) {
@@ -3612,6 +3635,48 @@ function getSmallTimedOutMarker(color) {
     smallTimedOutMarkerCache[color] = createSmallTimedOutMarker(color);
   }
   return smallTimedOutMarkerCache[color];
+}
+
+// Put `chart` into the hover state it would show with the pointer over
+// `points` ([{datasetIndex, index}]): enlarged markers, and a tooltip for
+// `tooltipPoints` (default all of them; pass a subset when a row lights up
+// dozens of series). Table rows call this on mouseenter so the matching
+// marker(s) light up; an empty list clears it. Chart.js replays the last
+// pointer event on update, which would undo the selection, so drop it first.
+function setChartActivePoints(chart, points, tooltipPoints = points) {
+  if (!chart) return;
+  chart._lastEvent = null;
+  const isValid = (p) => {
+    const meta = chart.getDatasetMeta(p.datasetIndex);
+    return meta && !meta.hidden && meta.data[p.index];
+  };
+  chart.setActiveElements(points.filter(isValid));
+  const tip = tooltipPoints.filter(isValid);
+  if (tip.length) {
+    const el = chart.getDatasetMeta(tip[0].datasetIndex).data[tip[0].index];
+    chart.tooltip.setActiveElements(tip, { x: el.x, y: el.y });
+  } else {
+    chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+  }
+  chart.update("none");
+}
+
+// The point in `points` from the dataset `prefer` matches, else the first
+function preferredPoint(chart, points, prefer) {
+  const hit = points.find((p) => prefer(chart.data.datasets[p.datasetIndex]));
+  return points.length ? [hit || points[0]] : [];
+}
+
+// Every point of `chart` for which `match(raw, datasetIndex, index)` is true
+function chartPointsWhere(chart, match) {
+  const points = [];
+  if (!chart) return points;
+  chart.data.datasets.forEach((ds, datasetIndex) => {
+    ds.data.forEach((raw, index) => {
+      if (match(raw, datasetIndex, index)) points.push({ datasetIndex, index });
+    });
+  });
+  return points;
 }
 
 // Y-axis only highlighting (for chart hover)
@@ -7472,7 +7537,7 @@ function renderBenchRunsTable() {
     const summaryUrl = row.date_path
       ? `https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/benchmark/by_date/${row.date_path.split("/").map(encodeURIComponent).join("/")}/summary.png`
       : "";
-    html += `<tr${summaryUrl ? ` data-summary-url="${escapeHtml(summaryUrl)}"` : ""}>`;
+    html += `<tr data-date-path="${escapeHtml(row.date_path)}" data-date="${escapeHtml(row.date)}"${summaryUrl ? ` data-summary-url="${escapeHtml(summaryUrl)}"` : ""}>`;
     html += `<td>${escapeHtml(row.date)}</td>`;
     html += `<td>${commitDisplay}</td>`;
     html += `<td>${reportDisplay}</td>`;
@@ -7487,6 +7552,26 @@ function renderBenchRunsTable() {
   }
   tbody.innerHTML = html || '<tr><td colspan="10">No runs</td></tr>';
   attachBenchRowHoverPreview(tbody);
+  tbody.querySelectorAll("tr[data-date]").forEach((tr) => {
+    tr.addEventListener("mouseenter", () => highlightBenchRun(tr.dataset.datePath, tr.dataset.date));
+    tr.addEventListener("mouseleave", () => setChartActivePoints(benchChart, []));
+  });
+}
+
+// Chart points from one Nanosoldier run: matched by report path, or by
+// calendar date for series whose points carry no path
+function highlightBenchRun(datePath, date) {
+  const dayMs = 24 * 3600 * 1000;
+  const dayOf = (x) => Math.floor(new Date(x).getTime() / dayMs);
+  const day = dayOf(date);
+  const points = chartPointsWhere(benchChart, (raw) =>
+    datePath && raw.date_path ? raw.date_path === datePath : dayOf(raw.x) === day,
+  );
+  setChartActivePoints(
+    benchChart,
+    points,
+    preferredPoint(benchChart, points, (ds) => ds.label === "Overall"),
+  );
 }
 
 function attachBenchRowHoverPreview(tbody) {
@@ -9277,7 +9362,19 @@ function updatePkgevalTable() {
   tbody.innerHTML = html;
   tbody.querySelectorAll("tr[data-report-url]").forEach((tr) => {
     tr.onclick = () => window.open(tr.dataset.reportUrl, "_blank", "noopener");
+    tr.addEventListener("mouseenter", () => highlightPkgevalPoint(tr.dataset.date));
+    tr.addEventListener("mouseleave", () => setChartActivePoints(pkgevalChart, []));
   });
+}
+
+function highlightPkgevalPoint(date) {
+  if (!pkgevalChart) return;
+  const index = pkgevalChart.data.labels.indexOf(date);
+  if (index < 0) return setChartActivePoints(pkgevalChart, []);
+  setChartActivePoints(
+    pkgevalChart,
+    pkgevalChart.data.datasets.map((_, datasetIndex) => ({ datasetIndex, index })),
+  );
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===
@@ -9929,7 +10026,18 @@ function renderTtfxBuildsTable() {
   tbody.innerHTML = html;
   tbody.querySelectorAll("tr[data-job-url]").forEach((tr) => {
     tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
+    tr.addEventListener("mouseenter", () => highlightTtfxBuild(Number(tr.dataset.build)));
+    tr.addEventListener("mouseleave", () => highlightTtfxBuild(null));
   });
+}
+
+// Light up build `build` on the per-task chart or on every summary panel
+function highlightTtfxBuild(build) {
+  const charts = ttfxMode === "summary" ? Object.values(ttfxSummaryCharts) : [ttfxChart];
+  for (const c of charts) {
+    const points = build == null ? [] : chartPointsWhere(c, (raw) => raw.build.build === build);
+    setChartActivePoints(c, points, preferredPoint(c, points, (ds) => ds._common));
+  }
 }
 
 function sortTtfxTasksTable(col) {
