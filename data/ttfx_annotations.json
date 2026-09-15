@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "annotations": [
+    {
+      "job_id": "01a0a5f4-b3b5-4cc8-b804-f297aab2d905",
+      "label": "macOS 26.6 → 27",
+      "description": "macOS runners were updated from macOS 26.6 to 27"
+    }
+  ]
+}

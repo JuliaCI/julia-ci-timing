@@ -45,6 +45,13 @@ Times are seconds, the minimum over the job's ABBA blocks; `load` and
 of the later runs. `builds` is sorted by date. A build whose job failed
 before uploading has an empty `tasks`.
 
+Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
+(not touched by `fetch_ttfx.jl`): each entry names a `job_id` from the summary
+plus a short `label` and a fuller `description`. The site draws a dashed line
+at that job on every TTFX chart, adds the description to its tooltip, and
+flags the row in the builds table. Use it for runner or environment changes
+that shift the numbers without a Julia commit being responsible.
+
 Agent snapshots (the CI → Workers tab) live under `data/agents/`, written
 by `fetch_agents.jl` from the Buildkite agents API on every update run.
 `history-YYYY-MM.ndjson` is append-only, one line per run:

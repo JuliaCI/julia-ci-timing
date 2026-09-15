@@ -9393,6 +9393,9 @@ let ttfxTaskColors = {};
 let ttfxTableView = "builds"; // "builds" | "tasks"
 let ttfxTaskSortCol = "latest";
 let ttfxTaskSortAsc = false;
+// Hand-written notes on individual jobs (data/ttfx_annotations.json), drawn
+// as a dashed line on every TTFX chart and flagged in the builds table
+let ttfxAnnotations = [];
 
 const TTFX_METRICS = {
   precompile: { label: "Precompile", index: 0 },
@@ -9409,6 +9412,41 @@ const TTFX_MIN_Y_SPAN_PCT = 20;
 
 function ttfxJobUrl(b) {
   return `https://buildkite.com/julialang/julia-ci/builds/${b.build}#${b.job_id}`;
+}
+
+function ttfxAnnotationsFor(b) {
+  return ttfxAnnotations.filter((a) => a.job_id === b.job_id);
+}
+
+// Chart.js annotation-plugin config: one dashed vertical line per annotated
+// job in `builds`, with its short label at the top
+function buildTtfxAnnotations(builds, isDark) {
+  const color = isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)";
+  const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
+  const labelColor = isDark ? "#8b949e" : "#656d76";
+  const out = {};
+  for (const b of builds) {
+    ttfxAnnotationsFor(b).forEach((a, i) => {
+      out[`note-${b.job_id}-${i}`] = {
+        type: "line",
+        xMin: ttfxBuildTime(b),
+        xMax: ttfxBuildTime(b),
+        borderColor: color,
+        borderWidth: 1,
+        borderDash: [4, 4],
+        label: {
+          display: true,
+          content: a.label || a.description,
+          position: "end",
+          backgroundColor: labelBg,
+          color: labelColor,
+          font: { size: 10 },
+          padding: 3,
+        },
+      };
+    });
+  }
+  return out;
 }
 
 // Row dates are "yyyy-mm-dd HH:MM" in UTC (Buildkite created_at)
@@ -9607,7 +9645,13 @@ function applyTtfxURLParams() {
 
 async function loadTtfxData() {
   try {
-    ttfxData = await loadGzipJson("data/ttfx_summary.json.gz");
+    [ttfxData, ttfxAnnotations] = await Promise.all([
+      loadGzipJson("data/ttfx_summary.json.gz"),
+      fetch("data/ttfx_annotations.json")
+        .then((r) => (r.ok ? r.json() : { annotations: [] }))
+        .then((d) => d.annotations || [])
+        .catch(() => []),
+    ]);
 
     const updatedEl = document.getElementById("ttfx-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(ttfxData.generated_at)}`;
@@ -9711,7 +9755,7 @@ function highlightTtfxRow(build) {
 
 // Chart options shared by the per-task chart and the summary panels.
 // `normalized` series are % change from the first build in range.
-function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
+function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, builds = [] }) {
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
   const textColor = isDark ? "#8b949e" : "#656d76";
@@ -9768,6 +9812,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(b.message);
+            for (const a of ttfxAnnotationsFor(b)) lines.push(`Note: ${a.description}`);
             lines.push("Click to open the Buildkite job");
             return lines;
           },
@@ -9786,6 +9831,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange }) {
           onZoomComplete: onZoomChange,
         },
       },
+      annotation: { annotations: buildTtfxAnnotations(builds, isDark) },
     },
     onClick: (evt, elements, chart) => {
       if (!elements.length) return;
@@ -9935,6 +9981,7 @@ function updateTtfxSummaryCharts() {
       title: `${m.label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
       legendDisplay: false,
       onZoomChange,
+      builds,
     });
     options.scales.y.title.display = false;
     if (ttfxSummaryCharts[metric]) ttfxSummaryCharts[metric].destroy();
@@ -9986,6 +10033,7 @@ function updateTtfxTaskChart() {
     onZoomChange: () => {
       document.getElementById("ttfx-btn-reset-zoom").style.display = "";
     },
+    builds,
   });
   if (ttfxChart) ttfxChart.destroy();
   ttfxChart = new Chart(canvas, { type: "line", data: { datasets }, options });
@@ -10035,7 +10083,11 @@ function renderTtfxBuildsTable() {
     for (const [key] of metricCols) {
       html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}</td>`;
     }
-    html += `<td class="msg col-secondary" title="${escapeHtml(b.message || "")}">${escapeHtml(b.message || "")}</td>`;
+    const notes = ttfxAnnotationsFor(b);
+    const noteBadge = notes.length
+      ? `<span class="ttfx-note-badge" title="${escapeHtml(notes.map((a) => a.description).join("\n"))}">${escapeHtml(notes.map((a) => a.label || a.description).join(", "))}</span> `
+      : "";
+    html += `<td class="msg col-secondary" title="${escapeHtml(b.message || "")}">${noteBadge}${escapeHtml(b.message || "")}</td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;

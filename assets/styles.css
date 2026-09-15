@@ -2539,6 +2539,18 @@ body {
   text-overflow: ellipsis;
   font-family: inherit;
 }
+.ttfx-note-badge {
+  display: inline-block;
+  background: var(--color-attention-subtle, #fff8c5);
+  color: var(--color-attention-fg, #9a6700);
+  border: 1px solid var(--color-attention-muted, #d4a72c);
+  border-radius: 10px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  cursor: default;
+}
 .ttfx-stats .ttfx-failed {
   color: var(--color-danger-fg);
 }
