@@ -9838,6 +9838,19 @@ function ttfxRebase(pts) {
   return pts.map((p) => ({ ...p, y: (p.y / base - 1) * 100 }));
 }
 
+// Hover styling shared by every TTFX series: the points are tiny, so a
+// highlighted build gets a large amber marker ringed in the foreground
+// color, whether the pointer or a table row selected it
+function ttfxHoverPointStyle() {
+  const isDark = isDarkMode();
+  return {
+    pointHoverRadius: 7,
+    pointHoverBorderWidth: 2.5,
+    pointHoverBackgroundColor: isDark ? "#e3b341" : "#bf8700",
+    pointHoverBorderColor: isDark ? "#f0f6fc" : "#1f2328",
+  };
+}
+
 function ttfxSuiteDataset(builds, common, metric) {
   const isDark = isDarkMode();
   const suiteColor = isDark ? "#e6edf3" : "#1f2328";
@@ -9855,6 +9868,7 @@ function ttfxSuiteDataset(builds, common, metric) {
     backgroundColor: suiteColor,
     borderWidth: 2.5,
     pointRadius: 2.5,
+    ...ttfxHoverPointStyle(),
     order: 0,
   };
 }
@@ -9960,6 +9974,7 @@ function updateTtfxTaskChart() {
       backgroundColor: color,
       borderWidth: 1,
       pointRadius: 1.5,
+      ...ttfxHoverPointStyle(),
       order: 1,
     });
   }
