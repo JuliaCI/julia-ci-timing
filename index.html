@@ -81,6 +81,18 @@
         >
       </h1>
       <div class="tab-nav" role="tablist" aria-label="Dashboard pages">
+        <button
+          class="tab-btn tab-btn-overview"
+          id="tab-overview"
+          role="tab"
+          aria-selected="false"
+          aria-controls="overview-view"
+          tabindex="-1"
+          onclick="switchTab('overview')"
+          title="Status of every data source at a glance: latest reports, freshness, and anything the other tabs flag"
+        >
+          Overview
+        </button>
         <div class="tab-group" role="presentation">
           <span class="tab-group-label" aria-hidden="true">Benchmarks</span>
           <div class="tab-group-buttons" role="presentation">
@@ -378,6 +390,39 @@
           <span class="shortcut-desc">Select all jobs</span>
           <span class="shortcut-key">n</span>
           <span class="shortcut-desc">Deselect all jobs</span>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="overview-main view-hidden"
+      id="overview-view"
+      role="tabpanel"
+      aria-labelledby="tab-overview"
+      tabindex="0"
+    >
+      <div class="overview-toolbar">
+        <span class="overview-headline" id="overview-headline"></span>
+        <button
+          class="btn"
+          onclick="renderOverview({ force: true })"
+          aria-label="Reload overview"
+        >
+          Reload
+        </button>
+        <a
+          href="https://github.com/JuliaCI/julia-ci-timing/actions/workflows/update-timing.yml"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="updated link-no-underline"
+          id="overview-updated"
+          title="The update workflow fetches every source every 2 hours"
+        ></a>
+      </div>
+      <div class="overview-body">
+        <ul class="overview-issues" id="overview-issues"></ul>
+        <div class="overview-grid" id="overview-grid">
+          <div class="loading">Loading overview...</div>
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ Dashboard for Julia language performance: nightly benchmarks (Nanosoldier),
 **Live:** <https://JuliaCI.github.io/julia-ci-timing/> (also at <https://perf.julialang.org/>)
 
 Short paths open a tab directly and forward any other query parameters:
+[/overview](https://perf.julialang.org/overview),
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
 [/timing](https://perf.julialang.org/timing), [/commits](https://perf.julialang.org/commits),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),

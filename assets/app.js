@@ -221,6 +221,59 @@ function agentJobText(job) {
   return where + job.name.replace(/:[a-z0-9_]+:\s*/g, "");
 }
 
+function agentQueueGroup(rec) {
+  const q = rec && rec.queue;
+  return q === "build" || q === "test" || q === "launch" ? q : "other";
+}
+
+// One table row per resident agent, or per host for the per-job queues, each
+// with a status; `connected` is the agent-name set of the snapshot taken at
+// `latestMs`. Shared by the Workers tab and the Overview card.
+function summarizeAgents(agents, connected, latestMs) {
+  const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
+  for (const name of connected) perQueue[agentQueueGroup(agents[name])]++;
+  const rows = [];
+  // Per-job queues: one row per host, folding the slot suffix of the agent name
+  const hosts = new Map();
+  for (const [name, rec] of Object.entries(agents)) {
+    const lastSeenMs = Date.parse(rec.last_seen || "");
+    const isConnected = connected.has(name);
+    const queue = agentQueueGroup(rec);
+    if (AGENTS_PER_JOB_QUEUES.has(queue)) {
+      if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_HOST_RETAIN_MS)) continue;
+      const key = name.replace(/\.\d+$/, "");
+      let host = hosts.get(key);
+      if (!host) {
+        host = { name: key, rec, queue, slots: 0, running: 0, jobs: [], lastSeenMs: NaN };
+        hosts.set(key, host);
+      }
+      host.slots++;
+      if (isNaN(host.lastSeenMs) || lastSeenMs > host.lastSeenMs) host.lastSeenMs = lastSeenMs;
+      if (isConnected) {
+        host.running++;
+        host.rec = rec;
+        if (rec.job) host.jobs.push(agentJobText(rec.job));
+      }
+      continue;
+    }
+    if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_MISSING_WINDOW_MS)) continue;
+    let status;
+    if (isConnected) status = "connected";
+    else if (rec.state === "lost" || rec.state === "stopping") status = rec.state;
+    else status = "missing";
+    rows.push({ name, rec, queue, status, lastSeenMs });
+  }
+  for (const host of hosts.values()) {
+    if (host.running > 0) host.status = "running";
+    else if (latestMs - host.lastSeenMs > AGENTS_QUIET_WINDOW_MS) host.status = "quiet";
+    else host.status = "idle";
+    rows.push(host);
+  }
+  const missing = rows.filter((r) => r.status === "missing" || r.status === "lost");
+  const quiet = rows.filter((r) => r.status === "quiet");
+  return { rows, perQueue, missing, quiet };
+}
+
 async function renderAgentsSection() {
   const section = document.getElementById("agents-section");
   if (!section) return;
@@ -263,53 +316,13 @@ async function renderAgentsSection() {
 
   // Summary: connected now, per queue, and how many are missing
   const connected = new Set(latest.connected);
-  const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
-  for (const name of connected) perQueue[queueOf(name)]++;
-  const rows = [];
-  // Per-job queues: one row per host, folding the slot suffix of the agent name
-  const hosts = new Map();
-  for (const [name, rec] of Object.entries(agents)) {
-    const lastSeenMs = Date.parse(rec.last_seen || "");
-    const isConnected = connected.has(name);
-    const queue = queueOf(name);
-    if (AGENTS_PER_JOB_QUEUES.has(queue)) {
-      if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_HOST_RETAIN_MS)) continue;
-      const key = name.replace(/\.\d+$/, "");
-      let host = hosts.get(key);
-      if (!host) {
-        host = { name: key, rec, queue, slots: 0, running: 0, jobs: [], lastSeenMs: NaN };
-        hosts.set(key, host);
-      }
-      host.slots++;
-      if (isNaN(host.lastSeenMs) || lastSeenMs > host.lastSeenMs) host.lastSeenMs = lastSeenMs;
-      if (isConnected) {
-        host.running++;
-        host.rec = rec;
-        if (rec.job) host.jobs.push(agentJobText(rec.job));
-      }
-      continue;
-    }
-    if (!isConnected && (isNaN(lastSeenMs) || latestMs - lastSeenMs > AGENTS_MISSING_WINDOW_MS)) continue;
-    let status;
-    if (isConnected) status = "connected";
-    else if (rec.state === "lost" || rec.state === "stopping") status = rec.state;
-    else status = "missing";
-    rows.push({ name, rec, queue, status, lastSeenMs });
-  }
-  for (const host of hosts.values()) {
-    if (host.running > 0) host.status = "running";
-    else if (latestMs - host.lastSeenMs > AGENTS_QUIET_WINDOW_MS) host.status = "quiet";
-    else host.status = "idle";
-    rows.push(host);
-  }
-  const missing = rows.filter((r) => r.status === "missing" || r.status === "lost").length;
-  const quiet = rows.filter((r) => r.status === "quiet").length;
+  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs);
   const queueParts = ["build", "test", "launch", "other"]
     .filter((q) => perQueue[q] > 0)
     .map((q) => `${q} ${perQueue[q]}`);
   const flagged = [];
-  if (missing > 0) flagged.push(`<strong class="agents-missing-count">${missing} missing</strong>`);
-  if (quiet > 0) flagged.push(`<strong class="agents-missing-count">${quiet} host${quiet === 1 ? "" : "s"} quiet</strong>`);
+  if (missing.length > 0) flagged.push(`<strong class="agents-missing-count">${missing.length} missing</strong>`);
+  if (quiet.length > 0) flagged.push(`<strong class="agents-missing-count">${quiet.length} host${quiet.length === 1 ? "" : "s"} quiet</strong>`);
   summaryEl.innerHTML =
     `<strong>${connected.size}</strong> connected (${queueParts.join(", ")})` +
     (flagged.length ? ", " + flagged.join(", ") : ", none missing");
@@ -5828,6 +5841,7 @@ async function loadData() {
 
       refreshAllUI();
     }
+    if (activeTab === "overview") renderOverview();
   } catch (err) {
     console.error("Failed to load data:", err);
     const retryBtn =
@@ -5947,6 +5961,7 @@ async function refreshData() {
       // breakages, sidebar) — new jobs can appear and caches go stale
       populateJobSelector();
       refreshAllUI();
+      if (activeTab === "overview") renderOverview();
     } else {
       // Update the "ago" time even if data hasn't changed
       const updatedEl = document.getElementById("last-updated");
@@ -5961,6 +5976,7 @@ async function refreshData() {
 let activeTab = "perf";
 
 const TAB_URL_MAP = {
+  overview: "overview",
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
@@ -6111,6 +6127,7 @@ function switchTab(tab) {
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
     perf: "tab-perf",
+    overview: "tab-overview",
   };
   for (const [name, id] of Object.entries(tabIds)) {
     const btn = document.getElementById(id);
@@ -6152,7 +6169,14 @@ function switchTab(tab) {
   document
     .getElementById("perf-view")
     .classList.toggle("view-hidden", tab !== "perf");
+  document
+    .getElementById("overview-view")
+    .classList.toggle("view-hidden", tab !== "overview");
   document.body.classList.toggle("tab-perf-active", tab === "perf");
+
+  if (tab === "overview") {
+    renderOverview();
+  }
 
   if (tab === "benchmarks" && !benchData) {
     loadBenchmarkData();
@@ -10209,6 +10233,569 @@ function renderTtfxTasksTable() {
     tr.onclick = () => toggleTtfxTask(tr.dataset.task);
   });
 }
+
+// === Overview ===
+// One card per data source: the latest upstream result, how old it is against
+// that source's usual cadence, and whatever the source's own tab flags (broken
+// CI jobs, failing TTFX tasks, missing agents). The summary files are fetched
+// here rather than through the tabs' loaders, which also build their charts.
+let overviewSources = null; // { pkgeval, bench, ttfx, packages, agents }
+let overviewLoadedAt = 0;
+let overviewLoading = null;
+
+const OVERVIEW_DAY_MS = 24 * 60 * 60 * 1000;
+// Gaps between consecutive reports that define a source's typical interval
+const OVERVIEW_CADENCE_GAPS = 10;
+// TTFX runs on every master build, so a quiet couple of days means the job
+// is not producing results
+const OVERVIEW_TTFX_STALE_MS = 2 * OVERVIEW_DAY_MS;
+// The package-server rollups for a day appear the next day
+const OVERVIEW_DOWNLOADS_LAG_DAYS = 3;
+// Agents are snapshotted on every update run
+const OVERVIEW_AGENTS_STALE_MS = OVERVIEW_DAY_MS;
+const OVERVIEW_DOWNLOADS_TOP_MINORS = 4;
+const OVERVIEW_LIST_LIMIT = 6;
+
+async function loadOverviewSources() {
+  const gz = (url) =>
+    loadGzipJson(url).catch((err) => {
+      console.error(`Failed to load ${url}:`, err);
+      return null;
+    });
+  const [pkgeval, bench, ttfx, packages, agents] = await Promise.all([
+    pkgevalData || gz("data/pkgeval_summary.json.gz"),
+    benchData || gz("data/benchmark_summary.json.gz"),
+    ttfxData || gz("data/ttfx_summary.json.gz"),
+    packagesDownloadsData || gz("data/packages_downloads_summary.json.gz"),
+    fetch("data/agents/latest.json", { cache: "no-cache" })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+  return { pkgeval, bench, ttfx, packages, agents };
+}
+
+async function renderOverview({ force = false } = {}) {
+  const expired = Date.now() - overviewLoadedAt > DATA_REFRESH_INTERVAL;
+  if (!overviewSources || force || expired) {
+    if (!overviewLoading) {
+      overviewLoading = loadOverviewSources()
+        .then((s) => {
+          overviewSources = s;
+          overviewLoadedAt = Date.now();
+        })
+        .finally(() => {
+          overviewLoading = null;
+        });
+    }
+    await overviewLoading;
+  }
+  if (activeTab !== "overview" || !overviewSources) return;
+  drawOverview();
+}
+
+// Whole days since a date-only or datetime string
+function overviewDays(dateString) {
+  const t = Date.parse(dateString);
+  if (isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / OVERVIEW_DAY_MS);
+}
+
+function overviewAgo(dateString) {
+  const days = overviewDays(dateString);
+  if (days === null) return "unknown";
+  if (days < 1) return timeAgo(dateString);
+  return days === 1 ? "1 day ago" : `${days} days ago`;
+}
+
+function overviewFormatDays(d) {
+  const r = Math.round(d * 10) / 10;
+  return r === 1 ? "1 day" : `${r} days`;
+}
+
+// Typical interval between reports: the median of the last few gaps. A source
+// is overdue once the gap since its latest report is well past that.
+function overviewCadence(dates) {
+  const ms = dates
+    .map((d) => Date.parse(d))
+    .filter((t) => !isNaN(t))
+    .sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = Math.max(1, ms.length - OVERVIEW_CADENCE_GAPS); i < ms.length; i++) {
+    gaps.push((ms[i] - ms[i - 1]) / OVERVIEW_DAY_MS);
+  }
+  if (!gaps.length) return null;
+  const typical = Math.max(1, median(gaps));
+  const since = (Date.now() - ms[ms.length - 1]) / OVERVIEW_DAY_MS;
+  const limit = Math.max(2 * typical, typical + 2);
+  return { typical, since, limit, overdue: since > limit };
+}
+
+function overviewCompact(n) {
+  if (n == null || isNaN(n)) return "—";
+  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(n);
+}
+
+function overviewSigned(n) {
+  return n > 0 ? `+${n}` : String(n);
+}
+
+function overviewTabLink(tab, text) {
+  return `<a href="?tab=${tabToURLValue(tab)}" onclick="switchTab('${tab}');return false">${escapeHtml(text)}</a>`;
+}
+
+function overviewExtLink(url, text) {
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+}
+
+function overviewList(names, limit = OVERVIEW_LIST_LIMIT) {
+  const shown = names.slice(0, limit).map(escapeHtml).join(", ");
+  const more = names.length - limit;
+  return more > 0 ? `${shown} and ${more} more` : shown;
+}
+
+const OVERVIEW_STATUS_ICON = { ok: "✓", warn: "⚠", bad: "✕", none: "…" };
+
+function overviewStatus(level, text) {
+  return { level, text };
+}
+
+// A card: title linking to the source's tab, a status badge (icon + label,
+// never colour alone), one headline figure and a list of label/value rows
+function overviewCard({ tab, title, status, headline, headlineLabel, rows }) {
+  const parts = [`<section class="overview-card overview-card-${status.level}">`];
+  parts.push('<header class="overview-card-header">');
+  parts.push(`<h2 class="overview-card-title">${overviewTabLink(tab, title)}</h2>`);
+  parts.push(
+    `<span class="overview-status overview-status-${status.level}"><span aria-hidden="true">${OVERVIEW_STATUS_ICON[status.level]}</span> ${escapeHtml(status.text)}</span>`,
+  );
+  parts.push("</header>");
+  if (headline != null) {
+    parts.push('<div class="overview-headline-figure">');
+    parts.push(`<span class="overview-figure">${headline}</span>`);
+    if (headlineLabel) parts.push(`<span class="overview-figure-label">${headlineLabel}</span>`);
+    parts.push("</div>");
+  }
+  parts.push('<dl class="overview-rows">');
+  for (const [label, value] of rows) {
+    if (value == null || value === "") continue;
+    parts.push(`<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`);
+  }
+  parts.push("</dl></section>");
+  return { html: parts.join(""), tab, title, status };
+}
+
+function overviewMissingCard(tab, title, what) {
+  return overviewCard({
+    tab,
+    title,
+    status: overviewStatus("bad", "No data"),
+    rows: [["Data", escapeHtml(`${what} could not be loaded`)]],
+  });
+}
+
+function overviewLoadingCard(tab, title) {
+  return overviewCard({
+    tab,
+    title,
+    status: overviewStatus("none", "Loading"),
+    rows: [["Data", "Still loading"]],
+  });
+}
+
+function overviewReportRow(link, date, cadence) {
+  let text = `${link} (${overviewAgo(date)})`;
+  if (cadence) text += `, usually every ${overviewFormatDays(cadence.typical)}`;
+  return text;
+}
+
+function overviewPkgevalCard(src) {
+  const reports = (src && src.reports) || [];
+  const last = reports[reports.length - 1];
+  if (!last) return overviewMissingCard("pkgeval", "PkgEval", "The PkgEval summary");
+  const prev = reports[reports.length - 2];
+  const cadence = overviewCadence(reports.map((r) => r.date));
+  const status = cadence && cadence.overdue
+    ? overviewStatus("warn", `No report for ${overviewFormatDays(Math.floor(cadence.since))}`)
+    : overviewStatus("ok", "Current");
+  const passPct = last.total ? ((100 * last.ok) / last.total).toFixed(1) : "—";
+  const results = `${last.ok} ok, ${last.fail} fail, ${last.crash} crash, ${last.skip} skip of ${last.total}`;
+  let change = "";
+  if (prev) {
+    const parts = [
+      `${overviewSigned(last.ok - prev.ok)} ok`,
+      `${overviewSigned(last.fail - prev.fail)} fail`,
+      `${overviewSigned(last.crash - prev.crash)} crash`,
+    ];
+    change = `${parts.join(", ")} vs ${escapeHtml(prev.date)}`;
+  }
+  const version = [last.version && last.version !== "unknown" ? last.version : "", last.commit]
+    .filter(Boolean)
+    .map(escapeHtml)
+    .join(" @ ");
+  return overviewCard({
+    tab: "pkgeval",
+    title: "PkgEval",
+    status,
+    headline: `${passPct}%`,
+    headlineLabel: "packages passing in the latest report",
+    rows: [
+      ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
+      ["Julia", version],
+      ["Results", escapeHtml(results)],
+      ["Change", change],
+      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
+}
+
+function overviewBenchCard(src) {
+  const reports = (src && src.reports) || [];
+  const last = reports[reports.length - 1];
+  if (!last) return overviewMissingCard("benchmarks", "Nanosoldier benchmarks", "The benchmark summary");
+  const cadence = overviewCadence(reports.map((r) => r.date));
+  const status = cadence && cadence.overdue
+    ? overviewStatus("warn", `No report for ${overviewFormatDays(Math.floor(cadence.since))}`)
+    : overviewStatus("ok", "Current");
+  const groups = last.by_group ? Object.keys(last.by_group).length : 0;
+  const hasCounts = last.report_total != null;
+  let baseline = "";
+  if (hasCounts) {
+    baseline = `${last.report_regressions} regressions, ${last.report_improvements} improvements of ${last.report_total} benchmarks`;
+    if (last.report_baseline_date) baseline += ` vs ${last.report_baseline_date}`;
+  }
+  return overviewCard({
+    tab: "benchmarks",
+    title: "Nanosoldier benchmarks",
+    status,
+    headline: hasCounts ? `${last.report_regressions}` : null,
+    headlineLabel: hasCounts ? "regressions flagged in the latest daily report" : null,
+    rows: [
+      ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
+      ["Commit", last.commit ? overviewExtLink(`https://github.com/JuliaLang/julia/commit/${last.commit}`, last.commit.slice(0, 10)) : ""],
+      ["Report", escapeHtml(baseline)],
+      ["Groups", groups ? `${groups} benchmark groups` : ""],
+      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
+}
+
+function overviewJobLabel(name) {
+  return name.replace(/:[a-z0-9_+-]+:\s*/g, "").trim();
+}
+
+function overviewRunTime(r) {
+  return r && r.date ? Date.parse(r.date.replace(" ", "T") + ":00Z") : NaN;
+}
+
+function overviewCICard() {
+  if (!data || !data.jobs || Object.keys(data.jobs).length === 0 || !data.generated_at) {
+    return overviewLoadingCard("ci-timing", "CI builds");
+  }
+  // Newest julia-ci build and its per-job outcome; `recent` is newest first
+  const byBuild = new Map();
+  const dayAgo = Date.now() - OVERVIEW_DAY_MS;
+  const buildsLastDay = new Set();
+  for (const [name, job] of Object.entries(data.jobs)) {
+    for (const r of job.recent || []) {
+      if (r.pipeline !== "julia-ci" || r.build == null) continue;
+      let b = byBuild.get(r.build);
+      if (!b) {
+        b = { build: r.build, run: r, runMs: -Infinity, jobs: [] };
+        byBuild.set(r.build, b);
+      }
+      b.jobs.push({ name, state: getRunState(r) });
+      const t = overviewRunTime(r);
+      if (!isNaN(t) && t > b.runMs) {
+        b.run = r;
+        b.runMs = t;
+      }
+      if (!isNaN(t) && t >= dayAgo) buildsLastDay.add(r.build);
+    }
+  }
+  const latest = [...byBuild.values()].sort((a, b) => b.build - a.build)[0];
+  const rows = [];
+  let latestOutcome = "";
+  let failedNames = [];
+  if (latest) {
+    const counts = { passed: 0, failed: 0, timed_out: 0, canceled: 0 };
+    for (const j of latest.jobs) counts[j.state] = (counts[j.state] || 0) + 1;
+    failedNames = latest.jobs
+      .filter((j) => j.state === "failed" || j.state === "timed_out")
+      .map((j) => overviewJobLabel(j.name));
+    const outcome = [`${counts.passed} passed`];
+    if (counts.failed) outcome.push(`${counts.failed} failed`);
+    if (counts.timed_out) outcome.push(`${counts.timed_out} timed out`);
+    if (counts.canceled) outcome.push(`${counts.canceled} canceled`);
+    latestOutcome = outcome.join(", ");
+    const r = latest.run;
+    const buildLink = overviewExtLink(`https://buildkite.com/julialang/julia-ci/builds/${latest.build}`, `#${latest.build}`);
+    const commitLink = r.commit ? overviewExtLink(`https://github.com/JuliaLang/julia/commit/${r.commit}`, r.commit) : "";
+    rows.push(["Latest build", `${buildLink} (${overviewAgo(new Date(latest.runMs).toISOString())}) ${commitLink} ${escapeHtml(r.message || "")}`]);
+    rows.push(["Jobs", escapeHtml(latestOutcome) + (failedNames.length ? `: ${overviewList(failedNames)}` : "")]);
+  }
+  rows.push(["Builds in last 24 h", String(buildsLastDay.size)]);
+  // Only jobs still running: the legacy pipelines' jobs keep their last state
+  const activeSince = Date.now() - PASS_RATE_DAYS * OVERVIEW_DAY_MS;
+  const broken = Object.entries(jobBreakages)
+    .filter(([name]) => {
+      return overviewRunTime(data.jobs[name].recent[0]) >= activeSince;
+    })
+    .map(([name, b]) => ({ name: overviewJobLabel(name), since: b.date }));
+  if (broken.length) {
+    rows.push([
+      "Broken jobs",
+      overviewList(broken.map((b) => `${b.name} since ${b.since.slice(0, 10)}`)),
+    ]);
+  }
+  const flaky = Object.entries(jobPassRates)
+    .filter(([, p]) => p.total >= PASS_RATE_MIN_RUNS && p.rate < PASS_RATE_THRESHOLD)
+    .sort((a, b) => a[1].rate - b[1].rate)
+    .map(([name, p]) => `${overviewJobLabel(name)} ${(100 * p.rate).toFixed(0)}%`);
+  if (flaky.length) {
+    rows.push([`Below ${PASS_RATE_THRESHOLD * 100}% pass rate (${PASS_RATE_DAYS} d)`, overviewList(flaky)]);
+  }
+  rows.push(["Data updated", `<span title="${escapeHtml(data.generated_at)}">${overviewAgo(data.generated_at)}</span>`]);
+
+  let status;
+  if (Date.now() - Date.parse(data.generated_at) > STALE_DATA_THRESHOLD_MS) {
+    status = overviewStatus("bad", `Data ${overviewAgo(data.generated_at)}`);
+  } else if (broken.length) {
+    status = overviewStatus("bad", `${broken.length} job${broken.length === 1 ? "" : "s"} broken`);
+  } else if (failedNames.length) {
+    status = overviewStatus("warn", `${failedNames.length} job${failedNames.length === 1 ? "" : "s"} failed in latest build`);
+  } else {
+    status = overviewStatus("ok", "Passing");
+  }
+  return overviewCard({
+    tab: "ci-timing",
+    title: "CI builds",
+    status,
+    headline: latest ? `${latest.jobs.length}` : null,
+    headlineLabel: latest ? `jobs in the latest master build, ${latestOutcome}` : null,
+    rows,
+  });
+}
+
+function overviewTtfxCard(src) {
+  const builds = (src && src.builds) || [];
+  const latest = builds[builds.length - 1];
+  if (!latest) return overviewMissingCard("ci-ttfx", "TTFX", "The TTFX summary");
+  const ageMs = Date.now() - ttfxBuildTime(latest);
+  const failed = Object.keys(latest.failed || {}).sort();
+  const weekAgo = Date.now() - 7 * OVERVIEW_DAY_MS;
+  const lastWeek = builds.filter((b) => ttfxBuildTime(b) >= weekAgo).length;
+  const measured = Object.keys(latest.tasks || {});
+  const geomean = ttfxGeomean(latest, measured, "precompile");
+  let status;
+  if (ageMs > OVERVIEW_TTFX_STALE_MS) {
+    status = overviewStatus("warn", `No result for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`);
+  } else if (latest.state && latest.state !== "passed") {
+    status = overviewStatus("warn", `Latest job ${latest.state}`);
+  } else if (failed.length) {
+    status = overviewStatus("warn", `${failed.length} task${failed.length === 1 ? "" : "s"} failing`);
+  } else {
+    status = overviewStatus("ok", "Current");
+  }
+  const builtAt = new Date(ttfxBuildTime(latest)).toISOString();
+  return overviewCard({
+    tab: "ci-ttfx",
+    title: "TTFX",
+    status,
+    headline: geomean != null ? formatTtfxSeconds(geomean) : null,
+    headlineLabel: geomean != null ? `precompile geomean over ${measured.length} tasks in the latest build` : null,
+    rows: [
+      ["Latest build", `${overviewExtLink(ttfxJobUrl(latest), `#${latest.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(latest.version || "")}`],
+      ["Tasks", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
+      ["Failing", failed.length ? overviewList(failed) : ""],
+      ["Builds in last 7 days", String(lastWeek)],
+      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
+}
+
+function overviewDateAdd(dateStr, days) {
+  return new Date(Date.parse(dateStr) + days * OVERVIEW_DAY_MS).toISOString().slice(0, 10);
+}
+
+// The rows dated within the `days` calendar days ending at `to`; the rollups
+// can skip days, so a window is by date rather than by row count
+function overviewDateWindow(rows, to, days) {
+  const from = overviewDateAdd(to, 1 - days);
+  return rows.filter((r) => r.date >= from && r.date <= to);
+}
+
+// Downloads over the `days` days ending at `to`, and over the same span
+// before it when that span is complete
+function overviewWeekSums(rows, to, days) {
+  const sum = (slice, key) => slice.reduce((acc, r) => acc + (r[key] || 0), 0);
+  const last = overviewDateWindow(rows, to, days);
+  const before = overviewDateWindow(rows, overviewDateAdd(to, -days), days);
+  return {
+    all: sum(last, "all"),
+    user: sum(last, "user"),
+    ci: sum(last, "ci"),
+    days: last.length,
+    prev: before.length === days ? sum(before, "all") : null,
+  };
+}
+
+// Dates with no rollup row in the `days` days ending at `to`
+function overviewMissingDates(rows, to, days) {
+  const have = new Set(rows.map((r) => r.date));
+  const missing = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = overviewDateAdd(to, -i);
+    if (!have.has(d)) missing.push(d);
+  }
+  return missing;
+}
+
+function overviewPackagesCard(src) {
+  const series = (src && src.series) || [];
+  if (!series.length) return overviewMissingCard("packages", "Package downloads", "The downloads summary");
+  const maxDate = src.maxDate || series[series.length - 1].date;
+  const lagDays = overviewDays(maxDate);
+  const week = overviewWeekSums(series, maxDate, 7);
+  let weekText = `${overviewCompact(week.all)} (${overviewCompact(week.user)} user, ${overviewCompact(week.ci)} CI)`;
+  if (week.days < 7) weekText += `, ${week.days} of 7 days reported`;
+  if (week.prev) {
+    const pct = (100 * (week.all - week.prev)) / week.prev;
+    weekText += `, ${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% vs the week before`;
+  }
+  const missing = overviewMissingDates(series, maxDate, 30);
+  let status;
+  if (lagDays !== null && lagDays > OVERVIEW_DOWNLOADS_LAG_DAYS) {
+    status = overviewStatus("warn", `Rollups stop at ${maxDate}`);
+  } else if (missing.length) {
+    status = overviewStatus("warn", `${missing.length} day${missing.length === 1 ? "" : "s"} missing`);
+  } else {
+    status = overviewStatus("ok", "Current");
+  }
+
+  // Share per Julia minor over the same week, from the version rollup
+  const mix = overviewDateWindow(src.version_mix || [], maxDate, 7);
+  const perMinor = new Map();
+  let mixTotal = 0;
+  for (const day of mix) {
+    for (const [minor, v] of Object.entries(day.minors || {})) {
+      const n = (v && v.all) || 0;
+      perMinor.set(minor, (perMinor.get(minor) || 0) + n);
+      mixTotal += n;
+    }
+  }
+  let shares = "";
+  if (mixTotal > 0) {
+    const sorted = [...perMinor].sort((a, b) => b[1] - a[1]);
+    const top = sorted.slice(0, OVERVIEW_DOWNLOADS_TOP_MINORS);
+    const rest = sorted.slice(OVERVIEW_DOWNLOADS_TOP_MINORS).reduce((acc, [, n]) => acc + n, 0);
+    const parts = top.map(([minor, n]) => `<span class="overview-share"><strong>${escapeHtml(minor)}</strong> ${((100 * n) / mixTotal).toFixed(1)}%</span>`);
+    if (rest > 0) parts.push(`<span class="overview-share">other ${((100 * rest) / mixTotal).toFixed(1)}%</span>`);
+    shares = parts.join(" ");
+  }
+  return overviewCard({
+    tab: "packages",
+    title: "Package downloads",
+    status,
+    headline: overviewCompact(week.all),
+    headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(week.to || maxDate)}`,
+    rows: [
+      ["Last 7 days", weekText],
+      ["Julia versions", shares],
+      ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)})`],
+      ["Missing days (30 d)", missing.length ? overviewList(missing, 4) : ""],
+      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
+}
+
+function overviewAgentsCard(src) {
+  const agents = src && src.agents;
+  if (!agents || !src.generated_at) return overviewMissingCard("ci-workers", "CI workers", "The agent snapshot");
+  const latestMs = Date.parse(src.generated_at);
+  const connected = new Set(Object.keys(agents).filter((n) => agents[n].state === "connected"));
+  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs);
+  const running = rows.filter((r) => r.status === "running").reduce((acc, r) => acc + r.running, 0)
+    + rows.filter((r) => r.status === "connected" && r.rec.job).length;
+  const queueParts = ["build", "test", "launch", "other"]
+    .filter((q) => perQueue[q] > 0)
+    .map((q) => `${q} ${perQueue[q]}`);
+  let status;
+  if (Date.now() - latestMs > OVERVIEW_AGENTS_STALE_MS) {
+    status = overviewStatus("bad", `Snapshot ${overviewAgo(src.generated_at)}`);
+  } else if (missing.length || quiet.length) {
+    const parts = [];
+    if (missing.length) parts.push(`${missing.length} missing`);
+    if (quiet.length) parts.push(`${quiet.length} quiet`);
+    status = overviewStatus("warn", parts.join(", "));
+  } else {
+    status = overviewStatus("ok", "All present");
+  }
+  return overviewCard({
+    tab: "ci-workers",
+    title: "CI workers",
+    status,
+    headline: `${connected.size}`,
+    headlineLabel: `agents connected (${queueParts.join(", ")})`,
+    rows: [
+      ["Running jobs", String(running)],
+      ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
+      ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
+      ["Snapshot", `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
+    ],
+  });
+}
+
+function drawOverview() {
+  const src = overviewSources;
+  const cards = [
+    overviewCICard(),
+    overviewTtfxCard(src.ttfx),
+    overviewAgentsCard(src.agents),
+    overviewBenchCard(src.bench),
+    overviewPkgevalCard(src.pkgeval),
+    overviewPackagesCard(src.packages),
+  ];
+  document.getElementById("overview-grid").innerHTML = cards.map((c) => c.html).join("");
+
+  // Issues list: every card whose badge is not OK, in card order
+  const issues = cards
+    .filter((c) => c.status.level === "warn" || c.status.level === "bad")
+    .map(
+      (c) =>
+        `<li class="overview-issue overview-issue-${c.status.level}"><span aria-hidden="true">${OVERVIEW_STATUS_ICON[c.status.level]}</span> ${overviewTabLink(c.tab, c.title)}: ${escapeHtml(c.status.text)}</li>`,
+    );
+  const issuesEl = document.getElementById("overview-issues");
+  issuesEl.innerHTML = issues.join("");
+  issuesEl.hidden = issues.length === 0;
+  document.getElementById("overview-headline").textContent = issues.length
+    ? `${issues.length} source${issues.length === 1 ? "" : "s"} need${issues.length === 1 ? "s" : ""} attention`
+    : "All sources current";
+
+  // Newest data file across the sources: when the update workflow last
+  // produced anything
+  const stamps = [
+    data && data.generated_at,
+    src.pkgeval && src.pkgeval.generated_at,
+    src.bench && src.bench.generated_at,
+    src.ttfx && src.ttfx.generated_at,
+    src.packages && src.packages.generated_at,
+    src.agents && src.agents.generated_at,
+  ]
+    .map((s) => Date.parse(s || ""))
+    .filter((t) => !isNaN(t));
+  const updatedEl = document.getElementById("overview-updated");
+  if (stamps.length) {
+    const newest = new Date(Math.max(...stamps)).toISOString();
+    updatedEl.textContent = `Update workflow last wrote data ${timeAgo(newest)}`;
+    updatedEl.title = `${newest}. Every source is fetched every 2 hours; a file is only rewritten when its data changed.`;
+  } else {
+    updatedEl.textContent = "";
+  }
+}
+
 
 loadData();
 
