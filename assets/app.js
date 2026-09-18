@@ -9541,10 +9541,17 @@ function buildTtfxAnnotations(builds, isDark) {
   const out = {};
   for (const b of builds) {
     ttfxAnnotationsFor(b).forEach((a, i) => {
+      const x = ttfxBuildTime(b);
       out[`note-${b.job_id}-${i}`] = {
         type: "line",
-        xMin: ttfxBuildTime(b),
-        xMax: ttfxBuildTime(b),
+        xMin: x,
+        xMax: x,
+        // Only within the x span the data (or a zoom) gives the axis; the
+        // plugin would otherwise pin an out-of-range line to the edge
+        display: ({ chart }) => {
+          const s = chart.scales.x;
+          return !!s && x >= s.min && x <= s.max;
+        },
         borderColor: color,
         borderWidth: 1,
         borderDash: [4, 4],
