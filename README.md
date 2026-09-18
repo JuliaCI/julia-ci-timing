@@ -25,7 +25,8 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
   `julia-master` and `julia-master-scheduled` pipelines, which stopped
   receiving builds in July 2026)
 - `fetch_ttfx.jl` — TTFX results (package precompile, load and run times of the
-  [Julia-TTFX-Snippets](https://github.com/tecosaur/Julia-TTFX-Snippets) tasks)
+  [Julia-TTFX-Snippets](https://github.com/tecosaur/Julia-TTFX-Snippets) tasks,
+  the load and run times also from repeats with the GC disabled)
   from the `TTFX` job on every `julia-ci` master build, see
   [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
 - `fetch_agents.jl` — a snapshot of the connected Buildkite agents on every run

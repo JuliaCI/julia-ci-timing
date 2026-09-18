@@ -6127,6 +6127,7 @@ const DASHBOARD_PARAMS = new Set([
   "tm", // ttfx metric
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
+  "tg", // ttfx GC-off repeats toggle
   "tk", // ttfx selected tasks
   "tx", // ttfx excluded tasks (when most are selected)
   "tv", // ttfx table view
@@ -9497,6 +9498,8 @@ let ttfxMode = "summary"; // "summary" | "tasks"
 let ttfxMetric = "precompile";
 let ttfxTimeRangeDays = 90;
 let ttfxNormalized = false;
+let ttfxGcOff = false; // load, run and warm from the GC-off repeats
+let ttfxHasGcOff = false; // any build in the data has them
 let ttfxSelectedTasks = new Set();
 let ttfxTaskColors = {};
 let ttfxTableView = "builds"; // "builds" | "tasks"
@@ -9506,11 +9509,13 @@ let ttfxTaskSortAsc = false;
 // as a dashed line on every TTFX chart and flagged in the builds table
 let ttfxAnnotations = [];
 
+// `gcoffIndex`: the same phase from the job's repeats with the GC disabled
+// (fetch_ttfx.jl's METRICS order); precompile has no such run
 const TTFX_METRICS = {
   precompile: { label: "Precompile", index: 0 },
-  load: { label: "Load (cold)", index: 1 },
-  run: { label: "Run (cold)", index: 2 },
-  warm: { label: "Load+run (warm)", index: 3 },
+  load: { label: "Load (cold)", index: 1, gcoffIndex: 4 },
+  run: { label: "Run (cold)", index: 2, gcoffIndex: 5 },
+  warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
 };
 const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
 const TTFX_SUITE_LABEL = "Suite geomean";
@@ -9566,8 +9571,14 @@ function ttfxBuildTime(b) {
 function ttfxValue(b, task, metric = ttfxMetric) {
   const v = b.tasks && b.tasks[task];
   if (!v) return null;
-  const x = v[TTFX_METRICS[metric].index];
+  const m = TTFX_METRICS[metric];
+  const x = v[ttfxGcOff && m.gcoffIndex != null ? m.gcoffIndex : m.index];
   return x == null || !(x > 0) ? null : x;
+}
+
+function ttfxMetricLabel(metric = ttfxMetric) {
+  const m = TTFX_METRICS[metric];
+  return ttfxGcOff && m.gcoffIndex != null ? `${m.label}, GC off` : m.label;
 }
 
 function ttfxAllTasks() {
@@ -9604,7 +9615,9 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric) {
 // over time. Per metric, since a task's run can round to 0 while its
 // precompile is fine.
 function ttfxCommonTasks(builds, tasks, metric = ttfxMetric) {
-  const measured = builds.filter((b) => b.tasks && Object.keys(b.tasks).length > 0);
+  const measured = builds.filter(
+    (b) => b.tasks && Object.keys(b.tasks).some((t) => ttfxValue(b, t, metric) != null),
+  );
   if (!measured.length) return [];
   return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric) != null));
 }
@@ -9638,6 +9651,24 @@ function setTtfxMetric(val) {
 
 function setTtfxTimeRange(val) {
   ttfxTimeRangeDays = parseInt(val, 10);
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+function ttfxUpdateGcOffButton() {
+  const btn = document.getElementById("ttfx-btn-gcoff");
+  btn.classList.toggle("btn-primary", ttfxGcOff);
+  btn.setAttribute("aria-pressed", ttfxGcOff ? "true" : "false");
+  btn.disabled = !ttfxHasGcOff;
+  if (!ttfxHasGcOff) btn.title = "No build in the data has GC-off runs yet";
+}
+
+function toggleTtfxGcOff() {
+  if (!ttfxHasGcOff) return;
+  ttfxGcOff = !ttfxGcOff;
+  ttfxUpdateGcOffButton();
+  populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
   updateTtfxURL();
@@ -9698,6 +9729,7 @@ function updateTtfxURL() {
   setOrDelete("tm", ttfxMetric, ttfxMetric === "precompile");
   setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
   setOrDelete("tn", "1", !ttfxNormalized);
+  setOrDelete("tg", "1", !ttfxGcOff);
   setOrDelete("tv", ttfxTableView, ttfxTableView === "builds");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
   // Whichever of the selected or the excluded tasks is the shorter list
@@ -9733,6 +9765,7 @@ function applyTtfxURLParams() {
     ttfxNormalized = true;
     document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
   }
+  if (params.get("tg") === "1") ttfxGcOff = true;
   if (params.get("ts") === "tasks") {
     ttfxMode = "tasks";
     document.getElementById("ttfx-mode-summary").classList.remove("btn-primary");
@@ -9767,6 +9800,12 @@ async function loadTtfxData() {
     updatedEl.title = ttfxData.generated_at;
 
     const tasks = ttfxAllTasks();
+    const gcoffIndices = Object.values(TTFX_METRICS).map((m) => m.gcoffIndex).filter((i) => i != null);
+    ttfxHasGcOff = (ttfxData.builds || []).some((b) =>
+      Object.values(b.tasks || {}).some((v) => gcoffIndices.some((i) => v[i] != null)),
+    );
+    if (!ttfxHasGcOff) ttfxGcOff = false;
+    ttfxUpdateGcOffButton();
     const colors = generateColors(tasks.length);
     ttfxTaskColors = {};
     tasks.forEach((t, i) => (ttfxTaskColors[t] = colors[i]));
@@ -9808,7 +9847,7 @@ function populateTtfxTaskList() {
   const container = document.getElementById("ttfx-task-list");
   const tasks = ttfxAllTasks();
   const latest = ttfxLatestMeasured(getTtfxFilteredBuilds());
-  const metricLabel = TTFX_METRICS[ttfxMetric].label.toLowerCase();
+  const metricLabel = ttfxMetricLabel().toLowerCase();
 
   let html = `<div class="group-header">Tasks (${ttfxSelectedTasks.size}/${tasks.length})</div>`;
   for (const t of tasks) {
@@ -10082,12 +10121,13 @@ function updateTtfxSummaryCharts() {
     }
     syncing = false;
   };
-  for (const [metric, m] of Object.entries(TTFX_METRICS)) {
+  for (const metric of Object.keys(TTFX_METRICS)) {
     const canvas = document.getElementById("ttfx-chart-" + metric);
     const common = ttfxCommonTasks(builds, tasks, metric);
+    const label = ttfxMetricLabel(metric);
     const options = ttfxChartOptions({
-      metricLabel: m.label,
-      title: `${m.label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
+      metricLabel: label,
+      title: `${label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
       legendDisplay: false,
       onZoomChange,
       builds,
@@ -10136,7 +10176,7 @@ function updateTtfxTaskChart() {
   }
 
   const options = ttfxChartOptions({
-    metricLabel: TTFX_METRICS[ttfxMetric].label,
+    metricLabel: ttfxMetricLabel(),
     title: null,
     legendDisplay: datasets.length <= 12,
     onZoomChange: () => {
@@ -10161,13 +10201,13 @@ function renderTtfxBuildsTable() {
   for (const metric of Object.keys(TTFX_METRICS)) common[metric] = ttfxCommonTasks(builds, tasks, metric);
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
-  const metricCols = Object.entries(TTFX_METRICS);
+  const metricCols = Object.keys(TTFX_METRICS);
   thead.innerHTML =
     "<tr><th>Date</th><th>Commit</th><th class=\"col-secondary\">Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
     metricCols
       .map(
-        ([key, m]) =>
-          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${m.label.toLowerCase()} value in every build of the range">${m.label}</th>`,
+        (key) =>
+          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range">${ttfxMetricLabel(key)}</th>`,
       )
       .join("") +
     '<th class="col-secondary">Message</th></tr>';
@@ -10189,7 +10229,7 @@ function renderTtfxBuildsTable() {
     html += `<td><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
-    for (const [key] of metricCols) {
+    for (const key of metricCols) {
       html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}</td>`;
     }
     const notes = ttfxAnnotationsFor(b);
@@ -10230,7 +10270,7 @@ function renderTtfxTasksTable() {
   const tasks = ttfxSelectedList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
-  const metricLabel = TTFX_METRICS[ttfxMetric].label;
+  const metricLabel = ttfxMetricLabel();
   const cols = [
     ["task", "Task", ""],
     ["latest", "Latest", "num"],

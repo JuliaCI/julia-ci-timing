@@ -175,6 +175,10 @@ body {
 .btn:hover {
   background: var(--color-btn-hover-bg);
 }
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .btn-icon {
   padding: 0;
   width: 28px;

@@ -7,7 +7,9 @@
 # The job uploads ttfx/results.json (one record per task and block) and
 # ttfx/results-meta.json (the build, machine and settings) as artifacts. This script pulls
 # both for every finished TTFX job it has not seen and keeps one row per job in
-# data/ttfx_summary.json.gz, with the minimum over blocks of each metric per task.
+# data/ttfx_summary.json.gz, with the minimum over blocks of each metric per task. The
+# job repeats each task script with the GC disabled as well; those give the load, run
+# and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
 
 using HTTP
 using JSON3
@@ -23,8 +25,11 @@ const OUTPUT = joinpath("data", "ttfx_summary.json.gz")
 # triplet keeps the group's "Launch TTFX benchmark jobs" step from matching
 const TTFX_JOB = r"\bTTFX\s+([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
-# Metric order in each task's array; the frontend indexes by this
-const METRICS = ("precompile", "load", "run", "warm")
+# Metric order in each task's array; the frontend indexes by this. A metric added
+# later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
+# fetched again in case the job already recorded it, the rest are padded.
+const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff")
+const REFETCH_BUILDS = 30
 
 function get_token()
     token = get(ENV, "BUILDKITE_API_TOKEN", nothing)
@@ -130,8 +135,15 @@ function summarize_records(records, arm)
         load = nanmin([Float64(r.load_times[1]) for r in ok if !isempty(r.load_times)])
         run = nanmin([Float64(r.run_times[1]) for r in ok if !isempty(r.run_times)])
         warm = nanmin([minimum(Float64.(r.total_times[2:end])) for r in ok if length(r.total_times) >= 2])
+        # The GC-off repeats are optional per record: absent before the driver made
+        # them, empty when they failed (`error_gcoff`), which leaves `status` alone
+        gcoff(r, key) = get(r, key, Any[])
+        load_gcoff = nanmin([Float64(gcoff(r, :load_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :load_times_gcoff))])
+        run_gcoff = nanmin([Float64(gcoff(r, :run_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :run_times_gcoff))])
+        warm_gcoff = nanmin([minimum(Float64.(gcoff(r, :total_times_gcoff)[2:end])) for r in ok if length(gcoff(r, :total_times_gcoff)) >= 2])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
-        tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm)]
+        tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
+                          round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff)]
     end
     return tasks, failed
 end
@@ -269,10 +281,27 @@ function write_summary(rows; output=OUTPUT)
     @info "Wrote summary" file=output rows=length(rows) tasks=length(task_names)
 end
 
+row_key(r) = "$(r["build"]):$(r["job_id"])"
+short_row(r) = any(length(v) < length(METRICS) for v in values(r["tasks"]))
+
+function pad_row!(r)
+    r["tasks"] = Dict{String,Any}(
+        String(k) => vcat(Any[x for x in v], fill(nothing, length(METRICS) - length(v))) for (k, v) in pairs(r["tasks"]))
+    return r
+end
+
 function main()
     mkpath("data")
     existing = load_existing()
-    known = Set("$(r["build"]):$(r["job_id"])" for r in existing)
+    # Rows short of a metric: the recent ones are fetched again, the rest padded
+    builds_desc = sort!(unique(r["build"] for r in existing); rev=true)
+    refetch_from = isempty(builds_desc) ? 0 : builds_desc[min(REFETCH_BUILDS, end)]
+    refetch = Set(row_key(r) for r in existing if short_row(r) && r["build"] >= refetch_from)
+    isempty(refetch) || @info "Rows fetched again for the metrics they lack" count=length(refetch)
+    for r in existing
+        short_row(r) && !(row_key(r) in refetch) && pad_row!(r)
+    end
+    known = Set(row_key(r) for r in existing if !(row_key(r) in refetch))
 
     new_rows = fetch_new_rows(known)
     @info "New TTFX rows" count=length(new_rows)
@@ -285,7 +314,8 @@ function main()
         return 1
     end
 
-    write_summary(vcat(existing, new_rows))
+    replaced = Set(row_key(r) for r in new_rows)
+    write_summary(vcat(filter(r -> !(row_key(r) in replaced), existing), new_rows))
     return 0
 end
 
