@@ -452,6 +452,17 @@
           <option value="365">Last 365 days</option>
           <option value="0">All time</option>
         </select>
+        <input
+          type="search"
+          class="time-select workers-filter view-hidden"
+          id="workers-filter"
+          placeholder="Filter agents and hosts"
+          aria-label="Filter agents and hosts by text"
+          title="Show only agents and hosts whose name, queue, status or current job contains every word"
+          autocomplete="off"
+          spellcheck="false"
+          oninput="setWorkersFilter(this.value)"
+        />
         <button
           class="btn btn-primary"
           id="btn-reset-zoom"

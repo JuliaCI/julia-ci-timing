@@ -142,10 +142,37 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("view-hidden", !isJobs);
   }
+  const filterEl = document.getElementById("workers-filter");
+  if (filterEl) filterEl.classList.toggle("view-hidden", !isWorkers);
 
   if (isWorkers) renderWorkerPresence();
   if (isCommits) renderCommitsView();
   if (updateUrl && typeof updateURL === "function") updateURL();
+}
+
+// Text filter on the Workers tab: every whitespace-separated term has to
+// appear, case-insensitively, in an agent row's text or a host's name
+let workersFilter = "";
+let workersFilterTimer = null;
+
+function workersFilterTerms() {
+  return workersFilter.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function workersFilterMatches(text) {
+  const haystack = text.toLowerCase();
+  return workersFilterTerms().every((term) => haystack.includes(term));
+}
+
+function setWorkersFilter(value, { immediate = false } = {}) {
+  workersFilter = (value || "").trim();
+  clearTimeout(workersFilterTimer);
+  const apply = () => {
+    renderWorkerPresence();
+    updateURL();
+  };
+  if (immediate) apply();
+  else workersFilterTimer = setTimeout(apply, 150);
 }
 
 // === Agent snapshots (Workers tab) ===
@@ -208,6 +235,8 @@ const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // listed per host and a host is flagged only when no slot of it has run a job
 // for a while.
 const AGENTS_PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
+// Section order of the agents table: the Julia cluster first, then the rest
+const AGENTS_JULIA_QUEUE_ORDER = ["build", "test", "launch", "default"];
 const AGENTS_QUIET_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const AGENTS_HOST_RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
 const AGENTS_QUEUE_COLORS = {
@@ -329,19 +358,42 @@ async function renderAgentsSection() {
 
   renderAgentsChart(snapshots, queueOf);
 
-  // Live table: flagged first, then by queue and name
+  // Live table, one section per queue: the Julia cluster's queues first, then
+  // the rest (yggdrasil, the GPU queues, ...) by name, since a queue is what
+  // ties agents to a pipeline. Flagged rows lead within a section.
   const statusOrder = { missing: 0, lost: 0, quiet: 0, stopping: 1, running: 2, connected: 2, idle: 3 };
+  const queueRank = (q) => {
+    const i = AGENTS_JULIA_QUEUE_ORDER.indexOf(q);
+    return i < 0 ? AGENTS_JULIA_QUEUE_ORDER.length : i;
+  };
+  const rawQueue = (row) => row.rec.queue || "(no queue)";
   rows.sort(
     (a, b) =>
+      queueRank(rawQueue(a)) - queueRank(rawQueue(b)) ||
+      rawQueue(a).localeCompare(rawQueue(b)) ||
       statusOrder[a.status] - statusOrder[b.status] ||
-      a.queue.localeCompare(b.queue) ||
       a.name.localeCompare(b.name),
   );
+  // Pipelines with a job on each queue right now, for the section headers
+  const queuePipelines = new Map();
+  const queueConnected = new Map();
+  for (const [name, rec] of Object.entries(agents)) {
+    if (!connected.has(name)) continue;
+    const q = rec.queue || "(no queue)";
+    queueConnected.set(q, (queueConnected.get(q) || 0) + 1);
+    if (rec.job && rec.job.pipeline) {
+      if (!queuePipelines.has(q)) queuePipelines.set(q, new Set());
+      queuePipelines.get(q).add(rec.job.pipeline);
+    }
+  }
   const parts = ['<table class="agents-table"><thead><tr>'];
   parts.push(
     "<th>Agent</th><th>Host</th><th>Queue</th><th>OS / arch</th><th>Status</th><th>Current job</th><th>Since</th>",
   );
   parts.push("</tr></thead><tbody>");
+  const filtering = workersFilterTerms().length > 0;
+  let shown = 0;
+  let openQueue = null;
   for (const row of rows) {
     const { name, rec, status, lastSeenMs } = row;
     const flaggedRow = status === "missing" || status === "lost" || status === "quiet";
@@ -363,6 +415,17 @@ async function renderAgentsSection() {
     }
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
+    if (filtering && !workersFilterMatches(`${name} ${rec.hostname || ""}`)) continue;
+    shown++;
+    const q = rawQueue(row);
+    if (q !== openQueue) {
+      openQueue = q;
+      const pipelines = [...(queuePipelines.get(q) || [])].sort();
+      const n = queueConnected.get(q) || 0;
+      parts.push(
+        `<tr class="agents-group" data-queue="${escapeHtml(row.queue)}"><th colspan="7"><span class="agents-group-queue">${escapeHtml(q)}</span> <span class="agents-group-meta">${n} connected${pipelines.length ? ` · ${escapeHtml(pipelines.join(", "))}` : ""}</span></th></tr>`,
+      );
+    }
     parts.push(`<tr class="${flaggedRow ? "agents-missing" : ""}" data-queue="${escapeHtml(row.queue)}">`);
     parts.push(
       `<td class="agents-name"><span class="agents-dot agents-dot-${escapeHtml(status)}"></span>${escapeHtml(name)}</td>`,
@@ -375,8 +438,12 @@ async function renderAgentsSection() {
     parts.push(`<td title="${escapeHtml(status === "connected" ? rec.connected_at || "" : "")}">${escapeHtml(since)}</td>`);
     parts.push("</tr>");
   }
+  if (filtering && shown === 0) {
+    parts.push(`<tr><td colspan="7" class="workers-empty">No agents match "${escapeHtml(workersFilter)}"</td></tr>`);
+  }
   parts.push("</tbody></table>");
   tableEl.innerHTML = parts.join("");
+  if (filtering) summaryEl.innerHTML += `, <strong>${shown}</strong> of ${rows.length} shown`;
   tableEl.querySelectorAll("tr[data-queue]").forEach((tr) => {
     tr.addEventListener("mouseenter", () => highlightAgentsQueue(tr.dataset.queue));
     tr.addEventListener("mouseleave", () => highlightAgentsQueue(null));
@@ -541,9 +608,13 @@ function renderWorkerPresence() {
   const cellH = 14;
 
   // Busiest hosts first
-  const agents = [...agentDays.keys()].sort(
-    (a, b) => (agentTotal.get(b) || 0) - (agentTotal.get(a) || 0) || a.localeCompare(b),
-  );
+  const agents = [...agentDays.keys()]
+    .filter((name) => workersFilterMatches(name))
+    .sort((a, b) => (agentTotal.get(b) || 0) - (agentTotal.get(a) || 0) || a.localeCompare(b));
+  if (agents.length === 0) {
+    container.innerHTML = `<div class="workers-empty">No hosts match "${escapeHtml(workersFilter)}"</div>`;
+    return;
+  }
 
   // Month label positions (one label per first-of-month, plus the first day)
   const monthLabels = [];
@@ -2052,6 +2123,12 @@ function updateURL() {
   }
   // cv is legacy; tab now fully identifies CI timing/workers.
   url.searchParams.delete("cv");
+
+  if (workersFilter) {
+    url.searchParams.set("wq", workersFilter);
+  } else {
+    url.searchParams.delete("wq");
+  }
   // Add expanded jobs if any
   if (expandedJobs.size > 0) {
     const expandedIndices = [...expandedJobs]
@@ -2155,6 +2232,13 @@ function applyURLParams() {
   const cv = params.get("cv");
   if (cv === "workers" || cv === "jobs") {
     setCITimingSubview(cv, { updateUrl: false });
+  }
+
+  const wq = params.get("wq");
+  if (wq !== null) {
+    workersFilter = wq.trim();
+    const filterEl = document.getElementById("workers-filter");
+    if (filterEl) filterEl.value = workersFilter;
   }
 
   // Apply expanded jobs
@@ -6026,6 +6110,7 @@ const DASHBOARD_PARAMS = new Set([
   "st", // state filter
   "c", // comparison build pair
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
+  "wq", // workers text filter
   "tab", // active tab
   "bt", // bench time range
   "bs", // bench stat type

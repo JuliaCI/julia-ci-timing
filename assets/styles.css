@@ -203,6 +203,13 @@ body {
   color: var(--color-fg-default);
   cursor: pointer;
 }
+.workers-filter {
+  cursor: text;
+  min-width: 200px;
+}
+.workers-filter::placeholder {
+  color: var(--color-fg-subtle);
+}
 .checkbox-dropdown {
   position: relative;
   display: inline-block;
@@ -1625,6 +1632,23 @@ body {
   max-width: 34ch;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.agents-table tr.agents-group th {
+  position: sticky;
+  top: 23px;
+  z-index: 1;
+  padding-top: 8px;
+  background: var(--color-canvas-default);
+  border-bottom: 1px solid var(--color-border-default);
+  text-align: left;
+}
+.agents-group-queue {
+  font-weight: 600;
+  color: var(--color-fg-default);
+}
+.agents-group-meta {
+  font-weight: 400;
+  color: var(--color-fg-muted);
 }
 .agents-table tr.agents-missing td {
   background: var(--color-attention-subtle, #fff8c5);
