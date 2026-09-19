@@ -2793,6 +2793,8 @@ body {
 .overview-delta {
   font-size: 12px;
   font-weight: 600;
+}
+.overview-delta-value {
   white-space: nowrap;
 }
 .overview-delta-vs {
@@ -2827,36 +2829,41 @@ body {
   width: 84px;
   height: 84px;
 }
+/* One grid row per entry so the values and changes line up in columns */
 .overview-legend {
   list-style: none;
   margin: 0;
   padding: 0;
   font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: auto max-content;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+.overview-legend-with-delta {
+  grid-template-columns: auto max-content max-content;
 }
 .overview-legend li {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  display: contents;
 }
 .overview-legend-dot {
+  display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  flex-shrink: 0;
-  align-self: center;
+  margin-right: 6px;
+  vertical-align: middle;
 }
 .overview-legend-label {
   color: var(--color-fg-muted);
-  flex: 1;
   white-space: nowrap;
 }
 .overview-legend-value {
   color: var(--color-fg-default);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  text-align: right;
 }
 .overview-legend-pct {
   color: var(--color-fg-muted);
@@ -2864,6 +2871,25 @@ body {
 .overview-legend-delta {
   font-size: 10px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+.overview-legend-hot {
+  color: var(--color-fg-default);
+  background: var(--color-accent-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.overview-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-fg-muted);
+}
+.overview-note {
+  font-size: 12px;
+  color: var(--color-fg-muted);
 }
 .overview-rows {
   display: grid;

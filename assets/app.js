@@ -10627,8 +10627,10 @@ function overviewWeekBefore(items, latestMs, timeOf) {
 
 // A signed week-over-week change beside the headline. `upIsGood` colours the
 // direction, or null when neither direction is better; `unit` is "pp" for
-// percentage points, "%" for a relative change or "" for a plain count.
-function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, vs = "last week" }) {
+// percentage points, "%" for a relative change or "" for a plain count. `vs`
+// says what is compared in a few words, `detail` spells the two spans out
+// for the tooltip.
+function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, vs = "this week vs last", detail = "" }) {
   if (value == null || isNaN(value)) return null;
   const rounded = Math.round(value * 10 ** digits) / 10 ** digits;
   let tone = "neutral";
@@ -10636,7 +10638,26 @@ function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, vs = "la
   else if (upIsGood !== null && rounded < 0) tone = upIsGood ? "bad" : "good";
   const arrow = rounded > 0 ? "▲" : rounded < 0 ? "▼" : "▬";
   const text = `${overviewSigned(value, digits)}${unit === "pp" ? " pp" : unit}`;
-  return { tone, arrow, text, vs };
+  return { tone, arrow, text, vs, detail, value };
+}
+
+function overviewDateOnly(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// The two 7-day windows ending now, for the tooltips of window comparisons
+function overviewWeekWindowsDetail(what, endMs = Date.now()) {
+  const d = overviewDateOnly;
+  return `${what} from ${d(endMs - OVERVIEW_WEEK_MS)} to ${d(endMs)}, against ${d(endMs - 2 * OVERVIEW_WEEK_MS)} to ${d(endMs - OVERVIEW_WEEK_MS)}`;
+}
+
+// The latest report against the last one at least a week older
+function overviewReportDelta(latestDate, earlierDate, what = "report") {
+  const days = Math.round((Date.parse(latestDate) - Date.parse(earlierDate)) / OVERVIEW_DAY_MS);
+  return {
+    vs: `vs ${what} ${days} d earlier`,
+    detail: `Latest ${what} ${latestDate} against the last one at least a week older, ${earlierDate}`,
+  };
 }
 
 // Donut spec: [{ label, value, color }] plus a legend format
@@ -10654,13 +10675,22 @@ function overviewSpark(points, { color, label, format = (v) => String(v), zero =
   return { points: kept, color, label, format, zero };
 }
 
+// Diverging bar spec: points [{ x: ms, up, down }], `up` drawn above the
+// zero line in `upColor` and `down` below it in `downColor`
+function overviewBars(points, { upColor, downColor, upLabel, downLabel, label }) {
+  const kept = points.filter((p) => !isNaN(p.x) && p.up != null && p.down != null);
+  if (kept.length < 2) return null;
+  kept.sort((a, b) => a.x - b.x);
+  return { points: kept, upColor, downColor, upLabel, downLabel, label };
+}
+
 let overviewChartSeq = 0;
 
 // A card: title linking to the source's tab, a status badge (icon + label,
 // never colour alone), one headline figure with its week-over-week delta, an
 // optional sparkline, then label/value rows beside an optional donut with
 // its legend
-function overviewCard({ tab, title, status, headline, headlineLabel, delta, spark, donut, rows }) {
+function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, spark, bars, donut, rows }) {
   const charts = [];
   const parts = [`<section class="overview-card overview-card-${status.level}">`];
   parts.push('<header class="overview-card-header">');
@@ -10669,13 +10699,14 @@ function overviewCard({ tab, title, status, headline, headlineLabel, delta, spar
     `<span class="overview-status overview-status-${status.level}"><span aria-hidden="true">${OVERVIEW_STATUS_ICON[status.level]}</span> ${escapeHtml(status.text)}</span>`,
   );
   parts.push("</header>");
+  if (description) parts.push(`<p class="overview-card-desc">${description}</p>`);
   if (headline != null || donut) parts.push('<div class="overview-card-top">');
   if (headline != null) {
     parts.push('<div class="overview-headline-figure">');
     parts.push(`<span class="overview-figure">${headline}</span>`);
     if (delta) {
       parts.push(
-        `<span class="overview-delta overview-delta-${delta.tone}" title="vs ${escapeHtml(delta.vs)}"><span aria-hidden="true">${delta.arrow}</span> ${escapeHtml(delta.text)} <span class="overview-delta-vs">vs ${escapeHtml(delta.vs)}</span></span>`,
+        `<span class="overview-delta overview-delta-${delta.tone}" title="${escapeHtml(delta.detail || delta.vs)}"><span class="overview-delta-value"><span aria-hidden="true">${delta.arrow}</span> ${escapeHtml(delta.text)}</span> <span class="overview-delta-vs">${escapeHtml(delta.vs)}</span></span>`,
       );
     }
     if (headlineLabel) parts.push(`<span class="overview-figure-label">${headlineLabel}</span>`);
@@ -10686,17 +10717,25 @@ function overviewCard({ tab, title, status, headline, headlineLabel, delta, spar
     const total = donut.segments.reduce((acc, s) => acc + s.value, 0);
     parts.push('<div class="overview-donut">');
     parts.push(`<div class="overview-donut-canvas"><canvas id="${id}" role="img" aria-label="${escapeHtml(donut.segments.map((s) => `${s.label} ${donut.format(s.value)}`).join(", "))}"></canvas></div>`);
-    parts.push('<ul class="overview-legend">');
-    for (const s of donut.segments) {
+    // Aligned columns: label, value (and share), change. The biggest change
+    // by absolute size is highlighted.
+    const deltas = donut.segments.map((s) => (s.delta ? Math.abs(s.delta.value) : 0));
+    const biggest = Math.max(0, ...deltas);
+    const hasDelta = donut.segments.some((s) => s.delta);
+    parts.push(`<ul class="overview-legend${hasDelta ? " overview-legend-with-delta" : ""}">`);
+    donut.segments.forEach((s, i) => {
       const pct = donut.showPct && total ? ` <span class="overview-legend-pct">${((100 * s.value) / total).toFixed(1)}%</span>` : "";
       let deltaHtml = "";
       if (s.delta) {
-        deltaHtml = ` <span class="overview-legend-delta overview-delta-${s.delta.tone}" title="${escapeHtml(s.delta.text)} vs ${escapeHtml(s.delta.vs)}">${escapeHtml(s.delta.text)}</span>`;
+        const hot = biggest > 0 && deltas[i] === biggest;
+        deltaHtml = `<span class="overview-legend-delta overview-delta-${s.delta.tone}${hot ? " overview-legend-hot" : ""}" title="${escapeHtml(s.delta.detail || s.delta.vs)}">${hot ? `<span aria-hidden="true">${s.delta.arrow}</span> ` : ""}${escapeHtml(s.delta.text)}</span>`;
+      } else if (hasDelta) {
+        deltaHtml = '<span class="overview-legend-delta"></span>';
       }
       parts.push(
-        `<li><span class="overview-legend-dot" style="background:${s.color}"></span><span class="overview-legend-label">${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(donut.format(s.value))}${pct}${deltaHtml}</span></li>`,
+        `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(donut.format(s.value))}${pct}</span>${deltaHtml}</li>`,
       );
-    }
+    });
     parts.push("</ul></div>");
     charts.push({ id, kind: "donut", spec: donut });
   }
@@ -10705,6 +10744,11 @@ function overviewCard({ tab, title, status, headline, headlineLabel, delta, spar
     const id = `overview-chart-${++overviewChartSeq}`;
     parts.push(`<div class="overview-spark"><canvas id="${id}" role="img" aria-label="${escapeHtml(spark.label)}"></canvas></div>`);
     charts.push({ id, kind: "spark", spec: spark });
+  }
+  if (bars) {
+    const id = `overview-chart-${++overviewChartSeq}`;
+    parts.push(`<div class="overview-spark overview-bars"><canvas id="${id}" role="img" aria-label="${escapeHtml(bars.label)}"></canvas></div>`);
+    charts.push({ id, kind: "bars", spec: bars });
   }
   parts.push('<dl class="overview-rows">');
   for (const [label, value] of rows) {
@@ -10753,7 +10797,7 @@ function overviewPkgevalCard(src) {
   const weekAgo = overviewWeekBefore(reports, Date.parse(last.date), (r) => Date.parse(r.date));
   const delta =
     weekAgo && passRate(weekAgo) != null
-      ? overviewDelta({ value: passPct - passRate(weekAgo), unit: "pp", upIsGood: true, vs: weekAgo.date })
+      ? overviewDelta({ value: passPct - passRate(weekAgo), unit: "pp", upIsGood: true, ...overviewReportDelta(last.date, weekAgo.date) })
       : null;
   let change = "";
   if (weekAgo) {
@@ -10763,7 +10807,7 @@ function overviewPkgevalCard(src) {
       `${overviewSigned(last.crash - weekAgo.crash)} crash`,
       `${overviewSigned(last.total - weekAgo.total)} tested`,
     ];
-    change = `${parts.join(", ")} vs ${escapeHtml(weekAgo.date)}`;
+    change = `${parts.join(", ")} vs the report of ${escapeHtml(weekAgo.date)}`;
   }
   const version = [last.version && last.version !== "unknown" ? last.version : "", last.commit]
     .filter(Boolean)
@@ -10785,6 +10829,8 @@ function overviewPkgevalCard(src) {
     tab: "pkgeval",
     title: "PkgEval",
     status,
+    description:
+      "Nanosoldier runs the test suite of every registered package against a nightly Julia build, every few days. A package is ok when its tests pass; fail, crash and skip are the other outcomes.",
     headline: passPct != null ? `${passPct.toFixed(1)}%` : "—",
     headlineLabel: `of ${last.total} packages passing`,
     delta,
@@ -10793,7 +10839,7 @@ function overviewPkgevalCard(src) {
     rows: [
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
-      ["Week change", change],
+      ["Change over a week", change],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
@@ -10802,7 +10848,7 @@ function overviewPkgevalCard(src) {
 function overviewBenchCard(src) {
   const reports = (src && src.reports) || [];
   const last = reports[reports.length - 1];
-  if (!last) return overviewMissingCard("benchmarks", "Nanosoldier benchmarks", "The benchmark summary");
+  if (!last) return overviewMissingCard("benchmarks", "Performance benchmarks", "The benchmark summary");
   const colors = overviewColors();
   const cadence = overviewCadence(reports.map((r) => r.date));
   const status = cadence && cadence.overdue
@@ -10813,12 +10859,14 @@ function overviewBenchCard(src) {
   const hasCounts = last.report_total != null;
   const weekAgo = hasCounts ? overviewWeekBefore(counted, Date.parse(last.date), (r) => Date.parse(r.date)) : null;
   const delta = weekAgo
-    ? overviewDelta({ value: last.report_regressions - weekAgo.report_regressions, digits: 0, upIsGood: false, vs: weekAgo.date })
+    ? overviewDelta({ value: last.report_regressions - weekAgo.report_regressions, digits: 0, upIsGood: false, ...overviewReportDelta(last.date, weekAgo.date) })
     : null;
   const sparkFrom = Date.now() - 90 * OVERVIEW_DAY_MS;
-  const spark = overviewSpark(
-    counted.filter((r) => Date.parse(r.date) >= sparkFrom).map((r) => ({ x: Date.parse(r.date), y: r.report_regressions })),
-    { color: colors.severe, label: "Regressions per report", format: (v) => `${v}`, zero: true },
+  const bars = overviewBars(
+    counted
+      .filter((r) => Date.parse(r.date) >= sparkFrom)
+      .map((r) => ({ x: Date.parse(r.date), up: r.report_regressions, down: r.report_improvements })),
+    { upColor: colors.bad, downColor: colors.good, upLabel: "regressions", downLabel: "improvements", label: "Regressions (up) and improvements (down) per daily report" },
   );
   const donut = hasCounts
     ? overviewDonut([
@@ -10829,14 +10877,14 @@ function overviewBenchCard(src) {
     : null;
   return overviewCard({
     tab: "benchmarks",
-    title: "Nanosoldier benchmarks",
+    title: "Performance benchmarks",
     status,
     headline: hasCounts ? `${last.report_regressions}` : null,
     headlineLabel: hasCounts
-      ? `regressions of ${last.report_total} benchmarks${last.report_baseline_date ? ` vs ${escapeHtml(last.report_baseline_date)}` : ""}`
+      ? `regressions, ${last.report_improvements} improvements, of ${last.report_total} benchmarks${last.report_baseline_date ? ` against ${escapeHtml(last.report_baseline_date)}` : ""}`
       : null,
     delta,
-    spark,
+    bars,
     donut,
     rows: [
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
@@ -10901,7 +10949,7 @@ function overviewCICard() {
   const priorRate = prior.runs ? (100 * prior.passed) / prior.runs : null;
   const delta =
     passRate != null && priorRate != null
-      ? overviewDelta({ value: passRate - priorRate, unit: "pp", upIsGood: true })
+      ? overviewDelta({ value: passRate - priorRate, unit: "pp", upIsGood: true, detail: overviewWeekWindowsDetail("Master job runs") })
       : null;
   const rows = [];
   let failedNames = [];
@@ -10995,7 +11043,13 @@ function overviewTtfxCard(src) {
   const weekAgoGeomean = weekAgo ? ttfxGeomean(weekAgo, common, "precompile") : null;
   const delta =
     geomean != null && weekAgoGeomean
-      ? overviewDelta({ value: (100 * (geomean - weekAgoGeomean)) / weekAgoGeomean, unit: "%", upIsGood: false, vs: `#${weekAgo.build}` })
+      ? overviewDelta({
+          value: (100 * (geomean - weekAgoGeomean)) / weekAgoGeomean,
+          unit: "%",
+          upIsGood: false,
+          ...overviewReportDelta(overviewDateOnly(latestMs), overviewDateOnly(ttfxBuildTime(weekAgo)), "build"),
+          detail: `Latest build #${latest.build} (${latest.date} UTC) against the last build at least a week older, #${weekAgo.build} (${weekAgo.date} UTC)`,
+        })
       : null;
   const spark = overviewSpark(
     sparkBuilds.map((b) => ({ x: ttfxBuildTime(b), y: ttfxGeomean(b, common, "precompile") })),
@@ -11016,6 +11070,8 @@ function overviewTtfxCard(src) {
     tab: "ci-ttfx",
     title: "TTFX",
     status,
+    description:
+      "Time to first X on every master build: for each Julia-TTFX-Snippets task, the time to precompile its packages from a cleared cache, then to load and to first run the task script in a fresh process, on a macOS aarch64 runner.",
     headline: geomean != null ? formatTtfxSeconds(geomean) : null,
     headlineLabel: geomean != null ? `precompile geomean over ${common.length} snippets in the latest build` : null,
     delta,
@@ -11083,14 +11139,16 @@ function overviewPackagesCard(src) {
   const week = overviewWeekSums(series, maxDate, 7);
   let weekText = `${overviewCompact(week.user)} user, ${overviewCompact(week.ci)} CI`;
   if (week.days < 7) weekText += `, ${week.days} of 7 days reported`;
+  const weekDetail = `7 days to ${maxDate} against the 7 days to ${overviewDateAdd(maxDate, -7)}`;
   const delta = week.prev
-    ? overviewDelta({ value: (100 * (week.all - week.prev)) / week.prev, unit: "%", upIsGood: true })
+    ? overviewDelta({ value: (100 * (week.all - week.prev)) / week.prev, unit: "%", upIsGood: true, detail: `Downloads in the ${weekDetail}` })
     : null;
   const status = lagDays !== null && lagDays > OVERVIEW_DOWNLOADS_LAG_DAYS
     ? overviewStatus("warn", `No data since ${maxDate}`)
     : overviewStatus("ok", "Current");
 
   // Share per Julia minor this week and last, from the version rollup
+  let biggestShift = "";
   const mixRows = src.version_mix || [];
   const thisWeek = overviewMinorShares(overviewDateWindow(mixRows, maxDate, 7));
   const lastWeek = overviewMinorShares(overviewDateWindow(mixRows, overviewDateAdd(maxDate, -7), 7));
@@ -11104,7 +11162,9 @@ function overviewPackagesCard(src) {
       : null;
     // Share deltas in percentage points need a few days of last week's data
     const shareDelta = (now, then) =>
-      lastWeek.days >= 3 && then != null ? overviewDelta({ value: 100 * (now - then), unit: "pp", upIsGood: null, digits: 1 }) : null;
+      lastWeek.days >= 3 && then != null
+        ? overviewDelta({ value: 100 * (now - then), unit: "pp", upIsGood: null, digits: 1, detail: `Share of downloads in the ${weekDetail}${lastWeek.days < 7 ? ` (${lastWeek.days} of those 7 days reported)` : ""}` })
+        : null;
     const segments = top.map(([minor, share], i) => ({
       label: `Julia ${minor}`,
       value: share,
@@ -11115,6 +11175,10 @@ function overviewPackagesCard(src) {
       segments.push({ label: "Other", value: restShare, color: colors.categorical[OVERVIEW_DOWNLOADS_TOP_MINORS], delta: shareDelta(restShare, restLast) });
     }
     donut = overviewDonut(segments, { format: (v) => `${(100 * v).toFixed(1)}%`, showPct: false });
+    const movers = segments.filter((seg) => seg.delta).sort((a, b) => Math.abs(b.delta.value) - Math.abs(a.delta.value));
+    if (movers.length && Math.abs(movers[0].delta.value) >= 0.05) {
+      biggestShift = `${escapeHtml(movers[0].label)} ${escapeHtml(movers[0].delta.text)} of downloads, this week vs last`;
+    }
   }
   const sparkFrom = overviewDateAdd(maxDate, 1 - OVERVIEW_SPARK_DAYS);
   const spark = overviewSpark(
@@ -11132,6 +11196,7 @@ function overviewPackagesCard(src) {
     donut,
     rows: [
       ["This week", weekText],
+      ["Biggest shift", biggestShift],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${overviewCompact(series[series.length - 1].all)} downloads`],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
@@ -11259,24 +11324,66 @@ function overviewSparkChart(canvas, spark) {
   });
 }
 
+function overviewBarsChart(canvas, bars) {
+  const isDark = isDarkMode();
+  const zeroColor = isDark ? "rgba(240,246,252,0.35)" : "rgba(31,35,40,0.35)";
+  const bar = (label, color, sign) => ({
+    label,
+    data: bars.points.map((p) => ({ x: p.x, y: sign * (sign > 0 ? p.up : p.down) })),
+    backgroundColor: color,
+    borderWidth: 0,
+    borderRadius: 1,
+    barThickness: 4,
+  });
+  return new Chart(canvas, {
+    type: "bar",
+    data: { datasets: [bar(bars.upLabel, bars.upColor, 1), bar(bars.downLabel, bars.downColor, -1)] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      layout: { padding: { top: 4, bottom: 2 } },
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { type: "time", display: false, offset: false },
+        y: { display: false },
+      },
+      plugins: {
+        legend: { display: false },
+        annotation: {
+          annotations: { zero: { type: "line", yMin: 0, yMax: 0, borderColor: zeroColor, borderWidth: 1 } },
+        },
+        tooltip: {
+          displayColors: true,
+          callbacks: {
+            title: (items) => overviewDateOnly(items[0].parsed.x),
+            label: (item) => ` ${Math.abs(item.parsed.y)} ${item.dataset.label}`,
+          },
+        },
+      },
+    },
+  });
+}
+
 function drawOverview() {
   const src = overviewSources;
   for (const c of overviewCharts) c.destroy();
   overviewCharts = [];
   const cards = [
-    overviewCICard(),
     overviewTtfxCard(src.ttfx),
+    overviewPackagesCard(src.packages),
+    overviewCICard(),
     overviewAgentsCard(src.agents),
     overviewBenchCard(src.bench),
     overviewPkgevalCard(src.pkgeval),
-    overviewPackagesCard(src.packages),
   ];
   document.getElementById("overview-grid").innerHTML = cards.map((c) => c.html).join("");
   for (const card of cards) {
     for (const { id, kind, spec } of card.charts) {
       const canvas = document.getElementById(id);
       if (!canvas) continue;
-      overviewCharts.push(kind === "donut" ? overviewDonutChart(canvas, spec) : overviewSparkChart(canvas, spec));
+      const make = kind === "donut" ? overviewDonutChart : kind === "bars" ? overviewBarsChart : overviewSparkChart;
+      overviewCharts.push(make(canvas, spec));
     }
   }
 
