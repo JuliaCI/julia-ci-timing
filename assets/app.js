@@ -6194,7 +6194,10 @@ window.addEventListener("message", (event) => {
   history.replaceState(null, "", url);
 });
 
-function switchTab(tab) {
+// `pushHistory`: a switch the user made gets its own history entry so the
+// browser's back button returns to the previous tab; the startup switch and
+// the one that answers a back or forward navigation only reflect the URL
+function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
   } else if (tab === "ci-commits") {
@@ -6281,8 +6284,26 @@ function switchTab(tab) {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(tab));
   url.searchParams.delete("cv");
-  history.replaceState(null, "", url);
+  if (pushHistory && url.href !== window.location.href) {
+    history.pushState(null, "", url);
+  } else {
+    history.replaceState(null, "", url);
+  }
 }
+
+// The tab a URL names, or null; old links used tab=ci-timing&cv=workers
+function tabFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  let tab = tabFromURLValue(params.get("tab"));
+  if (tab === "ci-timing" && params.get("cv") === "workers") tab = "ci-workers";
+  return tab;
+}
+
+// Back and forward: the browser has restored the URL of the entry, show its tab
+window.addEventListener("popstate", () => {
+  const tab = tabFromLocation() || "perf";
+  if (tab !== activeTab) switchTab(tab, { pushHistory: false });
+});
 
 // === Benchmarks State ===
 let benchData = null;
@@ -11287,19 +11308,8 @@ applyTtfxURLParams();
 applyPerfURLParams();
 
 // Switch to correct tab if URL says so
-const startupParams = new URLSearchParams(window.location.search);
-const rawUrlTab = startupParams.get("tab");
-let parsedUrlTab = tabFromURLValue(rawUrlTab);
-// Legacy compatibility: old links used tab=ci-timing&cv=workers.
-if (parsedUrlTab === "ci-timing" && startupParams.get("cv") === "workers") {
-  parsedUrlTab = "ci-workers";
-}
-if (parsedUrlTab) {
-  switchTab(parsedUrlTab);
-} else {
-  // Default tab is 'perf' — ensure it initializes (loads iframe, etc.)
-  switchTab("perf");
-}
+// Default tab is 'perf' — ensure it initializes (loads iframe, etc.)
+switchTab(tabFromLocation() || "perf", { pushHistory: false });
 
 // Auto-refresh data periodically — but only when the page is visible.
 setInterval(() => {
