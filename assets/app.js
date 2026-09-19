@@ -9595,9 +9595,17 @@ function buildTtfxAnnotations(builds, isDark) {
   const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
   const labelColor = isDark ? "#8b949e" : "#656d76";
   const out = {};
+  // Labels of notes close together in pixels are stepped down so they do not
+  // cover each other; roughly a label's width, since the plugin does not
+  // measure them before laying out
+  const LABEL_CLEARANCE_PX = 110;
+  const LABEL_STEP_PX = 16;
+  const earlier = []; // x of the notes already placed, in time order
   for (const b of builds) {
     ttfxAnnotationsFor(b).forEach((a, i) => {
       const x = ttfxBuildTime(b);
+      const before = earlier.slice();
+      earlier.push(x);
       out[`note-${b.job_id}-${i}`] = {
         enter: ({ chart }, event) => showTtfxAnnotationNote(chart, a, event),
         leave: ({ chart }) => hideTtfxAnnotationNote(chart),
@@ -9617,6 +9625,17 @@ function buildTtfxAnnotations(builds, isDark) {
           display: true,
           content: a.label || a.description,
           position: "end",
+          yAdjust: ({ chart }) => {
+            const s = chart.scales.x;
+            if (!s) return 0;
+            const px = s.getPixelForValue(x);
+            let level = 0;
+            for (let k = before.length - 1; k >= 0 && before[k] >= s.min; k--) {
+              if (px - s.getPixelForValue(before[k]) < LABEL_CLEARANCE_PX) level++;
+              else break;
+            }
+            return level * LABEL_STEP_PX;
+          },
           backgroundColor: labelBg,
           color: labelColor,
           font: { size: 10 },

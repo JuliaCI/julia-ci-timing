@@ -10,6 +10,11 @@
       "job_id": "01a0b354-167f-4e7b-ab68-d422cc2fc46f",
       "label": "TTFX driver #634",
       "description": "The TTFX driver instruments the task script for per-phase gc and compile stats and repeats it with the GC off (julia-buildkite#634). Its added statements cost about a millisecond of run on every task until julia-buildkite#635."
+    },
+    {
+      "job_id": "01a0b7a2-b032-4f9d-bfe4-43bfbbe72d94",
+      "label": "TTFX driver #635",
+      "description": "The TTFX driver keeps its instrumentation out of the timed windows (julia-buildkite#635), removing the fixed cost of about a millisecond of run per task that julia-buildkite#634 had added."
     }
   ]
 }
