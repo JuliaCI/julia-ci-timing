@@ -5,6 +5,11 @@
       "job_id": "01a0a5f4-b3b5-4cc8-b804-f297aab2d905",
       "label": "macOS 26.6 → 27",
       "description": "macOS runners were updated from macOS 26.6 to 27"
+    },
+    {
+      "job_id": "01a0b354-167f-4e7b-ab68-d422cc2fc46f",
+      "label": "TTFX driver #634",
+      "description": "julia-buildkite#634: the task script is instrumented for per-phase gc and compile stats and repeated with the GC off. Its added statements cost about a millisecond of run on every task until julia-buildkite#635."
     }
   ]
 }
