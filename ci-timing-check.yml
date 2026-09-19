@@ -1,0 +1,168 @@
+# CI Timing Regression Check
+#
+# This workflow compares CI job timings from a PR's Buildkite build against
+# recent master builds to detect statistically significant performance regressions.
+#
+# Add this file to .github/workflows/ci-timing-check.yml in the julia repository.
+#
+# Required repository secrets:
+#   BUILDKITE_API_TOKEN - Buildkite API token with read access to builds
+
+name: CI Timing Regression Check
+
+on:
+  # Trigger when Buildkite CI completes
+  # You may need to adjust the workflow name to match your Buildkite integration
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches-ignore:
+      - master
+      - release-*
+
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Buildkite build number to analyze'
+        required: true
+        type: number
+
+# Prevent concurrent runs for the same PR
+concurrency:
+  group: ci-timing-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-timing:
+    name: Check CI Timing Regressions
+    runs-on: ubuntu-latest
+    # Only run on PRs, not on direct pushes
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request')
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout timing analysis tools
+        uses: actions/checkout@v4
+        with:
+          repository: JuliaCI/julia-ci-timing
+          path: timing-tools
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+
+      - name: Install dependencies
+        run: |
+          cd timing-tools
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Get Buildkite build number
+        id: get-build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "build_number=${{ inputs.build_number }}" >> $GITHUB_OUTPUT
+          else
+            # Extract build number from the workflow run
+            # This assumes Buildkite posts the build number in commit status or check run
+            # You may need to adjust this based on your Buildkite-GitHub integration
+
+            HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+
+            # Try to get build number from commit statuses
+            BUILD_URL=$(gh api repos/${{ github.repository }}/commits/${HEAD_SHA}/statuses \
+              --jq '.[] | select(.context | contains("buildkite")) | .target_url' | head -1)
+
+            if [ -n "$BUILD_URL" ]; then
+              BUILD_NUMBER=$(echo "$BUILD_URL" | grep -oP 'builds/\K\d+')
+              echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+            else
+              echo "Could not determine Buildkite build number"
+              exit 1
+            fi
+          fi
+
+      - name: Run timing comparison
+        id: compare
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+        run: |
+          BUILD_NUMBER="${{ steps.get-build.outputs.build_number }}"
+
+          echo "Analyzing build #${BUILD_NUMBER}..."
+
+          # Run comparison and capture output
+          julia --project=timing-tools timing-tools/compare_build.jl ${BUILD_NUMBER} \
+            --baseline-commits 10 \
+            --threshold 10 \
+            --markdown > comparison_result.md 2>&1 || EXIT_CODE=$?
+
+          # Store exit code
+          echo "exit_code=${EXIT_CODE:-0}" >> $GITHUB_OUTPUT
+
+          # Check if there are regressions
+          if [ "${EXIT_CODE:-0}" -eq 1 ]; then
+            echo "has_regressions=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_regressions=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Find PR number
+        id: find-pr
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+
+          # Find PR associated with this commit
+          PR_NUMBER=$(gh api repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls \
+            --jq '.[0].number' 2>/dev/null || echo "")
+
+          if [ -n "$PR_NUMBER" ]; then
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post comment on PR
+        if: steps.find-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ steps.find-pr.outputs.pr_number }}"
+
+          # Check if we already have a timing comment
+          EXISTING_COMMENT=$(gh api repos/${{ github.repository }}/issues/${PR_NUMBER}/comments \
+            --jq '.[] | select(.body | contains("CI Timing")) | .id' | head -1)
+
+          if [ -n "$EXISTING_COMMENT" ]; then
+            # Update existing comment
+            gh api repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT} \
+              -X PATCH \
+              -F body=@comparison_result.md
+          else
+            # Create new comment
+            gh api repos/${{ github.repository }}/issues/${PR_NUMBER}/comments \
+              -F body=@comparison_result.md
+          fi
+
+      - name: Output results
+        run: |
+          echo "## Timing Comparison Results"
+          echo ""
+          cat comparison_result.md
+
+      - name: Fail if regressions detected
+        if: steps.compare.outputs.has_regressions == 'true'
+        run: |
+          echo "::error::Significant CI timing regressions detected. See PR comment for details."
+          exit 1
