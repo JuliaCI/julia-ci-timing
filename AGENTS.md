@@ -48,9 +48,12 @@ before uploading has an empty `tasks`.
 Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
 (not touched by `fetch_ttfx.jl`): each entry names a `job_id` from the summary
 plus a short `label` and a fuller `description`. The site draws a dashed line
-at that job on every TTFX chart, adds the description to its tooltip, and
-flags the row in the builds table. Use it for runner or environment changes
-that shift the numbers without a Julia commit being responsible.
+with the label at that job on every TTFX chart, shows the full text while the
+pointer is over the line or label, adds it to the build's tooltip, and flags
+the row in the builds table. Use it for changes to the runners or to the
+benchmark itself that shift the numbers without a Julia commit being
+responsible: a macOS update on the agents, a change to how the driver runs the
+task scripts.
 
 Agent snapshots (the CI → Workers tab) live under `data/agents/`, written
 by `fetch_agents.jl` from the Buildkite agents API on every update run.

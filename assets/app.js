@@ -9508,6 +9508,9 @@ let ttfxTaskSortAsc = false;
 // Hand-written notes on individual jobs (data/ttfx_annotations.json), drawn
 // as a dashed line on every TTFX chart and flagged in the builds table
 let ttfxAnnotations = [];
+// What such a note means, shown with every one of them
+const TTFX_ANNOTATION_HINT =
+  "Annotations mark changes to the runners or to the benchmark itself that shifted the results without a Julia commit being responsible.";
 
 // `gcoffIndex`: the same phase from the job's repeats with the GC disabled
 // (fetch_ttfx.jl's METRICS order); precompile has no such run
@@ -9532,8 +9535,40 @@ function ttfxAnnotationsFor(b) {
   return ttfxAnnotations.filter((a) => a.job_id === b.job_id);
 }
 
+// The full text of an annotation, plus the badge tooltip for a build's notes
+function ttfxAnnotationText(a) {
+  return a.label && a.label !== a.description ? `${a.label}: ${a.description}` : a.description;
+}
+function ttfxAnnotationTitle(notes) {
+  return notes.map(ttfxAnnotationText).join("\n") + "\n\n" + TTFX_ANNOTATION_HINT;
+}
+
+// The full text of the annotation under the pointer, floated beside it in the
+// chart's wrapper: the chart label only has room for the short form
+function showTtfxAnnotationNote(chart, a, event) {
+  const wrap = chart.canvas.parentElement;
+  let el = wrap.querySelector(".ttfx-note-popup");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "ttfx-note-popup";
+    wrap.appendChild(el);
+  }
+  el.innerHTML = `${escapeHtml(ttfxAnnotationText(a))}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`;
+  el.style.display = "block";
+  // Right of the pointer, or left of it near the right edge
+  const x = event.x + 14;
+  el.style.left = `${x + el.offsetWidth > wrap.clientWidth ? Math.max(0, event.x - 14 - el.offsetWidth) : x}px`;
+  el.style.top = `${Math.max(0, Math.min(event.y + 14, wrap.clientHeight - el.offsetHeight))}px`;
+}
+
+function hideTtfxAnnotationNote(chart) {
+  const el = chart.canvas.parentElement.querySelector(".ttfx-note-popup");
+  if (el) el.style.display = "none";
+}
+
 // Chart.js annotation-plugin config: one dashed vertical line per annotated
-// job in `builds`, with its short label at the top
+// job in `builds`, with its short label at the top and the full text while
+// the pointer is over the line or the label
 function buildTtfxAnnotations(builds, isDark) {
   const color = isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)";
   const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
@@ -9543,6 +9578,8 @@ function buildTtfxAnnotations(builds, isDark) {
     ttfxAnnotationsFor(b).forEach((a, i) => {
       const x = ttfxBuildTime(b);
       out[`note-${b.job_id}-${i}`] = {
+        enter: ({ chart }, event) => showTtfxAnnotationNote(chart, a, event),
+        leave: ({ chart }) => hideTtfxAnnotationNote(chart),
         type: "line",
         xMin: x,
         xMax: x,
@@ -9921,9 +9958,11 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
     animation: false,
     parsing: false,
     normalized: true,
-    // One point at a time: with every task on the chart an index tooltip
-    // would list them all
-    interaction: { mode: "nearest", intersect: false },
+    // One point at a time, and only when the pointer is on it: with every
+    // task on the chart an index tooltip would list them all, and a nearest
+    // match from anywhere on the plot highlighted a build for every position.
+    // The points are small, so `pointHitRadius` on the datasets widens the target.
+    interaction: { mode: "nearest", intersect: true },
     elements: { line: { tension: 0 } },
     plugins: {
       title: title
@@ -9986,7 +10025,11 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
           onZoomComplete: onZoomChange,
         },
       },
-      annotation: { annotations: buildTtfxAnnotations(builds, isDark) },
+      annotation: {
+        // Enter and leave only on the line or its label, not the nearest one
+        interaction: { mode: "nearest", intersect: true },
+        annotations: buildTtfxAnnotations(builds, isDark),
+      },
     },
     onClick: (evt, elements, chart) => {
       if (!elements.length) return;
@@ -10045,6 +10088,7 @@ function ttfxRebase(pts) {
 function ttfxHoverPointStyle() {
   const isDark = isDarkMode();
   return {
+    pointHitRadius: 6,
     pointHoverRadius: 7,
     pointHoverBorderWidth: 2.5,
     pointHoverBackgroundColor: isDark ? "#e3b341" : "#bf8700",
@@ -10241,7 +10285,7 @@ function renderTtfxBuildsTable() {
     }
     const notes = ttfxAnnotationsFor(b);
     const noteBadge = notes.length
-      ? `<span class="ttfx-note-badge" title="${escapeHtml(notes.map((a) => a.description).join("\n"))}">${escapeHtml(notes.map((a) => a.label || a.description).join(", "))}</span> `
+      ? `<span class="ttfx-note-badge" title="${escapeHtml(ttfxAnnotationTitle(notes))}">${escapeHtml(notes.map((a) => a.label || a.description).join(", "))}</span> `
       : "";
     html += `<td class="msg col-secondary" title="${escapeHtml(b.message || "")}">${noteBadge}${escapeHtml(b.message || "")}</td>`;
     html += "</tr>";
