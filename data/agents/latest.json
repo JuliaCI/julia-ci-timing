@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-20T20:00:20Z",
+ "generated_at": "2026-09-20T22:11:43Z",
  "agents": {
   "amdgpu1.luraess.com": {
    "hostname": "amdgpu1.luraess.com",
@@ -8,9 +8,9 @@
    "arch": "",
    "version": "3.132.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:43:27.058Z",
+   "connected_at": "2026-09-20T21:24:07.334Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "amdgpu2.luraess.com": {
@@ -20,98 +20,78 @@
    "arch": "",
    "version": "4.0.4",
    "state": "connected",
-   "connected_at": "2026-09-20T19:53:29.545Z",
+   "connected_at": "2026-09-20T21:11:22.931Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": null
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": "Build OpenMPI",
+    "pipeline": "mpi-dot-jl",
+    "build": 1889,
+    "started_at": "2026-09-20T22:08:33.308Z"
+   }
   },
   "builder-amdci4.1": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:40.287Z",
    "first_seen": "2026-09-12T12:31:14Z",
+   "connected_at": "2026-09-20T19:14:40.287Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build i686-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:14:40.715Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.10": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:56:49.853Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T18:56:49.853Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "asan",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T18:56:50.259Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.11": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:30:16.649Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:30:16.649Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnummtkconcurrent",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:30:17.026Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.12": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:04.570Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:39:04.570Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnuassert",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:05.003Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.2": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:04.314Z",
    "first_seen": "2026-09-13T14:00:55Z",
+   "connected_at": "2026-09-20T19:39:04.314Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build i686-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:04.774Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.3": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-20T08:53:22.520Z",
    "queue": "build",
    "arch": "x86_64",
@@ -119,45 +99,35 @@
    "job": null,
    "hostname": "amdci4.julia.csail.mit.edu",
    "version": "3.129.0",
-   "first_seen": "2026-09-12T16:40:01Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-12T16:40:01Z"
   },
   "builder-amdci4.4": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:48:09.232Z",
    "first_seen": "2026-09-14T16:05:22Z",
+   "connected_at": "2026-09-20T19:48:09.232Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnummtkconcurrent",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:48:09.625Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.5": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:41:39.857Z",
    "first_seen": "2026-09-12T12:31:14Z",
+   "connected_at": "2026-09-20T18:41:39.857Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "asan",
-    "pipeline": "julia-pr",
-    "build": 2719,
-    "started_at": "2026-09-20T18:41:40.278Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.6": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-20T08:53:22.696Z",
    "queue": "build",
    "arch": "x86_64",
@@ -165,28 +135,23 @@
    "job": null,
    "hostname": "amdci4.julia.csail.mit.edu",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T09:25:26Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-14T09:25:26Z"
   },
   "builder-amdci4.7": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:46:32.215Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:46:32.215Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnummtk",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:46:32.626Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci4.8": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-20T08:56:53.289Z",
    "queue": "build",
    "arch": "x86_64",
@@ -194,62 +159,47 @@
    "job": null,
    "hostname": "amdci4.julia.csail.mit.edu",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T16:05:22Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-14T16:05:22Z"
   },
   "builder-amdci4.9": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:04.547Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:39:04.547Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:05.016Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.1": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:19:26.961Z",
    "first_seen": "2026-09-12T12:31:14Z",
+   "connected_at": "2026-09-20T19:19:26.961Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "asan",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:19:27.317Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.10": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:16:41.168Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:16:41.168Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build i686-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:16:41.603Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.11": {
-   "state": "disconnected",
+   "os": "linux",
    "connected_at": "2026-09-19T21:58:29.597Z",
    "queue": "build",
    "arch": "x86_64",
@@ -258,44 +208,34 @@
    "hostname": "amdci5.julia.csail.mit.edu",
    "version": "3.129.0",
    "first_seen": "2026-09-13T14:00:55Z",
-   "os": "linux"
+   "state": "disconnected"
   },
   "builder-amdci5.12": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:43:42.411Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:43:42.411Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "tsan",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:43:42.882Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.2": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:43:59.804Z",
    "first_seen": "2026-09-13T02:04:06Z",
+   "connected_at": "2026-09-20T19:43:59.804Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "llvmpasses",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:44:00.347Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.3": {
-   "first_seen": "2026-09-14T09:25:26Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:09:13.913Z",
    "queue": "build",
    "arch": "x86_64",
@@ -303,11 +243,11 @@
    "job": null,
    "hostname": "amdci5.julia.csail.mit.edu",
    "version": "3.129.0",
-   "os": "linux",
-   "state": "disconnected"
+   "first_seen": "2026-09-14T09:25:26Z",
+   "os": "linux"
   },
   "builder-amdci5.4": {
-   "first_seen": "2026-09-14T09:25:26Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:09:13.893Z",
    "queue": "build",
    "arch": "x86_64",
@@ -315,113 +255,83 @@
    "job": null,
    "hostname": "amdci5.julia.csail.mit.edu",
    "version": "3.129.0",
+   "first_seen": "2026-09-14T09:25:26Z",
+   "os": "linux"
+  },
+  "builder-amdci5.5": {
+   "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:48:14.557Z",
+   "queue": "build",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
    "os": "linux",
    "state": "disconnected"
   },
-  "builder-amdci5.5": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:48:14.557Z",
-   "first_seen": "2026-09-12T16:40:01Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "llvmpasses",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:48:14.930Z"
-   }
-  },
   "builder-amdci5.6": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:43:33.788Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:43:33.788Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "asan",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:43:34.219Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.7": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:43:22.929Z",
    "first_seen": "2026-09-13T14:00:55Z",
+   "connected_at": "2026-09-20T19:43:22.929Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnuprofiling",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:43:23.311Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.8": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:29:44.779Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:29:44.779Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build x86_64-linux-gnummtk",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:29:45.157Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-amdci5.9": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "build",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:40.664Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:14:40.664Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "asan",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:14:41.074Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-armageddon.1": {
-   "hostname": "armageddon",
-   "queue": "build",
-   "os": "linux",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:06.230Z",
    "first_seen": "2026-09-12T12:31:14Z",
+   "connected_at": "2026-09-20T19:39:06.230Z",
+   "queue": "build",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build aarch64-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:06.597Z"
-   }
+   "job": null,
+   "hostname": "armageddon",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-armageddon.2": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-20T08:57:04.046Z",
    "queue": "build",
    "arch": "aarch64",
@@ -429,11 +339,11 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-13T14:00:55Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-13T14:00:55Z"
   },
   "builder-armageddon.3": {
-   "state": "disconnected",
+   "first_seen": "2026-09-13T17:16:46Z",
    "connected_at": "2026-09-19T16:26:11.239Z",
    "queue": "build",
    "arch": "aarch64",
@@ -442,44 +352,34 @@
    "hostname": "armageddon",
    "version": "3.129.0",
    "os": "linux",
-   "first_seen": "2026-09-13T17:16:46Z"
+   "state": "disconnected"
   },
   "builder-armageddon.4": {
-   "hostname": "armageddon",
-   "queue": "build",
-   "os": "linux",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:28.915Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:14:28.915Z",
+   "queue": "build",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build aarch64-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:14:29.283Z"
-   }
+   "job": null,
+   "hostname": "armageddon",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-armageddon.5": {
-   "hostname": "armageddon",
-   "queue": "build",
-   "os": "linux",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:16:29.503Z",
    "first_seen": "2026-09-14T16:05:22Z",
+   "connected_at": "2026-09-20T19:16:29.503Z",
+   "queue": "build",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: build aarch64-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:16:29.863Z"
-   }
+   "job": null,
+   "hostname": "armageddon",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "builder-armageddon.6": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-18T13:44:53.772Z",
    "queue": "build",
    "arch": "aarch64",
@@ -487,11 +387,11 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-16T19:15:06Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-16T19:15:06Z"
   },
   "builder-armageddon.7": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-18T13:46:54.433Z",
    "queue": "build",
    "arch": "aarch64",
@@ -499,11 +399,11 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-18T14:01:49Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-18T14:01:49Z"
   },
   "builder-armageddon.8": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-18T13:53:11.429Z",
    "queue": "build",
    "arch": "aarch64",
@@ -511,28 +411,23 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-16T19:15:06Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-16T19:15:06Z"
   },
   "builder-grannysmith-C07ZM05NJYVY.1": {
-   "hostname": "grannysmith-C07ZM05NJYVY",
-   "queue": "build",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:38:59.801Z",
    "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:38:59.801Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: build x86_64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:00.226Z"
-   }
+   "job": null,
+   "hostname": "grannysmith-C07ZM05NJYVY",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "builder-grannysmith-C07ZQ07FJYVY.1": {
-   "state": "disconnected",
+   "first_seen": "2026-09-12T12:31:14Z",
    "connected_at": "2026-09-20T00:00:49.948Z",
    "queue": "build",
    "arch": "x86_64",
@@ -541,27 +436,22 @@
    "hostname": "grannysmith-C07ZQ07FJYVY",
    "version": "3.129.0",
    "os": "macos",
-   "first_seen": "2026-09-12T12:31:14Z"
+   "state": "disconnected"
   },
   "builder-grannysmith-C07ZQ07RJYVY.1": {
-   "hostname": "grannysmith-C07ZQ07RJYVY",
-   "queue": "build",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:32.368Z",
    "first_seen": "2026-09-13T14:00:55Z",
+   "connected_at": "2026-09-20T19:14:32.368Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: build x86_64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:14:32.798Z"
-   }
+   "job": null,
+   "hostname": "grannysmith-C07ZQ07RJYVY",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "builder-honeycrisp-H2WGW04MJYVY.1": {
-   "state": "disconnected",
+   "os": "macos",
    "connected_at": "2026-09-19T21:23:04.683Z",
    "queue": "build",
    "arch": "x86_64",
@@ -570,10 +460,10 @@
    "hostname": "honeycrisp-H2WGW04MJYVY",
    "version": "3.129.0",
    "first_seen": "2026-09-15T17:52:18Z",
-   "os": "macos"
+   "state": "disconnected"
   },
   "builder-honeycrisp-H2WH90YZJYVY.1": {
-   "os": "macos",
+   "state": "disconnected",
    "connected_at": "2026-09-19T01:46:23.609Z",
    "queue": "build",
    "arch": "x86_64",
@@ -581,11 +471,11 @@
    "job": null,
    "hostname": "honeycrisp-H2WH90YZJYVY",
    "version": "3.129.0",
-   "first_seen": "2026-09-13T17:16:46Z",
-   "state": "disconnected"
+   "os": "macos",
+   "first_seen": "2026-09-13T17:16:46Z"
   },
   "builder-honeycrisp-H2WHG070JYVY.1": {
-   "state": "disconnected",
+   "first_seen": "2026-09-15T00:08:04Z",
    "connected_at": "2026-09-20T02:10:26.393Z",
    "queue": "build",
    "arch": "x86_64",
@@ -594,10 +484,10 @@
    "hostname": "honeycrisp-H2WHG070JYVY",
    "version": "3.129.0",
    "os": "macos",
-   "first_seen": "2026-09-15T00:08:04Z"
+   "state": "disconnected"
   },
   "builder-honeycrisp-HL2F7YQ3XH.1": {
-   "state": "disconnected",
+   "os": "macos",
    "connected_at": "2026-09-19T21:58:29.691Z",
    "queue": "build",
    "arch": "aarch64",
@@ -606,10 +496,10 @@
    "hostname": "honeycrisp-HL2F7YQ3XH",
    "version": "3.129.0",
    "first_seen": "2026-09-15T13:03:01Z",
-   "os": "macos"
+   "state": "disconnected"
   },
   "builder-honeycrisp-P2C257CXGN.1": {
-   "state": "disconnected",
+   "os": "macos",
    "connected_at": "2026-09-20T13:47:06.424Z",
    "queue": "build",
    "arch": "aarch64",
@@ -618,10 +508,10 @@
    "hostname": "honeycrisp-P2C257CXGN",
    "version": "3.129.0",
    "first_seen": "2026-09-15T00:08:04Z",
-   "os": "macos"
+   "state": "disconnected"
   },
   "builder-honeycrisp-R17H3W25T9.1": {
-   "os": "macos",
+   "state": "disconnected",
    "connected_at": "2026-09-20T08:53:23.689Z",
    "queue": "build",
    "arch": "aarch64",
@@ -629,11 +519,11 @@
    "job": null,
    "hostname": "honeycrisp-R17H3W25T9",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T16:05:22Z",
-   "state": "disconnected"
+   "os": "macos",
+   "first_seen": "2026-09-14T16:05:22Z"
   },
   "builder-honeycrisp-XC9YQX9HH2.1": {
-   "os": "macos",
+   "state": "disconnected",
    "connected_at": "2026-09-18T01:32:29.646Z",
    "queue": "build",
    "arch": "aarch64",
@@ -641,11 +531,11 @@
    "job": null,
    "hostname": "honeycrisp-XC9YQX9HH2",
    "version": "3.129.0",
-   "first_seen": "2026-09-15T19:23:39Z",
-   "state": "disconnected"
+   "os": "macos",
+   "first_seen": "2026-09-15T19:23:39Z"
   },
   "builder-honeycrisp-XG3Q6T6R70.1": {
-   "first_seen": "2026-09-14T16:05:22Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:09:07.820Z",
    "queue": "build",
    "arch": "aarch64",
@@ -653,11 +543,11 @@
    "job": null,
    "hostname": "honeycrisp-XG3Q6T6R70",
    "version": "3.129.0",
-   "os": "macos",
-   "state": "disconnected"
+   "first_seen": "2026-09-14T16:05:22Z",
+   "os": "macos"
   },
   "builder-macmini-x64-4.1": {
-   "os": "macos",
+   "state": "disconnected",
    "connected_at": "2026-09-19T02:06:50.971Z",
    "queue": "build",
    "arch": "x86_64",
@@ -665,11 +555,11 @@
    "job": null,
    "hostname": "macmini-x64-4",
    "version": "3.129.0",
-   "first_seen": "2026-09-16T19:15:06Z",
-   "state": "disconnected"
+   "os": "macos",
+   "first_seen": "2026-09-16T19:15:06Z"
   },
   "builder-macmini-x64-5.1": {
-   "first_seen": "2026-09-15T20:41:15Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:09:02.653Z",
    "queue": "build",
    "arch": "x86_64",
@@ -677,28 +567,23 @@
    "job": null,
    "hostname": "macmini-x64-5",
    "version": "3.129.0",
+   "first_seen": "2026-09-15T20:41:15Z",
+   "os": "macos"
+  },
+  "builder-macmini-x64-6.1": {
+   "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:17:34.080Z",
+   "queue": "build",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "macmini-x64-6",
+   "version": "3.129.0",
    "os": "macos",
    "state": "disconnected"
   },
-  "builder-macmini-x64-6.1": {
-   "hostname": "macmini-x64-6",
-   "queue": "build",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:17:34.080Z",
-   "first_seen": "2026-09-14T09:25:26Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: build x86_64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:17:34.522Z"
-   }
-  },
   "ci.pxlth.1": {
-   "state": "disconnected",
+   "os": "",
    "connected_at": "2026-09-19T07:52:52.594Z",
    "queue": "rocm",
    "arch": "",
@@ -707,7 +592,7 @@
    "hostname": "ci.pxlth.com",
    "version": "3.120.1",
    "first_seen": "2026-09-15T17:52:18Z",
-   "os": ""
+   "state": "disconnected"
   },
   "default-macmini-aarch64-2.1": {
    "hostname": "macmini-aarch64-2",
@@ -716,15 +601,10 @@
    "arch": "aarch64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T11:49:59.266Z",
+   "connected_at": "2026-09-20T21:25:15.692Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "Julia 1.11",
-    "pipeline": "metal-dot-jl",
-    "build": 3482,
-    "started_at": "2026-09-20T19:47:39.625Z"
-   }
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": null
   },
   "default-macmini-aarch64-3.1": {
    "hostname": "macmini-aarch64-3",
@@ -733,14 +613,14 @@
    "arch": "aarch64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T12:10:28.581Z",
+   "connected_at": "2026-09-20T21:26:28.866Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": "Julia 1.10",
+    "name": ":racehorse: Benchmarks",
     "pipeline": "metal-dot-jl",
-    "build": 3482,
-    "started_at": "2026-09-20T19:47:43.048Z"
+    "build": 3483,
+    "started_at": "2026-09-20T21:56:16.596Z"
    }
   },
   "default-macmini-aarch64-4.1": {
@@ -750,15 +630,10 @@
    "arch": "aarch64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T11:51:07.482Z",
+   "connected_at": "2026-09-20T21:47:18.136Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "Julia 1.13",
-    "pipeline": "metal-dot-jl",
-    "build": 3482,
-    "started_at": "2026-09-20T19:47:36.882Z"
-   }
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": null
   },
   "default-macmini-aarch64-5.1": {
    "hostname": "macmini-aarch64-5",
@@ -767,18 +642,13 @@
    "arch": "aarch64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T11:47:51.686Z",
+   "connected_at": "2026-09-20T21:56:20.930Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "Julia 1.12",
-    "pipeline": "metal-dot-jl",
-    "build": 3482,
-    "started_at": "2026-09-20T19:47:38.618Z"
-   }
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": null
   },
   "freebsd13-builder-amdci6.1": {
-   "state": "disconnected",
+   "os": "freebsd",
    "connected_at": "2026-09-20T13:47:32.994Z",
    "queue": "build",
    "arch": "x86_64",
@@ -787,10 +657,10 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-14T09:25:26Z",
-   "os": "freebsd"
+   "state": "disconnected"
   },
   "freebsd13-builder-amdci6.2": {
-   "os": "freebsd",
+   "state": "disconnected",
    "connected_at": "2026-09-18T13:52:16.610Z",
    "queue": "build",
    "arch": "x86_64",
@@ -798,91 +668,76 @@
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T09:25:26Z",
-   "state": "disconnected"
+   "os": "freebsd",
+   "first_seen": "2026-09-14T09:25:26Z"
   },
   "freebsd13-builder-amdci6.3": {
-   "hostname": "amdci6-vm",
-   "queue": "build",
-   "os": "freebsd",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:13.856Z",
    "first_seen": "2026-09-14T16:05:22Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":freebsd: build x86_64-unknown-freebsd",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:14.305Z"
-   }
-  },
-  "freebsd13-tester-amdci6.1": {
-   "first_seen": "2026-09-12T12:31:14Z",
-   "connected_at": "2026-09-20T16:36:19.719Z",
-   "queue": "test",
+   "connected_at": "2026-09-20T19:39:13.856Z",
+   "queue": "build",
    "arch": "x86_64",
-   "last_seen": "2026-09-20T17:09:23Z",
+   "last_seen": "2026-09-20T20:00:20Z",
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "os": "freebsd",
    "state": "disconnected"
   },
-  "freebsd13-tester-amdci6.2": {
+  "freebsd13-tester-amdci6.1": {
    "hostname": "amdci6-vm",
    "queue": "test",
    "os": "freebsd",
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:23:09.440Z",
-   "first_seen": "2026-09-12T16:40:01Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "connected_at": "2026-09-20T21:30:40.759Z",
+   "first_seen": "2026-09-12T12:31:14Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":freebsd: test x86_64-unknown-freebsd",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:23:09.894Z"
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:30:41.208Z"
    }
+  },
+  "freebsd13-tester-amdci6.2": {
+   "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:23:09.440Z",
+   "queue": "test",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
+   "os": "freebsd",
+   "state": "disconnected"
   },
   "freebsd13-tester-amdci6.3": {
-   "hostname": "amdci6-vm",
-   "queue": "test",
-   "os": "freebsd",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:43:09.029Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:43:09.029Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":freebsd: test x86_64-unknown-freebsd",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:43:09.431Z"
-   }
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
+   "os": "freebsd",
+   "state": "disconnected"
   },
   "freebsd13-tester-amdci6.4": {
-   "hostname": "amdci6-vm",
-   "queue": "test",
-   "os": "freebsd",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:46:34.761Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:46:34.761Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":freebsd: test x86_64-unknown-freebsd",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:46:35.140Z"
-   }
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
+   "os": "freebsd",
+   "state": "disconnected"
   },
   "freebsd13-tester-amdci6.5": {
-   "state": "disconnected",
+   "os": "freebsd",
    "connected_at": "2026-09-19T07:57:34.233Z",
    "queue": "test",
    "arch": "x86_64",
@@ -891,10 +746,10 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-14T16:05:22Z",
-   "os": "freebsd"
+   "state": "disconnected"
   },
   "freebsd13-tester-amdci6.6": {
-   "state": "disconnected",
+   "os": "freebsd",
    "connected_at": "2026-09-19T08:16:55.858Z",
    "queue": "test",
    "arch": "x86_64",
@@ -903,7 +758,7 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-18T17:32:02Z",
-   "os": "freebsd"
+   "state": "disconnected"
   },
   "gpuci.0": {
    "hostname": "gpuci.0",
@@ -912,9 +767,9 @@
    "arch": "",
    "version": "4.0.3",
    "state": "connected",
-   "connected_at": "2026-09-20T19:47:41.607Z",
+   "connected_at": "2026-09-20T22:08:43.810Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.1": {
@@ -926,7 +781,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T19:49:07.564Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.10": {
@@ -938,7 +793,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T13:39:20.853Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.11": {
@@ -950,7 +805,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T16:58:31.108Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.12": {
@@ -962,7 +817,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T17:52:56.494Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.13": {
@@ -974,7 +829,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T16:58:08.905Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.14": {
@@ -986,7 +841,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T09:21:20.803Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.15": {
@@ -998,7 +853,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T19:42:14.169Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.16": {
@@ -1010,7 +865,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:48:28.515Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.17": {
@@ -1022,7 +877,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T12:31:18.654Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.2": {
@@ -1034,8 +889,13 @@
    "state": "connected",
    "connected_at": "2026-09-20T16:50:02.054Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": null
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": "Build OpenMPI",
+    "pipeline": "mpi-dot-jl",
+    "build": 1889,
+    "started_at": "2026-09-20T22:08:33.197Z"
+   }
   },
   "gpuci.3": {
    "hostname": "gpuci.3",
@@ -1046,7 +906,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T13:37:07.537Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.4": {
@@ -1056,9 +916,9 @@
    "arch": "",
    "version": "3.132.0",
    "state": "connected",
-   "connected_at": "2026-09-20T10:17:38.132Z",
+   "connected_at": "2026-09-20T21:10:52.488Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.5": {
@@ -1070,7 +930,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T13:02:27.735Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.6": {
@@ -1080,9 +940,9 @@
    "arch": "",
    "version": "3.132.0",
    "state": "connected",
-   "connected_at": "2026-09-20T12:33:52.453Z",
+   "connected_at": "2026-09-20T20:54:04.887Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.7": {
@@ -1094,7 +954,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T16:47:52.136Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.8": {
@@ -1106,7 +966,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T18:06:46.501Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci.9": {
@@ -1118,7 +978,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T13:50:27.047Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "gpuci1": {
@@ -1130,11 +990,11 @@
    "state": "connected",
    "connected_at": "2026-09-20T02:13:43.605Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "launch-amdci4.1": {
-   "first_seen": "2026-09-15T17:52:18Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:09:17.546Z",
    "queue": "launch",
    "arch": "x86_64",
@@ -1142,8 +1002,8 @@
    "job": null,
    "hostname": "amdci4.julia.csail.mit.edu",
    "version": "3.129.0",
-   "os": "linux",
-   "state": "disconnected"
+   "first_seen": "2026-09-15T17:52:18Z",
+   "os": "linux"
   },
   "sagittarius.maleadt.net": {
    "hostname": "sagittarius.maleadt.net",
@@ -1152,27 +1012,27 @@
    "arch": "",
    "version": "3.132.0",
    "state": "connected",
-   "connected_at": "2026-09-20T12:19:58.419Z",
+   "connected_at": "2026-09-20T20:37:53.885Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": null
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": "Build MPICH",
+    "pipeline": "mpi-dot-jl",
+    "build": 1889,
+    "started_at": "2026-09-20T22:08:33.426Z"
+   }
   },
   "secure-amdci4.1": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "default",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:53:52.799Z",
    "first_seen": "2026-09-12T12:31:14Z",
+   "connected_at": "2026-09-20T19:53:52.799Z",
+   "queue": "default",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":lock: publish aarch64-apple-darwin",
-    "pipeline": "julia-publish",
-    "build": 1880,
-    "started_at": "2026-09-20T19:53:53.175Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci4.1": {
    "hostname": "amdci4.julia.csail.mit.edu",
@@ -1181,14 +1041,14 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:50:10.957Z",
+   "connected_at": "2026-09-20T20:14:50.043Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": "doctest",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:50:11.354Z"
+    "name": ":linux: test x86_64-linux-gnuassertrr",
+    "pipeline": "julia-pr",
+    "build": 2721,
+    "started_at": "2026-09-20T20:14:50.482Z"
    }
   },
   "tester-amdci4.10": {
@@ -1198,14 +1058,14 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:22:33.445Z",
+   "connected_at": "2026-09-20T21:36:34.312Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":linux: test x86_64-linux-gnuassertrr",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:22:33.804Z"
+    "build": 2724,
+    "started_at": "2026-09-20T21:36:34.655Z"
    }
   },
   "tester-amdci4.2": {
@@ -1215,66 +1075,51 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:27:21.692Z",
+   "connected_at": "2026-09-20T21:08:21.948Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test x86_64-linux-gnummtkconcurrent",
+    "name": ":linux: test x86_64-linux-gnuassertrr",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:27:22.190Z"
+    "build": 2723,
+    "started_at": "2026-09-20T21:08:22.357Z"
    }
   },
   "tester-amdci4.3": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:54:08.951Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:54:08.951Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test x86_64-linux-gnuassertrr",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:54:09.336Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci4.4": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:42:40.675Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:42:40.675Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test x86_64-linux-gnuassertrr",
-    "pipeline": "julia-pr",
-    "build": 2717,
-    "started_at": "2026-09-20T18:42:41.105Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci4.5": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:53:27.214Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:53:27.214Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": "test revise",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:53:27.631Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci4.6": {
    "hostname": "amdci4.julia.csail.mit.edu",
@@ -1283,14 +1128,14 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T18:49:23.150Z",
+   "connected_at": "2026-09-20T21:34:54.994Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":linux: test x86_64-linux-gnummtk",
     "pipeline": "julia-pr",
-    "build": 2717,
-    "started_at": "2026-09-20T18:49:23.913Z"
+    "build": 2724,
+    "started_at": "2026-09-20T21:34:55.482Z"
    }
   },
   "tester-amdci4.7": {
@@ -1300,32 +1145,27 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:59:26.932Z",
+   "connected_at": "2026-09-20T21:11:29.777Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test x86_64-linux-gnummtk",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:59:27.395Z"
+    "name": ":linux: test i686-linux-gnu",
+    "pipeline": "julia-pr",
+    "build": 2723,
+    "started_at": "2026-09-20T21:11:30.229Z"
    }
   },
   "tester-amdci4.8": {
-   "hostname": "amdci4.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:06:19.826Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:06:19.826Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test x86_64-linux-gnuassertrr",
-    "pipeline": "julia-pr",
-    "build": 2715,
-    "started_at": "2026-09-20T18:06:20.293Z"
-   }
+   "job": null,
+   "hostname": "amdci4.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci4.9": {
    "hostname": "amdci4.julia.csail.mit.edu",
@@ -1334,49 +1174,39 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:40:19.767Z",
+   "connected_at": "2026-09-20T21:13:55.703Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test JuliaC x86_64-linux-gnu",
+    "name": ":linux: test x86_64-linux-gnummtk",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:40:20.142Z"
+    "build": 2723,
+    "started_at": "2026-09-20T21:13:56.079Z"
    }
   },
   "tester-amdci5.1": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:53:37.519Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:53:37.519Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test x86_64-linux-gnu",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:53:37.934Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci5.10": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:24:21.406Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:24:21.406Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test i686-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:24:21.769Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci5.2": {
    "hostname": "amdci5.julia.csail.mit.edu",
@@ -1385,14 +1215,14 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:18:16.156Z",
+   "connected_at": "2026-09-20T21:47:24.415Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test x86_64-linux-gnu",
+    "name": ":linux: test i686-linux-gnu",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:18:16.589Z"
+    "build": 2724,
+    "started_at": "2026-09-20T21:47:24.863Z"
    }
   },
   "tester-amdci5.3": {
@@ -1402,32 +1232,27 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:27:16.739Z",
+   "connected_at": "2026-09-20T20:40:44.369Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test x86_64-linux-gnummtk",
+    "name": ":linux: test x86_64-linux-gnuassertrr",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:27:17.176Z"
+    "build": 2722,
+    "started_at": "2026-09-20T20:40:44.836Z"
    }
   },
   "tester-amdci5.4": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:25:17.089Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:25:17.089Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test i686-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2684,
-    "started_at": "2026-09-20T18:25:17.534Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci5.5": {
    "hostname": "amdci5.julia.csail.mit.edu",
@@ -1436,14 +1261,14 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T18:50:43.038Z",
+   "connected_at": "2026-09-20T21:14:41.528Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":linux: test x86_64-linux-gnummtkconcurrent",
     "pipeline": "julia-pr",
-    "build": 2717,
-    "started_at": "2026-09-20T18:50:43.516Z"
+    "build": 2723,
+    "started_at": "2026-09-20T21:14:41.871Z"
    }
   },
   "tester-amdci5.6": {
@@ -1453,32 +1278,27 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:48:54.977Z",
+   "connected_at": "2026-09-20T21:40:36.573Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": "analyzegc",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:48:55.422Z"
+    "name": ":linux: test x86_64-linux-gnummtkconcurrent",
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:40:36.986Z"
    }
   },
   "tester-amdci5.7": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:10:11.107Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:10:11.107Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test x86_64-linux-gnuassertrr",
-    "pipeline": "julia-pr",
-    "build": 2716,
-    "started_at": "2026-09-20T18:10:11.559Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-amdci5.8": {
    "hostname": "amdci5.julia.csail.mit.edu",
@@ -1487,32 +1307,27 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:51:36.338Z",
+   "connected_at": "2026-09-20T21:34:19.279Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": "pdf_docs_build",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:51:36.796Z"
+    "name": ":linux: test x86_64-linux-gnu",
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:34:19.643Z"
    }
   },
   "tester-amdci5.9": {
-   "hostname": "amdci5.julia.csail.mit.edu",
-   "queue": "test",
-   "os": "linux",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:56:46.567Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:56:46.567Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test i686-linux-gnu",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:56:47.011Z"
-   }
+   "job": null,
+   "hostname": "amdci5.julia.csail.mit.edu",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-armageddon.1": {
    "hostname": "armageddon",
@@ -1521,18 +1336,18 @@
    "arch": "aarch64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:55:59.628Z",
+   "connected_at": "2026-09-20T21:58:51.443Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":linux: test aarch64-linux-gnu",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:56:00.065Z"
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:58:51.834Z"
    }
   },
   "tester-armageddon.10": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-18T01:24:32.625Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1540,8 +1355,8 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T02:22:16Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-14T02:22:16Z"
   },
   "tester-armageddon.2": {
    "hostname": "armageddon",
@@ -1550,35 +1365,30 @@
    "arch": "aarch64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:33:06.377Z",
+   "connected_at": "2026-09-20T21:58:51.423Z",
    "first_seen": "2026-09-12T12:44:38Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
-    "name": ":linux: test aarch64-linux-gnu",
+    "name": ":linux: test JuliaC aarch64-linux-gnu",
     "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:33:06.780Z"
+    "build": 2724,
+    "started_at": "2026-09-20T21:58:51.825Z"
    }
   },
   "tester-armageddon.3": {
-   "hostname": "armageddon",
-   "queue": "test",
-   "os": "linux",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:59:40.533Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:59:40.533Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test aarch64-linux-gnu",
-    "pipeline": "julia-pr",
-    "build": 2717,
-    "started_at": "2026-09-20T18:59:40.949Z"
-   }
+   "job": null,
+   "hostname": "armageddon",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-armageddon.4": {
-   "state": "disconnected",
+   "os": "linux",
    "connected_at": "2026-09-19T21:49:21.481Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1587,27 +1397,22 @@
    "hostname": "armageddon",
    "version": "3.129.0",
    "first_seen": "2026-09-12T02:43:10Z",
-   "os": "linux"
+   "state": "disconnected"
   },
   "tester-armageddon.5": {
-   "hostname": "armageddon",
-   "queue": "test",
-   "os": "linux",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:55:59.609Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:55:59.609Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":linux: test JuliaC aarch64-linux-gnu",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:56:00.002Z"
-   }
+   "job": null,
+   "hostname": "armageddon",
+   "version": "3.129.0",
+   "os": "linux",
+   "state": "disconnected"
   },
   "tester-armageddon.6": {
-   "state": "disconnected",
+   "os": "linux",
    "connected_at": "2026-09-18T16:48:25.371Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1616,10 +1421,10 @@
    "hostname": "armageddon",
    "version": "3.129.0",
    "first_seen": "2026-09-14T02:22:16Z",
-   "os": "linux"
+   "state": "disconnected"
   },
   "tester-armageddon.7": {
-   "state": "disconnected",
+   "os": "linux",
    "connected_at": "2026-09-18T17:10:03.752Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1628,10 +1433,10 @@
    "hostname": "armageddon",
    "version": "3.129.0",
    "first_seen": "2026-09-13T17:16:46Z",
-   "os": "linux"
+   "state": "disconnected"
   },
   "tester-armageddon.8": {
-   "os": "linux",
+   "state": "disconnected",
    "connected_at": "2026-09-18T01:45:58.719Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1639,11 +1444,11 @@
    "job": null,
    "hostname": "armageddon",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T02:22:16Z",
-   "state": "disconnected"
+   "os": "linux",
+   "first_seen": "2026-09-14T02:22:16Z"
   },
   "tester-armageddon.9": {
-   "state": "disconnected",
+   "os": "linux",
    "connected_at": "2026-09-18T17:10:03.744Z",
    "queue": "test",
    "arch": "aarch64",
@@ -1652,10 +1457,10 @@
    "hostname": "armageddon",
    "version": "3.129.0",
    "first_seen": "2026-09-13T17:16:46Z",
-   "os": "linux"
+   "state": "disconnected"
   },
   "tester-grannysmith-C07ZM05NJYVY.1": {
-   "first_seen": "2026-09-12T19:54:06Z",
+   "state": "disconnected",
    "connected_at": "2026-09-19T22:54:11.555Z",
    "queue": "test",
    "arch": "x86_64",
@@ -1663,28 +1468,23 @@
    "job": null,
    "hostname": "grannysmith-C07ZM05NJYVY",
    "version": "3.129.0",
+   "first_seen": "2026-09-12T19:54:06Z",
+   "os": "macos"
+  },
+  "tester-grannysmith-C07ZQ07FJYVY.1": {
+   "first_seen": "2026-09-12T21:51:23Z",
+   "connected_at": "2026-09-20T19:31:08.856Z",
+   "queue": "test",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "grannysmith-C07ZQ07FJYVY",
+   "version": "3.129.0",
    "os": "macos",
    "state": "disconnected"
   },
-  "tester-grannysmith-C07ZQ07FJYVY.1": {
-   "hostname": "grannysmith-C07ZQ07FJYVY",
-   "queue": "test",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:31:08.856Z",
-   "first_seen": "2026-09-12T21:51:23Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test JuliaC x86_64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:31:09.286Z"
-   }
-  },
   "tester-grannysmith-C07ZQ07RJYVY.1": {
-   "first_seen": "2026-09-12T02:43:10Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:05:39.184Z",
    "queue": "test",
    "arch": "x86_64",
@@ -1692,28 +1492,23 @@
    "job": null,
    "hostname": "grannysmith-C07ZQ07RJYVY",
    "version": "3.129.0",
+   "first_seen": "2026-09-12T02:43:10Z",
+   "os": "macos"
+  },
+  "tester-honeycrisp-H2WGW04MJYVY.1": {
+   "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:39:02.079Z",
+   "queue": "test",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "honeycrisp-H2WGW04MJYVY",
+   "version": "3.129.0",
    "os": "macos",
    "state": "disconnected"
   },
-  "tester-honeycrisp-H2WGW04MJYVY.1": {
-   "hostname": "honeycrisp-H2WGW04MJYVY",
-   "queue": "test",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:02.079Z",
-   "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test JuliaC x86_64-apple-darwin",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:39:02.502Z"
-   }
-  },
   "tester-honeycrisp-H2WH90YZJYVY.1": {
-   "first_seen": "2026-09-14T02:22:16Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T17:05:34.267Z",
    "queue": "test",
    "arch": "x86_64",
@@ -1721,113 +1516,83 @@
    "job": null,
    "hostname": "honeycrisp-H2WH90YZJYVY",
    "version": "3.129.0",
+   "first_seen": "2026-09-14T02:22:16Z",
+   "os": "macos"
+  },
+  "tester-honeycrisp-H2WHG070JYVY.1": {
+   "first_seen": "2026-09-12T12:44:38Z",
+   "connected_at": "2026-09-20T19:31:06.403Z",
+   "queue": "test",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "honeycrisp-H2WHG070JYVY",
+   "version": "3.129.0",
    "os": "macos",
    "state": "disconnected"
   },
-  "tester-honeycrisp-H2WHG070JYVY.1": {
-   "hostname": "honeycrisp-H2WHG070JYVY",
-   "queue": "test",
-   "os": "macos",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:31:06.403Z",
-   "first_seen": "2026-09-12T12:44:38Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test x86_64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:31:06.776Z"
-   }
-  },
   "tester-honeycrisp-HL2F7YQ3XH.1": {
-   "hostname": "honeycrisp-HL2F7YQ3XH",
-   "queue": "test",
-   "os": "macos",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:33:54.835Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:33:54.835Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: TTFX aarch64-apple-darwin",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:33:55.208Z"
-   }
+   "job": null,
+   "hostname": "honeycrisp-HL2F7YQ3XH",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "tester-honeycrisp-P2C257CXGN.1": {
-   "hostname": "honeycrisp-P2C257CXGN",
-   "queue": "test",
-   "os": "macos",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:56:13.182Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:56:13.182Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test JuliaC aarch64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:56:13.863Z"
-   }
+   "job": null,
+   "hostname": "honeycrisp-P2C257CXGN",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "tester-honeycrisp-R17H3W25T9.1": {
-   "hostname": "honeycrisp-R17H3W25T9",
-   "queue": "test",
-   "os": "macos",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T18:50:17.151Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T18:50:17.151Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: TTFX aarch64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T18:50:17.530Z"
-   }
+   "job": null,
+   "hostname": "honeycrisp-R17H3W25T9",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "tester-honeycrisp-XC9YQX9HH2.1": {
-   "hostname": "honeycrisp-XC9YQX9HH2",
-   "queue": "test",
-   "os": "macos",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:58:51.190Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:58:51.190Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test aarch64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:58:51.603Z"
-   }
+   "job": null,
+   "hostname": "honeycrisp-XC9YQX9HH2",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "tester-honeycrisp-XG3Q6T6R70.1": {
-   "hostname": "honeycrisp-XG3Q6T6R70",
-   "queue": "test",
-   "os": "macos",
-   "arch": "aarch64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:45:53.427Z",
    "first_seen": "2026-09-12T02:43:10Z",
+   "connected_at": "2026-09-20T19:45:53.427Z",
+   "queue": "test",
+   "arch": "aarch64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":macos: test aarch64-apple-darwin",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:45:53.878Z"
-   }
+   "job": null,
+   "hostname": "honeycrisp-XG3Q6T6R70",
+   "version": "3.129.0",
+   "os": "macos",
+   "state": "disconnected"
   },
   "tester-macmini-x64-4.1": {
-   "state": "disconnected",
+   "os": "macos",
    "connected_at": "2026-09-20T13:47:39.251Z",
    "queue": "test",
    "arch": "x86_64",
@@ -1836,7 +1601,7 @@
    "hostname": "macmini-x64-4",
    "version": "3.129.0",
    "first_seen": "2026-09-12T16:40:01Z",
-   "os": "macos"
+   "state": "disconnected"
   },
   "tester-macmini-x64-5.1": {
    "hostname": "macmini-x64-5",
@@ -1845,30 +1610,35 @@
    "arch": "x86_64",
    "version": "3.129.0",
    "state": "connected",
-   "connected_at": "2026-09-20T19:39:00.728Z",
+   "connected_at": "2026-09-20T21:59:56.992Z",
    "first_seen": "2026-09-13T17:16:46Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": {
     "name": ":macos: test x86_64-apple-darwin",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:39:01.202Z"
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:59:57.422Z"
    }
   },
   "tester-macmini-x64-6.1": {
-   "state": "disconnected",
-   "connected_at": "2026-09-19T20:59:04.705Z",
-   "queue": "test",
-   "arch": "x86_64",
-   "last_seen": "2026-09-19T21:58:44Z",
-   "job": null,
    "hostname": "macmini-x64-6",
+   "queue": "test",
+   "os": "macos",
+   "arch": "x86_64",
    "version": "3.129.0",
+   "state": "connected",
+   "connected_at": "2026-09-20T21:59:58.547Z",
    "first_seen": "2026-09-12T12:44:38Z",
-   "os": "macos"
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": ":macos: test JuliaC x86_64-apple-darwin",
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:59:58.940Z"
+   }
   },
   "win2k22-builder-amdci6.1": {
-   "state": "disconnected",
+   "first_seen": "2026-09-12T12:31:14Z",
    "connected_at": "2026-09-19T16:26:33.908Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1877,27 +1647,22 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "os": "windows",
-   "first_seen": "2026-09-12T12:31:14Z"
+   "state": "disconnected"
   },
   "win2k22-builder-amdci6.2": {
-   "hostname": "amdci6-vm",
-   "queue": "build",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:56.549Z",
    "first_seen": "2026-09-15T00:08:04Z",
+   "connected_at": "2026-09-20T19:14:56.549Z",
+   "queue": "build",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: build i686-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:14:56.973Z"
-   }
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-builder-amdci6.3": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-19T21:33:39.473Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1906,10 +1671,10 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-12T12:31:14Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-builder-amdci6.4": {
-   "os": "windows",
+   "state": "disconnected",
    "connected_at": "2026-09-19T01:46:56.067Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1917,11 +1682,11 @@
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
-   "first_seen": "2026-09-13T17:16:46Z",
-   "state": "disconnected"
+   "os": "windows",
+   "first_seen": "2026-09-13T17:16:46Z"
   },
   "win2k22-builder-amdci6.5": {
-   "os": "windows",
+   "state": "disconnected",
    "connected_at": "2026-09-19T02:07:18.062Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1929,11 +1694,11 @@
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
-   "first_seen": "2026-09-14T09:25:26Z",
-   "state": "disconnected"
+   "os": "windows",
+   "first_seen": "2026-09-14T09:25:26Z"
   },
   "win2k22-builder-rhea.1": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-20T13:47:27.849Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1942,10 +1707,10 @@
    "hostname": "rhea-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-14T09:25:26Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-builder-rhea.2": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-20T13:47:27.939Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1954,10 +1719,10 @@
    "hostname": "rhea-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-14T09:25:26Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-builder-rhea.3": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-19T21:23:27.847Z",
    "queue": "build",
    "arch": "x86_64",
@@ -1966,56 +1731,51 @@
    "hostname": "rhea-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-12T16:40:01Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-builder-rhea.4": {
-   "hostname": "rhea-vm",
-   "queue": "build",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
+   "first_seen": "2026-09-14T16:05:22Z",
    "connected_at": "2026-09-20T19:39:22.513Z",
-   "first_seen": "2026-09-14T16:05:22Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: build x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:22.931Z"
-   }
-  },
-  "win2k22-builder-rhea.5": {
-   "hostname": "rhea-vm",
    "queue": "build",
-   "os": "windows",
    "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:39:22.229Z",
-   "first_seen": "2026-09-14T16:05:22Z",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: build i686-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2723,
-    "started_at": "2026-09-20T19:39:22.733Z"
-   }
-  },
-  "win2k22-tester-amdci6.1": {
-   "first_seen": "2026-09-12T12:44:38Z",
-   "connected_at": "2026-09-20T16:57:09.431Z",
-   "queue": "test",
-   "arch": "x86_64",
-   "last_seen": "2026-09-20T17:09:23Z",
    "job": null,
-   "hostname": "amdci6-vm",
+   "hostname": "rhea-vm",
    "version": "3.129.0",
    "os": "windows",
    "state": "disconnected"
   },
+  "win2k22-builder-rhea.5": {
+   "first_seen": "2026-09-14T16:05:22Z",
+   "connected_at": "2026-09-20T19:39:22.229Z",
+   "queue": "build",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
+  },
+  "win2k22-tester-amdci6.1": {
+   "hostname": "amdci6-vm",
+   "queue": "test",
+   "os": "windows",
+   "arch": "x86_64",
+   "version": "3.129.0",
+   "state": "connected",
+   "connected_at": "2026-09-20T21:48:22.605Z",
+   "first_seen": "2026-09-12T12:44:38Z",
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": ":windows: test x86_64-w64-mingw32",
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:48:22.994Z"
+   }
+  },
   "win2k22-tester-amdci6.10": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-18T16:44:16.897Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2024,22 +1784,27 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-15T13:03:01Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-tester-amdci6.2": {
-   "state": "disconnected",
-   "connected_at": "2026-09-20T13:48:10.606Z",
-   "queue": "test",
-   "arch": "x86_64",
-   "last_seen": "2026-09-20T13:51:01Z",
-   "job": null,
    "hostname": "amdci6-vm",
+   "queue": "test",
+   "os": "windows",
+   "arch": "x86_64",
    "version": "3.129.0",
+   "state": "connected",
+   "connected_at": "2026-09-20T21:49:08.011Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "os": "windows"
+   "last_seen": "2026-09-20T22:11:43Z",
+   "job": {
+    "name": ":windows: test i686-w64-mingw32",
+    "pipeline": "julia-pr",
+    "build": 2724,
+    "started_at": "2026-09-20T21:49:08.436Z"
+   }
   },
   "win2k22-tester-amdci6.3": {
-   "first_seen": "2026-09-12T02:43:10Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T16:53:09.619Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2047,28 +1812,23 @@
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
+   "first_seen": "2026-09-12T02:43:10Z",
+   "os": "windows"
+  },
+  "win2k22-tester-amdci6.4": {
+   "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:14:12.032Z",
+   "queue": "test",
+   "arch": "x86_64",
+   "last_seen": "2026-09-20T20:00:20Z",
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
    "os": "windows",
    "state": "disconnected"
   },
-  "win2k22-tester-amdci6.4": {
-   "hostname": "amdci6-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:14:12.032Z",
-   "first_seen": "2026-09-13T17:16:46Z",
-   "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:14:12.433Z"
-   }
-  },
   "win2k22-tester-amdci6.5": {
-   "first_seen": "2026-09-13T17:16:46Z",
+   "state": "disconnected",
    "connected_at": "2026-09-20T16:15:46.985Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2076,11 +1836,11 @@
    "job": null,
    "hostname": "amdci6-vm",
    "version": "3.129.0",
-   "os": "windows",
-   "state": "disconnected"
+   "first_seen": "2026-09-13T17:16:46Z",
+   "os": "windows"
   },
   "win2k22-tester-amdci6.6": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-20T13:48:10.664Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2089,27 +1849,22 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-13T17:16:46Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-tester-amdci6.7": {
-   "hostname": "amdci6-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:16:26.536Z",
    "first_seen": "2026-09-14T09:25:26Z",
+   "connected_at": "2026-09-20T19:16:26.536Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test i686-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2718,
-    "started_at": "2026-09-20T19:16:26.933Z"
-   }
+   "job": null,
+   "hostname": "amdci6-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-amdci6.8": {
-   "state": "disconnected",
+   "first_seen": "2026-09-13T17:16:46Z",
    "connected_at": "2026-09-18T23:47:31.600Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2118,10 +1873,10 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "os": "windows",
-   "first_seen": "2026-09-13T17:16:46Z"
+   "state": "disconnected"
   },
   "win2k22-tester-amdci6.9": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-18T08:36:08.668Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2130,129 +1885,94 @@
    "hostname": "amdci6-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-13T17:16:46Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.1": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:48:56.024Z",
    "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:48:56.024Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test i686-w64-mingw32",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:48:56.451Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.2": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:37:08.464Z",
    "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:37:08.464Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test x86_64-w64-mingw32",
-    "pipeline": "julia-ci",
-    "build": 626,
-    "started_at": "2026-09-20T19:37:08.920Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.3": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:57:30.991Z",
    "first_seen": "2026-09-12T16:40:01Z",
+   "connected_at": "2026-09-20T19:57:30.991Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test i686-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:57:31.404Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.4": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:54:45.692Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:54:45.692Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:54:46.213Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.5": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:54:43.581Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:54:43.581Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test JuliaC x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2722,
-    "started_at": "2026-09-20T19:54:44.025Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.6": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:59:32.082Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:59:32.082Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:59:32.505Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.7": {
-   "hostname": "rhea-vm",
-   "queue": "test",
-   "os": "windows",
-   "arch": "x86_64",
-   "version": "3.129.0",
-   "state": "connected",
-   "connected_at": "2026-09-20T19:59:32.201Z",
    "first_seen": "2026-09-13T17:16:46Z",
+   "connected_at": "2026-09-20T19:59:32.201Z",
+   "queue": "test",
+   "arch": "x86_64",
    "last_seen": "2026-09-20T20:00:20Z",
-   "job": {
-    "name": ":windows: test JuliaC x86_64-w64-mingw32",
-    "pipeline": "julia-pr",
-    "build": 2721,
-    "started_at": "2026-09-20T19:59:32.621Z"
-   }
+   "job": null,
+   "hostname": "rhea-vm",
+   "version": "3.129.0",
+   "os": "windows",
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.8": {
-   "state": "disconnected",
+   "first_seen": "2026-09-13T17:16:46Z",
    "connected_at": "2026-09-18T11:57:35.578Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2261,10 +1981,10 @@
    "hostname": "rhea-vm",
    "version": "3.129.0",
    "os": "windows",
-   "first_seen": "2026-09-13T17:16:46Z"
+   "state": "disconnected"
   },
   "win2k22-tester-rhea.9": {
-   "state": "disconnected",
+   "os": "windows",
    "connected_at": "2026-09-18T17:17:27.178Z",
    "queue": "test",
    "arch": "x86_64",
@@ -2273,7 +1993,7 @@
    "hostname": "rhea-vm",
    "version": "3.129.0",
    "first_seen": "2026-09-13T17:16:46Z",
-   "os": "windows"
+   "state": "disconnected"
   },
   "yggy-amdci7.1": {
    "hostname": "amdci7.julia.csail.mit.edu",
@@ -2282,9 +2002,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:49:23.982Z",
+   "connected_at": "2026-09-20T21:01:49.254Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.10": {
@@ -2294,9 +2014,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:46:35.033Z",
+   "connected_at": "2026-09-20T21:07:15.527Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.11": {
@@ -2308,7 +2028,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:52:12.271Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.12": {
@@ -2318,9 +2038,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:51:16.063Z",
+   "connected_at": "2026-09-20T21:02:47.283Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.13": {
@@ -2332,7 +2052,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:50:59.268Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.14": {
@@ -2342,9 +2062,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:49:18.738Z",
+   "connected_at": "2026-09-20T21:06:44.031Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.15": {
@@ -2356,7 +2076,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:25.047Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.16": {
@@ -2368,7 +2088,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:33.776Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.2": {
@@ -2380,7 +2100,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:00.659Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.3": {
@@ -2390,9 +2110,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:49:45.280Z",
+   "connected_at": "2026-09-20T21:01:53.537Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.4": {
@@ -2404,7 +2124,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:18.906Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.5": {
@@ -2416,7 +2136,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:51:42.031Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.6": {
@@ -2428,7 +2148,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:33.527Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.7": {
@@ -2440,7 +2160,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:48:38.993Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.8": {
@@ -2450,9 +2170,9 @@
    "arch": "x86_64",
    "version": "3.127.2",
    "state": "connected",
-   "connected_at": "2026-09-20T10:49:25.024Z",
+   "connected_at": "2026-09-20T21:01:22.772Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   },
   "yggy-amdci7.9": {
@@ -2464,7 +2184,7 @@
    "state": "connected",
    "connected_at": "2026-09-20T10:49:02.983Z",
    "first_seen": "2026-09-12T02:43:10Z",
-   "last_seen": "2026-09-20T20:00:20Z",
+   "last_seen": "2026-09-20T22:11:43Z",
    "job": null
   }
  }
