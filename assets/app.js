@@ -9731,9 +9731,22 @@ function ttfxAllTasks() {
   return ttfxData ? ttfxData.tasks || [] : [];
 }
 
+// Whether a build has any value from the GC-off repeats
+function ttfxHasGcOffValues(b) {
+  const indices = Object.values(TTFX_METRICS).map((m) => m.gcoffIndex).filter((i) => i != null);
+  return Object.values(b.tasks || {}).some((v) => indices.some((i) => v[i] != null));
+}
+
 function getTtfxFilteredBuilds() {
   if (!ttfxData) return [];
-  const builds = ttfxData.builds || [];
+  let builds = ttfxData.builds || [];
+  // With the GC-off repeats shown, everything covers the builds from the
+  // first one that has them, so the precompile chart, which has no GC-off
+  // run, spans the same time as the other charts and the tables agree
+  if (ttfxGcOff) {
+    const first = builds.findIndex(ttfxHasGcOffValues);
+    builds = first < 0 ? [] : builds.slice(first);
+  }
   if (ttfxTimeRangeDays === 0) return builds;
   const cutoff = Date.now() - ttfxTimeRangeDays * 86400 * 1000;
   return builds.filter((b) => ttfxBuildTime(b) >= cutoff);
@@ -9946,10 +9959,7 @@ async function loadTtfxData() {
     updatedEl.title = ttfxData.generated_at;
 
     const tasks = ttfxAllTasks();
-    const gcoffIndices = Object.values(TTFX_METRICS).map((m) => m.gcoffIndex).filter((i) => i != null);
-    ttfxHasGcOff = (ttfxData.builds || []).some((b) =>
-      Object.values(b.tasks || {}).some((v) => gcoffIndices.some((i) => v[i] != null)),
-    );
+    ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
     if (!ttfxHasGcOff) ttfxGcOff = false;
     ttfxUpdateGcOffButton();
     const colors = generateColors(tasks.length);
