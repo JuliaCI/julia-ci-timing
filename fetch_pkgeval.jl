@@ -1,7 +1,10 @@
 #!/usr/bin/env julia
 # Fetch PkgEval results from NanosoldierReports
 # Uses git ls-tree to enumerate dates, then fetches db.json files concurrently
-# via GitHub raw content URLs. Extracts per-date status counts (ok/fail/crash/skip/kill).
+# via GitHub raw content URLs. Extracts per-date status counts (ok/fail/crash/skip/kill)
+# and the per-package rows. Reports imported from the legacy summary file have
+# no package rows; `--backfill-packages N` re-fetches the newest N such
+# reports (about 1.5 MB and 13k rows each).
 
 using JSON3
 using HTTP
@@ -187,14 +190,30 @@ function write_reports!(db, reports)
     return n
 end
 
+function backfill_count(args)
+    i = findfirst(==("--backfill-packages"), args)
+    i === nothing && return 0
+    return i < length(args) ? parse(Int, args[i+1]) : 365
+end
+
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
     ensure_clone()
 
     all_dates = enumerate_pkgeval_dates()
-    known_dates = Set(String(r.date) for r in query(db, "SELECT date FROM pkgeval_reports"))
-    new_dates = filter(d -> date_path_to_date(d) ∉ known_dates, all_dates)
-    @info "New dates to process" count=length(new_dates) known=length(known_dates)
+    # Known by path: a db.json without a date field would otherwise be new forever
+    known_paths = Set(String(r.path) for r in query(db, "SELECT path FROM pkgeval_reports"))
+    new_dates = filter(d -> "by_date/" * d ∉ known_paths, all_dates)
+    @info "New dates to process" count=length(new_dates) known=length(known_paths)
+    backfill = backfill_count(args)
+    if backfill > 0
+        without = Set(String(r.path) for r in query(db, "SELECT r.path FROM pkgeval_reports r " *
+            "WHERE r.kind = 'daily' AND NOT EXISTS (SELECT 1 FROM pkgeval_results p WHERE p.report_id = r.id)"))
+        todo = filter(d -> "by_date/" * d in without, all_dates)
+        todo = todo[max(1, end - backfill + 1):end]
+        @info "Backfilling package rows" reports=length(todo) without_rows=length(without)
+        append!(new_dates, todo)
+    end
 
     done = Threads.Atomic{Int}(0)
     total = length(new_dates)
