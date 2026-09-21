@@ -9,13 +9,40 @@
 using HTTP
 using JSON3
 using Dates
-using CodecZlib: GzipCompressor, GzipDecompressor
+using CodecZlib: GzipDecompressor
+
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
 
 const SOURCE_URL =
     "https://julialang-logs.s3.amazonaws.com/public_outputs/current/resource_types_by_date.csv.gz"
 const JULIA_VERSIONS_URL =
     "https://julialang-logs.s3.amazonaws.com/public_outputs/current/julia_versions_by_date.csv.gz"
 const JULIA_RELEASES_API = "https://api.github.com/repos/JuliaLang/julia/releases?per_page=100"
+const PUBLIC_OUTPUTS = "https://julialang-logs.s3.amazonaws.com/public_outputs/current/"
+# Package names for the uuids of package_requests_by_date
+const GENERAL_REGISTRY_TOML = "https://raw.githubusercontent.com/JuliaRegistries/General/master/Registry.toml"
+
+# The other rollups of the same family, stored as published (see
+# docs/database-migration.md, "Package downloads"). Upstream keeps only a
+# window of each; package_requests_by_date only three days.
+const ROLLUPS = (
+    (table = "dl_resource_types", file = "resource_types_by_date",
+     keys = ["date", "resource_type", "status", "client_type"],
+     cols = ["request_addrs", "request_count", "cache_misses", "body_bytes_sent", "request_time"]),
+    (table = "dl_julia_versions", file = "julia_versions_by_date",
+     keys = ["date", "julia_version_prefix", "client_type"],
+     cols = ["request_addrs", "request_count", "successes", "cache_misses", "body_bytes_sent", "request_time"]),
+    (table = "dl_julia_systems", file = "julia_systems_by_date",
+     keys = ["date", "julia_system", "client_type"],
+     cols = ["request_addrs", "request_count", "successes", "cache_misses", "body_bytes_sent", "request_time"]),
+    (table = "dl_client_types", file = "client_types_by_date",
+     keys = ["date", "client_type"],
+     cols = ["request_addrs", "request_count", "successes", "cache_misses", "body_bytes_sent", "request_time"]),
+)
+# CSV column names that differ from the table's
+const COLUMN_RENAMES = Dict("julia_version_prefix" => "julia_version", "request_time" => "request_time_s")
 
 function is_stable_julia_tag(tag::AbstractString)
     # Keep only final stable release tags like v1.12.6 (exclude rc/alpha/beta).
@@ -234,46 +261,83 @@ function classify_julia_version_channel(version_prefix::AbstractString)
     end
 end
 
-function load_existing(output_dir::AbstractString)
-    path = joinpath(output_dir, "packages_downloads_summary.json.gz")
-    if !isfile(path)
-        return nothing
-    end
-    try
-        return JSON3.read(transcode(GzipDecompressor, read(path)))
-    catch e
-        @warn "Failed to read existing packages summary, rebuilding" error=e
-        return nothing
-    end
+
+function fetch_csv_lines(url)
+    resp = HTTP.get(url; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    resp.status == 200 || error("Failed to fetch $url: HTTP $(resp.status)")
+    lines = split(String(transcode(GzipDecompressor, resp.body)), '\n'; keepempty=false)
+    length(lines) >= 2 || error("$url appears empty")
+    return lines
 end
 
-function normalize_for_compare(x)
-    if x isa AbstractDict
-        out = Dict{String,Any}()
-        for (k, v) in pairs(x)
-            ks = String(k)
-            ks == "generated_at" && continue
-            out[ks] = normalize_for_compare(v)
-        end
-        return out
-    elseif x isa AbstractVector
-        return [normalize_for_compare(v) for v in x]
-    else
-        return x
+numeric(x) = (v = tryparse(Int, x); v !== nothing ? v : (f = tryparse(Float64, x); f === nothing ? missing : f))
+
+# Upsert the rows of one rollup CSV into its table; columns are matched by
+# header name so a reordered upstream CSV still lands correctly.
+function store_rollup!(db, spec, lines)
+    header = parse_csv_line(strip(lines[1]))
+    idx = Dict(h => i for (i, h) in enumerate(header))
+    for c in vcat(spec.keys, spec.cols)
+        haskey(idx, c) || error("$(spec.file): column $c missing from $header")
     end
+    column(c) = get(COLUMN_RENAMES, c, c)
+    stmt = upsert_stmt(db, spec.table, column.(spec.keys), column.(spec.cols); seq=false)
+    n = 0
+    for line in @view lines[2:end]
+        row = parse_csv_line(strip(line))
+        length(row) >= length(header) || continue
+        keyvals = Any[c == "status" ? numeric(row[idx[c]]) : row[idx[c]] for c in spec.keys]
+        any(v -> v === missing, keyvals) && continue
+        upsert!(stmt, (keyvals..., (numeric(row[idx[c]]) for c in spec.cols)...))
+        n += 1
+    end
+    return n
 end
 
-function main()
-    output_dir = "data"
-    mkpath(output_dir)
+# The [packages] table of Registry.toml: one `uuid = { name = "...", path = "..." }` per line
+function fetch_registry_packages()
+    resp = HTTP.get(GENERAL_REGISTRY_TOML; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    resp.status == 200 || error("Failed to fetch $GENERAL_REGISTRY_TOML: HTTP $(resp.status)")
+    packages = NamedTuple[]
+    for m in eachmatch(r"^([0-9a-f-]{36})\s*=\s*\{\s*name\s*=\s*\"([^\"]+)\"(?:\s*,\s*path\s*=\s*\"([^\"]*)\")?"m, String(resp.body))
+        push!(packages, (uuid = m.captures[1], name = m.captures[2], path = m.captures[3] === nothing ? missing : m.captures[3]))
+    end
+    length(packages) > 1000 || error("Registry.toml parsed to only $(length(packages)) packages")
+    return packages
+end
+
+function store_registry_packages!(db, packages)
+    stmt = upsert_stmt(db, "registry_packages", ["uuid"], ["name", "path"]; seq=false)
+    foreach(p -> upsert!(stmt, (p.uuid, p.name, p.path)), packages)
+    return length(packages)
+end
+
+# package_requests_by_date: successful requests only, the package as an id
+function store_package_requests!(db, lines)
+    header = parse_csv_line(strip(lines[1]))
+    idx = Dict(h => i for (i, h) in enumerate(header))
+    stmt = upsert_stmt(db, "dl_packages", ["date", "package_id", "status", "client_type"],
+                       ["request_addrs", "request_count", "cache_misses", "body_bytes_sent"]; seq=false)
+    ids = Dict{Tuple,Int}()
+    n = 0
+    for line in @view lines[2:end]
+        row = parse_csv_line(strip(line))
+        length(row) >= length(header) || continue
+        status = tryparse(Int, row[idx["status"]])
+        (status === nothing || !(200 <= status < 400)) && continue
+        pid = getid!(ids, db, "dl_package_uuids", ("uuid",), (row[idx["package_uuid"]],))
+        upsert!(stmt, (row[idx["date"]], pid, status, row[idx["client_type"]],
+                       (numeric(row[idx[c]]) for c in ("request_addrs", "request_count", "cache_misses", "body_bytes_sent"))...))
+        n += 1
+    end
+    return n
+end
+
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
 
     @info "Fetching package download rollup" url=SOURCE_URL
-    resp = HTTP.get(SOURCE_URL; retry=true, retries=3, connect_timeout=30, readtimeout=120)
-    resp.status == 200 || error("Failed to fetch rollup: HTTP $(resp.status)")
-
-    csv_text = String(transcode(GzipDecompressor, resp.body))
-    lines = split(csv_text, '\n'; keepempty=false)
-    length(lines) >= 2 || error("Rollup CSV appears empty")
+    lines = fetch_csv_lines(SOURCE_URL)
 
     totals = Dict{String,Dict{String,Int}}()
 
@@ -313,11 +377,7 @@ function main()
     end
 
     @info "Fetching Julia version rollup for minor-version mix" url=JULIA_VERSIONS_URL
-    versions_resp = HTTP.get(JULIA_VERSIONS_URL; retry=true, retries=3, connect_timeout=30, readtimeout=120)
-    versions_resp.status == 200 || error("Failed to fetch julia_versions_by_date rollup: HTTP $(versions_resp.status)")
-    versions_csv = String(transcode(GzipDecompressor, versions_resp.body))
-    version_lines = split(versions_csv, '\n'; keepempty=false)
-    length(version_lines) >= 2 || error("julia_versions_by_date CSV appears empty")
+    version_lines = fetch_csv_lines(JULIA_VERSIONS_URL)
 
     # date => Dict(
     #   "totals" => Dict("all" => Int, "user" => Int, "ci" => Int),
@@ -432,51 +492,58 @@ function main()
         ) for d in stage_mix_dates
     ]
 
-    existing = load_existing(output_dir)
-    if existing !== nothing
-        old_len = length(get(existing, :series, Any[]))
-        new_len = length(series)
-        @info "Built package downloads series" old_points=old_len new_points=new_len
-    else
-        @info "Built package downloads series" points=length(series)
-    end
+    @info "Built package downloads series" points=length(series)
 
     @info "Fetching recent stable Julia tags" years=2
     julia_tags = fetch_recent_stable_julia_tags(; years=2)
     @info "Fetching recent prerelease Julia tags" years=2
     julia_prerelease_tags = fetch_recent_prerelease_julia_tags(; years=2)
 
-    payload = Dict(
-        "generated_at" => Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
-        "source" => SOURCE_URL,
-        "julia_versions_source" => JULIA_VERSIONS_URL,
-        "julia_tags_source" => "https://api.github.com/repos/JuliaLang/julia/releases",
-        "julia_tags_window_years" => 2,
-        "julia_tags" => julia_tags,
-        "julia_prerelease_tags" => julia_prerelease_tags,
-        "maxDate" => isempty(sorted_dates) ? nothing : sorted_dates[end],
-        "series" => series,
-        "version_mix" => version_mix_series,
-        "version_stage_mix" => version_stage_mix_series,
-    )
+    rollup_lines = Dict{String,Any}("resource_types_by_date" => lines, "julia_versions_by_date" => version_lines)
+    for name in ("julia_systems_by_date", "client_types_by_date", "package_requests_by_date")
+        @info "Fetching rollup" name
+        rollup_lines[name] = fetch_csv_lines(PUBLIC_OUTPUTS * name * ".csv.gz")
+    end
+    @info "Fetching the General registry's package names"
+    registry = fetch_registry_packages()
 
-    out_path = joinpath(output_dir, "packages_downloads_summary.json.gz")
-    if existing !== nothing
-        old_norm = normalize_for_compare(existing)
-        new_norm = normalize_for_compare(payload)
-        if old_norm == new_norm
-            @info "Package downloads summary unchanged; keeping existing file" path=out_path
-            return 0
+    source_run(db, "packages") do
+        transaction(db) do
+            n = 0
+            for spec in ROLLUPS
+                n += store_rollup!(db, spec, rollup_lines[spec.file])
+            end
+            n += store_package_requests!(db, rollup_lines["package_requests_by_date"])
+            n += store_registry_packages!(db, registry)
+            @info "Stored rollup rows" rows=n
+            seq = next_seq!(db)
+            sstmt = upsert_stmt(db, "dl_series", ["date"], ["total_requests", "user_requests", "ci_requests"])
+            for e in series
+                upsert!(sstmt, (e["date"], e["all"], e["user"], e["ci"], seq))
+            end
+            mstmt = upsert_stmt(db, "dl_mix", ["date", "kind", "key"], ["total_requests", "user_requests", "ci_requests"]; seq=false)
+            for (kind, member, entries) in (("version", "minors", version_mix_series), ("stage", "channels", version_stage_mix_series))
+                for e in entries
+                    t = e["totals"]
+                    upsert!(mstmt, (e["date"], kind, "*", t["all"], t["user"], t["ci"]))
+                    for (key, c) in e[member]
+                        upsert!(mstmt, (e["date"], kind, key, c["all"], c["user"], c["ci"]))
+                    end
+                end
+            end
+            tstmt = upsert_stmt(db, "julia_tags", ["tag"], ["date", "published_at", "url", "prerelease"]; seq=false)
+            for (tags, pre) in ((julia_tags, 0), (julia_prerelease_tags, 1))
+                for t in tags
+                    upsert!(tstmt, (t["tag"], t["date"], t["published_at"], t["url"], pre))
+                end
+            end
+            n + length(series)
         end
     end
-
-    json_bytes = Vector{UInt8}(JSON3.write(payload))
-    write(out_path, transcode(GzipCompressor, json_bytes))
-    @info "Wrote package downloads summary" path=out_path bytes=filesize(out_path)
-
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end

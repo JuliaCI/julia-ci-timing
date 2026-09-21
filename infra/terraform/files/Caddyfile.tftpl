@@ -1,0 +1,44 @@
+(site_common) {
+  # The site and its data files are static; .json.gz files must reach the
+  # browser as gzip bytes (app.js decompresses them itself), which the
+  # encoder leaves alone since it only compresses text-like types.
+  encode zstd gzip
+  root * ${site_root}
+
+  redir /db /db/ 308
+  handle /db/* {
+    reverse_proxy 127.0.0.1:${datasette_port}
+  }
+  # The site's own reads (db/serve.jl); its responses are already gzipped
+  handle /api/* {
+    reverse_proxy 127.0.0.1:${api_port}
+  }
+  # What the ingest renders: the files the site reads, health.json, the
+  # database snapshot
+  handle_path /data/* {
+    root * ${export_root}
+    header Cache-Control "no-cache"
+    file_server
+  }
+  handle /healthz {
+    rewrite * /health.json
+    root * ${export_root}
+    header Cache-Control "no-cache"
+    file_server
+  }
+  handle {
+    header /assets/* Cache-Control "public, max-age=300"
+    try_files {path} {path}/index.html
+    file_server
+  }
+}
+
+http://${public_ip} {
+  import site_common
+}
+%{ if public_hostname != "" ~}
+
+${public_hostname} {
+  import site_common
+}
+%{ endif ~}

@@ -1,0 +1,41 @@
+#!/bin/bash
+# Consistent online snapshot of the database plus the export and Caddy's
+# certificate store, uploaded as latest.tar.gz. ci-timing-archive copies it
+# to a dated archive once a day. Also publishes the compressed database
+# snapshot in the export directory for download.
+set -euo pipefail
+set -a; . /etc/ci-timing.host.env; set +a
+data_root="$CI_TIMING_DATA_DIR"
+db_name="$CI_TIMING_DB_FILENAME"
+lock_file="/var/lock/ci-timing-backup.lock"
+staging_root="/var/lib/ci-timing-backup-staging"
+snapshot_dir=""
+cleanup() { [ -n "$snapshot_dir" ] && rm -rf "$snapshot_dir"; rm -f "$staging_root/latest.tar.gz"; }
+trap cleanup EXIT INT TERM
+exec 9>"$lock_file"
+flock -n 9
+
+if [ ! -s "${data_root}/${db_name}" ]; then
+  echo "Missing database at ${data_root}/${db_name}" >&2
+  exit 1
+fi
+install -d -m 700 "$staging_root"
+snapshot_dir="$(mktemp -d "$staging_root/snapshot.XXXXXX")"
+# The SQLite backup API cooperates with a live WAL writer and yields one
+# checkpointed file; the timeout covers an ingest holding a write transaction
+sqlite3 -cmd ".timeout 30000" "${data_root}/${db_name}" ".backup '${snapshot_dir}/${db_name}'"
+[ -d "${CI_TIMING_EXPORT_DIR}" ] && cp -a "${CI_TIMING_EXPORT_DIR}" "${snapshot_dir}/export"
+[ -d "${CI_TIMING_CADDY_DATA_DIR}" ] && cp -a "${CI_TIMING_CADDY_DATA_DIR}" "${snapshot_dir}/caddy-data"
+printf 'timestamp=%s\nhostname=%s\nimage=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$(hostname -s)" "$CI_TIMING_IMAGE_REF" > "${snapshot_dir}/metadata.txt"
+
+# Public snapshot for people and agents who want the whole database
+gzip -c "${snapshot_dir}/${db_name}" > "${CI_TIMING_EXPORT_DIR}/${db_name}.gz.tmp"
+mv "${CI_TIMING_EXPORT_DIR}/${db_name}.gz.tmp" "${CI_TIMING_EXPORT_DIR}/${db_name}.gz"
+chown "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" "${CI_TIMING_EXPORT_DIR}/${db_name}.gz"
+
+# The archive is finished on disk before it replaces latest.tar.gz, so a
+# failed tar (set -e) never publishes a truncated one
+archive="$staging_root/latest.tar.gz"
+tar -C "$snapshot_dir" -czf "$archive" .
+aws s3 cp "$archive" "s3://${CI_TIMING_BACKUP_BUCKET}/${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_LATEST_NAME}" --only-show-errors
+rm -f "$archive"

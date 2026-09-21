@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the ci-timing ingest every two hours
+
+[Timer]
+OnCalendar=*-*-* 00/2:05:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

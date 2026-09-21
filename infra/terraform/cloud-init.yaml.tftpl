@@ -1,0 +1,16 @@
+#cloud-config
+write_files:
+%{ for path, f in files ~}
+  - path: ${path}
+    permissions: '${f.mode}'
+    encoding: b64
+    content: ${base64encode(f.content)}
+%{ endfor ~}
+runcmd:
+  # The AWS CLI v2 and amazon-ssm-agent ship preinstalled in the AL2023 AMI
+  - dnf install -y docker tar gzip sqlite
+  - systemctl enable --now docker amazon-ssm-agent
+  - install -d -m 750 -o ${runtime_uid} -g ${runtime_gid} ${data_mount_path} ${data_mount_path}/${export_dir} ${data_mount_path}/${site_dir} ${data_mount_path}/cache
+  - install -d -m 755 ${caddy_data_dir} ${caddy_config_dir}
+  - systemctl daemon-reload
+  - systemctl enable --now ci-timing-caddy ci-timing-datasette ci-timing-api ci-timing-bootstrap ci-timing-ingest.timer ci-timing-archive.timer

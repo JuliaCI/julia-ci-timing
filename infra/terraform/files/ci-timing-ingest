@@ -1,0 +1,31 @@
+#!/bin/bash
+# One ingest run: the fetchers and the export inside the image, then a
+# backup. Started by ci-timing-ingest.timer every two hours and by
+# ci-timing-deploy after a new image.
+set -uo pipefail
+set -a; . /etc/ci-timing.host.env; set +a
+lock_file="/var/lock/ci-timing-ingest.lock"
+exec 9>"$lock_file"
+flock 9
+
+# The token never lands on disk: read at run time into the container's env
+token="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_TOKEN_PARAMETER" --with-decryption \
+  --query Parameter.Value --output text)"
+if [ -z "$token" ] || [ "$token" = "unset" ]; then
+  echo "Buildkite token not set in $CI_TIMING_TOKEN_PARAMETER; the Buildkite fetchers will fail" >&2
+fi
+
+docker run --rm --name ci-timing-ingest \
+  --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --env BUILDKITE_API_TOKEN="$token" \
+  --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
+  --env CI_TIMING_EXPORT_DIR=/data/export \
+  --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
+  "$CI_TIMING_IMAGE_REF" ingest
+rc=$?
+unset token
+# Back up even after a partly failed run: whatever was written is worth keeping
+/usr/local/bin/ci-timing-backup || echo "backup failed" >&2
+exit $rc

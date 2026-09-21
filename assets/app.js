@@ -39,18 +39,28 @@ let data = null;
 let statsTableSortColumn = "median";
 let statsTableSortAsc = false; // false = descending (largest first)
 
-// Fetch a gzipped JSON file and return the parsed value.
-// Throws on non-2xx responses; AbortError if the signal fires.
-// Defaults to `cache: "no-cache"` so the browser always revalidates with the
-// origin (via If-None-Match / If-Modified-Since) and picks up freshly
-// regenerated data files instead of serving a stale disk-cached copy. Callers
-// can override `cache` via options if they need a different policy.
-async function loadGzipJson(url, options = {}) {
-  const resp = await fetch(url, { cache: "no-cache", ...options });
+// === Data source ===
+// The site reads the database through the API (db/serve.jl, at api/ on
+// the host), which serves each tab's shape with a time window. Locally,
+// `julia --project db/serve.jl --db X.sqlite --site .` serves both.
+const API_BASE = "api";
+
+// GET an API route; empty parameters are left out of the query
+async function apiGet(path, params = {}, options = {}) {
+  const query = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null && v !== ""),
+  ).toString();
+  const resp = await fetch(`${API_BASE}/${path}${query ? "?" + query : ""}`, {
+    cache: "no-cache",
+    ...options,
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
-  return new Response(decompressed).json();
+  return resp.json();
 }
+
+// A window bound for the API, as a UTC day so that everyone asking for the
+// same range shares the server's cache; null (all time) is unbounded
+const apiSince = (date) => (date ? new Date(date).toISOString().slice(0, 10) : "");
 let selectedJobs = new Set();
 let timeRangeDays = DEFAULT_TIME_RANGE;
 let lineType = DEFAULT_LINE_TYPE;
@@ -64,10 +74,6 @@ let customXMin = null; // timestamp or null
 let customXMax = null; // timestamp or null
 let customYMin = null; // seconds or null
 let customYMax = null; // seconds or null
-
-// === Comparison Mode State ===
-// Format: { build: number, base: number, jobs: { jobName: { duration: seconds, baseline: seconds } } }
-let comparisonData = null;
 
 // === Helper Functions ===
 const isFailedState = (state) => FAILED_STATES.includes(state);
@@ -116,7 +122,7 @@ function refreshAllUI() {
   updateStatsTable();
   updateToolbarButtons();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "commits") renderCommitsView();
+  if (ciSubview === "builds") renderBuildsView();
 }
 
 // CI Timing sub-view: 'jobs' (default), 'commits', or 'workers'
@@ -129,12 +135,11 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
 ];
 
 function setCITimingSubview(name, { updateUrl = true } = {}) {
-  if (name !== "jobs" && name !== "workers" && name !== "commits")
-    name = "jobs";
+  if (name !== "jobs" && name !== "workers" && name !== "builds") name = "jobs";
   ciSubview = name;
   const isJobs = name === "jobs";
   const isWorkers = name === "workers";
-  const isCommits = name === "commits";
+  const isBuilds = name === "builds";
 
   const view = document.getElementById("ci-timing-view");
   if (view) {
@@ -147,10 +152,10 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   }
   const workersView = document.getElementById("workers-view");
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
-  const commitsView = document.getElementById("commits-view");
-  if (commitsView) commitsView.classList.toggle("view-hidden", !isCommits);
+  const buildsView = document.getElementById("builds-view");
+  if (buildsView) buildsView.classList.toggle("view-hidden", !isBuilds);
 
-  // Hide controls that don't apply to the workers/commits views
+  // Hide controls that don't apply to the workers/builds views
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("view-hidden", !isJobs);
@@ -159,7 +164,7 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   if (filterEl) filterEl.classList.toggle("view-hidden", !isWorkers);
 
   if (isWorkers) renderWorkerPresence();
-  if (isCommits) renderCommitsView();
+  if (isBuilds) renderBuildsView();
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
 
@@ -188,56 +193,200 @@ function setWorkersFilter(value, { immediate = false } = {}) {
   else workersFilterTimer = setTimeout(apply, 150);
 }
 
+// === Builds (CI → Builds tab) ===
+// api/timing/builds: every master build fetched from the Buildkite API with
+// its wall time and the queue wait of its jobs. Only from the API: the
+// files carry no timestamps.
+let buildsData = null; // { since, changeSeq, builds }
+let buildsLoading = null;
+let buildsChart = null;
+
+function buildsLoadError(message) {
+  const tableEl = document.getElementById("builds-table");
+  if (tableEl) tableEl.innerHTML = `<div class="workers-empty">${escapeHtml(message)}</div>`;
+  if (buildsChart) {
+    buildsChart.destroy();
+    buildsChart = null;
+  }
+}
+
+async function renderBuildsView() {
+  const since = apiSince(getTimeRangeCutoff());
+  const stale = !buildsData || buildsData.changeSeq !== timingChangeSeq || (since !== buildsData.since && (since === "" || since < buildsData.since));
+  if (stale && !buildsLoading) {
+    buildsLoading = apiGet("timing/builds", { since })
+      .then((builds) => {
+        buildsData = { since, changeSeq: timingChangeSeq, builds };
+      })
+      .catch((err) => {
+        console.error("Failed to load builds:", err);
+        buildsLoadError("Failed to load builds.");
+      })
+      .finally(() => {
+        buildsLoading = null;
+        // The range may have widened meanwhile: check again rather than draw
+        if (ciSubview === "builds") renderBuildsView();
+      });
+    if (!buildsData) return;
+  }
+  drawBuildsView();
+}
+
+const buildkiteBuildUrl = (b) => b.url || `https://buildkite.com/julialang/${b.pipeline}/builds/${b.build}`;
+
+function drawBuildsView() {
+  const canvas = document.getElementById("builds-chart");
+  const tableEl = document.getElementById("builds-table");
+  if (!canvas || !tableEl || !buildsData) return;
+  const cutoff = getTimeRangeCutoff();
+  const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
+  const builds = buildsData.builds
+    .filter((b) => Date.parse(b.created_at) >= cutoffMs)
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  if (builds.length === 0) {
+    buildsLoadError("No builds with timestamps in the selected time range.");
+    return;
+  }
+  const isDark = isDarkMode();
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const point = (b, y) => ({ x: Date.parse(b.created_at), y, build: b });
+  const minutes = (s) => (s == null ? null : s / 60);
+  const datasets = [
+    {
+      label: "Wall time",
+      data: builds.filter((b) => b.wall_s != null).map((b) => point(b, minutes(b.wall_s))),
+      borderColor: colors.build,
+      backgroundColor: colors.build,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      tension: 0.1,
+      yAxisID: "y",
+    },
+    {
+      label: "Queue wait (median job)",
+      data: builds.filter((b) => b.queue_median_s != null).map((b) => point(b, minutes(b.queue_median_s))),
+      borderColor: colors.test,
+      backgroundColor: colors.test,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      tension: 0.1,
+      yAxisID: "y",
+    },
+    {
+      label: "Job time (sum, right axis)",
+      data: builds.filter((b) => b.run_total_s != null).map((b) => point(b, b.run_total_s / 3600)),
+      borderColor: colors.regression,
+      backgroundColor: colors.regression,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 1,
+      borderDash: [4, 3],
+      tension: 0.1,
+      yAxisID: "y2",
+    },
+  ];
+  if (buildsChart) buildsChart.destroy();
+  buildsChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "nearest", intersect: false },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const b = items.length && items[0].raw.build;
+              return b ? `#${b.build} ${b.commit} — ${b.message || ""}` : "";
+            },
+            label: (ctx) => {
+              const b = ctx.raw.build;
+              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs`];
+              const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
+              if (ctx.datasetIndex === 0) {
+                lines.push(`${b.jobs} jobs, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
+              } else {
+                lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total`);
+              }
+              return lines;
+            },
+          },
+        },
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const b = buildsChart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
+        window.open(buildkiteBuildUrl(b), "_blank", "noopener");
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor }),
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "minutes", color: textColor },
+          ticks: { color: textColor },
+          grid: { color: gridColor },
+        },
+        y2: {
+          position: "right",
+          beginAtZero: true,
+          title: { display: true, text: "job time, hours", color: textColor },
+          ticks: { color: textColor },
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+  });
+
+  const recent = builds.slice().reverse().slice(0, 100);
+  const rows = recent
+    .map((b) => {
+      const url = escapeHtml(buildkiteBuildUrl(b));
+      return `<tr data-url="${url}">
+        <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
+        <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
+        <td class="commits-reg-msg"><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
+        <td>${escapeHtml(b.state)}</td>
+        <td class="num">${formatDuration(b.wall_s)}</td>
+        <td class="num">${b.jobs}</td>
+        <td class="num">${formatDuration(b.run_total_s)}</td>
+        <td class="num">${formatDuration(b.queue_median_s)}</td>
+        <td class="num">${formatDuration(b.queue_max_s)}</td>
+      </tr>`;
+    })
+    .join("");
+  tableEl.innerHTML = `
+    <h3 class="commits-reg-title">Builds (newest first${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
+    <table class="commits-reg-table">
+      <thead><tr><th>Created</th><th>Build</th><th>Commit</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num">Jobs</th><th class="num" title="Sum of the jobs' durations">Job time</th><th class="num" title="Median wait from runnable to started across the build's jobs">Queue (median)</th><th class="num">Queue (max)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  tableEl.querySelectorAll("tr[data-url]").forEach((tr) => {
+    tr.onclick = (e) => {
+      if (e.target.closest("a")) return;
+      window.open(tr.dataset.url, "_blank", "noopener");
+    };
+  });
+}
+
 // === Agent snapshots (Workers tab) ===
-// data/agents/, from fetch_agents.jl: latest.json holds the latest details per
-// agent and history-YYYY-MM.ndjson one line per update run listing the agent
-// names connected then. Unlike the job grid this covers every queue and
-// pipeline, PR builds included.
+// api/agents/latest holds the latest details per agent and
+// api/agents/snapshots one entry per update run listing the agent names
+// connected then, from fetch_agents.jl. Unlike the job grid this covers
+// every queue and pipeline, PR builds included.
 let agentsData = null;
 let agentsDataPromise = null;
 let agentsChart = null;
 
 async function loadAgentsData() {
-  const resp = await fetch("data/agents/latest.json", { cache: "no-cache" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const latest = await resp.json();
-  const agents = latest.agents || {};
-  // Every month file from the earliest first_seen to now; a month with no
-  // snapshots has no file and is skipped
-  let earliest = Date.parse(latest.generated_at || "") || Date.now();
-  for (const rec of Object.values(agents)) {
-    const t = Date.parse(rec.first_seen || "");
-    if (!isNaN(t) && t < earliest) earliest = t;
-  }
-  const months = [];
-  const cursor = new Date(earliest);
-  cursor.setUTCDate(1);
-  cursor.setUTCHours(0, 0, 0, 0);
-  const end = new Date();
-  while (cursor <= end && months.length < 24) {
-    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  const texts = await Promise.all(
-    months.map((m) =>
-      fetch(`data/agents/history-${m}.ndjson`, { cache: "no-cache" }).then((r) =>
-        r.ok ? r.text() : "",
-      ),
-    ),
-  );
-  const snapshots = [];
-  for (const text of texts) {
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        snapshots.push(JSON.parse(line));
-      } catch (err) {
-        console.warn("Skipping malformed agent snapshot line", err);
-      }
-    }
-  }
-  snapshots.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-  return { generated_at: latest.generated_at, agents, snapshots };
+  const [latest, snapshots] = await Promise.all([apiGet("agents/latest"), apiGet("agents/snapshots")]);
+  return { generated_at: latest.generated_at, agents: latest.agents || {}, snapshots };
 }
 const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // The build, test and launch queues (the Julia cluster) and the Secure cluster's
@@ -684,12 +833,7 @@ function renderWorkerPresence() {
   container.innerHTML = parts.join("");
 }
 
-// === Per-commit averages sub-view ===
-// Averages passed platform build/test job durations per master commit,
-// normalizing each job by its own median over the window so the
-// cross-platform mean is insensitive to which platforms ran.
-let commitsChart = null;
-
+// === Builds and the per-run palette ===
 const COMMITS_SERIES_COLORS = {
   // Validated 2-color categorical palette (CVD-safe on both surfaces)
   light: { build: "#0969da", test: "#bc4c00", regression: "#cf222e" },
@@ -701,356 +845,6 @@ function median(values) {
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-// Per-commit cross-platform normalized averages for one category
-// ('build' or 'test'). Returns points sorted by date.
-function computeCommitSeries(category) {
-  const cutoff = getTimeRangeCutoff();
-  const MIN_RUNS_PER_JOB = 8; // below this the job median is unstable
-  const MIN_JOBS_PER_COMMIT = 3;
-
-  // commit -> { dateMs, message, perJob: Map(job -> [normalized]), rawSum, rawN }
-  const commits = new Map();
-
-  for (const [name, job] of Object.entries(data.jobs)) {
-    const { group, type } = classifyJob(name);
-    if (type !== category || !platformOrder.includes(group)) continue;
-
-    const runs = [];
-    for (const r of job.recent || []) {
-      if (getRunState(r) !== "passed" || (r.retry || 0) > 0) continue;
-      const t = runTime(r);
-      if (isNaN(t) || (cutoff && t < cutoff.getTime())) continue;
-      runs.push({ ...r, t });
-    }
-    if (runs.length < MIN_RUNS_PER_JOB) continue;
-    const jobMedian = median(runs.map((r) => r.duration));
-    if (!(jobMedian > 0)) continue;
-
-    for (const r of runs) {
-      let entry = commits.get(r.commit);
-      if (!entry) {
-        entry = {
-          dateMs: r.t,
-          message: "",
-          perJob: new Map(),
-          rawSum: 0,
-          rawN: 0,
-        };
-        commits.set(r.commit, entry);
-      }
-      if (r.t < entry.dateMs) entry.dateMs = r.t;
-      if (!entry.message && r.message && r.message !== "Scheduled build") {
-        entry.message = r.message;
-      }
-      let norms = entry.perJob.get(name);
-      if (!norms) {
-        norms = [];
-        entry.perJob.set(name, norms);
-      }
-      norms.push(r.duration / jobMedian);
-      entry.rawSum += r.duration;
-      entry.rawN++;
-    }
-  }
-
-  const points = [];
-  for (const [commit, e] of commits) {
-    if (e.perJob.size < MIN_JOBS_PER_COMMIT) continue;
-    // Median across jobs so one platform's outlier can't move the point
-    const perJobMeans = [];
-    for (const norms of e.perJob.values()) {
-      perJobMeans.push(norms.reduce((a, b) => a + b, 0) / norms.length);
-    }
-    points.push({
-      commit,
-      x: e.dateMs,
-      y: median(perJobMeans),
-      n: e.perJob.size,
-      rawMean: e.rawSum / e.rawN,
-      message: e.message,
-    });
-  }
-  points.sort((a, b) => a.x - b.x);
-  return points;
-}
-
-// Rolling median over 2*half+1 commits; the trend line that makes step
-// changes visible against the noisy per-commit dots.
-function rollingMedian(points, half = 5) {
-  return points.map((p, i) => ({
-    x: p.x,
-    y: median(
-      points
-        .slice(Math.max(0, i - half), Math.min(points.length, i + half + 1))
-        .map((q) => q.y),
-    ),
-  }));
-}
-
-// Flag points where a sustained shift in the series median starts.
-// Compares the median of the W commits before vs. after each candidate and
-// requires the increase to exceed both a 4% floor and ~3 standard errors of
-// a W-sample median estimated from the local MAD, so single noisy commits
-// and slow drifts are not flagged.
-function detectCommitRegressions(points) {
-  const W = 12;
-  const flagged = new Map(); // index -> pct increase
-  if (points.length < 2 * W + 1) return flagged;
-  const ys = points.map((p) => p.y);
-  let i = W;
-  while (i <= ys.length - W) {
-    const before = ys.slice(i - W, i);
-    const after = ys.slice(i, i + W);
-    const mBefore = median(before);
-    const mAfter = median(after);
-    const residuals = [
-      ...before.map((v) => Math.abs(v - mBefore)),
-      ...after.map((v) => Math.abs(v - mAfter)),
-    ];
-    const sigma = 1.4826 * median(residuals); // MAD -> sigma
-    // std-err of a W-sample median ~ 1.2533*sigma/sqrt(W); difference of
-    // two medians -> *sqrt(2)
-    const threshold = Math.max(
-      0.04 * mBefore,
-      (3.0 * 1.2533 * sigma * Math.sqrt(2)) / Math.sqrt(W),
-    );
-    if (mAfter - mBefore >= threshold) {
-      // The window test fires as soon as the after-window median crosses,
-      // which can be several commits before the actual step. Refine by
-      // scanning forward for the first commit where the series settles on
-      // the slow side of the midpoint (two consecutive slow points, so a
-      // single noisy commit can't claim the flag).
-      const mid = (mBefore + mAfter) / 2;
-      let bestJ = i;
-      for (let j = Math.max(1, i - 2); j < Math.min(ys.length - 1, i + W); j++) {
-        if (ys[j] >= mid && ys[j + 1] >= mid) {
-          bestJ = j;
-          break;
-        }
-      }
-      // Recompute the magnitude at the refined boundary
-      const b2 = median(ys.slice(Math.max(0, bestJ - W), bestJ));
-      const a2 = median(ys.slice(bestJ, bestJ + W));
-      flagged.set(bestJ, ((a2 - b2) / b2) * 100);
-      i = bestJ + W; // skip past this shift so it isn't flagged repeatedly
-    } else {
-      i++;
-    }
-  }
-  return flagged;
-}
-
-function renderCommitsView() {
-  const canvas = document.getElementById("commits-chart");
-  const tableEl = document.getElementById("commits-regressions");
-  if (!canvas || !tableEl) return;
-  if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
-    tableEl.innerHTML = '<div class="loading">Loading data...</div>';
-    return;
-  }
-
-  const isDark = isDarkMode();
-  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
-
-  const datasets = [];
-  const meta = {}; // "datasetIndex-dataIndex" -> point
-  const regressionRows = [];
-
-  // Chart.js needs an rgba() string for the translucent raw dots
-  const hexToRgba = (hex, alpha) => {
-    const v = parseInt(hex.slice(1), 16);
-    return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
-  };
-
-  for (const category of ["build", "test"]) {
-    const points = computeCommitSeries(category);
-    const flagged = detectCommitRegressions(points);
-    const label = category === "build" ? "Build" : "Test";
-    const color = colors[category];
-    const trend = rollingMedian(points);
-
-    // Faint per-commit dots (hoverable/clickable)
-    const dsIdx = datasets.length;
-    datasets.push({
-      label: `${label} (commits)`,
-      data: points,
-      parsing: false,
-      showLine: false,
-      backgroundColor: hexToRgba(color, 0.35),
-      borderColor: "transparent",
-      pointRadius: 2.5,
-      pointHoverRadius: 6,
-      pointHoverBackgroundColor: color,
-    });
-    points.forEach((p, i) => {
-      meta[`${dsIdx}-${i}`] = p;
-    });
-
-    // Rolling-median trend line: this is where step changes are visible
-    datasets.push({
-      label,
-      data: trend,
-      parsing: false,
-      borderColor: color,
-      backgroundColor: color,
-      borderWidth: 2.5,
-      pointRadius: 0,
-      pointHitRadius: 0,
-      pointHoverRadius: 0,
-      tension: 0,
-    });
-
-    const regPoints = [];
-    for (const [i, pct] of flagged) {
-      const p = {
-        ...points[i],
-        y: trend[i].y, // anchor the marker to the trend, not the noisy dot
-        pointY: points[i].y,
-        regressionPct: pct,
-        series: label,
-        // Detection is only certain to ~±1 CI run, so the candidate range
-        // starts two runs back: a GitHub compare of rangeStart...commit then
-        // contains every candidate (compare excludes its left endpoint).
-        rangeStart: i > 1 ? points[i - 2].commit : null,
-      };
-      p.markers = [{ datasetIndex: dsIdx, index: i }];
-      regPoints.push(p);
-      regressionRows.push(p);
-    }
-    if (regPoints.length > 0) {
-      const regIdx = datasets.length;
-      regPoints.forEach((p, i) => p.markers.push({ datasetIndex: regIdx, index: i }));
-      datasets.push({
-        label: `${label} regression`,
-        data: regPoints,
-        parsing: false,
-        showLine: false,
-        pointStyle: "triangle",
-        pointRadius: 9,
-        pointHoverRadius: 11,
-        pointBackgroundColor: color,
-        pointBorderColor: colors.regression,
-        pointBorderWidth: 3,
-      });
-      regPoints.forEach((p, i) => {
-        meta[`${regIdx}-${i}`] = p;
-      });
-    }
-  }
-
-  if (commitsChart) commitsChart.destroy();
-  commitsChart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "nearest", intersect: false },
-      plugins: {
-        legend: {
-          labels: {
-            color: textColor,
-            usePointStyle: true,
-            // Show only the trend lines in the legend
-            filter: (item) =>
-              !item.text.includes("regression") &&
-              !item.text.includes("(commits)"),
-          },
-        },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const m = items.length && meta[`${items[0].datasetIndex}-${items[0].dataIndex}`];
-              return m ? `${m.commit} — ${m.message || "(no message)"}` : "";
-            },
-            label: (ctx) => {
-              const m = meta[`${ctx.datasetIndex}-${ctx.dataIndex}`];
-              if (!m) return null;
-              const series = ctx.dataset.label
-                .replace(" regression", "")
-                .replace(" (commits)", "");
-              const value = m.pointY != null ? m.pointY : m.y;
-              const lines = [
-                `${series}: ${value.toFixed(3)}× median ` +
-                  `(avg ${formatDuration(m.rawMean)} across ${m.n} jobs)`,
-              ];
-              if (m.regressionPct != null) {
-                lines.push(
-                  `⚠ sustained +${m.regressionPct.toFixed(1)}% shift starts near here`,
-                );
-              }
-              return lines;
-            },
-          },
-        },
-      },
-      onClick: (evt, elements) => {
-        if (!elements.length) return;
-        const el = elements[0];
-        const m = meta[`${el.datasetIndex}-${el.index}`];
-        if (m) {
-          window.open(
-            `https://github.com/JuliaLang/julia/commit/${m.commit}`,
-            "_blank",
-            "noopener",
-          );
-        }
-      },
-      scales: {
-        x: timeAxis({ textColor, gridColor }),
-        y: {
-          title: {
-            display: true,
-            text: "duration vs. window median (1.00 = typical)",
-            color: textColor,
-          },
-          ticks: { color: textColor },
-          grid: { color: gridColor },
-        },
-      },
-    },
-  });
-
-  // Regressions table (also the non-color encoding of the highlights)
-  if (regressionRows.length === 0) {
-    tableEl.innerHTML =
-      '<div class="workers-empty">No sustained regressions detected in the selected time range.</div>';
-    return;
-  }
-  regressionRows.sort((a, b) => b.x - a.x);
-  const rows = regressionRows
-    .map((p, i) => {
-      const range = p.rangeStart
-        ? `<a href="https://github.com/JuliaLang/julia/compare/${escapeHtml(p.rangeStart)}...${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.rangeStart)}…${escapeHtml(p.commit)}</code></a>`
-        : `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.commit)}</code></a>`;
-      return `<tr data-row="${i}">
-        <td>${new Date(p.x).toISOString().slice(0, 10)}</td>
-        <td>${range}</td>
-        <td>${escapeHtml(p.series)}</td>
-        <td class="commits-reg-pct">+${p.regressionPct.toFixed(1)}%</td>
-        <td class="commits-reg-msg">${escapeHtml(p.message || "")}</td>
-      </tr>`;
-    })
-    .join("");
-  tableEl.innerHTML = `
-    <h3 class="commits-reg-title">⚠ Detected regressions (sustained shifts)</h3>
-    <p class="commits-reg-help">Each range spans the detection uncertainty (~±1 CI run); the compare link lists every candidate commit. Message shown is the flagged commit's.</p>
-    <div class="commits-reg-table-wrapper">
-    <table class="commits-reg-table" aria-label="Detected timing regressions">
-      <thead><tr><th>Date</th><th>Commit range</th><th>Series</th><th>Change</th><th>Message</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    </div>`;
-  tableEl.querySelectorAll("tr[data-row]").forEach((tr) => {
-    const p = regressionRows[Number(tr.dataset.row)];
-    tr.addEventListener("mouseenter", () => setChartActivePoints(commitsChart, p.markers, p.markers.slice(-1)));
-    tr.addEventListener("mouseleave", () => setChartActivePoints(commitsChart, []));
-  });
 }
 
 function toggleJobsSelection(jobs) {
@@ -1369,30 +1163,6 @@ function timeAxis({ textColor, gridColor, minorGridColor, tooltipFormat = "yyyy-
     },
     ...rest,
   };
-}
-
-/**
- * Standard normal cumulative distribution function approximation.
- * Uses Abramowitz and Stegun's polynomial approximation.
- * @param {number} z - Z-score value
- * @returns {number} Cumulative probability P(Z ≤ z)
- */
-function normalCDF(z) {
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const p = 0.3275911;
-
-  const sign = z < 0 ? -1 : 1;
-  z = Math.abs(z) / Math.sqrt(2);
-
-  const t = 1.0 / (1.0 + p * z);
-  const y =
-    1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-z * z);
-
-  return 0.5 * (1.0 + sign * y);
 }
 
 /**
@@ -2332,153 +2102,16 @@ function applyURLParams() {
   );
 }
 
-// Parse comparison data from URL parameter
-// Format: c=PR:BUILD:BASE:JOB1=DUR1,JOB2=DUR2,...
-// PR is 0 if not a PR build, durations are in seconds
-function parseComparisonParam(param) {
-  if (!param) return null;
-  const parts = param.split(":");
-  if (parts.length < 4) return null;
-
-  const pr = parseInt(parts[0], 10);
-  const build = parseInt(parts[1], 10);
-  const base = parseInt(parts[2], 10);
-  if (isNaN(build) || isNaN(base)) return null;
-
-  const jobsStr = parts.slice(3).join(":"); // Rejoin in case job names had colons
-  const jobs = {};
-  for (const pair of jobsStr.split(",")) {
-    const eqIdx = pair.lastIndexOf("=");
-    if (eqIdx === -1) continue;
-    const jobName = decodeURIComponent(pair.substring(0, eqIdx));
-    const duration = parseFloat(pair.substring(eqIdx + 1));
-    if (!isNaN(duration)) {
-      jobs[jobName] = { duration };
-    }
-  }
-
-  if (Object.keys(jobs).length === 0) return null;
-  return { pr: pr || null, build, base, jobs };
-}
-
-// Apply comparison data from URL param and update UI
-function applyComparisonParam() {
-  const params = new URLSearchParams(window.location.search);
-  const c = params.get("c");
-  comparisonData = parseComparisonParam(c);
-
-  if (comparisonData) {
-    // Populate baseline values from our data
-    for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-      const job = data?.jobs?.[jobName];
-      if (job?.stats?.median_seconds) {
-        jobData.baseline = job.stats.median_seconds;
-      }
-    }
-    updateComparisonBanner();
-  }
-}
-
-// Update the comparison banner UI
-function updateComparisonBanner() {
-  const banner = document.getElementById("comparison-banner");
-  if (!comparisonData) {
-    banner.classList.remove("visible");
-    return;
-  }
-
-  banner.classList.add("visible");
-
-  // Build the title based on PR number availability
-  const title = document.getElementById("comparison-title");
-  const buildLink = `https://buildkite.com/julialang/julia-master/builds/${comparisonData.build}`;
-  const baseLink = `https://buildkite.com/julialang/julia-master/builds/${comparisonData.base}`;
-
-  if (comparisonData.pr) {
-    const prLink = `https://github.com/JuliaLang/julia/pull/${comparisonData.pr}`;
-    // Check if base is significantly older (more than 50 builds behind)
-    const buildDiff = comparisonData.build - comparisonData.base;
-    if (buildDiff > 50) {
-      title.innerHTML = `Comparing <a href="${prLink}" target="_blank" rel="noopener noreferrer">PR #${comparisonData.pr}</a> (<a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a>). Note: the base of the PR branch is old, at <a href="${baseLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.base}</a>`;
-    } else {
-      title.innerHTML = `Comparing <a href="${prLink}" target="_blank" rel="noopener noreferrer">PR #${comparisonData.pr}</a> (<a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a>)`;
-    }
-  } else {
-    title.innerHTML = `Comparing <a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a> vs <a href="${baseLink}" target="_blank" rel="noopener noreferrer">base ${comparisonData.base}</a>`;
-  }
-
-  // Calculate summary stats
-  let regressions = 0,
-    improvements = 0,
-    neutral = 0;
-  const threshold = 0.05; // 5% threshold for significance
-
-  for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-    if (!jobData.baseline) continue;
-    const pctDiff = (jobData.duration - jobData.baseline) / jobData.baseline;
-    if (pctDiff > threshold) {
-      regressions++;
-    } else if (pctDiff < -threshold) {
-      improvements++;
-    } else {
-      neutral++;
-    }
-  }
-
-  const summary = document.getElementById("comparison-summary");
-  summary.innerHTML = "";
-
-  if (regressions > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat regression";
-    span.innerHTML = `<span class="comparison-badge regression">↑ ${regressions}</span> slower`;
-    summary.appendChild(span);
-  }
-  if (improvements > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat improvement";
-    span.innerHTML = `<span class="comparison-badge improvement">↓ ${improvements}</span> faster`;
-    summary.appendChild(span);
-  }
-  if (neutral > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat neutral";
-    span.textContent = `${neutral} unchanged`;
-    summary.appendChild(span);
-  }
-
-  // In comparison mode, only select the compared jobs
-  selectedJobs.clear();
-  for (const jobName of Object.keys(comparisonData.jobs)) {
-    if (data?.jobs?.[jobName]) {
-      selectedJobs.add(jobName);
-    }
-  }
-  // Sync the job list UI to reflect the selection
-  syncJobListUI();
-  updateMatrixHighlights();
-}
-
-// Clear comparison mode
-function clearComparison() {
-  comparisonData = null;
-  document.getElementById("comparison-banner").classList.remove("visible");
-  // Remove c param from URL
-  const url = new URL(window.location);
-  url.searchParams.delete("c");
-  history.replaceState(null, "", url);
-  updateChart();
-}
-
 function setTimeRange(days) {
   timeRangeDays = parseInt(days, 10);
   // Clear custom zoom when selecting a preset
   clearCustomZoom();
+  ensureTimingWindow();
   updateHostFilterUI();
   updateChart();
   updateStatsTable();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "commits") renderCommitsView();
+  if (ciSubview === "builds") renderBuildsView();
   updateURL();
 }
 
@@ -2497,6 +2130,7 @@ function setCustomZoom(xMin, xMax, yMin, yMax) {
   customXMax = xMax;
   customYMin = yMin;
   customYMax = yMax;
+  ensureTimingWindow();
   // Update dropdown to show "Custom"
   const select = document.getElementById("time-range");
   select.value = "custom";
@@ -2869,8 +2503,8 @@ function updateChart() {
   const datasets = [];
   chartMetadata = {};
   const cutoff = getTimeRangeCutoff();
-  // Don't show coverage overlay in comparison mode
-  const showCoverage = !comparisonData && hasSelectedCoverageJob();
+  ensureTimingWindow();
+  const showCoverage = hasSelectedCoverageJob();
 
   for (const jobName of selectedArray) {
     const jobData = data.jobs[jobName];
@@ -3237,75 +2871,6 @@ function updateChart() {
     }
   }
 
-  // Add comparison mode datasets if active
-  let comparisonDate = null;
-  if (comparisonData) {
-    // Find the base build date to position comparison points
-    let baseBuildDate = null;
-    for (const [jobName, job] of Object.entries(data.jobs)) {
-      for (const run of job.recent || []) {
-        if (run.build === comparisonData.base) {
-          baseBuildDate = new Date(runTime(run));
-          break;
-        }
-      }
-      if (baseBuildDate) break;
-    }
-
-    // If no base build found in data, use now
-    if (!baseBuildDate) baseBuildDate = new Date();
-
-    // Offset comparison points slightly after base build
-    comparisonDate = new Date(baseBuildDate.getTime() + 2 * 60 * 60 * 1000); // +2 hours
-
-    for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-      if (!selectedJobs.has(jobName)) continue;
-      const color = jobColors[jobName] || "#888";
-      const baseline = jobData.baseline || 0;
-      const pctDiff =
-        baseline > 0 ? (jobData.duration - baseline) / baseline : 0;
-      const isRegression = pctDiff > 0.05;
-      const isImprovement = pctDiff < -0.05;
-
-      const dsIdx = datasets.length;
-      datasets.push({
-        label: comparisonData.pr
-          ? `${jobName} (PR #${comparisonData.pr})`
-          : `${jobName} (build ${comparisonData.build})`,
-        data: [{ x: comparisonDate, y: jobData.duration }],
-        borderColor: "transparent",
-        backgroundColor: color,
-        fill: false,
-        showLine: false,
-        pointRadius: 10,
-        pointHoverRadius: 12,
-        pointStyle: isRegression
-          ? "triangle"
-          : isImprovement
-            ? "rectRot"
-            : "star",
-        pointBorderColor: isRegression
-          ? "#cf222e"
-          : isImprovement
-            ? "#1a7f37"
-            : color,
-        pointBackgroundColor: color,
-        pointBorderWidth: 3,
-        yAxisID: "y",
-      });
-      chartMetadata[`${dsIdx}-0`] = {
-        job: jobName,
-        build: comparisonData.build,
-        baseBuild: comparisonData.base,
-        state: "comparison",
-        duration: jobData.duration,
-        baseline: baseline,
-        pctDiff: pctDiff,
-        isComparison: true,
-      };
-    }
-  }
-
   if (chart) chart.destroy();
   highlightActive = false; // Reset highlight state when chart is recreated
 
@@ -3321,10 +2886,6 @@ function updateChart() {
   } else if (timeRangeDays > 0) {
     xMax = Date.now();
     xMin = xMax - timeRangeDays * 24 * 60 * 60 * 1000;
-    // Extend xMax to include comparison points if needed
-    if (comparisonDate && comparisonDate.getTime() > xMax) {
-      xMax = comparisonDate.getTime() + 12 * 60 * 60 * 1000; // +12 hours padding
-    }
   }
   // For "All time" (timeRangeDays === 0), leave undefined to auto-scale
 
@@ -3400,19 +2961,6 @@ function updateChart() {
                 return [
                   `${meta.coverage.toFixed(2)}%`,
                   `Commit: ${meta.commit?.slice(0, 8) || ""}`,
-                ];
-              }
-
-              // Comparison dataset tooltip
-              if (meta.isComparison) {
-                const pctStr = (meta.pctDiff * 100).toFixed(1);
-                const arrow =
-                  meta.pctDiff > 0 ? "↑" : meta.pctDiff < 0 ? "↓" : "";
-                const sign = meta.pctDiff > 0 ? "+" : "";
-                return [
-                  `PR Build #${meta.build}: ${formatDuration(meta.duration)}`,
-                  `Baseline (median): ${formatDuration(meta.baseline)}`,
-                  `${arrow} ${sign}${pctStr}% vs baseline`,
                 ];
               }
 
@@ -4009,11 +3557,6 @@ function highlightChartDataset(jobColor, agent = null, yAxisID = "y") {
   chart.data.datasets.forEach((ds, dsIdx) => {
     // Match by the original border color (unique per job)
     const isJobMatch = ds._originalBorderColor === jobColor;
-    // Check if this is a comparison point dataset for the highlighted job
-    const comparisonMeta = chartMetadata[`${dsIdx}-0`];
-    const isComparisonForJob =
-      comparisonMeta?.isComparison &&
-      jobColors[comparisonMeta.job] === jobColor;
     const hasPointsArray =
       Array.isArray(ds._originalPointRadius) &&
       ds._originalPointRadius.some((r) => r > 0);
@@ -4027,8 +3570,8 @@ function highlightChartDataset(jobColor, agent = null, yAxisID = "y") {
       return c;
     };
 
-    if ((isJobMatch || isComparisonForJob) && !agent) {
-      // Highlight entire job (or its comparison point): keep original formatting
+    if (isJobMatch && !agent) {
+      // Highlight entire job: keep original formatting
       ds.borderColor = ds._originalBorderColor;
       ds.backgroundColor = ds._originalBackgroundColor;
       ds.borderWidth = ds._originalBorderWidth;
@@ -4338,7 +3881,6 @@ function toggleShortcutsHelp() {
   el.setAttribute("aria-hidden", visible ? "false" : "true");
 }
 
-// Update stats table header for comparison mode
 function updateStatsTableHeader() {
   const thead = document.getElementById("stats-thead");
   if (!thead) return;
@@ -4355,15 +3897,7 @@ function updateStatsTableHeader() {
                 <th scope="col" class="sortable" data-sort="n" onclick="handleStatsTableSort('n')">n <span class="sort-indicator">▲</span></th>
             `;
 
-  const comparisonHeaders = comparisonData
-    ? `
-                <th scope="col" class="sortable comparison-col comparison-col-first" data-sort="cmpDuration" onclick="handleStatsTableSort('cmpDuration')" title="PR build duration">PR Duration <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable comparison-col" data-sort="cmpChange" onclick="handleStatsTableSort('cmpChange')" title="Change vs median">Change <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable comparison-col" data-sort="cmpSig" onclick="handleStatsTableSort('cmpSig')" title="Statistical significance">Sig <span class="sort-indicator">▲</span></th>
-            `
-    : "";
-
-  thead.innerHTML = `<tr>${baseHeaders}${comparisonHeaders}</tr>`;
+  thead.innerHTML = `<tr>${baseHeaders}</tr>`;
   updateSortIndicators();
 }
 
@@ -4371,10 +3905,9 @@ function updateStatsTable() {
   const tbody = document.getElementById("stats-tbody");
   tbody.innerHTML = "";
 
-  // Update table header for comparison mode
   updateStatsTableHeader();
 
-  const colSpan = comparisonData ? 13 : 10;
+  const colSpan = 10;
   if (selectedJobs.size === 0) {
     tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">Select jobs to see statistics</td></tr>`;
     updateSortIndicators();
@@ -4520,27 +4053,6 @@ function updateStatsTable() {
       case "n":
         cmp = a.n - b.n;
         break;
-      case "cmpDuration":
-        const durA = comparisonData?.jobs[a.jobName]?.duration ?? 0;
-        const durB = comparisonData?.jobs[b.jobName]?.duration ?? 0;
-        cmp = durA - durB;
-        break;
-      case "cmpChange":
-        const getChange = (stat) => {
-          const cmpJob = comparisonData?.jobs[stat.jobName];
-          if (!cmpJob || !stat.median) return 0;
-          return ((cmpJob.duration - stat.median) / stat.median) * 100;
-        };
-        cmp = getChange(a) - getChange(b);
-        break;
-      case "cmpSig":
-        const getSig = (stat) => {
-          const cmpJob = comparisonData?.jobs[stat.jobName];
-          if (!cmpJob || !stat.std || stat.std === 0) return 0;
-          return Math.abs((cmpJob.duration - stat.mean) / stat.std);
-        };
-        cmp = getSig(a) - getSig(b);
-        break;
     }
     return statsTableSortAsc ? cmp : -cmp;
   });
@@ -4634,9 +4146,6 @@ function updateStatsTable() {
     const aggRow = document.createElement("tr");
     aggRow.className = "aggregate-row";
     const aggTrendResult = formatTrend(aggTrend, null, true);
-    const aggComparisonCells = comparisonData
-      ? '<td class="comparison-col comparison-col-first"></td><td class="comparison-col"></td><td class="comparison-col"></td>'
-      : "";
     aggRow.innerHTML = `
                     <td>All (${jobStats.length} jobs)</td>
                     <td></td>
@@ -4647,7 +4156,6 @@ function updateStatsTable() {
                     <td></td>
                     <td></td>
                     <td>${allN}</td>
-                    ${aggComparisonCells}
                 `;
     tbody.appendChild(aggRow);
   }
@@ -4763,50 +4271,6 @@ function updateStatsTable() {
       ? `<td class="trend-cell" data-trend='${trendResult.trendData}'>${trendResult.html}</td>`
       : `<td>${trendResult.html}</td>`;
 
-    // Comparison columns
-    let comparisonCells = "";
-    if (comparisonData) {
-      const cmpJob = comparisonData.jobs[jobName];
-      if (cmpJob && median) {
-        const cmpDuration = cmpJob.duration;
-        const pctChange = ((cmpDuration - median) / median) * 100;
-        const zScore = std > 0 ? (cmpDuration - mean) / std : 0;
-        const pValue = 2 * (1 - normalCDF(Math.abs(zScore)));
-        const isSignificant = pValue < 0.05 && Math.abs(pctChange) > 5;
-
-        // Format change with color
-        const changeSign = pctChange > 0 ? "+" : "";
-        const changeColor = isSignificant
-          ? pctChange > 0
-            ? "var(--color-danger-fg)"
-            : "var(--color-success-fg)"
-          : "var(--color-fg-muted)";
-        const changeHtml = `<span style="color: ${changeColor}">${changeSign}${pctChange.toFixed(1)}%</span>`;
-
-        // Format significance
-        let sigHtml;
-        if (isSignificant) {
-          const stars = pValue < 0.001 ? "***" : pValue < 0.01 ? "**" : "*";
-          const sigColor =
-            pctChange > 0
-              ? "var(--color-danger-fg)"
-              : "var(--color-success-fg)";
-          sigHtml = `<span style="color: ${sigColor}" title="p=${pValue.toFixed(4)}, z=${zScore.toFixed(2)}">${stars}</span>`;
-        } else {
-          sigHtml = `<span class="text-muted" title="p=${pValue.toFixed(4)}, z=${zScore.toFixed(2)}">—</span>`;
-        }
-
-        comparisonCells = `
-                            <td class="duration comparison-col comparison-col-first">${formatDuration(cmpDuration)}</td>
-                            <td class="comparison-col">${changeHtml}</td>
-                            <td class="comparison-col">${sigHtml}</td>
-                        `;
-      } else {
-        comparisonCells =
-          '<td class="comparison-col comparison-col-first">—</td><td class="comparison-col">—</td><td class="comparison-col">—</td>';
-      }
-    }
-
     row.innerHTML = `
                     <td><span class="color-dot" style="background: ${color}"></span> ${convertEmoji(jobName)}</td>
                     <td>${hostsHtml}</td>
@@ -4817,7 +4281,6 @@ function updateStatsTable() {
                     <td class="duration">${formatDuration(max)}</td>
                     <td class="duration">${std != null ? "±" + formatDuration(std) : formatDuration(null)}</td>
                     <td>${n}</td>
-                    ${comparisonCells}
                 `;
     tbody.appendChild(row);
 
@@ -4956,9 +4419,6 @@ function updateStatsTable() {
         const hostTrendCell = hostTrendResult.trendData
           ? `<td class="trend-cell" data-trend='${hostTrendResult.trendData}'>${hostTrendResult.html}</td>`
           : `<td>${hostTrendResult.html}</td>`;
-        const hostComparisonCells = comparisonData
-          ? '<td class="comparison-col comparison-col-first"></td><td class="comparison-col"></td><td class="comparison-col"></td>'
-          : "";
         hostRow.innerHTML = `
                             <td><span class="color-dot" style="background: ${hostColor}"></span> ${escapeHtml(agent)}</td>
                             <td></td>
@@ -4969,7 +4429,6 @@ function updateStatsTable() {
                             <td class="duration">${formatDuration(hostMax)}</td>
                             <td class="duration">±${formatDuration(hostStd)}</td>
                             <td>${hostN}</td>
-                            ${hostComparisonCells}
                         `;
         tbody.appendChild(hostRow);
       }
@@ -5408,11 +4867,6 @@ function renderMatrixTable() {
   // Apply URL params (selection and time range) or localStorage or default
   const hasURLSelection = applyURLParams();
 
-  // Check if we're in comparison mode (takes priority over localStorage)
-  const hasComparisonMode = new URLSearchParams(window.location.search).has(
-    "c",
-  );
-
   // Always restore stats panel height from localStorage (independent of URL params)
   const storedConfig = loadFromLocalStorage();
   if (
@@ -5424,7 +4878,7 @@ function renderMatrixTable() {
       storedConfig.statsHeight + "px";
   }
 
-  if (!hasURLSelection && !hasComparisonMode) {
+  if (!hasURLSelection) {
     // Try localStorage for other settings
     if (storedConfig) {
       // Apply stored time range
@@ -5606,9 +5060,6 @@ function renderMatrixTable() {
       listContainer.appendChild(item);
     }
   }
-
-  // Apply comparison mode from URL params
-  applyComparisonParam();
 
   refreshAllUI();
 }
@@ -5793,218 +5244,180 @@ function timeAgo(dateString) {
   return `${weeks}w ago`;
 }
 
+// === Timing data ===
+// `data` is { generated_at, jobs: { name: { recent: [runs newest first] } },
+// coverage }: the runs of builds created since `timingSince` (a UTC day, ""
+// for all time), extended on demand as the time range widens and never
+// shrunk; refreshes ask for what changed after `timingChangeSeq`.
+let timingSince = null;
+let timingChangeSeq = 0;
+let timingExtending = null; // in-flight window extension, keyed by its since
+
+const runKey = (r) => `${r.pipeline}#${r.build}/${r.retry || 0}`;
+
+// Newest first, as the export orders runs: date descending, retries in
+// order, higher build number first among ties
+function sortRuns(runs) {
+  return runs.sort(
+    (a, b) =>
+      (b.date < a.date ? -1 : b.date > a.date ? 1 : 0) ||
+      (a.retry || 0) - (b.retry || 0) ||
+      b.build - a.build,
+  );
+}
+
+// The API keeps a build's commit, author, message and date once, under
+// pipeline#number; give every run its build's fields back, so the rest of
+// the page sees the shape the files have
+function hydrateTimingRuns(payload) {
+  const builds = payload.builds || {};
+  for (const job of Object.values(payload.jobs || {})) {
+    for (const r of job.recent || []) {
+      const b = builds[`${r.pipeline}#${r.build}`];
+      if (b) {
+        r.commit = b.commit;
+        r.author = b.author;
+        r.message = b.message;
+        r.date = b.date;
+      }
+    }
+  }
+  return payload;
+}
+
+// Upsert the API's jobs into `data.jobs`, run by run
+function mergeTimingRuns(jobs) {
+  for (const [name, job] of Object.entries(jobs)) {
+    const existing = data.jobs[name];
+    if (!existing) {
+      data.jobs[name] = { recent: sortRuns(job.recent || []) };
+      continue;
+    }
+    if (!job.recent || job.recent.length === 0) continue;
+    const byKey = new Map(existing.recent.map((r) => [runKey(r), r]));
+    for (const r of job.recent) byKey.set(runKey(r), r);
+    existing.recent = sortRuns([...byKey.values()]);
+  }
+}
+
+// The time range the page will show, read before the data arrives (the
+// same sources applyURLParams and populateJobSelector apply afterwards),
+// so the first request already covers it
+function initialTimingCutoff() {
+  const params = new URLSearchParams(window.location.search);
+  const x = params.get("x");
+  if (x) {
+    const xMin = Number(x.split(".")[0]);
+    if (!isNaN(xMin)) return new Date(xMin - 90 * 24 * 60 * 60 * 1000);
+  }
+  // Without a selection in the URL the stored range wins over t=, as in
+  // populateJobSelector
+  let days = DEFAULT_TIME_RANGE;
+  const t = params.get("t");
+  const stored = params.has("s") ? null : loadFromLocalStorage();
+  if (stored && VALID_TIME_RANGES.includes(stored.timeRange)) {
+    days = stored.timeRange;
+  } else if (t !== null && VALID_TIME_RANGES.includes(parseInt(t, 10))) {
+    days = parseInt(t, 10);
+  }
+  if (days === 0) return null;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return cutoff;
+}
+
+function setTimingUpdated() {
+  const updatedEl = document.getElementById("last-updated");
+  updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
+  updatedEl.title = data.generated_at;
+}
+
+function showTimingLoadError() {
+  const retryBtn =
+    '<button class="btn btn-retry" onclick="location.reload()">Retry</button>';
+  document.getElementById("chart-loading").innerHTML =
+    `<span class="error">Failed to load data</span>${retryBtn}`;
+  document.getElementById("job-matrix").innerHTML =
+    `<div class="error">Failed to load ${retryBtn}</div>`;
+  document.getElementById("job-list").innerHTML =
+    `<div class="error">Failed to load jobs ${retryBtn}</div>`;
+  document.getElementById("stats-tbody").innerHTML = `
+                  <tr><td colspan="10" class="error">
+                      Failed to load data. Run <code>julia fetch_timing.jl</code> to generate data. ${retryBtn}
+                  </td></tr>
+              `;
+}
+
 async function loadData() {
   try {
-    // Render empty matrix skeleton immediately
     renderMatrixSkeleton();
-
-    // no-cache like loadGzipJson: always revalidate against the server
-    const resp = await fetch("data/timing_summary.json.gz", {
-      cache: "no-cache",
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    // Stream and parse JSON progressively (decompress gzip on the fly)
-    const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
-    const reader = decompressed.getReader();
-    const decoder = new TextDecoder();
-    let jsonText = "";
-    let jobCount = 0;
-    let uiRendered = false;
-    let lastProgressTime = 0;
-    const PROGRESS_INTERVAL = 100; // ms between progress updates
-
-    // Initialize data structure
-    data = { jobs: {} };
-
-    // Calculate cutoff date for early UI render based on default time range
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - DEFAULT_TIME_RANGE);
-    const cutoffStr = cutoffDate.toISOString().slice(0, 10); // "yyyy-mm-dd"
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      jsonText += decoder.decode(value, { stream: true });
-
-      const now = performance.now();
-      if (now - lastProgressTime > PROGRESS_INTERVAL) {
-        // Extract generated_at if we haven't yet
-        if (!data.generated_at) {
-          const match = jsonText.match(/"generated_at":\s*"([^"]+)"/);
-          if (match) {
-            data.generated_at = match[1];
-            const updatedEl = document.getElementById("last-updated");
-            updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-            updatedEl.title = data.generated_at;
-          }
-        }
-
-        // Count jobs to show progress
-        const jobMatches = jsonText.match(/":\s*\{\s*"recent"/g);
-        const newCount = jobMatches ? jobMatches.length : 0;
-        if (newCount > jobCount) {
-          jobCount = newCount;
-          const bytesLoaded = jsonText.length;
-          const mbLoaded = (bytesLoaded / (1024 * 1024)).toFixed(1);
-          document.getElementById("chart-loading").innerHTML =
-            `<span class="loading">Loading... ${jobCount} jobs (${mbLoaded} MB)</span>`;
-        }
-
-        // Try to render UI early once we have enough data for the default time range
-        if (!uiRendered && jobCount >= 5) {
-          // Check if we have data beyond the cutoff date (older data)
-          // The JSON has jobs sorted newest first, so look for dates older than cutoff
-          const hasOldEnoughData =
-            jsonText.includes(`"date": "${cutoffStr}`) ||
-            (jsonText.includes(`"date": "20`) &&
-              jsonText.lastIndexOf('"date":') > jsonText.length - 5000);
-
-          // Try a partial parse to see if we can render
-          if (hasOldEnoughData || jsonText.length > 500000) {
-            const partialData = tryParsePartialJSON(jsonText);
-            if (partialData && Object.keys(partialData.jobs).length >= 5) {
-              data = partialData;
-              populateJobSelector();
-              document.getElementById("chart-loading").style.display = "none";
-              uiRendered = true;
-            }
-          }
-        }
-
-        lastProgressTime = now;
-      }
-    }
-
-    // Final parse
-    jsonText += decoder.decode();
-    data = JSON.parse(jsonText);
-
-    const updatedEl = document.getElementById("last-updated");
-    updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-    updatedEl.title = data.generated_at;
-
-    // Check if data is stale (more than 3 days old)
+    const since = apiSince(initialTimingCutoff());
+    const payload = hydrateTimingRuns(await apiGet("timing/runs", { since }));
+    data = { generated_at: payload.generated_at, jobs: payload.jobs, coverage: payload.coverage };
+    timingSince = since;
+    timingChangeSeq = payload.change_seq;
+    setTimingUpdated();
     checkStaleData(data.generated_at);
-
-    if (!uiRendered) {
-      populateJobSelector();
-      document.getElementById("chart-loading").style.display = "none";
-    } else {
-      // Update with complete data - rebuild matrix with all jobs
-      buildJobMatrix();
-      buildJobIndex();
-
-      // Reassign colors for any new jobs from complete data
-      const allJobs = Object.keys(data.jobs);
-      const colors = generateColors(allJobs.length);
-      allJobs.forEach((name, i) => {
-        jobColors[name] = colors[i];
-      });
-
-      // Recalculate pass rates with complete data and re-render matrix
-      calculateAllPassRates();
-      calculateAllBreakages();
-      renderMatrixTable();
-
-      // Re-apply URL params with complete data to get full selection
-      // (partial data may have missed some jobs in matrix cells)
-      selectedJobs.clear();
-      const hasURLSelection = applyURLParams();
-
-      // Check if we're in comparison mode (takes priority over localStorage)
-      const hasComparisonMode = new URLSearchParams(window.location.search).has(
-        "c",
-      );
-
-      if (!hasURLSelection && !hasComparisonMode) {
-        // Try localStorage
-        const storedConfig = loadFromLocalStorage();
-        if (storedConfig?.selection) {
-          const sel = decodeSelection(storedConfig.selection);
-          if (sel) {
-            for (const { platform, type } of sel.matrix) {
-              const jobs = jobMatrix[platform]?.[type] || [];
-              for (const { name } of jobs) selectedJobs.add(name);
-            }
-            for (const group of sel.special) {
-              const jobs = specialJobGroups[group] || [];
-              for (const { name } of jobs) selectedJobs.add(name);
-            }
-            for (const idx of sel.indices) {
-              if (jobNameList[idx]) selectedJobs.add(jobNameList[idx]);
-            }
-          }
-        }
-      }
-
-      // If still nothing selected and not in comparison mode, select all matrix jobs
-      if (selectedJobs.size === 0 && !hasComparisonMode) {
-        for (const platform of platformOrder) {
-          for (const type of typeOrder) {
-            for (const { name } of jobMatrix[platform]?.[type] || []) {
-              selectedJobs.add(name);
-            }
-          }
-        }
-      }
-
-      // Re-apply comparison mode with complete data
-      applyComparisonParam();
-
-      refreshAllUI();
-    }
+    populateJobSelector();
+    document.getElementById("chart-loading").style.display = "none";
     if (activeTab === "overview") renderOverview();
   } catch (err) {
     console.error("Failed to load data:", err);
-    const retryBtn =
-      '<button class="btn btn-retry" onclick="location.reload()">Retry</button>';
-    document.getElementById("chart-loading").innerHTML =
-      `<span class="error">Failed to load data</span>${retryBtn}`;
-    document.getElementById("job-matrix").innerHTML =
-      `<div class="error">Failed to load ${retryBtn}</div>`;
-    document.getElementById("job-list").innerHTML =
-      `<div class="error">Failed to load jobs ${retryBtn}</div>`;
-    document.getElementById("stats-tbody").innerHTML = `
-                    <tr><td colspan="10" class="error">
-                        Failed to load data. Run <code>julia fetch_timing.jl</code> to generate data. ${retryBtn}
-                    </td></tr>
-                `;
+    showTimingLoadError();
   }
 }
 
-// Try to parse partial JSON by closing open structures
-function tryParsePartialJSON(jsonText) {
-  try {
-    // Find the last complete job entry
-    // Jobs look like: "jobname": { "recent": [...], "stats": {...} }
-    // Find a point where we can safely truncate
-
-    // Look for the pattern where a job's stats section ends
-    const statsEndPattern = /"std_seconds":\s*[\d.]+\s*\}\s*\}/g;
-    let lastMatch = null;
-    let match;
-    while ((match = statsEndPattern.exec(jsonText)) !== null) {
-      lastMatch = match;
-    }
-
-    if (!lastMatch) return null;
-
-    // Truncate at the end of the last complete job and close the JSON
-    const truncateAt = lastMatch.index + lastMatch[0].length;
-    let partial = jsonText.slice(0, truncateAt);
-
-    // Close any remaining open braces
-    partial += "}}"; // Close jobs object and root object
-
-    return JSON.parse(partial);
-  } catch (e) {
-    return null;
-  }
+// Widen the loaded window to the range being shown; the chart redraws when
+// the older runs arrive
+function ensureTimingWindow() {
+  if (!data || timingSince === null || timingSince === "") return;
+  const wanted = apiSince(getTimeRangeCutoff());
+  if (wanted !== "" && wanted >= timingSince) return;
+  if (timingExtending === wanted) return;
+  timingExtending = wanted;
+  const until = timingSince;
+  apiGet("timing/runs", { since: wanted, until })
+    .then((payload) => {
+      if (timingExtending !== wanted) return;
+      mergeTimingRuns(hydrateTimingRuns(payload).jobs);
+      Object.assign(data.coverage, payload.coverage);
+      timingSince = wanted;
+      timingExtending = null;
+      // A refresh that ran meanwhile only covered the narrow window; the
+      // next one starts from this response's cursor so the older builds
+      // get their changes too
+      if (payload.change_seq < timingChangeSeq) timingChangeSeq = payload.change_seq;
+      populateJobSelector();
+      refreshAllUI();
+    })
+    .catch((err) => {
+      console.error("Failed to extend the timing window:", err);
+      timingExtending = null;
+    });
 }
 
-// Render empty matrix immediately so users see structure
+async function refreshTimingFromApi(signal) {
+  const payload = await apiGet(
+    "timing/runs",
+    { since: timingSince, changed_since: timingChangeSeq },
+    { signal },
+  );
+  if (signal.aborted) return;
+  if (payload.change_seq !== timingChangeSeq) {
+    mergeTimingRuns(hydrateTimingRuns(payload).jobs);
+    Object.assign(data.coverage, payload.coverage);
+    data.generated_at = payload.generated_at;
+    timingChangeSeq = payload.change_seq;
+    checkStaleData(data.generated_at);
+    // Rebuild all derived state (job matrix/index, colors, pass rates,
+    // breakages, sidebar): new jobs can appear and caches go stale
+    populateJobSelector();
+    refreshAllUI();
+    if (activeTab === "overview") renderOverview();
+  }
+  setTimingUpdated();
+}
+
 function renderMatrixSkeleton() {
   const matrixContainer = document.getElementById("job-matrix");
   let html = '<table class="matrix-table">';
@@ -6057,30 +5470,8 @@ async function refreshData() {
   // Abort any in-flight refresh so we don't race with ourselves.
   if (refreshController) refreshController.abort();
   refreshController = new AbortController();
-  const signal = refreshController.signal;
   try {
-    const newData = await loadGzipJson("data/timing_summary.json.gz", {
-      signal,
-    });
-    if (signal.aborted) return;
-
-    // Only update if data actually changed
-    if (newData.generated_at !== data.generated_at) {
-      data = newData;
-      const updatedEl = document.getElementById("last-updated");
-      updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-      updatedEl.title = data.generated_at;
-      checkStaleData(data.generated_at);
-      // Rebuild all derived state (job matrix/index, colors, pass rates,
-      // breakages, sidebar) — new jobs can appear and caches go stale
-      populateJobSelector();
-      refreshAllUI();
-      if (activeTab === "overview") renderOverview();
-    } else {
-      // Update the "ago" time even if data hasn't changed
-      const updatedEl = document.getElementById("last-updated");
-      updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-    }
+    await refreshTimingFromApi(refreshController.signal);
   } catch (err) {
     // Silently ignore refresh errors (including AbortError)
   }
@@ -6094,7 +5485,7 @@ const TAB_URL_MAP = {
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
-  "ci-commits": "ci-commits",
+  "ci-builds": "ci-builds",
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
   packages: "ecosystem-downloads",
@@ -6108,7 +5499,7 @@ const TAB_SHORT_PATH = {
   perf: "/diff",
   benchmarks: "/history",
   "ci-timing": "/timing",
-  "ci-commits": "/commits",
+  "ci-builds": "/builds",
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
   packages: "/downloads",
@@ -6132,7 +5523,7 @@ const LEGACY_TAB_ALIASES = new Set([
   "perf",
   "benchmarks",
   "ci-timing",
-  "ci-commits",
+  "ci-builds",
   "ci-workers",
   "packages",
   "pkgeval",
@@ -6148,6 +5539,7 @@ function tabFromURLValue(value) {
     if (tabValue === value) return tabName;
   }
   if (LEGACY_TAB_ALIASES.has(value)) return value;
+  if (value === "ci-commits") return "ci-builds"; // the Commits tab was folded into Builds
   return null;
 }
 
@@ -6165,22 +5557,24 @@ const DASHBOARD_PARAMS = new Set([
   "l", // line type
   "e", // expanded jobs in stats table
   "st", // state filter
-  "c", // comparison build pair
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "wq", // workers text filter
   "tab", // active tab
   "bt", // bench time range
   "bs", // bench stat type
   "bv", // bench table view
+  "bm", // bench metric
   "bg", // bench groups
   "bpc", // bench show pre-change data
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
+  "pkg", // pkgeval package history
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
   "edp", // ecosystem downloads proportional toggle
   "edm", // ecosystem downloads view mode
+  "edpkg", // ecosystem downloads package
   "tm", // ttfx metric
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
@@ -6261,8 +5655,8 @@ window.addEventListener("message", (event) => {
 function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
-  } else if (tab === "ci-commits") {
-    setCITimingSubview("commits", { updateUrl: false });
+  } else if (tab === "ci-builds") {
+    setCITimingSubview("builds", { updateUrl: false });
   } else if (tab === "ci-timing") {
     setCITimingSubview("jobs", { updateUrl: false });
   }
@@ -6270,7 +5664,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   activeTab = tab;
   const tabIds = {
     "ci-timing": "tab-ci-timing",
-    "ci-commits": "tab-ci-commits",
+    "ci-builds": "tab-ci-builds",
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
     packages: "tab-packages",
@@ -6292,14 +5686,13 @@ function switchTab(tab, { pushHistory = true } = {}) {
     group.classList.toggle("active-group", hasActiveTab);
   });
 
-  const isCITab =
-    tab === "ci-timing" || tab === "ci-commits" || tab === "ci-workers";
+  const isCITab = tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers";
 
   document
     .getElementById("ci-timing-view")
     .classList.toggle("view-hidden", !isCITab);
   // Hide CI-timing-specific banners
-  for (const id of ["stale-data-warning", "comparison-banner"]) {
+  for (const id of ["stale-data-warning"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = isCITab ? "" : "none";
   }
@@ -6379,12 +5772,23 @@ let benchChart = null;
 let benchSelectedGroups = new Set();
 let benchTimeRangeDays = 15;
 let benchStatType = "minimum";
+// Which estimate the API serves: time (the only one the files have), gctime,
+// memory or allocs
+let benchMetric = "time";
+const BENCH_METRIC_LABELS = { time: "Time", gctime: "GC time", memory: "Memory", allocs: "Allocations" };
+let benchVerdicts = null; // { since, verdicts } from api/benchmarks/verdicts
+let benchVerdictsLoading = null;
 let benchSortCol = "trendAbs"; // default view is "groups", which has no date column
 let benchSortAsc = false;
 let benchGroupColors = {};
 let benchExpandedGroups = new Set();
 let benchGroupDetail = {}; // group => fetched detail data
 let benchGroupDetailLoading = {}; // group => in-flight Promise
+// The detail covers reports since this UTC day ("" for all time); widening
+// the range drops it and reloads. Every window or metric change bumps the
+// generation, and a response from an earlier one is dropped on arrival.
+let benchDetailSince = null;
+let benchDetailGeneration = 0;
 let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 // Whether to draw vertical methodology-change annotations on the chart.
 // Toggled by Notes button hover/focus and while the methodology popup is open.
@@ -6485,6 +5889,12 @@ function updateBenchURL() {
   } else {
     url.searchParams.delete("bv");
   }
+  // Metric (default time)
+  if (benchMetric !== "time") {
+    url.searchParams.set("bm", benchMetric);
+  } else {
+    url.searchParams.delete("bm");
+  }
   // Noisy view min latency (ns)
   if (benchNoisyMinNs !== BENCH_NOISY_DEFAULT_MIN_NS) {
     url.searchParams.set("bn", benchNoisyMinNs);
@@ -6547,11 +5957,21 @@ function applyBenchURLParams() {
     document.getElementById("bench-view-runs")?.classList.add("btn-primary");
   } else if (bv === "noisy") {
     benchTableView = "noisy";
-    document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
+    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
     document.getElementById("bench-view-noisy")?.classList.add("btn-primary");
+  } else if (bv === "verdicts") {
+    benchTableView = "verdicts";
+    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
+    document.getElementById("bench-view-verdicts")?.classList.add("btn-primary");
   }
   const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
   if (minNsLabel) minNsLabel.hidden = benchTableView !== "noisy";
+  const bm = params.get("bm");
+  if (bm !== null && bm in BENCH_METRIC_LABELS) {
+    benchMetric = bm;
+    const sel = document.getElementById("bench-metric");
+    if (sel) sel.value = bm;
+  }
 
   const bn = params.get("bn");
   if (bn !== null) {
@@ -6590,9 +6010,31 @@ function applyBenchGroupParams() {
 
 function setBenchTimeRange(value) {
   benchTimeRangeDays = parseInt(value);
+  ensureBenchDetailWindow();
   updateBenchChart();
   updateBenchTable();
   updateBenchURL();
+}
+
+// One group's detail for the reports in range; null when the window or
+// metric changed while it was in flight
+async function fetchBenchGroupDetail(group) {
+  const generation = benchDetailGeneration;
+  const detail = await apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
+  return generation === benchDetailGeneration ? detail : null;
+}
+
+// Drop windowed detail that no longer covers the range and reload what is
+// selected; in-flight loads for the old window are ignored on arrival
+function ensureBenchDetailWindow() {
+  if (benchDetailSince === null || benchDetailSince === "") return;
+  const wanted = apiSince(getBenchCutoff());
+  if (wanted !== "" && wanted >= benchDetailSince) return;
+  benchDetailSince = wanted;
+  benchDetailGeneration++;
+  benchGroupDetail = {};
+  benchGroupDetailLoading = {};
+  for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
 }
 
 function setBenchStatType(value) {
@@ -6758,10 +6200,9 @@ function buildBenchMethodologyAnnotations(isDark) {
 // chart/table redraw when it arrives. No-op if already cached or in-flight.
 function ensureBenchGroupDetailLoaded(group) {
   if (benchGroupDetail[group] || benchGroupDetailLoading[group]) return;
-  benchGroupDetailLoading[group] = loadGzipJson(
-    `data/benchmarks/${encodeURIComponent(group)}.json.gz`,
-  )
+  const request = fetchBenchGroupDetail(group)
     .then((data) => {
+      if (benchGroupDetailLoading[group] !== request || !data) return; // superseded
       benchGroupDetail[group] = data;
       delete benchGroupDetailLoading[group];
       // Only redraw if this group is still selected.
@@ -6772,8 +6213,9 @@ function ensureBenchGroupDetailLoaded(group) {
     })
     .catch((err) => {
       console.error(`Failed to load detail for ${group}:`, err);
-      delete benchGroupDetailLoading[group];
+      if (benchGroupDetailLoading[group] === request) delete benchGroupDetailLoading[group];
     });
+  benchGroupDetailLoading[group] = request;
 }
 
 // Returns the time-range cutoff for a benchmark. Kept as a thin wrapper so
@@ -6803,13 +6245,56 @@ function formatTime(ns) {
   return (ns / 1e9).toFixed(2) + " s";
 }
 
+function formatBytes(b) {
+  if (b == null || b === 0) return "—";
+  if (b < 1024) return b.toFixed(0) + " B";
+  if (b < 1024 ** 2) return (b / 1024).toFixed(1) + " KiB";
+  if (b < 1024 ** 3) return (b / 1024 ** 2).toFixed(1) + " MiB";
+  return (b / 1024 ** 3).toFixed(2) + " GiB";
+}
+
+// A value of the selected benchmark metric
+function formatBenchValue(v) {
+  if (benchMetric === "memory") return formatBytes(v);
+  if (benchMetric === "allocs") return v == null || v === 0 ? "—" : Math.round(v).toLocaleString();
+  return formatTime(v);
+}
+
+function benchMetricLabel() {
+  return BENCH_METRIC_LABELS[benchMetric] || "Time";
+}
+
+async function setBenchMetric(value) {
+  if (!(value in BENCH_METRIC_LABELS) || value === benchMetric) return;
+  benchMetric = value;
+  benchDetailGeneration++;
+  benchGroupDetail = {};
+  benchGroupDetailLoading = {};
+  const sel = document.getElementById("bench-metric");
+  if (sel) sel.value = value;
+  let summary;
+  try {
+    summary = await apiGet("benchmarks/summary", { metric: value });
+  } catch (err) {
+    console.error("Failed to load the benchmark summary:", err);
+    return;
+  }
+  if (benchMetric !== value) return; // changed again meanwhile
+  benchData = summary;
+  for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
+  updateBenchChart();
+  updateBenchTable();
+  updateBenchURL();
+}
+
 async function loadBenchmarkData() {
   try {
     // Load methodology-change registry first so cutoff helpers have data
     // before the chart computes anything.
     await BenchCore.loadMethodologyChanges();
     updateBenchMethodologyNotesCount();
-    benchData = await loadGzipJson("data/benchmark_summary.json.gz");
+    benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
+    benchDetailSince = apiSince(getBenchCutoff());
 
     document.getElementById("bench-chart-loading").style.display = "none";
 
@@ -6919,16 +6404,17 @@ async function toggleExpandGroup(group) {
   benchExpandedGroups.add(group);
 
   if (!benchGroupDetail[group]) {
+    let detail = null;
     try {
-      benchGroupDetail[group] = await loadGzipJson(
-        `data/benchmarks/${encodeURIComponent(group)}.json.gz`,
-      );
+      detail = await fetchBenchGroupDetail(group);
     } catch (err) {
       console.error(`Failed to load detail for ${group}:`, err);
       benchExpandedGroups.delete(group);
       updateBenchTable();
       return;
     }
+    if (!detail) return; // the window or metric changed meanwhile; its reload redraws
+    benchGroupDetail[group] = detail;
   }
 
   updateBenchTable();
@@ -7329,11 +6815,11 @@ function updateBenchChart() {
   } else {
     const yLabel =
       expandedWithDetail.length > 0 || noisyView
-        ? `${statLabel} Time`
-        : `${statLabel} Geomean Time`;
+        ? `${statLabel} ${benchMetricLabel()}`
+        : `${statLabel} Geomean ${benchMetricLabel()}`;
     yAxis.title = { display: true, text: yLabel, color: textColor };
     yAxis.ticks.callback = function (value) {
-      return formatTime(value);
+      return formatBenchValue(value);
     };
   }
 
@@ -7376,7 +6862,7 @@ function updateBenchChart() {
             },
             label: (item) => {
               const raw = item.raw;
-              const abs = formatTime(raw.yRaw);
+              const abs = formatBenchValue(raw.yRaw);
               if (multiSeries) {
                 const sign = raw.y >= 0 ? "+" : "";
                 return `${item.dataset.label}: ${sign}${raw.y.toFixed(1)}% (${abs})`;
@@ -7494,7 +6980,7 @@ function makeBenchRowComparator(defaultStrCol) {
 }
 
 function setBenchTableView(view) {
-  if (view !== "groups" && view !== "runs" && view !== "noisy") return;
+  if (view !== "groups" && view !== "runs" && view !== "noisy" && view !== "verdicts") return;
   if (view === benchTableView) return;
   const prev = benchTableView;
   benchTableView = view;
@@ -7507,6 +6993,9 @@ function setBenchTableView(view) {
   document
     .getElementById("bench-view-noisy")
     ?.classList.toggle("btn-primary", view === "noisy");
+  document
+    .getElementById("bench-view-verdicts")
+    ?.classList.toggle("btn-primary", view === "verdicts");
   const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
   if (minNsLabel) minNsLabel.hidden = view !== "noisy";
   // Reset sort to sensible default for the new view
@@ -7534,9 +7023,75 @@ function updateBenchTable() {
     renderBenchRunsTable();
   } else if (benchTableView === "noisy") {
     renderBenchNoisyTable();
+  } else if (benchTableView === "verdicts") {
+    renderBenchVerdictsTable();
   } else {
     renderBenchGroupsTable();
   }
+}
+
+// Nanosoldier's own regressions and improvements (api/benchmarks/verdicts)
+// for the reports in the selected range, newest first
+function renderBenchVerdictsTable() {
+  const thead = document.getElementById("bench-stats-thead");
+  const tbody = document.getElementById("bench-stats-tbody");
+  thead.innerHTML = `<tr>
+                <th>Date</th>
+                <th>Group</th>
+                <th>Benchmark</th>
+                <th>Verdict</th>
+                <th class="bench-time-header" title="Time against the baseline report; the tolerance is Nanosoldier's threshold">Time ratio</th>
+                <th class="bench-time-header" title="Memory against the baseline report">Memory ratio</th>
+            </tr>`;
+  const since = apiSince(getBenchCutoff());
+  const covered = benchVerdicts && (benchVerdicts.since === since || benchVerdicts.since === "" || (since !== "" && benchVerdicts.since < since));
+  if (!covered) {
+    if (!benchVerdictsLoading) {
+      tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading...</td></tr>';
+      benchVerdictsLoading = apiGet("benchmarks/verdicts", { since })
+        .then((d) => {
+          benchVerdicts = { since, verdicts: d.verdicts || [] };
+        })
+        .catch((err) => {
+          console.error("Failed to load verdicts:", err);
+          benchVerdicts = { since, verdicts: [], failed: true };
+        })
+        .finally(() => {
+          benchVerdictsLoading = null;
+          if (benchTableView === "verdicts") renderBenchVerdictsTable();
+        });
+    }
+    return;
+  }
+  const cutoff = getBenchCutoff();
+  const rows = benchVerdicts.verdicts.filter(
+    (v) => benchSelectedGroups.has(v.group) && (!cutoff || new Date(v.date) >= cutoff),
+  );
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6">${benchVerdicts.failed ? "Failed to load verdicts." : "No regressions or improvements flagged for the selected groups and range" + (benchVerdicts.verdicts.length === 0 ? " (verdicts exist for reports parsed from their tarball)" : "") + "."}</td></tr>`;
+    return;
+  }
+  const ratio = (r, tol) => {
+    if (r == null) return "—";
+    const pct = (r - 1) * 100;
+    const cls = pct > 0 ? "bench-delta-pos" : pct < 0 ? "bench-delta-neg" : "";
+    const title = tol != null ? ` title="tolerance ±${(tol * 100).toFixed(0)}%"` : "";
+    return `<span class="${cls}"${title}>${r.toFixed(2)}× (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`;
+  };
+  let html = "";
+  for (const v of rows.slice(0, 500)) {
+    const url = nanosoldierReportUrl("benchmark", v.date_path || v.date);
+    html += `<tr>
+      <td><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(v.date)}</a></td>
+      <td>${escapeHtml(v.group)}</td>
+      <td>${escapeHtml(v.name)}</td>
+      <td class="${v.verdict === "regression" ? "bench-delta-pos" : "bench-delta-neg"}">${escapeHtml(v.verdict)}</td>
+      <td>${ratio(v.time_ratio, v.time_tolerance)}</td>
+      <td>${ratio(v.memory_ratio, v.memory_tolerance)}</td>
+    </tr>`;
+  }
+  if (rows.length > 500) html += `<tr><td colspan="6">${rows.length - 500} more not shown; narrow the range or the groups.</td></tr>`;
+  tbody.innerHTML = html;
 }
 
 function getNotesForBenchmark(group, name) {
@@ -7741,9 +7296,9 @@ function renderBenchRunsTable() {
     html += `<td>${commitDisplay}</td>`;
     html += `<td>${reportDisplay}</td>`;
     html += `<td>${comparisonDisplay}</td>`;
-    html += `<td class="bench-time">${formatTime(row.geomeanMin)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.geomeanMin)}</td>`;
     html += `<td class="bench-delta">${formatBenchDelta(row.deltaMin)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.geomeanMean)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.geomeanMean)}</td>`;
     html += `<td class="bench-delta">${formatBenchDelta(row.deltaMean)}</td>`;
     html += `<td>${fmtCount(row.improved, "bench-runs-improved")}</td>`;
     html += `<td>${fmtCount(row.regressed, "bench-runs-regressed")}</td>`;
@@ -7914,11 +7469,9 @@ async function ensureAllGroupDetail() {
   if (groups.length === 0) return true;
   const results = await Promise.allSettled(
     groups.map((g) =>
-      loadGzipJson(`data/benchmarks/${encodeURIComponent(g)}.json.gz`).then(
-        (d) => {
-          benchGroupDetail[g] = d;
-        },
-      ),
+      fetchBenchGroupDetail(g).then((d) => {
+        if (d) benchGroupDetail[g] = d;
+      }),
     ),
   );
   const failed = results.filter((r) => r.status === "rejected");
@@ -8056,7 +7609,7 @@ async function renderBenchNoisyTable() {
     const noisyNotes = getNotesForBenchmark(row.group, row.name);
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td>${escapeHtml(row.name)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.latest)}</td>`;
     html += `<td class="bench-noise-cell">${formatNoise(row.noise)}</td>`;
     html += `<td>${row.samples}</td>`;
     html += renderNotesCell(noisyNotes);
@@ -8175,10 +7728,10 @@ function renderBenchGroupsTable() {
   if (overall) {
     html += `<tr class="bench-overall-row">`;
     html += `<td><strong>Overall</strong></td>`;
-    html += `<td class="bench-time"><strong>${formatTime(overall.latest)}</strong></td>`;
-    html += `<td class="bench-time">${formatTime(overall.avg)}</td>`;
-    html += `<td class="bench-time">${formatTime(overall.min)}</td>`;
-    html += `<td class="bench-time">${formatTime(overall.max)}</td>`;
+    html += `<td class="bench-time"><strong>${formatBenchValue(overall.latest)}</strong></td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.avg)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.min)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.max)}</td>`;
     html += `<td class="bench-trend"><strong>${formatTrendPct(overall.trend)}</strong></td>`;
     html += `<td></td>`;
     html += `<td></td>`;
@@ -8192,10 +7745,10 @@ function renderBenchGroupsTable() {
     const groupNotes = getNotesForGroup(row.group);
     html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}">`;
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.min)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.max)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.latest)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.avg)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.min)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.max)}</td>`;
     html += `<td class="bench-trend">${formatTrendPct(row.trend)}</td>`;
     html += `<td>${row.count}</td>`;
     html += `<td></td>`;
@@ -8254,10 +7807,10 @@ function renderBenchGroupsTable() {
           html += `<tr class="${detailClass}" data-bench-label="${escapeHtml(row.group + "/" + b.name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(b.name)}" style="cursor: pointer;" title="${escapeHtml(b.name)}">`;
           const benchNotes = getNotesForBenchmark(b.group, b.name);
           html += `<td>${escapeHtml(b.name)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.latest)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.avg)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.min)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.max)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.latest)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.avg)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.min)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.max)}</td>`;
           html += `<td class="bench-trend">${formatTrendPct(b.trend)}</td>`;
           html += `<td></td>`;
           html += `<td class="bench-noise-cell">${formatNoise(b.noise)}</td>`;
@@ -8316,6 +7869,7 @@ function setPackagesTimeRange(val) {
 }
 
 function setPackagesClientType(val) {
+  if (packagesDownloadsData) setTimeout(loadPackagesTop, 0);
   if (val === "all" || val === "user" || val === "ci") {
     packagesClientType = val;
   } else {
@@ -8492,6 +8046,11 @@ function updatePackagesURL() {
   } else {
     url.searchParams.delete("edm");
   }
+  if (packagesPackage) {
+    url.searchParams.set("edpkg", packagesPackage);
+  } else {
+    url.searchParams.delete("edpkg");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -8527,6 +8086,12 @@ function applyPackagesURLParams() {
     const btn = document.getElementById("packages-btn-proportional");
     if (btn) btn.textContent = "Show counts";
   }
+  const edpkg = params.get("edpkg");
+  if (edpkg) {
+    packagesPackage = edpkg.trim();
+    const input = document.getElementById("packages-package");
+    if (input) input.value = packagesPackage;
+  }
   const edm = params.get("edm");
   if (edm === "prerelease-testing" || edm === "minor") {
     packagesViewMode = edm;
@@ -8548,12 +8113,143 @@ function getPackagesFilteredSeries() {
   });
 }
 
+// === Per-package downloads (API only) ===
+let packagesPackage = ""; // the package whose requests are shown, "" for none
+let packagesPackageChart = null;
+let packagesSuggestTimer = null;
+
+function suggestPackagesPackages(value) {
+  clearTimeout(packagesSuggestTimer);
+  const q = (value || "").trim();
+  if (q.length < 2) return;
+  packagesSuggestTimer = setTimeout(async () => {
+    try {
+      const names = await apiGet("downloads/packages", { q });
+      const list = document.getElementById("packages-package-list");
+      if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
+    } catch (err) {
+      console.error("Package suggestions failed:", err);
+    }
+  }, 150);
+}
+
+async function setPackagesPackage(name) {
+  packagesPackage = (name || "").trim();
+  const input = document.getElementById("packages-package");
+  if (input && input.value !== packagesPackage) input.value = packagesPackage;
+  const clear = document.getElementById("packages-package-clear");
+  if (clear) clear.hidden = !packagesPackage;
+  const panel = document.getElementById("packages-package-view");
+  const tableEl = document.getElementById("packages-package-table");
+  updatePackagesURL();
+  if (!packagesPackage) {
+    if (panel) panel.classList.add("view-hidden");
+    if (packagesPackageChart) {
+      packagesPackageChart.destroy();
+      packagesPackageChart = null;
+    }
+    return;
+  }
+  panel.classList.remove("view-hidden");
+  tableEl.innerHTML = '<div class="loading">Loading...</div>';
+  let d;
+  try {
+    d = await apiGet(`downloads/package/${encodeURIComponent(packagesPackage)}`);
+  } catch (err) {
+    console.error("Failed to load the package's requests:", err);
+    tableEl.innerHTML = '<div class="error">Failed to load.</div>';
+    return;
+  }
+  if (d.name !== packagesPackage) return; // superseded
+  renderPackagesPackage(d);
+}
+
+function renderPackagesPackage(d) {
+  const canvas = document.getElementById("packages-package-chart");
+  const tableEl = document.getElementById("packages-package-table");
+  const series = d.series || [];
+  if (packagesPackageChart) {
+    packagesPackageChart.destroy();
+    packagesPackageChart = null;
+  }
+  if (series.length === 0) {
+    tableEl.innerHTML = `<p class="package-panel-help">No successful requests recorded for ${escapeHtml(d.name)}. Per-package requests are kept from the day the database started (the upstream rollup only holds the last few days).</p>`;
+    return;
+  }
+  const isDark = isDarkMode();
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const toPoints = (key) => series.map((s) => ({ x: Date.parse(s.date), y: s[key] }));
+  packagesPackageChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [
+        { label: "User", data: toPoints("user"), borderColor: colors.build, backgroundColor: colors.build, pointRadius: 2, borderWidth: 1.5, tension: 0.1 },
+        { label: "CI", data: toPoints("ci"), borderColor: colors.test, backgroundColor: colors.test, pointRadius: 2, borderWidth: 1.5, tension: 0.1 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true } },
+        title: { display: true, text: `${d.name}: successful package requests per day`, color: textColor },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString()}` } },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
+        y: { beginAtZero: true, ticks: { color: textColor }, grid: { color: gridColor } },
+      },
+    },
+  });
+  const sum = (key, from) => series.slice(from).reduce((n, s) => n + s[key], 0);
+  const week = Math.max(0, series.length - 7);
+  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", 0).toLocaleString()} requests (${sum("user", 0).toLocaleString()} user, ${sum("ci", 0).toLocaleString()} CI); last 7 days ${sum("all", week).toLocaleString()} (${sum("user", week).toLocaleString()} user, ${sum("ci", week).toLocaleString()} CI).</p>`;
+}
+
+// The most requested packages over the last week of data
+async function loadPackagesTop() {
+  const panel = document.getElementById("packages-top");
+  if (!panel) return;
+  let d;
+  try {
+    d = await apiGet("downloads/top", { days: 7, client: packagesClientType === "all" ? "all" : packagesClientType });
+  } catch (err) {
+    console.error("Failed to load the top packages:", err);
+    return;
+  }
+  if (!d.packages || d.packages.length === 0) return;
+  const rows = d.packages
+    .map(
+      (p, i) => `<tr class="clickable" data-name="${escapeHtml(p.name || "")}">
+        <td class="num">${i + 1}</td>
+        <td>${p.name ? escapeHtml(p.name) : `<code title="not in General">${escapeHtml(p.uuid)}</code>`}</td>
+        <td class="num">${p.user.toLocaleString()}</td>
+        <td class="num">${p.ci.toLocaleString()}</td>
+        <td class="num">${p.all.toLocaleString()}</td>
+      </tr>`,
+    )
+    .join("");
+  panel.innerHTML = `
+    <h3>Most requested packages, ${escapeHtml(d.since)} to ${escapeHtml(d.until)} <span class="updated">by ${d.client === "all" ? "all" : d.client} clients</span></h3>
+    <p class="package-panel-help">Successful package requests to the package server, per package, over the last 7 days of data. Click a row for its daily history.</p>
+    <table>
+      <thead><tr><th class="num">#</th><th>Package</th><th class="num">User</th><th class="num">CI</th><th class="num">All</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-name]").forEach((tr) => {
+    tr.onclick = () => tr.dataset.name && setPackagesPackage(tr.dataset.name);
+  });
+  panel.classList.remove("view-hidden");
+}
+
 async function loadPackagesDownloadsData() {
   const loadingEl = document.getElementById("packages-chart-loading");
   try {
-    packagesDownloadsData = await loadGzipJson(
-      "data/packages_downloads_summary.json.gz",
-    );
+    packagesDownloadsData = await apiGet("downloads/summary");
     const series = packagesDownloadsData.series || [];
     packagesDownloadsData.maxDate =
       packagesDownloadsData.maxDate ||
@@ -8568,6 +8264,8 @@ async function loadPackagesDownloadsData() {
     if (loadingEl) loadingEl.style.display = "none";
     populatePackagesMinorFilterOptions();
     updatePackagesDownloadsChart();
+    loadPackagesTop();
+    if (packagesPackage) setPackagesPackage(packagesPackage);
   } catch (err) {
     console.error("Failed to load ecosystem packages downloads:", err);
     if (loadingEl) {
@@ -9256,6 +8954,11 @@ function updatePkgevalURL() {
   } else {
     url.searchParams.delete("pp");
   }
+  if (pkgevalPackage) {
+    url.searchParams.set("pkg", pkgevalPackage);
+  } else {
+    url.searchParams.delete("pkg");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -9275,6 +8978,155 @@ function applyPkgevalURLParams() {
     document.getElementById("pkgeval-btn-proportional").textContent =
       "Show counts";
   }
+  const pkg = params.get("pkg");
+  if (pkg) {
+    pkgevalPackage = pkg.trim();
+    const input = document.getElementById("pkgeval-package");
+    if (input) input.value = pkgevalPackage;
+  }
+}
+
+// === Per-package PkgEval history and failure reasons (API only) ===
+let pkgevalPackage = ""; // the package whose history is shown, "" for none
+let pkgevalPackageData = null; // api/pkgeval/package/<name>
+let pkgevalSuggestTimer = null;
+
+// Datalist suggestions for the package box, debounced
+function suggestPkgevalPackages(value) {
+  clearTimeout(pkgevalSuggestTimer);
+  const q = (value || "").trim();
+  if (q.length < 2) return;
+  pkgevalSuggestTimer = setTimeout(async () => {
+    try {
+      const names = await apiGet("pkgeval/packages", { q });
+      const list = document.getElementById("pkgeval-package-list");
+      if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
+    } catch (err) {
+      console.error("Package suggestions failed:", err);
+    }
+  }, 150);
+}
+
+async function setPkgevalPackage(name) {
+  pkgevalPackage = (name || "").trim();
+  const input = document.getElementById("pkgeval-package");
+  if (input && input.value !== pkgevalPackage) input.value = pkgevalPackage;
+  const clear = document.getElementById("pkgeval-package-clear");
+  if (clear) clear.hidden = !pkgevalPackage;
+  const panel = document.getElementById("pkgeval-package-view");
+  updatePkgevalURL();
+  if (!pkgevalPackage) {
+    pkgevalPackageData = null;
+    if (panel) panel.classList.add("view-hidden");
+    return;
+  }
+  if (panel) {
+    panel.classList.remove("view-hidden");
+    panel.innerHTML = '<div class="loading">Loading...</div>';
+  }
+  try {
+    const d = await apiGet(`pkgeval/package/${encodeURIComponent(pkgevalPackage)}`);
+    if (d.name !== pkgevalPackage) return; // superseded
+    pkgevalPackageData = d;
+  } catch (err) {
+    console.error("Failed to load the package history:", err);
+    if (panel) panel.innerHTML = '<div class="error">Failed to load the package history.</div>';
+    return;
+  }
+  renderPkgevalPackage();
+}
+
+const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
+
+function renderPkgevalPackage() {
+  const panel = document.getElementById("pkgeval-package-view");
+  if (!panel || !pkgevalPackageData) return;
+  const history = (pkgevalPackageData.history || []).filter((h) => h.date);
+  const name = pkgevalPackageData.name;
+  if (history.length === 0) {
+    panel.innerHTML = `<h3>${escapeHtml(name)}</h3><p class="package-panel-help">No per-package results for this name. Package rows exist for the reports fetched into the database (the recent ones); check the spelling against the suggestions.</p>`;
+    return;
+  }
+  const counts = {};
+  for (const h of history) counts[h.status] = (counts[h.status] || 0) + 1;
+  const summary = PKGEVAL_STATUS_ORDER.filter((s) => counts[s])
+    .map((s) => `<span class="pe-${s}">${counts[s]} ${s}</span>`)
+    .join(", ");
+  const strip = history
+    .map((h) => {
+      const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}`;
+      return `<span class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"></span>`;
+    })
+    .join("");
+  // Rows where something changed, newest first, so a long green history
+  // collapses to its transitions
+  const changes = [];
+  let prev = null;
+  for (const h of history) {
+    if (!prev || h.status !== prev.status || (h.reason || "") !== (prev.reason || "") || (h.version || "") !== (prev.version || "")) changes.push(h);
+    prev = h;
+  }
+  changes.reverse();
+  const rows = changes
+    .slice(0, 200)
+    .map((h) => {
+      const url = nanosoldierReportUrl("pkgeval", h.date_path || h.date);
+      return `<tr class="clickable" data-url="${escapeHtml(url)}">
+        <td>${escapeHtml(h.date)}</td>
+        <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
+        <td>${escapeHtml(h.version || "")}</td>
+        <td class="pe-${escapeHtml(h.status)}">${escapeHtml(h.status)}</td>
+        <td class="wrap">${escapeHtml(h.reason || "")}</td>
+        <td class="num">${h.duration_s != null ? formatDuration(h.duration_s) : ""}</td>
+      </tr>`;
+    })
+    .join("");
+  panel.innerHTML = `
+    <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
+    <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
+    <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report.</p>
+    <table>
+      <thead><tr><th>Date</th><th>Julia</th><th>Version</th><th>Status</th><th>Reason</th><th class="num">Duration</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-url]").forEach((tr) => {
+    tr.onclick = () => window.open(tr.dataset.url, "_blank", "noopener");
+  });
+}
+
+// Status and reason counts of the newest report with package rows
+async function loadPkgevalReasons() {
+  const panel = document.getElementById("pkgeval-reasons");
+  if (!panel) return;
+  let d;
+  try {
+    d = await apiGet("pkgeval/reasons");
+  } catch (err) {
+    console.error("Failed to load the failure reasons:", err);
+    return;
+  }
+  if (!d || !d.reasons || d.reasons.length === 0 || !d.date) return;
+  const total = d.reasons.reduce((n, r) => n + r.count, 0);
+  const rows = d.reasons
+    .filter((r) => r.status !== "ok")
+    .map(
+      (r) => `<tr>
+        <td class="pe-${escapeHtml(r.status)}">${escapeHtml(r.status)}</td>
+        <td>${escapeHtml(r.reason || "(none)")}</td>
+        <td class="num">${r.count.toLocaleString()}</td>
+        <td class="num">${((r.count / total) * 100).toFixed(1)}%</td>
+      </tr>`,
+    )
+    .join("");
+  const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
+  panel.innerHTML = `
+    <h3>Why packages did not pass on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
+    <p class="package-panel-help">Nanosoldier's reason for every package that was not ok in the latest report, out of ${total.toLocaleString()} packages. Type a package name above for its own history.</p>
+    <table>
+      <thead><tr><th>Status</th><th>Reason</th><th class="num">Packages</th><th class="num">Share</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.classList.remove("view-hidden");
 }
 
 function getPkgevalFilteredReports() {
@@ -9288,7 +9140,7 @@ function getPkgevalFilteredReports() {
 
 async function loadPkgevalData() {
   try {
-    pkgevalData = await loadGzipJson("data/pkgeval_summary.json.gz");
+    pkgevalData = await apiGet("pkgeval/summary");
 
     const updatedEl = document.getElementById("pkgeval-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
@@ -9297,6 +9149,8 @@ async function loadPkgevalData() {
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
     updatePkgevalTable();
+    loadPkgevalReasons();
+    if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
     document.getElementById("pkgeval-chart-loading").innerHTML =
@@ -9571,7 +9425,7 @@ function highlightPkgevalPoint(date) {
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===
-// data/ttfx_summary.json.gz, from fetch_ttfx.jl: one row per julia-ci TTFX
+// api/ttfx/summary, from fetch_ttfx.jl: one row per julia-ci TTFX
 // job, with each task's per-metric minimum over the job's ABBA blocks as
 // [precompile, load, run, warm] seconds. Failed tasks are in row.failed.
 let ttfxData = null;
@@ -9947,7 +9801,7 @@ function applyTtfxURLParams() {
 async function loadTtfxData() {
   try {
     [ttfxData, ttfxAnnotations] = await Promise.all([
-      loadGzipJson("data/ttfx_summary.json.gz"),
+      apiGet("ttfx/summary"),
       fetch("data/ttfx_annotations.json")
         .then((r) => (r.ok ? r.json() : { annotations: [] }))
         .then((d) => d.annotations || [])
@@ -10579,21 +10433,25 @@ function overviewColors() {
 }
 
 async function loadOverviewSources() {
-  const gz = (url) =>
-    loadGzipJson(url).catch((err) => {
-      console.error(`Failed to load ${url}:`, err);
+  const quiet = (route, params) =>
+    apiGet(route, params).catch((err) => {
+      console.error(`Failed to load ${route}:`, err);
       return null;
     });
-  const [pkgeval, bench, ttfx, packages, agents] = await Promise.all([
-    pkgevalData || gz("data/pkgeval_summary.json.gz"),
-    benchData || gz("data/benchmark_summary.json.gz"),
-    ttfxData || gz("data/ttfx_summary.json.gz"),
-    packagesDownloadsData || gz("data/packages_downloads_summary.json.gz"),
-    fetch("data/agents/latest.json", { cache: "no-cache" })
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
+  // Beyond the tabs' summaries: the latest builds' timing, the failure
+  // reasons of the latest PkgEval report, the week's most requested packages
+  const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
+  const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top] = await Promise.all([
+    pkgevalData || quiet("pkgeval/summary"),
+    benchData || quiet("benchmarks/summary"),
+    ttfxData || quiet("ttfx/summary"),
+    packagesDownloadsData || quiet("downloads/summary"),
+    quiet("agents/latest"),
+    quiet("timing/builds", { since: weekAgo }),
+    quiet("pkgeval/reasons"),
+    quiet("downloads/top", { days: 7, client: "user" }),
   ]);
-  return { pkgeval, bench, ttfx, packages, agents };
+  return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -10902,7 +10760,7 @@ function overviewPkgevalCard(src) {
     title: "PkgEval",
     status,
     description:
-      "Nanosoldier runs the test suite of every registered package against a recent Julia master build, every 2 to 3 days. A package is ok when its tests pass; fail, crash, skip and kill are the other outcomes.",
+      "Nanosoldier tests every registered package against Julia master, every 2 to 3 days.",
     headline: passPct != null ? `${passPct.toFixed(1)}%` : "—",
     headlineLabel: `of ${last.total} packages passing`,
     delta,
@@ -10912,9 +10770,21 @@ function overviewPkgevalCard(src) {
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
       ["Change over a week", change],
+      ["Why packages fail", overviewPkgevalReasons()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The commonest reasons of the latest report with package rows, from the API
+function overviewPkgevalReasons() {
+  const d = overviewSources && overviewSources.reasons;
+  if (!d || !d.reasons || !d.date) return "";
+  const notOk = d.reasons.filter((r) => r.status !== "ok");
+  const total = notOk.reduce((n, r) => n + r.count, 0);
+  if (!total) return "";
+  const top = notOk.slice(0, 4).map((r) => `${escapeHtml(r.reason || r.status)} ${overviewCompact(r.count)}`);
+  return `${overviewTabLink("pkgeval", `${overviewCompact(total)} not ok on ${escapeHtml(d.date)}`)}: ${top.join(", ")}${notOk.length > 4 ? ", …" : ""}`;
 }
 
 function overviewBenchCard(src) {
@@ -10951,6 +10821,8 @@ function overviewBenchCard(src) {
     tab: "benchmarks",
     title: "Performance benchmarks",
     status,
+    description:
+      "Nanosoldier's daily BaseBenchmarks run against Julia master, compared with the previous run.",
     headline: hasCounts ? `${last.report_regressions}` : null,
     headlineLabel: hasCounts
       ? `regressions, ${last.report_improvements} improvements, of ${last.report_total} benchmarks${last.report_baseline_date ? ` against ${escapeHtml(last.report_baseline_date)}` : ""}`
@@ -11043,6 +10915,20 @@ function overviewCICard() {
   }
   rows.push(["Builds in last 24 h", String(buildsLastDay.size)]);
   rows.push(["Job runs this week", `${week.runs}${prior.runs ? `, ${prior.runs} the week before` : ""}`]);
+  // Wall time and queue wait of the week's builds, where the database has them
+  const timed = ((overviewSources && overviewSources.builds) || []).filter((b) => b.pipeline === "julia-ci" && b.wall_s != null);
+  if (timed.length) {
+    const newest = timed[0];
+    const walls = timed.map((b) => b.wall_s);
+    const queues = timed.filter((b) => b.queue_median_s != null).map((b) => b.queue_median_s);
+    rows.push([
+      "Build wall time",
+      `${overviewTabLink("ci-builds", formatDuration(median(walls)))} median over ${timed.length} build${timed.length === 1 ? "" : "s"} this week; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
+    ]);
+    if (queues.length) {
+      rows.push(["Queue wait", `${formatDuration(median(queues))} median job wait this week; latest build ${formatDuration(newest.queue_median_s)}, longest ${formatDuration(newest.queue_max_s)}`]);
+    }
+  }
   // Only jobs still running: the legacy pipelines' jobs keep their last state
   const activeSince = now - PASS_RATE_DAYS * OVERVIEW_DAY_MS;
   const broken = Object.entries(jobBreakages)
@@ -11079,6 +10965,8 @@ function overviewCICard() {
     tab: "ci-timing",
     title: "CI builds",
     status,
+    description:
+      "Buildkite builds and tests of every Julia master commit: pass rates, job times, queue waits.",
     headline: passRate != null ? `${passRate.toFixed(1)}%` : null,
     headlineLabel: passRate != null ? "of master job runs passed this week" : null,
     delta,
@@ -11143,7 +11031,7 @@ function overviewTtfxCard(src) {
     title: "TTFX",
     status,
     description:
-      "Time to first X on every master build: for each Julia-TTFX-Snippets task, the time to precompile its packages from a cleared cache, then to load and to first run the task script in a fresh process, on a macOS aarch64 runner.",
+      "Time to precompile, load and first run a set of packages, measured on every master build.",
     headline: geomean != null ? formatTtfxSeconds(geomean) : null,
     headlineLabel: geomean != null ? `precompile geomean over ${common.length} snippets in the latest build` : null,
     delta,
@@ -11261,6 +11149,8 @@ function overviewPackagesCard(src) {
     tab: "packages",
     title: "Package downloads",
     status,
+    description:
+      "Package installs served by pkg.julialang.org, by client type and Julia version.",
     headline: overviewCompact(week.all),
     headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(maxDate)}`,
     delta,
@@ -11270,9 +11160,18 @@ function overviewPackagesCard(src) {
       ["This week", weekText],
       ["Biggest shift", biggestShift],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${overviewCompact(series[series.length - 1].all)} downloads`],
+      ["Most requested", overviewTopPackages()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The week's most requested packages by users, from the API
+function overviewTopPackages() {
+  const d = overviewSources && overviewSources.top;
+  if (!d || !d.packages || !d.packages.length) return "";
+  const names = d.packages.filter((p) => p.name).slice(0, 5).map((p) => `${escapeHtml(p.name)} ${overviewCompact(p.user)}`);
+  return `${overviewTabLink("packages", "by users this week")}: ${names.join(", ")}`;
 }
 
 function overviewAgentsCard(src) {
@@ -11305,6 +11204,8 @@ function overviewAgentsCard(src) {
     tab: "ci-workers",
     title: "CI workers",
     status,
+    description:
+      "The machines running Julia's CI, and which of them have gone quiet.",
     headline: `${connected.size}`,
     headlineLabel: "agents connected in the latest snapshot",
     donut,
@@ -11615,7 +11516,7 @@ function applyTheme() {
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
-  if (commitsChart) renderCommitsView();
+  if (buildsChart) drawBuildsView();
   if (activeTab === "overview" && overviewSources) drawOverview();
 }
 function cycleTheme() {
