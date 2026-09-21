@@ -12,8 +12,8 @@ The source of truth is a SQLite database on the site's host
 every two hours and the site reads it through a small API. Three ways to get
 at it, depending on what you need:
 
-- **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/` (the
-  same on the beta host at `http://3.82.159.74/db/`), public and read-only.
+- **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/`, public
+  and read-only.
   The schema is `db/schema.sql`. One request per query:
   `curl "https://perf.julialang.org/db/ci-timing.json?sql=SELECT+...&_shape=array"`.
   Bounded by the row limit and the query time limit; for anything heavy,

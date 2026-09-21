@@ -6,14 +6,10 @@ name: Deploy to the ingest host
 # outcome is on /healthz). The AWS role is assumed through GitHub's OIDC
 # provider; no long-lived keys.
 #
-# Runs on push to main once the site is served from AWS. workflow_dispatch
-# only works for workflows on the default branch, so while the beta host is
-# fed from db-migration-plan that branch is listed here too.
-
 on:
   workflow_dispatch:
   push:
-    branches: [main, db-migration-plan]
+    branches: [main]
     paths:
       - 'fetch_*.jl'
       - 'db/**'
