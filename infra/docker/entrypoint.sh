@@ -27,7 +27,7 @@ fetch_all() {
 }
 
 export_all() {
-  julia --color=no --project /app/db/export.jl --out "$export_dir"
+  julia --color=no --project /app/db/export.jl --out "$export_dir" || return 1
   # The hand-maintained files are part of the repo, not the database
   cp /app/data/ttfx_annotations.json /app/data/methodology_changes.json "$export_dir/"
 }

@@ -17,7 +17,7 @@ using SQLite, DBInterface, JSON3, CodecZlib, DataStructures, Dates, Statistics
 const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents"]
 
 function parse_args(args)
-    opts = Dict{String,Any}("db" => Store.DEFAULT_PATH, "out" => nothing, "only" => SOURCES)
+    opts = Dict{String,Any}("db" => Store.db_path(args), "out" => nothing, "only" => SOURCES)
     i = 1
     while i <= length(args)
         a = args[i]
