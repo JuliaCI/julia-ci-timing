@@ -44,7 +44,7 @@ jobs:
             echo "fetch=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed=$(git diff --name-only "$BEFORE" HEAD -- 'fetch_*.jl' .github/workflows/update-timing.yml)
+          changed=$(git diff --name-only "$BEFORE" HEAD -- 'fetch_*.jl' db .github/workflows/update-timing.yml)
           if [[ -n "$changed" ]]; then
             echo "Fetchers changed:"; echo "$changed"
             echo "fetch=true" >> "$GITHUB_OUTPUT"
@@ -63,7 +63,7 @@ jobs:
         with:
           # The branch tip, not the pushed commit: a data commit made while
           # this run was queued would otherwise conflict on the binary files
-          ref: main
+          ref: ${{ github.ref_name }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v3
@@ -73,10 +73,10 @@ jobs:
       - name: Cache Julia packages
         uses: julia-actions/cache@v3
 
-      - name: Cache NanosoldierReports clone
+      - name: Cache NanosoldierReports clones
         uses: actions/cache@v5
         with:
-          path: .cache/NanosoldierReports
+          path: .cache
           key: nanosoldier-reports-${{ github.run_id }}
           restore-keys: |
             nanosoldier-reports-
@@ -85,37 +85,79 @@ jobs:
         run: |
           julia --color=yes --project -e 'using Pkg; Pkg.instantiate()'
 
+      # Until the database lives on its own host (docs/database-migration.md,
+      # stage 1) it is rebuilt from the committed files on every run: the
+      # fetchers write to it and the export renders data/ back.
+      - name: Seed the database from data/
+        run: |
+          julia --color=yes --project db/import_legacy.jl --db ci-timing.sqlite
+
       - name: Fetch timing data
         env:
           BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_timing.jl
 
       - name: Fetch benchmark data
+        env:
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_benchmarks.jl
 
       - name: Fetch pkgeval data
+        env:
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_pkgeval.jl
 
       - name: Fetch package downloads data
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_packages.jl
 
       - name: Fetch TTFX data
         env:
           BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_ttfx.jl
 
       - name: Snapshot Buildkite agents
         env:
           BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+          CI_TIMING_DB: ci-timing.sqlite
         run: |
           julia --color=yes --project fetch_agents.jl
+
+      - name: Render data/ from the database
+        # A failed fetcher left its source as imported, so its files come
+        # out unchanged, as when a file-based fetcher failed
+        if: always()
+        run: |
+          julia --color=yes --project db/export.jl --db ci-timing.sqlite --out data
+
+      - name: Shadow run of the file-based fetchers
+        # Runs main's fetchers on a worktree seeded from the same commit and
+        # diffs their output against the export. Informational: races with
+        # upstream between the two runs show up as differences too.
+        if: always()
+        continue-on-error: true
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --depth=1 origin main
+          git worktree add ../shadow origin/main
+          cd ../shadow
+          julia --color=yes --project -e 'using Pkg; Pkg.instantiate()'
+          for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_agents.jl; do
+            julia --color=yes --project "$f" > "/tmp/shadow-$f.log" 2>&1 || echo "shadow $f failed (see /tmp/shadow-$f.log)"
+          done
+          cd "$GITHUB_WORKSPACE"
+          julia --color=yes --project db/compare.jl ../shadow/data data
 
       - name: Commit updated data
         # A failed fetcher must not discard what the others wrote; the push
@@ -129,16 +171,17 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update timing data"
-            # main may have advanced during the long fetch step. Should a
-            # data commit have landed in between, this run's files (theirs,
+            # The branch may have advanced during the long fetch step. Should
+            # a data commit have landed in between, this run's files (theirs,
             # in rebase terms) win rather than failing the run.
-            git pull --rebase -X theirs origin main
-            git push
+            git pull --rebase -X theirs origin "$GITHUB_REF_NAME"
+            git push origin HEAD:"$GITHUB_REF_NAME"
           fi
 
   deploy-pages:
-    # Always deploy on push, but wait for fetch-and-update if it ran
-    if: always() && (needs.fetch-and-update.result == 'success' || needs.fetch-and-update.result == 'skipped')
+    # Always deploy on push, but wait for fetch-and-update if it ran. Only
+    # main reaches the site: a manual run on another branch stops here.
+    if: always() && github.ref_name == 'main' && (needs.fetch-and-update.result == 'success' || needs.fetch-and-update.result == 'skipped')
     needs: [changes, fetch-and-update]
     runs-on: ubuntu-latest
     environment:

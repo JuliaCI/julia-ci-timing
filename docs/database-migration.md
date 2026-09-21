@@ -3,11 +3,14 @@
 Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
 are folded in below and in `db/schema.sql`.
 
-Status: stage 0 in progress on branch `db-migration-plan`. `db/schema.sql`,
-`db/Store.jl`, `db/import_legacy.jl`, `db/export.jl` and `db/compare.jl` exist and
-the import -> export round trip reproduces `data/` structurally (gate passed
-2026-09-21). Fetchers still write the JSON files; next is switching them to the
-store.
+Status: stage 0 code complete on branch `db-migration-plan` (2026-09-21).
+`db/` holds the schema, store, legacy importer, exporter and the round-trip
+gate, which passes; all six fetchers write to the store. The update workflow
+on the branch seeds a throwaway database from `data/` on every run, fetches
+into it, exports back and commits, with a shadow run of `main`'s file-based
+fetchers diffed against the export in the log. Not yet done: the comparison
+feature deletion, `analysis/fetch_data.jl`, the historical median/std
+backfill (`fetch_benchmarks.jl --backfill-stats`), and everything in stage 1.
 
 ## Where we are
 
@@ -348,6 +351,46 @@ Rules for the database:
   independent fallback for a defined window (say 4 weeks).
 - After the window: delete `data/` except the two hand-maintained files, final
   squash, turn Pages off or leave it as a redirect.
+
+### Raw access for people and agents
+
+The site's own files are not the only way out of the database:
+
+- **Datasette at `/db/`** (stage 1): public, read-only SQL over HTTP with
+  JSON and CSV output, the same thing julia-perf exposes. `curl
+  "https://perf.julialang.org/db/ci-timing.json?sql=SELECT+..."` is enough
+  for a script or an agent; the schema is browsable there too. Bounded by
+  `sql_time_limit_ms` and `max_returned_rows` (raise the row limit for canned
+  queries that need it).
+- **`/data/*.json.gz`**: the extracts keep being published, so anything that
+  reads them today (the `analysis/` scripts, the TTFX skill) keeps working
+  with a URL instead of a checkout.
+- **A daily database snapshot** at `/data/ci-timing.sqlite.zst` (the
+  online-backup copy, compressed): one download and any agent can run
+  arbitrary SQL locally with `sqlite3`, with no load on the host and no row
+  limits. About 50 MB today.
+
+AGENTS.md gets a section pointing at all three once stage 1 is up.
+
+### Protecting julia-perf's database
+
+Nothing here touches julia-perf (JuliaCI/julia-perf, the Benchmarks tab's
+backend): it keeps its own instance, `julia.db`, backup bucket and
+Datasette, and this deployment has its own Terraform state and
+`name_prefix`. Guards worth adding before stage 1, in order of value:
+
+1. Scoped credentials for this work: an IAM role or user whose policy has an
+   explicit `Deny` on every `rustc-perf-*` resource (instance by tag, bucket,
+   ECR repository, IAM role), used for all Terraform and CLI work here. A
+   Deny cannot be overridden by a mistaken plan.
+2. S3 versioning on the julia-perf backup bucket, so an overwritten or
+   deleted `latest.tar.gz` is recoverable (cheap; the archive prefix already
+   has 30-day retention).
+3. A one-off EBS snapshot of the julia-perf root volume before any work in
+   the account starts, as a restore point independent of its own backups.
+4. In julia-perf's own Terraform (their call): `prevent_destroy` on the
+   bucket and `disable_api_termination` on the instance, which needs
+   `deploy.sh` to lift it before an instance replacement.
 
 ### Stage 3: use the database (incremental, tab by tab)
 
