@@ -127,10 +127,13 @@ timing_file(db) = SortedDict("coverage" => coverage(db), "generated_at" => gener
 
 "The API's timing window; `change_seq` is the cursor for the next incremental refresh."
 function timing(db; since="", until="", changed_since=0)
+    # The cursor is read before the rows: an ingest landing in between is
+    # then fetched again by the next refresh rather than skipped for good
+    seq = Store.current_seq(db)
     builds = Dict{String,Any}()
     jobs = timing_jobs(db; since, until, changed_since, builds)
     return OrderedDict(
-        "generated_at" => generated_at(db, "timing"), "change_seq" => Store.current_seq(db),
+        "generated_at" => generated_at(db, "timing"), "change_seq" => seq,
         "since" => since, "until" => until, "builds" => builds, "jobs" => jobs, "coverage" => coverage(db; changed_since))
 end
 

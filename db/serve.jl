@@ -255,14 +255,24 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
                            ".gz" => "application/gzip", ".svg" => "image/svg+xml", ".ndjson" => "application/x-ndjson",
                            ".png" => "image/png", ".ico" => "image/x-icon", ".txt" => "text/plain; charset=utf-8")
 
-# Development only: index.html, assets/ and the tab directories from --site,
-# data/ from --data, like Caddy on the host
-function static(root, path)
+# Development only: what Caddy serves on the host, and nothing else of a
+# checkout (--site is usually the repository, which also holds .git and
+# Terraform state): index.html, favicon.svg, assets/, the tab directories
+# and data/. Paths are resolved before the containment check, so a
+# symbolic link cannot lead outside either.
+const SITE_PATHS = Set(["index.html", "favicon.svg", "assets", "data",
+                        "overview", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "downloads", "pkgeval"])
+
+function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
-    (occursin("..", rel) || occursin('\0', rel)) && return HTTP.Response(400, "bad path")
-    file = joinpath(root, lstrip(rel, '/'))
+    occursin('\0', rel) && return HTTP.Response(400, "bad path")
+    parts = String[String(p) for p in split(rel, '/'; keepempty=false)]
+    isempty(parts) && (parts = ["index.html"])
+    ((allowed === nothing || parts[1] in allowed) && all(p -> p != "." && p != "..", parts)) || return HTTP.Response(404, "not found")
+    file = joinpath(root, parts...)
     isdir(file) && (file = joinpath(file, "index.html"))
     isfile(file) || return HTTP.Response(404, "not found")
+    startswith(realpath(file), realpath(root) * "/") || return HTTP.Response(404, "not found")
     ctype = get(CONTENT_TYPES, lowercase(splitext(file)[2]), "application/octet-stream")
     return HTTP.Response(200, ["Content-Type" => ctype, "Cache-Control" => "no-cache"], read(file))
 end
@@ -275,7 +285,7 @@ function handle(s::Server, req::HTTP.Request)
         elseif path == "/healthz"
             return json_response(200, withdb(Render.health, s))
         elseif s.data !== nothing && startswith(path, "/data/")
-            return static(s.data, path[7:end])
+            return static(s.data, path[6:end]; allowed=nothing)   # the export directory holds only extracts
         elseif s.site !== nothing
             return static(s.site, path)
         end
