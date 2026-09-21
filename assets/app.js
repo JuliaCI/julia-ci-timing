@@ -157,7 +157,6 @@ function refreshAllUI() {
   updateStatsTable();
   updateToolbarButtons();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "commits") renderCommitsView();
   if (ciSubview === "builds") renderBuildsView();
 }
 
@@ -171,12 +170,10 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
 ];
 
 function setCITimingSubview(name, { updateUrl = true } = {}) {
-  if (name !== "jobs" && name !== "workers" && name !== "commits" && name !== "builds")
-    name = "jobs";
+  if (name !== "jobs" && name !== "workers" && name !== "builds") name = "jobs";
   ciSubview = name;
   const isJobs = name === "jobs";
   const isWorkers = name === "workers";
-  const isCommits = name === "commits";
   const isBuilds = name === "builds";
 
   const view = document.getElementById("ci-timing-view");
@@ -190,12 +187,10 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   }
   const workersView = document.getElementById("workers-view");
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
-  const commitsView = document.getElementById("commits-view");
-  if (commitsView) commitsView.classList.toggle("view-hidden", !isCommits);
   const buildsView = document.getElementById("builds-view");
   if (buildsView) buildsView.classList.toggle("view-hidden", !isBuilds);
 
-  // Hide controls that don't apply to the workers/commits views
+  // Hide controls that don't apply to the workers/builds views
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("view-hidden", !isJobs);
@@ -204,7 +199,6 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   if (filterEl) filterEl.classList.toggle("view-hidden", !isWorkers);
 
   if (isWorkers) renderWorkerPresence();
-  if (isCommits) renderCommitsView();
   if (isBuilds) renderBuildsView();
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
@@ -321,6 +315,18 @@ function drawBuildsView() {
       tension: 0.1,
       yAxisID: "y",
     },
+    {
+      label: "Job time (sum, right axis)",
+      data: builds.filter((b) => b.run_total_s != null).map((b) => point(b, b.run_total_s / 3600)),
+      borderColor: colors.regression,
+      backgroundColor: colors.regression,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 1,
+      borderDash: [4, 3],
+      tension: 0.1,
+      yAxisID: "y2",
+    },
   ];
   if (buildsChart) buildsChart.destroy();
   buildsChart = new Chart(canvas.getContext("2d"), {
@@ -341,6 +347,7 @@ function drawBuildsView() {
             },
             label: (ctx) => {
               const b = ctx.raw.build;
+              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs`];
               const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
               if (ctx.datasetIndex === 0) {
                 lines.push(`${b.jobs} jobs, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
@@ -364,6 +371,13 @@ function drawBuildsView() {
           title: { display: true, text: "minutes", color: textColor },
           ticks: { color: textColor },
           grid: { color: gridColor },
+        },
+        y2: {
+          position: "right",
+          beginAtZero: true,
+          title: { display: true, text: "job time, hours", color: textColor },
+          ticks: { color: textColor },
+          grid: { drawOnChartArea: false },
         },
       },
     },
@@ -903,12 +917,7 @@ function renderWorkerPresence() {
   container.innerHTML = parts.join("");
 }
 
-// === Per-commit averages sub-view ===
-// Averages passed platform build/test job durations per master commit,
-// normalizing each job by its own median over the window so the
-// cross-platform mean is insensitive to which platforms ran.
-let commitsChart = null;
-
+// === Builds and the per-run palette ===
 const COMMITS_SERIES_COLORS = {
   // Validated 2-color categorical palette (CVD-safe on both surfaces)
   light: { build: "#0969da", test: "#bc4c00", regression: "#cf222e" },
@@ -920,356 +929,6 @@ function median(values) {
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-// Per-commit cross-platform normalized averages for one category
-// ('build' or 'test'). Returns points sorted by date.
-function computeCommitSeries(category) {
-  const cutoff = getTimeRangeCutoff();
-  const MIN_RUNS_PER_JOB = 8; // below this the job median is unstable
-  const MIN_JOBS_PER_COMMIT = 3;
-
-  // commit -> { dateMs, message, perJob: Map(job -> [normalized]), rawSum, rawN }
-  const commits = new Map();
-
-  for (const [name, job] of Object.entries(data.jobs)) {
-    const { group, type } = classifyJob(name);
-    if (type !== category || !platformOrder.includes(group)) continue;
-
-    const runs = [];
-    for (const r of job.recent || []) {
-      if (getRunState(r) !== "passed" || (r.retry || 0) > 0) continue;
-      const t = runTime(r);
-      if (isNaN(t) || (cutoff && t < cutoff.getTime())) continue;
-      runs.push({ ...r, t });
-    }
-    if (runs.length < MIN_RUNS_PER_JOB) continue;
-    const jobMedian = median(runs.map((r) => r.duration));
-    if (!(jobMedian > 0)) continue;
-
-    for (const r of runs) {
-      let entry = commits.get(r.commit);
-      if (!entry) {
-        entry = {
-          dateMs: r.t,
-          message: "",
-          perJob: new Map(),
-          rawSum: 0,
-          rawN: 0,
-        };
-        commits.set(r.commit, entry);
-      }
-      if (r.t < entry.dateMs) entry.dateMs = r.t;
-      if (!entry.message && r.message && r.message !== "Scheduled build") {
-        entry.message = r.message;
-      }
-      let norms = entry.perJob.get(name);
-      if (!norms) {
-        norms = [];
-        entry.perJob.set(name, norms);
-      }
-      norms.push(r.duration / jobMedian);
-      entry.rawSum += r.duration;
-      entry.rawN++;
-    }
-  }
-
-  const points = [];
-  for (const [commit, e] of commits) {
-    if (e.perJob.size < MIN_JOBS_PER_COMMIT) continue;
-    // Median across jobs so one platform's outlier can't move the point
-    const perJobMeans = [];
-    for (const norms of e.perJob.values()) {
-      perJobMeans.push(norms.reduce((a, b) => a + b, 0) / norms.length);
-    }
-    points.push({
-      commit,
-      x: e.dateMs,
-      y: median(perJobMeans),
-      n: e.perJob.size,
-      rawMean: e.rawSum / e.rawN,
-      message: e.message,
-    });
-  }
-  points.sort((a, b) => a.x - b.x);
-  return points;
-}
-
-// Rolling median over 2*half+1 commits; the trend line that makes step
-// changes visible against the noisy per-commit dots.
-function rollingMedian(points, half = 5) {
-  return points.map((p, i) => ({
-    x: p.x,
-    y: median(
-      points
-        .slice(Math.max(0, i - half), Math.min(points.length, i + half + 1))
-        .map((q) => q.y),
-    ),
-  }));
-}
-
-// Flag points where a sustained shift in the series median starts.
-// Compares the median of the W commits before vs. after each candidate and
-// requires the increase to exceed both a 4% floor and ~3 standard errors of
-// a W-sample median estimated from the local MAD, so single noisy commits
-// and slow drifts are not flagged.
-function detectCommitRegressions(points) {
-  const W = 12;
-  const flagged = new Map(); // index -> pct increase
-  if (points.length < 2 * W + 1) return flagged;
-  const ys = points.map((p) => p.y);
-  let i = W;
-  while (i <= ys.length - W) {
-    const before = ys.slice(i - W, i);
-    const after = ys.slice(i, i + W);
-    const mBefore = median(before);
-    const mAfter = median(after);
-    const residuals = [
-      ...before.map((v) => Math.abs(v - mBefore)),
-      ...after.map((v) => Math.abs(v - mAfter)),
-    ];
-    const sigma = 1.4826 * median(residuals); // MAD -> sigma
-    // std-err of a W-sample median ~ 1.2533*sigma/sqrt(W); difference of
-    // two medians -> *sqrt(2)
-    const threshold = Math.max(
-      0.04 * mBefore,
-      (3.0 * 1.2533 * sigma * Math.sqrt(2)) / Math.sqrt(W),
-    );
-    if (mAfter - mBefore >= threshold) {
-      // The window test fires as soon as the after-window median crosses,
-      // which can be several commits before the actual step. Refine by
-      // scanning forward for the first commit where the series settles on
-      // the slow side of the midpoint (two consecutive slow points, so a
-      // single noisy commit can't claim the flag).
-      const mid = (mBefore + mAfter) / 2;
-      let bestJ = i;
-      for (let j = Math.max(1, i - 2); j < Math.min(ys.length - 1, i + W); j++) {
-        if (ys[j] >= mid && ys[j + 1] >= mid) {
-          bestJ = j;
-          break;
-        }
-      }
-      // Recompute the magnitude at the refined boundary
-      const b2 = median(ys.slice(Math.max(0, bestJ - W), bestJ));
-      const a2 = median(ys.slice(bestJ, bestJ + W));
-      flagged.set(bestJ, ((a2 - b2) / b2) * 100);
-      i = bestJ + W; // skip past this shift so it isn't flagged repeatedly
-    } else {
-      i++;
-    }
-  }
-  return flagged;
-}
-
-function renderCommitsView() {
-  const canvas = document.getElementById("commits-chart");
-  const tableEl = document.getElementById("commits-regressions");
-  if (!canvas || !tableEl) return;
-  if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
-    tableEl.innerHTML = '<div class="loading">Loading data...</div>';
-    return;
-  }
-
-  const isDark = isDarkMode();
-  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
-
-  const datasets = [];
-  const meta = {}; // "datasetIndex-dataIndex" -> point
-  const regressionRows = [];
-
-  // Chart.js needs an rgba() string for the translucent raw dots
-  const hexToRgba = (hex, alpha) => {
-    const v = parseInt(hex.slice(1), 16);
-    return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
-  };
-
-  for (const category of ["build", "test"]) {
-    const points = computeCommitSeries(category);
-    const flagged = detectCommitRegressions(points);
-    const label = category === "build" ? "Build" : "Test";
-    const color = colors[category];
-    const trend = rollingMedian(points);
-
-    // Faint per-commit dots (hoverable/clickable)
-    const dsIdx = datasets.length;
-    datasets.push({
-      label: `${label} (commits)`,
-      data: points,
-      parsing: false,
-      showLine: false,
-      backgroundColor: hexToRgba(color, 0.35),
-      borderColor: "transparent",
-      pointRadius: 2.5,
-      pointHoverRadius: 6,
-      pointHoverBackgroundColor: color,
-    });
-    points.forEach((p, i) => {
-      meta[`${dsIdx}-${i}`] = p;
-    });
-
-    // Rolling-median trend line: this is where step changes are visible
-    datasets.push({
-      label,
-      data: trend,
-      parsing: false,
-      borderColor: color,
-      backgroundColor: color,
-      borderWidth: 2.5,
-      pointRadius: 0,
-      pointHitRadius: 0,
-      pointHoverRadius: 0,
-      tension: 0,
-    });
-
-    const regPoints = [];
-    for (const [i, pct] of flagged) {
-      const p = {
-        ...points[i],
-        y: trend[i].y, // anchor the marker to the trend, not the noisy dot
-        pointY: points[i].y,
-        regressionPct: pct,
-        series: label,
-        // Detection is only certain to ~±1 CI run, so the candidate range
-        // starts two runs back: a GitHub compare of rangeStart...commit then
-        // contains every candidate (compare excludes its left endpoint).
-        rangeStart: i > 1 ? points[i - 2].commit : null,
-      };
-      p.markers = [{ datasetIndex: dsIdx, index: i }];
-      regPoints.push(p);
-      regressionRows.push(p);
-    }
-    if (regPoints.length > 0) {
-      const regIdx = datasets.length;
-      regPoints.forEach((p, i) => p.markers.push({ datasetIndex: regIdx, index: i }));
-      datasets.push({
-        label: `${label} regression`,
-        data: regPoints,
-        parsing: false,
-        showLine: false,
-        pointStyle: "triangle",
-        pointRadius: 9,
-        pointHoverRadius: 11,
-        pointBackgroundColor: color,
-        pointBorderColor: colors.regression,
-        pointBorderWidth: 3,
-      });
-      regPoints.forEach((p, i) => {
-        meta[`${regIdx}-${i}`] = p;
-      });
-    }
-  }
-
-  if (commitsChart) commitsChart.destroy();
-  commitsChart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "nearest", intersect: false },
-      plugins: {
-        legend: {
-          labels: {
-            color: textColor,
-            usePointStyle: true,
-            // Show only the trend lines in the legend
-            filter: (item) =>
-              !item.text.includes("regression") &&
-              !item.text.includes("(commits)"),
-          },
-        },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const m = items.length && meta[`${items[0].datasetIndex}-${items[0].dataIndex}`];
-              return m ? `${m.commit} — ${m.message || "(no message)"}` : "";
-            },
-            label: (ctx) => {
-              const m = meta[`${ctx.datasetIndex}-${ctx.dataIndex}`];
-              if (!m) return null;
-              const series = ctx.dataset.label
-                .replace(" regression", "")
-                .replace(" (commits)", "");
-              const value = m.pointY != null ? m.pointY : m.y;
-              const lines = [
-                `${series}: ${value.toFixed(3)}× median ` +
-                  `(avg ${formatDuration(m.rawMean)} across ${m.n} jobs)`,
-              ];
-              if (m.regressionPct != null) {
-                lines.push(
-                  `⚠ sustained +${m.regressionPct.toFixed(1)}% shift starts near here`,
-                );
-              }
-              return lines;
-            },
-          },
-        },
-      },
-      onClick: (evt, elements) => {
-        if (!elements.length) return;
-        const el = elements[0];
-        const m = meta[`${el.datasetIndex}-${el.index}`];
-        if (m) {
-          window.open(
-            `https://github.com/JuliaLang/julia/commit/${m.commit}`,
-            "_blank",
-            "noopener",
-          );
-        }
-      },
-      scales: {
-        x: timeAxis({ textColor, gridColor }),
-        y: {
-          title: {
-            display: true,
-            text: "duration vs. window median (1.00 = typical)",
-            color: textColor,
-          },
-          ticks: { color: textColor },
-          grid: { color: gridColor },
-        },
-      },
-    },
-  });
-
-  // Regressions table (also the non-color encoding of the highlights)
-  if (regressionRows.length === 0) {
-    tableEl.innerHTML =
-      '<div class="workers-empty">No sustained regressions detected in the selected time range.</div>';
-    return;
-  }
-  regressionRows.sort((a, b) => b.x - a.x);
-  const rows = regressionRows
-    .map((p, i) => {
-      const range = p.rangeStart
-        ? `<a href="https://github.com/JuliaLang/julia/compare/${escapeHtml(p.rangeStart)}...${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.rangeStart)}…${escapeHtml(p.commit)}</code></a>`
-        : `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(p.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(p.commit)}</code></a>`;
-      return `<tr data-row="${i}">
-        <td>${new Date(p.x).toISOString().slice(0, 10)}</td>
-        <td>${range}</td>
-        <td>${escapeHtml(p.series)}</td>
-        <td class="commits-reg-pct">+${p.regressionPct.toFixed(1)}%</td>
-        <td class="commits-reg-msg">${escapeHtml(p.message || "")}</td>
-      </tr>`;
-    })
-    .join("");
-  tableEl.innerHTML = `
-    <h3 class="commits-reg-title">⚠ Detected regressions (sustained shifts)</h3>
-    <p class="commits-reg-help">Each range spans the detection uncertainty (~±1 CI run); the compare link lists every candidate commit. Message shown is the flagged commit's.</p>
-    <div class="commits-reg-table-wrapper">
-    <table class="commits-reg-table" aria-label="Detected timing regressions">
-      <thead><tr><th>Date</th><th>Commit range</th><th>Series</th><th>Change</th><th>Message</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    </div>`;
-  tableEl.querySelectorAll("tr[data-row]").forEach((tr) => {
-    const p = regressionRows[Number(tr.dataset.row)];
-    tr.addEventListener("mouseenter", () => setChartActivePoints(commitsChart, p.markers, p.markers.slice(-1)));
-    tr.addEventListener("mouseleave", () => setChartActivePoints(commitsChart, []));
-  });
 }
 
 function toggleJobsSelection(jobs) {
@@ -2536,7 +2195,6 @@ function setTimeRange(days) {
   updateChart();
   updateStatsTable();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "commits") renderCommitsView();
   if (ciSubview === "builds") renderBuildsView();
   updateURL();
 }
@@ -5698,6 +5356,25 @@ function sortRuns(runs) {
   );
 }
 
+// The API keeps a build's commit, author, message and date once, under
+// pipeline#number; give every run its build's fields back, so the rest of
+// the page sees the shape the files have
+function hydrateTimingRuns(payload) {
+  const builds = payload.builds || {};
+  for (const job of Object.values(payload.jobs || {})) {
+    for (const r of job.recent || []) {
+      const b = builds[`${r.pipeline}#${r.build}`];
+      if (b) {
+        r.commit = b.commit;
+        r.author = b.author;
+        r.message = b.message;
+        r.date = b.date;
+      }
+    }
+  }
+  return payload;
+}
+
 // Upsert the API's jobs into `data.jobs`, run by run
 function mergeTimingRuns(jobs) {
   for (const [name, job] of Object.entries(jobs)) {
@@ -5765,7 +5442,7 @@ async function loadTimingFromApi() {
   try {
     renderMatrixSkeleton();
     const since = apiSince(initialTimingCutoff());
-    const payload = await apiGet("timing/runs", { since });
+    const payload = hydrateTimingRuns(await apiGet("timing/runs", { since }));
     data = { generated_at: payload.generated_at, jobs: payload.jobs, coverage: payload.coverage };
     timingSince = since;
     timingChangeSeq = payload.change_seq;
@@ -5792,7 +5469,7 @@ function ensureTimingWindow() {
   apiGet("timing/runs", { since: wanted, until })
     .then((payload) => {
       if (timingExtending !== wanted) return;
-      mergeTimingRuns(payload.jobs);
+      mergeTimingRuns(hydrateTimingRuns(payload).jobs);
       Object.assign(data.coverage, payload.coverage);
       timingSince = wanted;
       timingExtending = null;
@@ -5813,7 +5490,7 @@ async function refreshTimingFromApi(signal) {
   );
   if (signal.aborted) return;
   if (payload.change_seq !== timingChangeSeq) {
-    mergeTimingRuns(payload.jobs);
+    mergeTimingRuns(hydrateTimingRuns(payload).jobs);
     Object.assign(data.coverage, payload.coverage);
     data.generated_at = payload.generated_at;
     timingChangeSeq = payload.change_seq;
@@ -6111,7 +5788,6 @@ const TAB_URL_MAP = {
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
   "ci-builds": "ci-builds",
-  "ci-commits": "ci-commits",
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
   packages: "ecosystem-downloads",
@@ -6126,7 +5802,6 @@ const TAB_SHORT_PATH = {
   benchmarks: "/history",
   "ci-timing": "/timing",
   "ci-builds": "/builds",
-  "ci-commits": "/commits",
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
   packages: "/downloads",
@@ -6151,7 +5826,6 @@ const LEGACY_TAB_ALIASES = new Set([
   "benchmarks",
   "ci-timing",
   "ci-builds",
-  "ci-commits",
   "ci-workers",
   "packages",
   "pkgeval",
@@ -6167,6 +5841,7 @@ function tabFromURLValue(value) {
     if (tabValue === value) return tabName;
   }
   if (LEGACY_TAB_ALIASES.has(value)) return value;
+  if (value === "ci-commits") return "ci-builds"; // the Commits tab was folded into Builds
   return null;
 }
 
@@ -6284,8 +5959,6 @@ function switchTab(tab, { pushHistory = true } = {}) {
     setCITimingSubview("workers", { updateUrl: false });
   } else if (tab === "ci-builds") {
     setCITimingSubview("builds", { updateUrl: false });
-  } else if (tab === "ci-commits") {
-    setCITimingSubview("commits", { updateUrl: false });
   } else if (tab === "ci-timing") {
     setCITimingSubview("jobs", { updateUrl: false });
   }
@@ -6294,7 +5967,6 @@ function switchTab(tab, { pushHistory = true } = {}) {
   const tabIds = {
     "ci-timing": "tab-ci-timing",
     "ci-builds": "tab-ci-builds",
-    "ci-commits": "tab-ci-commits",
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
     packages: "tab-packages",
@@ -6316,8 +5988,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     group.classList.toggle("active-group", hasActiveTab);
   });
 
-  const isCITab =
-    tab === "ci-timing" || tab === "ci-builds" || tab === "ci-commits" || tab === "ci-workers";
+  const isCITab = tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers";
 
   document
     .getElementById("ci-timing-view")
@@ -11086,7 +10757,11 @@ async function loadOverviewSources() {
     });
   const api = (await probeDataSource()) === "api";
   const load = (route, file) => quiet(api ? apiGet(route) : loadGzipJson(file), api ? route : file);
-  const [pkgeval, bench, ttfx, packages, agents] = await Promise.all([
+  // What only the database has: the latest builds' timing, the failure
+  // reasons of the latest PkgEval report, the week's most requested packages
+  const extra = (route, params) => (api ? quiet(apiGet(route, params), route) : Promise.resolve(null));
+  const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
+  const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top] = await Promise.all([
     pkgevalData || load("pkgeval/summary", "data/pkgeval_summary.json.gz"),
     benchData || load("benchmarks/summary", "data/benchmark_summary.json.gz"),
     ttfxData || load("ttfx/summary", "data/ttfx_summary.json.gz"),
@@ -11096,8 +10771,11 @@ async function loadOverviewSources() {
       : fetch("data/agents/latest.json", { cache: "no-cache" })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
+    extra("timing/builds", { since: weekAgo }),
+    extra("pkgeval/reasons"),
+    extra("downloads/top", { days: 7, client: "user" }),
   ]);
-  return { pkgeval, bench, ttfx, packages, agents };
+  return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -11416,9 +11094,21 @@ function overviewPkgevalCard(src) {
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
       ["Change over a week", change],
+      ["Why packages fail", overviewPkgevalReasons()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The commonest reasons of the latest report with package rows, from the API
+function overviewPkgevalReasons() {
+  const d = overviewSources && overviewSources.reasons;
+  if (!d || !d.reasons || !d.date) return "";
+  const notOk = d.reasons.filter((r) => r.status !== "ok");
+  const total = notOk.reduce((n, r) => n + r.count, 0);
+  if (!total) return "";
+  const top = notOk.slice(0, 4).map((r) => `${escapeHtml(r.reason || r.status)} ${overviewCompact(r.count)}`);
+  return `${overviewTabLink("pkgeval", `${overviewCompact(total)} not ok on ${escapeHtml(d.date)}`)}: ${top.join(", ")}${notOk.length > 4 ? ", …" : ""}`;
 }
 
 function overviewBenchCard(src) {
@@ -11455,6 +11145,8 @@ function overviewBenchCard(src) {
     tab: "benchmarks",
     title: "Performance benchmarks",
     status,
+    description:
+      "Nanosoldier runs the BaseBenchmarks suite (about 9,000 microbenchmarks of the language and standard library) against a Julia master commit most days and compares it with the previous run. The History tab charts the results, the Diff tab compares any two commits.",
     headline: hasCounts ? `${last.report_regressions}` : null,
     headlineLabel: hasCounts
       ? `regressions, ${last.report_improvements} improvements, of ${last.report_total} benchmarks${last.report_baseline_date ? ` against ${escapeHtml(last.report_baseline_date)}` : ""}`
@@ -11547,6 +11239,20 @@ function overviewCICard() {
   }
   rows.push(["Builds in last 24 h", String(buildsLastDay.size)]);
   rows.push(["Job runs this week", `${week.runs}${prior.runs ? `, ${prior.runs} the week before` : ""}`]);
+  // Wall time and queue wait of the week's builds, where the database has them
+  const timed = ((overviewSources && overviewSources.builds) || []).filter((b) => b.pipeline === "julia-ci" && b.wall_s != null);
+  if (timed.length) {
+    const newest = timed[0];
+    const walls = timed.map((b) => b.wall_s);
+    const queues = timed.filter((b) => b.queue_median_s != null).map((b) => b.queue_median_s);
+    rows.push([
+      "Build wall time",
+      `${overviewTabLink("ci-builds", formatDuration(median(walls)))} median over ${timed.length} build${timed.length === 1 ? "" : "s"} this week; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
+    ]);
+    if (queues.length) {
+      rows.push(["Queue wait", `${formatDuration(median(queues))} median job wait this week; latest build ${formatDuration(newest.queue_median_s)}, longest ${formatDuration(newest.queue_max_s)}`]);
+    }
+  }
   // Only jobs still running: the legacy pipelines' jobs keep their last state
   const activeSince = now - PASS_RATE_DAYS * OVERVIEW_DAY_MS;
   const broken = Object.entries(jobBreakages)
@@ -11583,6 +11289,8 @@ function overviewCICard() {
     tab: "ci-timing",
     title: "CI builds",
     status,
+    description:
+      "Every commit to Julia's master branch is built and tested on Buildkite across Linux, macOS, Windows and FreeBSD. The Timing, Builds and Workers tabs track how long the jobs take, how long each build waits and runs, and which machines are doing the work.",
     headline: passRate != null ? `${passRate.toFixed(1)}%` : null,
     headlineLabel: passRate != null ? "of master job runs passed this week" : null,
     delta,
@@ -11765,6 +11473,8 @@ function overviewPackagesCard(src) {
     tab: "packages",
     title: "Package downloads",
     status,
+    description:
+      "Requests served by Julia's package server (pkg.julialang.org), from the public logs: every package install or update by a user or a CI job, split by the Julia version that asked.",
     headline: overviewCompact(week.all),
     headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(maxDate)}`,
     delta,
@@ -11774,9 +11484,18 @@ function overviewPackagesCard(src) {
       ["This week", weekText],
       ["Biggest shift", biggestShift],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${overviewCompact(series[series.length - 1].all)} downloads`],
+      ["Most requested", overviewTopPackages()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The week's most requested packages by users, from the API
+function overviewTopPackages() {
+  const d = overviewSources && overviewSources.top;
+  if (!d || !d.packages || !d.packages.length) return "";
+  const names = d.packages.filter((p) => p.name).slice(0, 5).map((p) => `${escapeHtml(p.name)} ${overviewCompact(p.user)}`);
+  return `${overviewTabLink("packages", "by users this week")}: ${names.join(", ")}`;
 }
 
 function overviewAgentsCard(src) {
@@ -11809,6 +11528,8 @@ function overviewAgentsCard(src) {
     tab: "ci-workers",
     title: "CI workers",
     status,
+    description:
+      "The machines behind Julia's CI: Buildkite agents on the build, test and launch queues (one agent per job on the Julia cluster) and the other queues. Snapshots every couple of hours show which hosts are working and which have gone quiet.",
     headline: `${connected.size}`,
     headlineLabel: "agents connected in the latest snapshot",
     donut,
@@ -12119,7 +11840,7 @@ function applyTheme() {
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
-  if (commitsChart) renderCommitsView();
+  if (buildsChart) drawBuildsView();
   if (activeTab === "overview" && overviewSources) drawOverview();
 }
 function cycleTheme() {
