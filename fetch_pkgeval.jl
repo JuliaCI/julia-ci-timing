@@ -174,7 +174,7 @@ function write_reports!(db, reports)
         path = "by_date/" * summary["date_path"]
         upsert!(rstmt, (path, "daily", summary["date"], sha, summary["version"], summary["total"], summary["ok"],
                         summary["fail"], summary["crash"], summary["skip"], summary["kill"], seq))
-        id = Int(first(DBInterface.execute(db, "SELECT id FROM pkgeval_reports WHERE path = ?", (path,))).id)
+        id = Int(query(db, "SELECT id FROM pkgeval_reports WHERE path = ?", (path,))[1].id)
         for ((status, reason), count) in reasons
             upsert!(reason_stmt, (id, status, reason, count))
         end
@@ -192,7 +192,7 @@ function main(args=ARGS)
     ensure_clone()
 
     all_dates = enumerate_pkgeval_dates()
-    known_dates = Set(String(r.date) for r in DBInterface.execute(db, "SELECT date FROM pkgeval_reports"))
+    known_dates = Set(String(r.date) for r in query(db, "SELECT date FROM pkgeval_reports"))
     new_dates = filter(d -> date_path_to_date(d) ∉ known_dates, all_dates)
     @info "New dates to process" count=length(new_dates) known=length(known_dates)
 

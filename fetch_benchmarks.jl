@@ -217,9 +217,8 @@ sql(x) = x === nothing ? missing : x
 nan_missing(x) = isnan(x) ? missing : x
 
 function report_id(db, path)
-    r = DBInterface.execute(db, "SELECT id FROM bench_reports WHERE path = ?", (path,))
-    row = iterate(r)
-    return row === nothing ? nothing : Int(row[1].id)
+    r = query(db, "SELECT id FROM bench_reports WHERE path = ?", (path,))
+    return isempty(r) ? nothing : Int(r[1].id)
 end
 
 # Write one report: its header row from report.md, then for every parsed
@@ -255,8 +254,8 @@ function write_report!(db, date_path, md, parsed, names, seq)
     for v in md.verdicts
         bid = get(names, (v.grp, v.name), nothing)
         if bid === nothing
-            r = iterate(DBInterface.execute(db, "SELECT id FROM bench_names WHERE grp = ? AND name = ?", (v.grp, v.name)))
-            bid = r === nothing ? nothing : Int(r[1].id)
+            r = query(db, "SELECT id FROM bench_names WHERE grp = ? AND name = ?", (v.grp, v.name))
+            bid = isempty(r) ? nothing : Int(r[1].id)
         end
         bid === nothing && (unmatched += 1; continue)
         upsert!(vstmt, (id, bid, v.time_ratio, v.time_tolerance, v.memory_ratio, v.memory_tolerance, v.verdict))
@@ -313,8 +312,7 @@ function main(args=ARGS)
             stmt = DBInterface.prepare(db, "UPDATE bench_reports SET report_total = ?, report_regressions = ?, report_improvements = ?, " *
                                            "baseline_date = ?, baseline_commit_sha = COALESCE(baseline_commit_sha, ?), change_seq = ? WHERE id = ?")
             backfilled = 0
-            for r in SQLite.Tables.rowtable(DBInterface.execute(db,
-                    "SELECT id, path FROM bench_reports WHERE kind = 'daily' AND (report_total IS NULL OR baseline_date IS NULL)"))
+            for r in query(db, "SELECT id, path FROM bench_reports WHERE kind = 'daily' AND (report_total IS NULL OR baseline_date IS NULL)")
                 date_path = replace(String(r.path), "by_date/" => "")
                 date_path in new_dates && continue
                 md = parse_report_md(by_date_dir, date_path)

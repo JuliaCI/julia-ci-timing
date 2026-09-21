@@ -208,7 +208,7 @@ function extract_builds_and_jobs(builds, pipeline::String)
     return build_rows, job_rows
 end
 
-rows(db, sql, params=()) = SQLite.Tables.rowtable(DBInterface.execute(db, sql, params))
+rows(db, sql, params=()) = query(db, sql, params)
 
 # Builds below this number are fully captured: the oldest build among the
 # newest `lookback` records of the key jobs, per pipeline (records ordered

@@ -13,7 +13,7 @@ module Store
 
 using SQLite, DBInterface, Dates, JSON3, CodecZstd, Statistics
 
-export open_db, db_path, transaction, next_seq!, upsert_stmt, upsert!, getid!,
+export open_db, db_path, transaction, query, next_seq!, upsert_stmt, upsert!, getid!,
        source_run, compress_zst, decompress_zst,
        iso_now, legacy_minute_to_iso, iso_to_legacy_minute, TIMING_SOURCE
 
@@ -34,12 +34,24 @@ function open_db(path::AbstractString=DEFAULT_PATH; create::Bool=true)
         error("database $path does not exist; run db/import_legacy.jl first or pass --bootstrap")
     end
     db = SQLite.DB(path)
-    DBInterface.execute(db, "PRAGMA journal_mode = WAL")
-    DBInterface.execute(db, "PRAGMA synchronous = NORMAL")
-    DBInterface.execute(db, "PRAGMA foreign_keys = ON")
+    # SQLite.execute (not DBInterface.execute) closes its statement at once.
+    # A DBInterface query stays "in progress" until its rows are consumed,
+    # and an unconsumed PRAGMA counts as an active write statement, which
+    # makes the next SAVEPOINT fail.
+    SQLite.execute(db, "PRAGMA journal_mode = WAL")
+    SQLite.execute(db, "PRAGMA synchronous = NORMAL")
+    SQLite.execute(db, "PRAGMA foreign_keys = ON")
     apply_schema!(db)
     return db
 end
+
+"""
+    query(db, sql, params=()) -> Vector{NamedTuple}
+
+Run a SELECT and materialize every row, which also resets the statement.
+Use this rather than `first`/`iterate` on a `DBInterface.execute` result.
+"""
+query(db::SQLite.DB, sql::AbstractString, params=()) = SQLite.Tables.rowtable(DBInterface.execute(db, sql, params))
 
 """
     db_path(args=ARGS) -> String
@@ -61,13 +73,13 @@ function apply_schema!(db::SQLite.DB)
     for stmt in split(body, ';')
         s = strip(stmt)
         isempty(s) && continue
-        DBInterface.execute(db, s)
+        SQLite.execute(db, s)
     end
 end
 
 transaction(f, db::SQLite.DB) = SQLite.transaction(f, db)
 
-meta(db, key) = first(DBInterface.execute(db, "SELECT value FROM meta WHERE key = ?", (key,))).value
+meta(db, key) = query(db, "SELECT value FROM meta WHERE key = ?", (key,))[1].value
 setmeta!(db, key, value) = DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, string(value)))
 
 """
@@ -118,13 +130,12 @@ function getid!(cache::Dict, db::SQLite.DB, table::AbstractString, keycols, keyv
     id = get(cache, k, nothing)
     id === nothing || return id
     where = join(["$c = ?" for c in keycols], " AND ")
-    r = DBInterface.execute(db, "SELECT id FROM $table WHERE $where", k)
-    row = iterate(r)
-    if row === nothing
+    r = query(db, "SELECT id FROM $table WHERE $where", k)
+    if isempty(r)
         DBInterface.execute(db, "INSERT INTO $table ($(join(keycols, ", "))) VALUES ($(join(fill("?", length(keycols)), ", ")))", k)
         id = Int(SQLite.last_insert_rowid(db))
     else
-        id = Int(row[1].id)
+        id = Int(r[1].id)
     end
     cache[k] = id
     return id

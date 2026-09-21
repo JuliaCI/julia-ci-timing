@@ -147,7 +147,7 @@ function record_snapshot!(db, agents, now_time::DateTime)
     snapshot_time = Dates.format(now_time, DATEFMT)
     seq = next_seq!(db)
     first_seen = Dict{String,String}()
-    for r in DBInterface.execute(db, "SELECT name, first_seen FROM agents")
+    for r in query(db, "SELECT name, first_seen FROM agents")
         first_seen[String(r.name)] = r.first_seen === missing ? "" : String(r.first_seen)
     end
     stmt = upsert_stmt(db, "agents", ["name"], AGENT_COLS)
