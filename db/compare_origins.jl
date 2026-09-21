@@ -2,7 +2,7 @@
 # The stage 1 gate of docs/database-migration.md: compare what two origins
 # of the site serve under data/, the Pages build against the AWS host.
 #
-#   julia --project db/compare_origins.jl REFERENCE CANDIDATE [--settle-hours 48] [--max-age-hours 6]
+#   julia --project db/compare_origins.jl REFERENCE CANDIDATE [--settle-hours 48] [--max-age-hours 6] [--max-disk-pct 80]
 #
 # Each side is a base URL (files are read from URL/data/) or a directory
 # holding the same files. The two origins fetch at different times and the
@@ -14,7 +14,8 @@
 # rows, rows only on the candidate and derived fields (per-job stats, the
 # TTFX task list, the download tag list) are counted, not failed. Every
 # candidate file must have been generated within --max-age-hours; agents
-# are checked for freshness only. Exit 1 on any failure.
+# are checked for freshness only. A candidate URL's /healthz must report a
+# disk below --max-disk-pct. Exit 1 on any failure.
 
 using Pkg
 Pkg.activate(dirname(@__DIR__); io=devnull)
@@ -175,6 +176,7 @@ mutable struct Gate
     cand::Side
     cutoff::Date
     max_age::Float64
+    max_disk::Float64
     failed::Int
 end
 
@@ -314,12 +316,31 @@ function gate_agents!(gate)
     end
 end
 
+# The host's own health report: the disk, and each source's last run
+function gate_health!(gate)
+    isdir(gate.cand.base) && return
+    name = "healthz"
+    rep = Report()
+    r = HTTP.get("$(rstrip(gate.cand.base, '/'))/healthz"; status_exception=false, readtimeout=60)
+    if r.status != 200
+        note!(rep, name, "HTTP $(r.status)")
+        report!(gate, name, rep, nothing, nothing)
+        return
+    end
+    h = tojulia(JSON3.read(r.body))
+    disk = get(h, "disk_used_pct", nothing)
+    disk === nothing || disk <= gate.max_disk || note!(rep, name, "disk $(disk)% used")
+    failing = [s for (s, v) in get(h, "sources", Dict()) if get(v, "last_ok", true) == false]
+    isempty(failing) || push!(rep.lines, "info $name: last run failed for " * join(sort(failing), ", "))
+    report!(gate, name, rep, nothing, "disk $(disk === nothing ? "?" : disk)% used")
+end
+
 function parse_args(args)
-    opts = Dict{String,Any}("settle-hours" => 48.0, "max-age-hours" => 6.0)
+    opts = Dict{String,Any}("settle-hours" => 48.0, "max-age-hours" => 6.0, "max-disk-pct" => 80.0)
     positional = String[]
     i = 1
     while i <= length(args)
-        if args[i] in ("--settle-hours", "--max-age-hours")
+        if args[i] in ("--settle-hours", "--max-age-hours", "--max-disk-pct")
             opts[args[i][3:end]] = parse(Float64, args[i + 1])
             i += 2
         else
@@ -327,7 +348,7 @@ function parse_args(args)
             i += 1
         end
     end
-    length(positional) == 2 || error("usage: compare_origins.jl REFERENCE CANDIDATE [--settle-hours H] [--max-age-hours H]")
+    length(positional) == 2 || error("usage: compare_origins.jl REFERENCE CANDIDATE [--settle-hours H] [--max-age-hours H] [--max-disk-pct P]")
     return positional, opts
 end
 
@@ -335,7 +356,7 @@ function run_gate(args)
     (ref, cand), opts = parse_args(args)
     tmp = mktempdir()
     gate = Gate(Side(ref, joinpath(tmp, "reference")), Side(cand, joinpath(tmp, "candidate")),
-                Date(now(UTC) - Hour(round(Int, opts["settle-hours"]))), opts["max-age-hours"], 0)
+                Date(now(UTC) - Hour(round(Int, opts["settle-hours"]))), opts["max-age-hours"], opts["max-disk-pct"], 0)
     println("reference $ref\ncandidate $cand\nsettled before $(gate.cutoff), candidate files at most $(gate.max_age) h old\n")
     gate_timing!(gate)
     gate_benchmarks!(gate)
@@ -343,6 +364,7 @@ function run_gate(args)
     gate_ttfx!(gate)
     gate_packages!(gate)
     gate_agents!(gate)
+    gate_health!(gate)
     println(gate.failed == 0 ? "\nPASS" : "\nFAIL: $(gate.failed) file(s)")
     exit(gate.failed == 0 ? 0 : 1)
 end

@@ -2,8 +2,9 @@ name: Compare origins
 
 # The stage 1 gate of docs/database-migration.md: once a day, check that the
 # AWS host serves every settled row the Pages site does, with fresh files
-# (db/compare_origins.jl). Schedules and workflow_dispatch only run from the
-# default branch; until this lands on main, run it locally:
+# and a disk below 80% (db/compare_origins.jl), and that the latest backup
+# in S3 is under a day old. Schedules and workflow_dispatch only run from
+# the default branch; until this lands on main, run the gate locally:
 #   julia --project db/compare_origins.jl https://perf.julialang.org http://3.82.159.74
 
 on:
@@ -13,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   compare:
@@ -39,6 +41,23 @@ jobs:
           CANDIDATE: ${{ vars.CI_TIMING_SITE_URL || 'http://3.82.159.74' }}
         run: |
           julia --color=no --project db/compare_origins.jl https://perf.julialang.org "$CANDIDATE" | tee report.txt
+
+      - name: Configure AWS credentials (OIDC)
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.CI_TIMING_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Latest backup is under a day old
+        if: always()
+        shell: bash
+        run: |
+          modified=$(aws s3api list-objects-v2 --bucket ci-timing-393686272827-us-east-1-backups \
+            --prefix runtime/latest.tar.gz --query 'Contents[0].LastModified' --output text)
+          age=$(( $(date -u +%s) - $(date -u -d "$modified" +%s) ))
+          echo "latest backup: $modified ($((age / 3600)) h ago)" | tee -a report.txt
+          [ "$age" -lt 86400 ] || { echo "backup older than a day"; exit 1; }
 
       - name: Job summary
         if: always()
