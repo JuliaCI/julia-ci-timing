@@ -45,8 +45,12 @@ end
 # Runs per job, newest first. `since`/`until` bound the build's created_at,
 # `changed_since` selects rows written after that change sequence (an
 # incremental refresh); with `stats` each job also carries the all-time
-# duration statistics the legacy file had.
-function timing_jobs(db; since="", until="", changed_since=0, stats=false)
+# duration statistics the legacy file had. With a `builds` dictionary the
+# runs carry only what is theirs (agent, state, duration) and the build's
+# commit, author, message and date go into it once, keyed pipeline#number:
+# the API's shape, a third the size of the legacy one where every run
+# repeats its build.
+function timing_jobs(db; since="", until="", changed_since=0, stats=false, builds=nothing)
     # Legacy order: date descending, then retry ascending. Number descending
     # settles ties within a pipeline the way the fetcher's merge did; ties
     # across pipelines in the same minute were fetch-order accidents.
@@ -89,11 +93,19 @@ function timing_jobs(db; since="", until="", changed_since=0, stats=false)
             current = name
             empty!(recent); empty!(durations)
         end
-        push!(recent, (
-            agent = String(r.agent_hostname), author = String(r.author), build = Int(r.number),
-            commit = String(r.commit_prefix), date = iso_to_legacy_minute(String(r.created_at)),
-            duration = Float64(r.duration_s), message = String(r.message), pipeline = String(r.pipeline),
-            retry = Int(r.retry), state = String(r.state)))
+        if builds === nothing
+            push!(recent, (
+                agent = String(r.agent_hostname), author = String(r.author), build = Int(r.number),
+                commit = String(r.commit_prefix), date = iso_to_legacy_minute(String(r.created_at)),
+                duration = Float64(r.duration_s), message = String(r.message), pipeline = String(r.pipeline),
+                retry = Int(r.retry), state = String(r.state)))
+        else
+            key = "$(r.pipeline)#$(r.number)"
+            haskey(builds, key) || (builds[key] = (commit = String(r.commit_prefix), author = String(r.author),
+                                                    message = String(r.message), date = iso_to_legacy_minute(String(r.created_at))))
+            push!(recent, (agent = String(r.agent_hostname), build = Int(r.number), duration = Float64(r.duration_s),
+                           pipeline = String(r.pipeline), retry = Int(r.retry), state = String(r.state)))
+        end
         push!(durations, Float64(r.duration_s))
     end
     flush!()
@@ -114,10 +126,13 @@ timing_file(db) = SortedDict("coverage" => coverage(db), "generated_at" => gener
                              "jobs" => timing_jobs(db; stats=true))
 
 "The API's timing window; `change_seq` is the cursor for the next incremental refresh."
-timing(db; since="", until="", changed_since=0) = OrderedDict(
-    "generated_at" => generated_at(db, "timing"), "change_seq" => Store.current_seq(db),
-    "since" => since, "until" => until,
-    "jobs" => timing_jobs(db; since, until, changed_since), "coverage" => coverage(db; changed_since))
+function timing(db; since="", until="", changed_since=0)
+    builds = Dict{String,Any}()
+    jobs = timing_jobs(db; since, until, changed_since, builds)
+    return OrderedDict(
+        "generated_at" => generated_at(db, "timing"), "change_seq" => Store.current_seq(db),
+        "since" => since, "until" => until, "builds" => builds, "jobs" => jobs, "coverage" => coverage(db; changed_since))
+end
 
 seconds_between(a, b) = (a === missing || b === missing) ? nothing : round((DateTime(String(b), Store.ISO_SECONDS) - DateTime(String(a), Store.ISO_SECONDS)).value / 1000; digits=1)
 
@@ -162,18 +177,15 @@ date_path(path) = replace(path, "by_date/" => "")
 
 const BENCH_METRICS = Dict("time" => "time_ns", "gctime" => "gctime_ns", "memory" => "memory_bytes", "allocs" => "allocs")
 
-# Per (report, group, statistic) geomean and count of a metric. Time comes
-# from the summary rows the fetcher writes; the others are aggregated from
-# the results (positive values only, as a geomean needs), which is a scan
-# of the whole table and is what the API's cache is for.
+const BENCH_GROUP_COLUMNS = Dict("time" => ("geomean_ns", "count"), "gctime" => ("gctime_geomean_ns", "gctime_count"),
+                                 "memory" => ("memory_geomean_bytes", "memory_count"), "allocs" => ("allocs_geomean", "allocs_count"))
+
+# Per (report, group, statistic) geomean and count of a metric, as the
+# fetcher summarized them
 function bench_group_geomeans(db, metric)
-    if metric == "time"
-        return rows(db, "SELECT report_id, grp, stat, geomean_ns AS geomean, count FROM bench_report_groups WHERE stat IN ('minimum', 'mean')")
-    end
-    column = BENCH_METRICS[metric]
-    return rows(db, "SELECT r.report_id, n.grp, r.stat, exp(avg(ln(r.$column))) AS geomean, count(*) AS count " *
-                    "FROM bench_results r JOIN bench_names n ON n.id = r.bench_id " *
-                    "WHERE r.stat IN ('minimum', 'mean') AND r.$column > 0 GROUP BY r.report_id, n.grp, r.stat")
+    geomean, count = BENCH_GROUP_COLUMNS[metric]
+    return rows(db, "SELECT report_id, grp, stat, $geomean AS geomean, $count AS count FROM bench_report_groups " *
+                    "WHERE stat IN ('minimum', 'mean') AND $count > 0")
 end
 
 function bench_summary(db; metric="time")
