@@ -3,14 +3,18 @@
 Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
 are folded in below and in `db/schema.sql`.
 
-Status: stage 0 code complete on branch `db-migration-plan` (2026-09-21).
-`db/` holds the schema, store, legacy importer, exporter and the round-trip
-gate, which passes; all six fetchers write to the store. The update workflow
-on the branch seeds a throwaway database from `data/` on every run, fetches
-into it, exports back and commits, with a shadow run of `main`'s file-based
-fetchers diffed against the export in the log. Not yet done: the comparison
-feature deletion, `analysis/fetch_data.jl`, the historical median/std
-backfill (`fetch_benchmarks.jl --backfill-stats`), and everything in stage 1.
+Status (2026-09-21, evening): stage 1 duplicate is live at http://3.82.159.74
+(no hostname yet) from branch `db-migration-plan`. `infra/terraform` is applied
+in the julia-perf-website-prod account as the `ci-timing` profile; the host
+restored the seed backup, every fetcher has run on it, the export renders
+`/data/*`, `/healthz` reports per-source success, `/db/` is Datasette over
+the live database, `/data/ci-timing.sqlite.gz` is the snapshot, and
+`.github/workflows/deploy.yml` builds and deploys on push to the branch.
+Not yet done: a hostname and HTTPS (`site_hostname` plus a DNS record), the
+daily Pages-vs-host diff job (stage 1 gate), starting the ingest with
+`--no-block` from `ci-timing-deploy`, the comparison feature deletion,
+`analysis/fetch_data.jl`, the historical median/std backfill, the AGENTS.md
+raw-access section, and everything in stage 2.
 
 ## Where we are
 
