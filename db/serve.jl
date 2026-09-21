@@ -10,11 +10,20 @@
 #   /api/timing/runs?since=&until=&changed_since=  jobs -> recent runs (window on the
 #                                               build's created_at; changed_since is
 #                                               the change_seq cursor of a refresh)
-#   /api/benchmarks/summary                     benchmark_summary.json.gz
-#   /api/benchmarks/groups/<group>?since=       benchmarks/<group>.json.gz, windowed
+#   /api/timing/builds?since=                   builds with wall time and queue waits
+#   /api/benchmarks/summary?metric=             benchmark_summary.json.gz; metric is time
+#                                               (default), gctime, memory or allocs
+#   /api/benchmarks/groups/<group>?since=&metric=  benchmarks/<group>.json.gz, windowed
+#   /api/benchmarks/verdicts?since=             Nanosoldier's regressions and improvements
 #   /api/pkgeval/summary                        pkgeval_summary.json.gz
+#   /api/pkgeval/packages?q=                    package names starting with q
+#   /api/pkgeval/package/<name>                 one package's status on every report
+#   /api/pkgeval/reasons?path=                  status and reason counts of a report (latest by default)
 #   /api/ttfx/summary?since=                    ttfx_summary.json.gz, windowed
 #   /api/downloads/summary                      packages_downloads_summary.json.gz
+#   /api/downloads/packages?q=                  registry names starting with q
+#   /api/downloads/package/<name>               one package's daily requests
+#   /api/downloads/top?days=&client=            most requested packages
 #   /api/agents/latest                          agents/latest.json
 #   /api/agents/snapshots?since=                the history-*.ndjson lines, as an array
 #
@@ -119,6 +128,12 @@ function status(db)
     return Dict("change_seq" => Store.current_seq(db), "generated_at" => sources, "server_time" => Store.iso_now())
 end
 
+function bench_metric(params)
+    metric = get(params, "metric", "time")
+    haskey(Render.BENCH_METRICS, metric) || throw(BadRequest("metric must be one of " * join(sort(collect(keys(Render.BENCH_METRICS))), ", ")))
+    return metric
+end
+
 # path segments after /api/ and the query parameters -> the rendered value
 function render(db, segments, params)
     if segments == ["status"]
@@ -126,18 +141,39 @@ function render(db, segments, params)
     elseif segments == ["timing", "runs"]
         return Render.timing(db; since=instant(params, "since"), until=instant(params, "until"),
                              changed_since=cursor(params, "changed_since"))
+    elseif segments == ["timing", "builds"]
+        return Render.timing_builds(db; since=instant(params, "since"))
     elseif segments == ["benchmarks", "summary"]
-        return Render.bench_summary(db)
+        return Render.bench_summary(db; metric=bench_metric(params))
     elseif length(segments) == 3 && segments[1:2] == ["benchmarks", "groups"]
         grp = segments[3]
         grp in Render.bench_groups(db) || return nothing
-        return Render.bench_group(db, grp; since=instant(params, "since"))
+        return Render.bench_group(db, grp; since=instant(params, "since"), metric=bench_metric(params))
+    elseif segments == ["benchmarks", "verdicts"]
+        return Render.bench_verdicts(db; since=instant(params, "since"))
     elseif segments == ["pkgeval", "summary"]
         return Render.pkgeval(db)
+    elseif segments == ["pkgeval", "packages"]
+        return Render.pkgeval_packages(db, get(params, "q", ""))
+    elseif length(segments) == 3 && segments[1:2] == ["pkgeval", "package"]
+        return Render.pkgeval_package(db, segments[3])
+    elseif segments == ["pkgeval", "reasons"]
+        path = get(params, "path", "")
+        (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
+        return Render.pkgeval_reasons(db, path)
     elseif segments == ["ttfx", "summary"]
         return Render.ttfx(db; since=instant(params, "since"))
     elseif segments == ["downloads", "summary"]
         return Render.downloads(db)
+    elseif segments == ["downloads", "packages"]
+        return Render.download_packages(db, get(params, "q", ""))
+    elseif length(segments) == 3 && segments[1:2] == ["downloads", "package"]
+        return Render.download_package(db, segments[3])
+    elseif segments == ["downloads", "top"]
+        days = cursor(params, "days")
+        client = get(params, "client", "user")
+        client in ("user", "ci", "all") || throw(BadRequest("client must be user, ci or all"))
+        return Render.download_top(db; days=days == 0 ? 7 : min(days, 366), client)
     elseif segments == ["agents", "latest"]
         return Render.agents_latest(db)
     elseif segments == ["agents", "snapshots"]
@@ -258,7 +294,15 @@ function warm_up(s::Server)
                     (["ttfx", "summary"], Dict("since" => since)),
                     (["downloads", "summary"], Dict()),
                     (["agents", "latest"], Dict()),
-                    (["agents", "snapshots"], Dict("since" => since)))
+                    (["agents", "snapshots"], Dict("since" => since)),
+                    (["timing", "builds"], Dict("since" => since)),
+                    (["benchmarks", "verdicts"], Dict("since" => since)),
+                    (["pkgeval", "packages"], Dict("q" => "A")),
+                    (["pkgeval", "package", "Example"], Dict()),
+                    (["pkgeval", "reasons"], Dict()),
+                    (["downloads", "packages"], Dict("q" => "A")),
+                    (["downloads", "package", "Example"], Dict()),
+                    (["downloads", "top"], Dict("days" => "7")))
                 gzip(Vector{UInt8}(JSON3.write(render(db, segments, Dict{String,String}(params)))))
             end
             groups = Render.bench_groups(db)

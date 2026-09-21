@@ -119,20 +119,72 @@ timing(db; since="", until="", changed_since=0) = OrderedDict(
     "since" => since, "until" => until,
     "jobs" => timing_jobs(db; since, until, changed_since), "coverage" => coverage(db; changed_since))
 
+seconds_between(a, b) = (a === missing || b === missing) ? nothing : round((DateTime(String(b), Store.ISO_SECONDS) - DateTime(String(a), Store.ISO_SECONDS)).value / 1000; digits=1)
+
+# Builds with their wall time and the queue wait of their jobs (time from
+# runnable to started), newest first. Only builds fetched from the API have
+# the timestamps; legacy rows are left out.
+function timing_builds(db; since="")
+    where, params = where_clause("b.created_at", since, "")
+    builds = OrderedDict{Int,Any}()
+    for b in rows(db, "SELECT id, pipeline, number, commit_prefix, author, message, state, created_at, started_at, finished_at, web_url " *
+                      "FROM builds b" * where * (isempty(where) ? " WHERE" : " AND") * " b.started_at IS NOT NULL ORDER BY b.created_at DESC", params)
+        builds[Int(b.id)] = OrderedDict{String,Any}(
+            "pipeline" => String(b.pipeline), "build" => Int(b.number), "commit" => String(b.commit_prefix),
+            "author" => String(b.author), "message" => String(b.message), "state" => jstr(b.state),
+            "created_at" => String(b.created_at), "started_at" => jstr(b.started_at), "finished_at" => jstr(b.finished_at),
+            "url" => js(b.web_url), "wall_s" => seconds_between(b.started_at, b.finished_at),
+            "jobs" => 0, "run_total_s" => 0.0, "queue_waits" => Float64[])
+    end
+    isempty(builds) && return Any[]
+    for j in rows(db, "SELECT build_id, duration_s, runnable_at, started_at FROM jobs WHERE build_id IN (SELECT value FROM json_each(?))",
+                  (JSON3.write(collect(keys(builds))),))
+        b = builds[Int(j.build_id)]
+        b["jobs"] += 1
+        b["run_total_s"] += Float64(j.duration_s)
+        w = seconds_between(j.runnable_at, j.started_at)
+        w === nothing || push!(b["queue_waits"], w)
+    end
+    for b in values(builds)
+        w = sort!(b["queue_waits"])
+        b["queue_median_s"] = isempty(w) ? nothing : round(median(w); digits=1)
+        b["queue_max_s"] = isempty(w) ? nothing : w[end]
+        b["queue_total_s"] = round(sum(w; init=0.0); digits=1)
+        b["run_total_s"] = round(b["run_total_s"]; digits=1)
+        delete!(b, "queue_waits")
+    end
+    return collect(values(builds))
+end
+
 # --- benchmarks --------------------------------------------------------------
 
 date_path(path) = replace(path, "by_date/" => "")
 
-function bench_summary(db)
+const BENCH_METRICS = Dict("time" => "time_ns", "gctime" => "gctime_ns", "memory" => "memory_bytes", "allocs" => "allocs")
+
+# Per (report, group, statistic) geomean and count of a metric. Time comes
+# from the summary rows the fetcher writes; the others are aggregated from
+# the results (positive values only, as a geomean needs), which is a scan
+# of the whole table and is what the API's cache is for.
+function bench_group_geomeans(db, metric)
+    if metric == "time"
+        return rows(db, "SELECT report_id, grp, stat, geomean_ns AS geomean, count FROM bench_report_groups WHERE stat IN ('minimum', 'mean')")
+    end
+    column = BENCH_METRICS[metric]
+    return rows(db, "SELECT r.report_id, n.grp, r.stat, exp(avg(ln(r.$column))) AS geomean, count(*) AS count " *
+                    "FROM bench_results r JOIN bench_names n ON n.id = r.bench_id " *
+                    "WHERE r.stat IN ('minimum', 'mean') AND r.$column > 0 GROUP BY r.report_id, n.grp, r.stat")
+end
+
+function bench_summary(db; metric="time")
     reports = rows(db, "SELECT id, date, path, commit_sha, baseline_date, report_total, report_regressions, report_improvements " *
                        "FROM bench_reports WHERE kind = 'daily' ORDER BY date")
     # The files carry the two legacy statistics; median and std stay in the database
-    groups = rows(db, "SELECT report_id, grp, stat, geomean_ns, count FROM bench_report_groups WHERE stat IN ('minimum', 'mean')")
     by_report = Dict{Int,Dict{String,Dict{String,Any}}}()
-    for g in groups
+    for g in bench_group_geomeans(db, metric)
         d = get!(by_report, Int(g.report_id), Dict{String,Dict{String,Any}}())
         e = get!(d, String(g.grp), Dict{String,Any}())
-        e["$(g.stat)_geomean_ns"] = Float64(g.geomean_ns)
+        e["$(g.stat)_geomean_ns"] = Float64(g.geomean)
         e["$(g.stat)_count"] = Int(g.count)
     end
     out = Any[]
@@ -145,15 +197,18 @@ function bench_summary(db)
         r.baseline_date === missing || (e["report_baseline_date"] = String(r.baseline_date))
         push!(out, e)
     end
-    return OrderedDict("generated_at" => generated_at(db, "benchmarks"), "reports" => out)
+    return OrderedDict("generated_at" => generated_at(db, "benchmarks"), "metric" => metric, "reports" => out)
 end
 
 bench_groups(db) = String[String(r.grp) for r in rows(db, "SELECT DISTINCT grp FROM bench_names ORDER BY grp")]
 
 # One group's detail: per statistic, every benchmark's series over the
 # reports that have a summary row for the (group, statistic), aligned with
-# `dates`. `since` bounds the report date.
-function bench_group(db, grp; since="")
+# `dates`. `since` bounds the report date; `metric` picks the estimate
+# (time by default; gctime, memory and allocs exist where the report
+# tarball was parsed, not for rows imported from the legacy files).
+function bench_group(db, grp; since="", metric="time")
+    column = BENCH_METRICS[metric]
     names = rows(db, "SELECT id, name FROM bench_names WHERE grp = ? ORDER BY name", (grp,))
     detail = OrderedDict{String,Any}()
     for stat in ("minimum", "mean")
@@ -172,12 +227,12 @@ function bench_group(db, grp; since="")
         if !isempty(ids)
             # The report list is a JSON array parameter: a window is a few
             # reports out of hundreds, and the primary key serves the lookups
-            for r in DBInterface.execute(db, "SELECT r.report_id, r.bench_id, r.time_ns FROM bench_results r " *
+            for r in DBInterface.execute(db, "SELECT r.report_id, r.bench_id, r.$column AS value FROM bench_results r " *
                                              "WHERE r.stat = ? AND r.bench_id IN (SELECT id FROM bench_names WHERE grp = ?) " *
                                              "AND r.report_id IN (SELECT value FROM json_each(?))", (stat, grp, JSON3.write(ids)))
                 i = get(pos, Int(r.report_id), nothing)
-                i === nothing && continue
-                bench_by_id[Int(r.bench_id)][i] = Float64(r.time_ns)
+                (i === nothing || r.value === missing) && continue
+                bench_by_id[Int(r.bench_id)][i] = Float64(r.value)
             end
         end
         detail[stat] = OrderedDict("benchmarks" => series,
@@ -188,7 +243,60 @@ function bench_group(db, grp; since="")
     return detail
 end
 
+# Nanosoldier's verdicts (report.md) for the daily reports since a date:
+# the benchmarks it flagged as regressions or improvements against the
+# baseline, with the time and memory ratios.
+function bench_verdicts(db; since="")
+    where, params = where_clause("r.date", since, "")
+    out = Any[]
+    for v in rows(db, "SELECT r.date, r.path, r.commit_sha, r.baseline_date, n.grp, n.name, v.verdict, " *
+                      "v.time_ratio, v.time_tolerance, v.memory_ratio, v.memory_tolerance " *
+                      "FROM bench_verdicts v JOIN bench_reports r ON r.id = v.report_id JOIN bench_names n ON n.id = v.bench_id" *
+                      where * (isempty(where) ? " WHERE" : " AND") * " r.kind = 'daily' AND v.verdict IN ('regression', 'improvement') " *
+                      "ORDER BY r.date DESC, n.grp, n.name", params)
+        push!(out, OrderedDict("date" => String(v.date), "date_path" => date_path(String(v.path)), "commit" => String(v.commit_sha),
+                               "baseline_date" => js(v.baseline_date), "group" => String(v.grp), "name" => String(v.name),
+                               "verdict" => String(v.verdict), "time_ratio" => js(v.time_ratio), "time_tolerance" => js(v.time_tolerance),
+                               "memory_ratio" => js(v.memory_ratio), "memory_tolerance" => js(v.memory_tolerance)))
+    end
+    return OrderedDict("generated_at" => generated_at(db, "benchmarks"), "since" => since, "verdicts" => out)
+end
+
 # --- pkgeval -----------------------------------------------------------------
+
+# Package names matching a prefix (case-insensitive), for a search box
+function pkgeval_packages(db, q; limit=25)
+    isempty(q) && return String[]
+    return String[String(r.name) for r in rows(db, "SELECT name FROM packages WHERE name LIKE ? ESCAPE '\\' ORDER BY length(name), name LIMIT ?",
+                                                (replace(q, "%" => "\\%", "_" => "\\_") * "%", limit))]
+end
+
+# One package's status on every daily report that has package rows
+function pkgeval_package(db, name)
+    history = Any[]
+    for r in rows(db, "SELECT r.date, r.path, r.julia_version, p.version, p.status, p.reason, p.duration_s " *
+                      "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN pkgeval_reports r ON r.id = p.report_id " *
+                      "WHERE k.name = ? AND r.kind = 'daily' ORDER BY r.date", (name,))
+        push!(history, OrderedDict("date" => String(r.date), "date_path" => date_path(String(r.path)), "julia" => String(r.julia_version),
+                                   "version" => js(r.version), "status" => String(r.status), "reason" => js(r.reason),
+                                   "duration_s" => js(r.duration_s)))
+    end
+    return OrderedDict("name" => name, "history" => history)
+end
+
+# Status and reason counts of one report (the newest with package rows by default)
+function pkgeval_reasons(db, path="")
+    r = if isempty(path)
+        rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
+                 "(SELECT 1 FROM pkgeval_reasons x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 1")
+    else
+        rows(db, "SELECT id, date, path FROM pkgeval_reports WHERE path = ?", ("by_date/" * path,))
+    end
+    isempty(r) && return nothing
+    reasons = [OrderedDict("status" => String(x.status), "reason" => String(x.reason), "count" => Int(x.count))
+               for x in rows(db, "SELECT status, reason, count FROM pkgeval_reasons WHERE report_id = ? ORDER BY count DESC", (Int(r[1].id),))]
+    return OrderedDict("date" => String(r[1].date), "date_path" => date_path(String(r[1].path)), "reasons" => reasons)
+end
 
 function pkgeval(db)
     reports = Any[]
@@ -279,6 +387,43 @@ function downloads(db)
         "version_stage_mix" => mix("stage", "channels"))
 end
 
+# Registry names matching a prefix, for a search box; only packages with requests
+function download_packages(db, q; limit=25)
+    isempty(q) && return String[]
+    return String[String(r.name) for r in rows(db, "SELECT DISTINCT g.name FROM registry_packages g JOIN dl_package_uuids u ON u.uuid = g.uuid " *
+                                                "WHERE g.name LIKE ? ESCAPE '\\' ORDER BY length(g.name), g.name LIMIT ?",
+                                                (replace(q, "%" => "\\%", "_" => "\\_") * "%", limit))]
+end
+
+counts_row(r) = OrderedDict("all" => Int(r.all), "user" => Int(r.user), "ci" => Int(r.ci))
+
+# Daily successful requests for one package, user and CI clients apart
+function download_package(db, name)
+    series = [OrderedDict("date" => String(r.date), "all" => Int(r.all), "user" => Int(r.user), "ci" => Int(r.ci))
+              for r in rows(db, "SELECT d.date, SUM(d.request_count) AS `all`, " *
+                                "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
+                                "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
+                                "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
+                                "WHERE g.name = ? GROUP BY d.date ORDER BY d.date", (name,))]
+    return OrderedDict("name" => name, "series" => series)
+end
+
+# The most requested packages over the last `days` days of data
+function download_top(db; days=7, limit=50, client="user")
+    last = rows(db, "SELECT MAX(date) AS d FROM dl_packages")
+    (isempty(last) || last[1].d === missing) && return OrderedDict("days" => days, "since" => nothing, "until" => nothing, "packages" => Any[])
+    until = String(last[1].d)
+    since = Dates.format(Date(until) - Day(days - 1), dateformat"yyyy-mm-dd")
+    metric = client == "all" ? "SUM(d.request_count)" : "SUM(CASE WHEN d.client_type = '$client' THEN d.request_count ELSE 0 END)"
+    packages = [OrderedDict("name" => js(r.name), "uuid" => String(r.uuid), "all" => Int(r.all), "user" => Int(r.user), "ci" => Int(r.ci))
+                for r in rows(db, "SELECT g.name, u.uuid, SUM(d.request_count) AS `all`, " *
+                                  "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
+                                  "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
+                                  "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id LEFT JOIN registry_packages g ON g.uuid = u.uuid " *
+                                  "WHERE d.date >= ? AND d.date <= ? GROUP BY u.uuid ORDER BY $metric DESC LIMIT ?", (since, until, limit))]
+    return OrderedDict("days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages)
+end
+
 # --- agents ------------------------------------------------------------------
 
 const AGENT_RETAIN_MONTHS = 12
@@ -323,7 +468,19 @@ end
 
 # --- health --------------------------------------------------------------------
 
-# /healthz for monitoring: the latest run and latest success per source.
+# Percent of the volume holding the database in use (df), or nothing
+function disk_used_pct(db)
+    try
+        lines = split(read(`df -P $(dirname(abspath(db.file)))`, String), '\n'; keepempty=false)
+        length(lines) >= 2 || return nothing
+        return parse(Int, rstrip(split(lines[end])[5], '%'))
+    catch
+        return nothing
+    end
+end
+
+# /healthz for monitoring: the latest run and latest success per source,
+# and the disk.
 function health(db)
     sources = OrderedDict{String,Any}()
     for r in rows(db, "SELECT source, MAX(CASE WHEN ok = 1 THEN finished_at END) AS last_ok_at, MAX(started_at) AS last_run_at " *
@@ -333,7 +490,8 @@ function health(db)
                                                 "last_ok" => last.ok === missing ? nothing : last.ok == 1,
                                                 "last_rows" => js(last.rows_written), "last_error" => js(last.error))
     end
-    return OrderedDict("generated_at" => Store.iso_now(), "change_seq" => Store.current_seq(db), "sources" => sources)
+    return OrderedDict("generated_at" => Store.iso_now(), "change_seq" => Store.current_seq(db),
+                       "disk_used_pct" => disk_used_pct(db), "sources" => sources)
 end
 
 end # module
