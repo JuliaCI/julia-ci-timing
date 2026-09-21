@@ -400,6 +400,15 @@ CREATE TABLE IF NOT EXISTS dl_package_uuids (
     uuid TEXT NOT NULL UNIQUE
 );
 
+-- Names for the uuids, from the General registry's Registry.toml on every
+-- downloads run. A uuid missing here is not in General.
+CREATE TABLE IF NOT EXISTS registry_packages (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT
+);
+CREATE INDEX IF NOT EXISTS registry_packages_name ON registry_packages (name);
+
 -- ~20k rows/day after filtering to successful package requests; upstream
 -- keeps 3 days, so this table is the only history there is.
 CREATE TABLE IF NOT EXISTS dl_packages (
