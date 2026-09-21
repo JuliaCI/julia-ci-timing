@@ -51,6 +51,51 @@ async function loadGzipJson(url, options = {}) {
   const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
   return new Response(decompressed).json();
 }
+
+// === Data source ===
+// The site reads from the API (db/serve.jl, at api/ on the host), which
+// serves the database with a time window, and falls back to the rendered
+// files under data/ where there is no API: the GitHub Pages copy and a plain
+// checkout served statically. Both give the loaders the same shapes.
+const API_BASE = "api";
+let dataSource = null; // "api" | "files", settled by the first probe
+let dataSourceProbe = null;
+let apiStatus = null; // the last api/status payload
+
+function probeDataSource() {
+  if (dataSource) return Promise.resolve(dataSource);
+  if (!dataSourceProbe) {
+    dataSourceProbe = fetch(`${API_BASE}/status`, { cache: "no-cache" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((status) => {
+        if (!status || typeof status.change_seq !== "number") throw new Error("not the API");
+        apiStatus = status;
+        dataSource = "api";
+      })
+      .catch(() => {
+        dataSource = "files";
+      })
+      .then(() => dataSource);
+  }
+  return dataSourceProbe;
+}
+
+// GET an API route; empty parameters are left out of the query
+async function apiGet(path, params = {}, options = {}) {
+  const query = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null && v !== ""),
+  ).toString();
+  const resp = await fetch(`${API_BASE}/${path}${query ? "?" + query : ""}`, {
+    cache: "no-cache",
+    ...options,
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// A window bound for the API, as a UTC day so that everyone asking for the
+// same range shares the server's cache; null (all time) is unbounded
+const apiSince = (date) => (date ? new Date(date).toISOString().slice(0, 10) : "");
 let selectedJobs = new Set();
 let timeRangeDays = DEFAULT_TIME_RANGE;
 let lineType = DEFAULT_LINE_TYPE;
@@ -194,6 +239,13 @@ let agentsDataPromise = null;
 let agentsChart = null;
 
 async function loadAgentsData() {
+  if ((await probeDataSource()) === "api") {
+    const [latest, snapshots] = await Promise.all([
+      apiGet("agents/latest"),
+      apiGet("agents/snapshots"),
+    ]);
+    return { generated_at: latest.generated_at, agents: latest.agents || {}, snapshots };
+  }
   const resp = await fetch("data/agents/latest.json", { cache: "no-cache" });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const latest = await resp.json();
@@ -2308,6 +2360,7 @@ function setTimeRange(days) {
   timeRangeDays = parseInt(days, 10);
   // Clear custom zoom when selecting a preset
   clearCustomZoom();
+  ensureTimingWindow();
   updateHostFilterUI();
   updateChart();
   updateStatsTable();
@@ -2331,6 +2384,7 @@ function setCustomZoom(xMin, xMax, yMin, yMax) {
   customXMax = xMax;
   customYMin = yMin;
   customYMax = yMax;
+  ensureTimingWindow();
   // Update dropdown to show "Custom"
   const select = document.getElementById("time-range");
   select.value = "custom";
@@ -2703,6 +2757,7 @@ function updateChart() {
   const datasets = [];
   chartMetadata = {};
   const cutoff = getTimeRangeCutoff();
+  ensureTimingWindow();
   const showCoverage = hasSelectedCoverageJob();
 
   for (const jobName of selectedArray) {
@@ -5443,7 +5498,164 @@ function timeAgo(dateString) {
   return `${weeks}w ago`;
 }
 
+// === Timing data ===
+// `data` is { generated_at, jobs: { name: { recent: [runs newest first] } },
+// coverage }. From the API it holds the runs of builds created since
+// `timingSince` (a UTC day, "" for all time), extended on demand as the
+// time range widens and never shrunk; refreshes ask for what changed after
+// `timingChangeSeq`. From the files it is the whole extract.
+let timingSince = null;
+let timingChangeSeq = 0;
+let timingExtending = null; // in-flight window extension, keyed by its since
+
 async function loadData() {
+  if ((await probeDataSource()) === "api") return loadTimingFromApi();
+  return loadTimingFromFiles();
+}
+
+const runKey = (r) => `${r.pipeline}#${r.build}/${r.retry || 0}`;
+
+// Newest first, as the export orders runs: date descending, retries in
+// order, higher build number first among ties
+function sortRuns(runs) {
+  return runs.sort(
+    (a, b) =>
+      (b.date < a.date ? -1 : b.date > a.date ? 1 : 0) ||
+      (a.retry || 0) - (b.retry || 0) ||
+      b.build - a.build,
+  );
+}
+
+// Upsert the API's jobs into `data.jobs`, run by run
+function mergeTimingRuns(jobs) {
+  for (const [name, job] of Object.entries(jobs)) {
+    const existing = data.jobs[name];
+    if (!existing) {
+      data.jobs[name] = { recent: sortRuns(job.recent || []) };
+      continue;
+    }
+    if (!job.recent || job.recent.length === 0) continue;
+    const byKey = new Map(existing.recent.map((r) => [runKey(r), r]));
+    for (const r of job.recent) byKey.set(runKey(r), r);
+    existing.recent = sortRuns([...byKey.values()]);
+  }
+}
+
+// The time range the page will show, read before the data arrives (the
+// same sources applyURLParams and populateJobSelector apply afterwards),
+// so the first request already covers it
+function initialTimingCutoff() {
+  const params = new URLSearchParams(window.location.search);
+  const x = params.get("x");
+  if (x) {
+    const xMin = Number(x.split(".")[0]);
+    if (!isNaN(xMin)) return new Date(xMin - 90 * 24 * 60 * 60 * 1000);
+  }
+  // Without a selection in the URL the stored range wins over t=, as in
+  // populateJobSelector
+  let days = DEFAULT_TIME_RANGE;
+  const t = params.get("t");
+  const stored = params.has("s") ? null : loadFromLocalStorage();
+  if (stored && VALID_TIME_RANGES.includes(stored.timeRange)) {
+    days = stored.timeRange;
+  } else if (t !== null && VALID_TIME_RANGES.includes(parseInt(t, 10))) {
+    days = parseInt(t, 10);
+  }
+  if (days === 0) return null;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return cutoff;
+}
+
+function setTimingUpdated() {
+  const updatedEl = document.getElementById("last-updated");
+  updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
+  updatedEl.title = data.generated_at;
+}
+
+function showTimingLoadError() {
+  const retryBtn =
+    '<button class="btn btn-retry" onclick="location.reload()">Retry</button>';
+  document.getElementById("chart-loading").innerHTML =
+    `<span class="error">Failed to load data</span>${retryBtn}`;
+  document.getElementById("job-matrix").innerHTML =
+    `<div class="error">Failed to load ${retryBtn}</div>`;
+  document.getElementById("job-list").innerHTML =
+    `<div class="error">Failed to load jobs ${retryBtn}</div>`;
+  document.getElementById("stats-tbody").innerHTML = `
+                  <tr><td colspan="10" class="error">
+                      Failed to load data. Run <code>julia fetch_timing.jl</code> to generate data. ${retryBtn}
+                  </td></tr>
+              `;
+}
+
+async function loadTimingFromApi() {
+  try {
+    renderMatrixSkeleton();
+    const since = apiSince(initialTimingCutoff());
+    const payload = await apiGet("timing/runs", { since });
+    data = { generated_at: payload.generated_at, jobs: payload.jobs, coverage: payload.coverage };
+    timingSince = since;
+    timingChangeSeq = payload.change_seq;
+    setTimingUpdated();
+    checkStaleData(data.generated_at);
+    populateJobSelector();
+    document.getElementById("chart-loading").style.display = "none";
+    if (activeTab === "overview") renderOverview();
+  } catch (err) {
+    console.error("Failed to load data:", err);
+    showTimingLoadError();
+  }
+}
+
+// Widen the loaded window to the range being shown; the chart redraws when
+// the older runs arrive. A no-op from the files, which hold everything.
+function ensureTimingWindow() {
+  if (dataSource !== "api" || !data || timingSince === null || timingSince === "") return;
+  const wanted = apiSince(getTimeRangeCutoff());
+  if (wanted !== "" && wanted >= timingSince) return;
+  if (timingExtending === wanted) return;
+  timingExtending = wanted;
+  const until = timingSince;
+  apiGet("timing/runs", { since: wanted, until })
+    .then((payload) => {
+      if (timingExtending !== wanted) return;
+      mergeTimingRuns(payload.jobs);
+      Object.assign(data.coverage, payload.coverage);
+      timingSince = wanted;
+      timingExtending = null;
+      populateJobSelector();
+      refreshAllUI();
+    })
+    .catch((err) => {
+      console.error("Failed to extend the timing window:", err);
+      timingExtending = null;
+    });
+}
+
+async function refreshTimingFromApi(signal) {
+  const payload = await apiGet(
+    "timing/runs",
+    { since: timingSince, changed_since: timingChangeSeq },
+    { signal },
+  );
+  if (signal.aborted) return;
+  if (payload.change_seq !== timingChangeSeq) {
+    mergeTimingRuns(payload.jobs);
+    Object.assign(data.coverage, payload.coverage);
+    data.generated_at = payload.generated_at;
+    timingChangeSeq = payload.change_seq;
+    checkStaleData(data.generated_at);
+    // Rebuild all derived state (job matrix/index, colors, pass rates,
+    // breakages, sidebar): new jobs can appear and caches go stale
+    populateJobSelector();
+    refreshAllUI();
+    if (activeTab === "overview") renderOverview();
+  }
+  setTimingUpdated();
+}
+
+async function loadTimingFromFiles() {
   try {
     // Render empty matrix skeleton immediately
     renderMatrixSkeleton();
@@ -5600,19 +5812,7 @@ async function loadData() {
     if (activeTab === "overview") renderOverview();
   } catch (err) {
     console.error("Failed to load data:", err);
-    const retryBtn =
-      '<button class="btn btn-retry" onclick="location.reload()">Retry</button>';
-    document.getElementById("chart-loading").innerHTML =
-      `<span class="error">Failed to load data</span>${retryBtn}`;
-    document.getElementById("job-matrix").innerHTML =
-      `<div class="error">Failed to load ${retryBtn}</div>`;
-    document.getElementById("job-list").innerHTML =
-      `<div class="error">Failed to load jobs ${retryBtn}</div>`;
-    document.getElementById("stats-tbody").innerHTML = `
-                    <tr><td colspan="10" class="error">
-                        Failed to load data. Run <code>julia fetch_timing.jl</code> to generate data. ${retryBtn}
-                    </td></tr>
-                `;
+    showTimingLoadError();
   }
 }
 
@@ -5701,6 +5901,8 @@ async function refreshData() {
   refreshController = new AbortController();
   const signal = refreshController.signal;
   try {
+    if (dataSource === "api") return await refreshTimingFromApi(signal);
+    if (dataSource !== "files") return;
     const newData = await loadGzipJson("data/timing_summary.json.gz", {
       signal,
     });
@@ -6026,6 +6228,9 @@ let benchGroupColors = {};
 let benchExpandedGroups = new Set();
 let benchGroupDetail = {}; // group => fetched detail data
 let benchGroupDetailLoading = {}; // group => in-flight Promise
+// From the API the detail covers reports since this UTC day ("" for all
+// time); widening the range drops it and reloads. The files hold everything.
+let benchDetailSince = null;
 let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 // Whether to draw vertical methodology-change annotations on the chart.
 // Toggled by Notes button hover/focus and while the methodology popup is open.
@@ -6231,9 +6436,31 @@ function applyBenchGroupParams() {
 
 function setBenchTimeRange(value) {
   benchTimeRangeDays = parseInt(value);
+  ensureBenchDetailWindow();
   updateBenchChart();
   updateBenchTable();
   updateBenchURL();
+}
+
+// Fetch one group's detail: from the API for the reports in range, or the
+// whole file
+function fetchBenchGroupDetail(group) {
+  if (dataSource === "api") {
+    return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince });
+  }
+  return loadGzipJson(`data/benchmarks/${encodeURIComponent(group)}.json.gz`);
+}
+
+// Drop windowed detail that no longer covers the range and reload what is
+// selected; in-flight loads for the old window are ignored on arrival
+function ensureBenchDetailWindow() {
+  if (dataSource !== "api" || benchDetailSince === null || benchDetailSince === "") return;
+  const wanted = apiSince(getBenchCutoff());
+  if (wanted !== "" && wanted >= benchDetailSince) return;
+  benchDetailSince = wanted;
+  benchGroupDetail = {};
+  benchGroupDetailLoading = {};
+  for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
 }
 
 function setBenchStatType(value) {
@@ -6399,10 +6626,9 @@ function buildBenchMethodologyAnnotations(isDark) {
 // chart/table redraw when it arrives. No-op if already cached or in-flight.
 function ensureBenchGroupDetailLoaded(group) {
   if (benchGroupDetail[group] || benchGroupDetailLoading[group]) return;
-  benchGroupDetailLoading[group] = loadGzipJson(
-    `data/benchmarks/${encodeURIComponent(group)}.json.gz`,
-  )
+  const request = fetchBenchGroupDetail(group)
     .then((data) => {
+      if (benchGroupDetailLoading[group] !== request) return; // superseded
       benchGroupDetail[group] = data;
       delete benchGroupDetailLoading[group];
       // Only redraw if this group is still selected.
@@ -6413,8 +6639,9 @@ function ensureBenchGroupDetailLoaded(group) {
     })
     .catch((err) => {
       console.error(`Failed to load detail for ${group}:`, err);
-      delete benchGroupDetailLoading[group];
+      if (benchGroupDetailLoading[group] === request) delete benchGroupDetailLoading[group];
     });
+  benchGroupDetailLoading[group] = request;
 }
 
 // Returns the time-range cutoff for a benchmark. Kept as a thin wrapper so
@@ -6450,7 +6677,12 @@ async function loadBenchmarkData() {
     // before the chart computes anything.
     await BenchCore.loadMethodologyChanges();
     updateBenchMethodologyNotesCount();
-    benchData = await loadGzipJson("data/benchmark_summary.json.gz");
+    if ((await probeDataSource()) === "api") {
+      benchData = await apiGet("benchmarks/summary");
+      benchDetailSince = apiSince(getBenchCutoff());
+    } else {
+      benchData = await loadGzipJson("data/benchmark_summary.json.gz");
+    }
 
     document.getElementById("bench-chart-loading").style.display = "none";
 
@@ -6561,9 +6793,7 @@ async function toggleExpandGroup(group) {
 
   if (!benchGroupDetail[group]) {
     try {
-      benchGroupDetail[group] = await loadGzipJson(
-        `data/benchmarks/${encodeURIComponent(group)}.json.gz`,
-      );
+      benchGroupDetail[group] = await fetchBenchGroupDetail(group);
     } catch (err) {
       console.error(`Failed to load detail for ${group}:`, err);
       benchExpandedGroups.delete(group);
@@ -7555,11 +7785,9 @@ async function ensureAllGroupDetail() {
   if (groups.length === 0) return true;
   const results = await Promise.allSettled(
     groups.map((g) =>
-      loadGzipJson(`data/benchmarks/${encodeURIComponent(g)}.json.gz`).then(
-        (d) => {
-          benchGroupDetail[g] = d;
-        },
-      ),
+      fetchBenchGroupDetail(g).then((d) => {
+        benchGroupDetail[g] = d;
+      }),
     ),
   );
   const failed = results.filter((r) => r.status === "rejected");
@@ -8192,9 +8420,10 @@ function getPackagesFilteredSeries() {
 async function loadPackagesDownloadsData() {
   const loadingEl = document.getElementById("packages-chart-loading");
   try {
-    packagesDownloadsData = await loadGzipJson(
-      "data/packages_downloads_summary.json.gz",
-    );
+    packagesDownloadsData =
+      (await probeDataSource()) === "api"
+        ? await apiGet("downloads/summary")
+        : await loadGzipJson("data/packages_downloads_summary.json.gz");
     const series = packagesDownloadsData.series || [];
     packagesDownloadsData.maxDate =
       packagesDownloadsData.maxDate ||
@@ -8929,7 +9158,10 @@ function getPkgevalFilteredReports() {
 
 async function loadPkgevalData() {
   try {
-    pkgevalData = await loadGzipJson("data/pkgeval_summary.json.gz");
+    pkgevalData =
+      (await probeDataSource()) === "api"
+        ? await apiGet("pkgeval/summary")
+        : await loadGzipJson("data/pkgeval_summary.json.gz");
 
     const updatedEl = document.getElementById("pkgeval-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
@@ -9587,8 +9819,9 @@ function applyTtfxURLParams() {
 
 async function loadTtfxData() {
   try {
+    const source = await probeDataSource();
     [ttfxData, ttfxAnnotations] = await Promise.all([
-      loadGzipJson("data/ttfx_summary.json.gz"),
+      source === "api" ? apiGet("ttfx/summary") : loadGzipJson("data/ttfx_summary.json.gz"),
       fetch("data/ttfx_annotations.json")
         .then((r) => (r.ok ? r.json() : { annotations: [] }))
         .then((d) => d.annotations || [])
@@ -10220,19 +10453,23 @@ function overviewColors() {
 }
 
 async function loadOverviewSources() {
-  const gz = (url) =>
-    loadGzipJson(url).catch((err) => {
-      console.error(`Failed to load ${url}:`, err);
+  const quiet = (p, what) =>
+    p.catch((err) => {
+      console.error(`Failed to load ${what}:`, err);
       return null;
     });
+  const api = (await probeDataSource()) === "api";
+  const load = (route, file) => quiet(api ? apiGet(route) : loadGzipJson(file), api ? route : file);
   const [pkgeval, bench, ttfx, packages, agents] = await Promise.all([
-    pkgevalData || gz("data/pkgeval_summary.json.gz"),
-    benchData || gz("data/benchmark_summary.json.gz"),
-    ttfxData || gz("data/ttfx_summary.json.gz"),
-    packagesDownloadsData || gz("data/packages_downloads_summary.json.gz"),
-    fetch("data/agents/latest.json", { cache: "no-cache" })
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
+    pkgevalData || load("pkgeval/summary", "data/pkgeval_summary.json.gz"),
+    benchData || load("benchmarks/summary", "data/benchmark_summary.json.gz"),
+    ttfxData || load("ttfx/summary", "data/ttfx_summary.json.gz"),
+    packagesDownloadsData || load("downloads/summary", "data/packages_downloads_summary.json.gz"),
+    api
+      ? quiet(apiGet("agents/latest"), "agents/latest")
+      : fetch("data/agents/latest.json", { cache: "no-cache" })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
   ]);
   return { pkgeval, bench, ttfx, packages, agents };
 }
