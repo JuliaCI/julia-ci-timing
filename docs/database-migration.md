@@ -12,10 +12,12 @@ the live database, `/data/ci-timing.sqlite.gz` is the snapshot, and
 `.github/workflows/deploy.yml` builds and deploys on push to the branch.
 The stage 1 gate is `db/compare_origins.jl`, run daily by
 `.github/workflows/compare-origins.yml` (from main only: schedules do not
-fire on other branches). Not yet done: a hostname and HTTPS (`site_hostname`
-plus a DNS record), the comparison feature deletion, `analysis/fetch_data.jl`,
-the historical median/std backfill, the AGENTS.md raw-access section, and
-everything in stage 2.
+fire on other branches). Stage 3 is in: the site reads the database through
+`db/serve.jl` (`/api/`, see "Stage 3" below) and falls back to the `/data/`
+files where there is no API, the comparison feature is gone, and
+`analysis/fetch_data.jl` downloads the extracts. Not yet done: a hostname and
+HTTPS (`site_hostname` plus a DNS record, deferred until the cutover), the
+historical median/std backfill, and the stage 2 cutover itself.
 
 ## Where we are
 
@@ -421,16 +423,26 @@ later without changing anything here.
 
 ### Stage 3: use the database (incremental, tab by tab)
 
-- Timing: `/api/timing/runs?since=&until=` for the default 30-day window (~45k
-  rows, low single-digit MB gzipped); refresh via `?updated_since=` with
-  client-side upsert by key, coverage included.
-- Benchmarks by group and date range; packages history past upstream's window;
-  agents as rows.
-- New views the data now supports: queue wait and build wall time on the timing
-  tab, allocation and memory regressions on the benchmarks tab, per-package
-  status history and failure reasons on the PkgEval tab, per-package downloads.
-- Datasette canned queries (`metadata.yml`) first; an HTTP.jl container only where
-  shaping is needed.
+Done (2026-09-21) with an HTTP.jl server rather than Datasette canned queries:
+the benchmark detail alone is 1.2M cells for the `scalar` group, which
+Datasette cannot shape or return in time, and every tab wants the shapes the
+files already had.
+
+- `db/Render.jl` builds those shapes from the database (with a window where
+  the data is large); `db/export.jl` writes them to `data/` and `db/serve.jl`
+  serves them at `/api/` (routes in its header). Responses carry an ETag from
+  the change sequence and are cached gzipped per (request, sequence).
+- Timing: `/api/timing/runs?since=` for the shown range (30 days is ~12k
+  rows, 0.8 MB gzipped, against 11 MB for the file); the range widening
+  fetches the older runs and merges them by (pipeline, build, job, retry);
+  refresh asks for `changed_since=<change_seq>` and upserts. Benchmarks:
+  the summary plus per-group detail windowed on the report date, reloaded
+  when the range widens. The other tabs read their summary in one request.
+- The browser probes `api/status` once: without it (the Pages copy, a
+  static checkout) every loader reads the files as before.
+- Not yet: the new views the data supports (queue wait and build wall time,
+  allocation and memory regressions, per-package status history and
+  failure reasons, per-package downloads).
 
 ## Cost
 
