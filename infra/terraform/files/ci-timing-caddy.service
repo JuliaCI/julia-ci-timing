@@ -1,0 +1,15 @@
+[Unit]
+Description=Caddy: perf.julialang.org static site, /data and /db
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ci-timing-run-caddy
+ExecStop=/usr/bin/docker stop ci-timing-caddy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Dated copy of the latest ci-timing backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ci-timing-archive

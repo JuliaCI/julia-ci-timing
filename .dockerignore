@@ -1,0 +1,10 @@
+.git
+.cache
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/*.gz
+data/benchmarks
+data/agents
+infra/terraform
+docs
