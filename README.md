@@ -35,16 +35,6 @@ Fetched by the Julia scripts in this repo and cached under `data/`:
   `data/agents/history-*.ndjson`, for the Workers tab's live agent table and
   connected-agents-per-queue history
 
-## PR comparison
-
-```bash
-export BUILDKITE_API_TOKEN="your-token"
-julia --project=. compare_build.jl <build_number> [--threshold 10] [--json|--markdown]
-```
-
-Exit codes: `0` no regressions, `1` regressions, `2` error.
-See [ci-timing-check.yml](ci-timing-check.yml) for the GitHub Actions workflow.
-
 ## Related
 
 The "Benchmarks" tab embeds [julia-perf](https://github.com/JuliaCI/julia-perf),
