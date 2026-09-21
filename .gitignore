@@ -17,7 +17,6 @@ Thumbs.db
 *~
 .vscode/
 .idea/
-.julia-repo-cache
 .cache/
 
 # Local database (db/)

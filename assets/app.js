@@ -65,10 +65,6 @@ let customXMax = null; // timestamp or null
 let customYMin = null; // seconds or null
 let customYMax = null; // seconds or null
 
-// === Comparison Mode State ===
-// Format: { build: number, base: number, jobs: { jobName: { duration: seconds, baseline: seconds } } }
-let comparisonData = null;
-
 // === Helper Functions ===
 const isFailedState = (state) => FAILED_STATES.includes(state);
 const getRunState = (run) => run.state || "passed";
@@ -1372,30 +1368,6 @@ function timeAxis({ textColor, gridColor, minorGridColor, tooltipFormat = "yyyy-
 }
 
 /**
- * Standard normal cumulative distribution function approximation.
- * Uses Abramowitz and Stegun's polynomial approximation.
- * @param {number} z - Z-score value
- * @returns {number} Cumulative probability P(Z ≤ z)
- */
-function normalCDF(z) {
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const p = 0.3275911;
-
-  const sign = z < 0 ? -1 : 1;
-  z = Math.abs(z) / Math.sqrt(2);
-
-  const t = 1.0 / (1.0 + p * z);
-  const y =
-    1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-z * z);
-
-  return 0.5 * (1.0 + sign * y);
-}
-
-/**
  * Linear trend of duration over time, with a t-test on the slope and an R²
  * floor. The fit is to one point per build, the median duration of that
  * build's passed runs: retries, and the jobs pooled into the aggregate row,
@@ -2332,144 +2304,6 @@ function applyURLParams() {
   );
 }
 
-// Parse comparison data from URL parameter
-// Format: c=PR:BUILD:BASE:JOB1=DUR1,JOB2=DUR2,...
-// PR is 0 if not a PR build, durations are in seconds
-function parseComparisonParam(param) {
-  if (!param) return null;
-  const parts = param.split(":");
-  if (parts.length < 4) return null;
-
-  const pr = parseInt(parts[0], 10);
-  const build = parseInt(parts[1], 10);
-  const base = parseInt(parts[2], 10);
-  if (isNaN(build) || isNaN(base)) return null;
-
-  const jobsStr = parts.slice(3).join(":"); // Rejoin in case job names had colons
-  const jobs = {};
-  for (const pair of jobsStr.split(",")) {
-    const eqIdx = pair.lastIndexOf("=");
-    if (eqIdx === -1) continue;
-    const jobName = decodeURIComponent(pair.substring(0, eqIdx));
-    const duration = parseFloat(pair.substring(eqIdx + 1));
-    if (!isNaN(duration)) {
-      jobs[jobName] = { duration };
-    }
-  }
-
-  if (Object.keys(jobs).length === 0) return null;
-  return { pr: pr || null, build, base, jobs };
-}
-
-// Apply comparison data from URL param and update UI
-function applyComparisonParam() {
-  const params = new URLSearchParams(window.location.search);
-  const c = params.get("c");
-  comparisonData = parseComparisonParam(c);
-
-  if (comparisonData) {
-    // Populate baseline values from our data
-    for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-      const job = data?.jobs?.[jobName];
-      if (job?.stats?.median_seconds) {
-        jobData.baseline = job.stats.median_seconds;
-      }
-    }
-    updateComparisonBanner();
-  }
-}
-
-// Update the comparison banner UI
-function updateComparisonBanner() {
-  const banner = document.getElementById("comparison-banner");
-  if (!comparisonData) {
-    banner.classList.remove("visible");
-    return;
-  }
-
-  banner.classList.add("visible");
-
-  // Build the title based on PR number availability
-  const title = document.getElementById("comparison-title");
-  const buildLink = `https://buildkite.com/julialang/julia-master/builds/${comparisonData.build}`;
-  const baseLink = `https://buildkite.com/julialang/julia-master/builds/${comparisonData.base}`;
-
-  if (comparisonData.pr) {
-    const prLink = `https://github.com/JuliaLang/julia/pull/${comparisonData.pr}`;
-    // Check if base is significantly older (more than 50 builds behind)
-    const buildDiff = comparisonData.build - comparisonData.base;
-    if (buildDiff > 50) {
-      title.innerHTML = `Comparing <a href="${prLink}" target="_blank" rel="noopener noreferrer">PR #${comparisonData.pr}</a> (<a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a>). Note: the base of the PR branch is old, at <a href="${baseLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.base}</a>`;
-    } else {
-      title.innerHTML = `Comparing <a href="${prLink}" target="_blank" rel="noopener noreferrer">PR #${comparisonData.pr}</a> (<a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a>)`;
-    }
-  } else {
-    title.innerHTML = `Comparing <a href="${buildLink}" target="_blank" rel="noopener noreferrer">build ${comparisonData.build}</a> vs <a href="${baseLink}" target="_blank" rel="noopener noreferrer">base ${comparisonData.base}</a>`;
-  }
-
-  // Calculate summary stats
-  let regressions = 0,
-    improvements = 0,
-    neutral = 0;
-  const threshold = 0.05; // 5% threshold for significance
-
-  for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-    if (!jobData.baseline) continue;
-    const pctDiff = (jobData.duration - jobData.baseline) / jobData.baseline;
-    if (pctDiff > threshold) {
-      regressions++;
-    } else if (pctDiff < -threshold) {
-      improvements++;
-    } else {
-      neutral++;
-    }
-  }
-
-  const summary = document.getElementById("comparison-summary");
-  summary.innerHTML = "";
-
-  if (regressions > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat regression";
-    span.innerHTML = `<span class="comparison-badge regression">↑ ${regressions}</span> slower`;
-    summary.appendChild(span);
-  }
-  if (improvements > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat improvement";
-    span.innerHTML = `<span class="comparison-badge improvement">↓ ${improvements}</span> faster`;
-    summary.appendChild(span);
-  }
-  if (neutral > 0) {
-    const span = document.createElement("span");
-    span.className = "comparison-stat neutral";
-    span.textContent = `${neutral} unchanged`;
-    summary.appendChild(span);
-  }
-
-  // In comparison mode, only select the compared jobs
-  selectedJobs.clear();
-  for (const jobName of Object.keys(comparisonData.jobs)) {
-    if (data?.jobs?.[jobName]) {
-      selectedJobs.add(jobName);
-    }
-  }
-  // Sync the job list UI to reflect the selection
-  syncJobListUI();
-  updateMatrixHighlights();
-}
-
-// Clear comparison mode
-function clearComparison() {
-  comparisonData = null;
-  document.getElementById("comparison-banner").classList.remove("visible");
-  // Remove c param from URL
-  const url = new URL(window.location);
-  url.searchParams.delete("c");
-  history.replaceState(null, "", url);
-  updateChart();
-}
-
 function setTimeRange(days) {
   timeRangeDays = parseInt(days, 10);
   // Clear custom zoom when selecting a preset
@@ -2869,8 +2703,7 @@ function updateChart() {
   const datasets = [];
   chartMetadata = {};
   const cutoff = getTimeRangeCutoff();
-  // Don't show coverage overlay in comparison mode
-  const showCoverage = !comparisonData && hasSelectedCoverageJob();
+  const showCoverage = hasSelectedCoverageJob();
 
   for (const jobName of selectedArray) {
     const jobData = data.jobs[jobName];
@@ -3237,75 +3070,6 @@ function updateChart() {
     }
   }
 
-  // Add comparison mode datasets if active
-  let comparisonDate = null;
-  if (comparisonData) {
-    // Find the base build date to position comparison points
-    let baseBuildDate = null;
-    for (const [jobName, job] of Object.entries(data.jobs)) {
-      for (const run of job.recent || []) {
-        if (run.build === comparisonData.base) {
-          baseBuildDate = new Date(runTime(run));
-          break;
-        }
-      }
-      if (baseBuildDate) break;
-    }
-
-    // If no base build found in data, use now
-    if (!baseBuildDate) baseBuildDate = new Date();
-
-    // Offset comparison points slightly after base build
-    comparisonDate = new Date(baseBuildDate.getTime() + 2 * 60 * 60 * 1000); // +2 hours
-
-    for (const [jobName, jobData] of Object.entries(comparisonData.jobs)) {
-      if (!selectedJobs.has(jobName)) continue;
-      const color = jobColors[jobName] || "#888";
-      const baseline = jobData.baseline || 0;
-      const pctDiff =
-        baseline > 0 ? (jobData.duration - baseline) / baseline : 0;
-      const isRegression = pctDiff > 0.05;
-      const isImprovement = pctDiff < -0.05;
-
-      const dsIdx = datasets.length;
-      datasets.push({
-        label: comparisonData.pr
-          ? `${jobName} (PR #${comparisonData.pr})`
-          : `${jobName} (build ${comparisonData.build})`,
-        data: [{ x: comparisonDate, y: jobData.duration }],
-        borderColor: "transparent",
-        backgroundColor: color,
-        fill: false,
-        showLine: false,
-        pointRadius: 10,
-        pointHoverRadius: 12,
-        pointStyle: isRegression
-          ? "triangle"
-          : isImprovement
-            ? "rectRot"
-            : "star",
-        pointBorderColor: isRegression
-          ? "#cf222e"
-          : isImprovement
-            ? "#1a7f37"
-            : color,
-        pointBackgroundColor: color,
-        pointBorderWidth: 3,
-        yAxisID: "y",
-      });
-      chartMetadata[`${dsIdx}-0`] = {
-        job: jobName,
-        build: comparisonData.build,
-        baseBuild: comparisonData.base,
-        state: "comparison",
-        duration: jobData.duration,
-        baseline: baseline,
-        pctDiff: pctDiff,
-        isComparison: true,
-      };
-    }
-  }
-
   if (chart) chart.destroy();
   highlightActive = false; // Reset highlight state when chart is recreated
 
@@ -3321,10 +3085,6 @@ function updateChart() {
   } else if (timeRangeDays > 0) {
     xMax = Date.now();
     xMin = xMax - timeRangeDays * 24 * 60 * 60 * 1000;
-    // Extend xMax to include comparison points if needed
-    if (comparisonDate && comparisonDate.getTime() > xMax) {
-      xMax = comparisonDate.getTime() + 12 * 60 * 60 * 1000; // +12 hours padding
-    }
   }
   // For "All time" (timeRangeDays === 0), leave undefined to auto-scale
 
@@ -3400,19 +3160,6 @@ function updateChart() {
                 return [
                   `${meta.coverage.toFixed(2)}%`,
                   `Commit: ${meta.commit?.slice(0, 8) || ""}`,
-                ];
-              }
-
-              // Comparison dataset tooltip
-              if (meta.isComparison) {
-                const pctStr = (meta.pctDiff * 100).toFixed(1);
-                const arrow =
-                  meta.pctDiff > 0 ? "↑" : meta.pctDiff < 0 ? "↓" : "";
-                const sign = meta.pctDiff > 0 ? "+" : "";
-                return [
-                  `PR Build #${meta.build}: ${formatDuration(meta.duration)}`,
-                  `Baseline (median): ${formatDuration(meta.baseline)}`,
-                  `${arrow} ${sign}${pctStr}% vs baseline`,
                 ];
               }
 
@@ -4009,11 +3756,6 @@ function highlightChartDataset(jobColor, agent = null, yAxisID = "y") {
   chart.data.datasets.forEach((ds, dsIdx) => {
     // Match by the original border color (unique per job)
     const isJobMatch = ds._originalBorderColor === jobColor;
-    // Check if this is a comparison point dataset for the highlighted job
-    const comparisonMeta = chartMetadata[`${dsIdx}-0`];
-    const isComparisonForJob =
-      comparisonMeta?.isComparison &&
-      jobColors[comparisonMeta.job] === jobColor;
     const hasPointsArray =
       Array.isArray(ds._originalPointRadius) &&
       ds._originalPointRadius.some((r) => r > 0);
@@ -4027,8 +3769,8 @@ function highlightChartDataset(jobColor, agent = null, yAxisID = "y") {
       return c;
     };
 
-    if ((isJobMatch || isComparisonForJob) && !agent) {
-      // Highlight entire job (or its comparison point): keep original formatting
+    if (isJobMatch && !agent) {
+      // Highlight entire job: keep original formatting
       ds.borderColor = ds._originalBorderColor;
       ds.backgroundColor = ds._originalBackgroundColor;
       ds.borderWidth = ds._originalBorderWidth;
@@ -4338,7 +4080,6 @@ function toggleShortcutsHelp() {
   el.setAttribute("aria-hidden", visible ? "false" : "true");
 }
 
-// Update stats table header for comparison mode
 function updateStatsTableHeader() {
   const thead = document.getElementById("stats-thead");
   if (!thead) return;
@@ -4355,15 +4096,7 @@ function updateStatsTableHeader() {
                 <th scope="col" class="sortable" data-sort="n" onclick="handleStatsTableSort('n')">n <span class="sort-indicator">▲</span></th>
             `;
 
-  const comparisonHeaders = comparisonData
-    ? `
-                <th scope="col" class="sortable comparison-col comparison-col-first" data-sort="cmpDuration" onclick="handleStatsTableSort('cmpDuration')" title="PR build duration">PR Duration <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable comparison-col" data-sort="cmpChange" onclick="handleStatsTableSort('cmpChange')" title="Change vs median">Change <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable comparison-col" data-sort="cmpSig" onclick="handleStatsTableSort('cmpSig')" title="Statistical significance">Sig <span class="sort-indicator">▲</span></th>
-            `
-    : "";
-
-  thead.innerHTML = `<tr>${baseHeaders}${comparisonHeaders}</tr>`;
+  thead.innerHTML = `<tr>${baseHeaders}</tr>`;
   updateSortIndicators();
 }
 
@@ -4371,10 +4104,9 @@ function updateStatsTable() {
   const tbody = document.getElementById("stats-tbody");
   tbody.innerHTML = "";
 
-  // Update table header for comparison mode
   updateStatsTableHeader();
 
-  const colSpan = comparisonData ? 13 : 10;
+  const colSpan = 10;
   if (selectedJobs.size === 0) {
     tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">Select jobs to see statistics</td></tr>`;
     updateSortIndicators();
@@ -4520,27 +4252,6 @@ function updateStatsTable() {
       case "n":
         cmp = a.n - b.n;
         break;
-      case "cmpDuration":
-        const durA = comparisonData?.jobs[a.jobName]?.duration ?? 0;
-        const durB = comparisonData?.jobs[b.jobName]?.duration ?? 0;
-        cmp = durA - durB;
-        break;
-      case "cmpChange":
-        const getChange = (stat) => {
-          const cmpJob = comparisonData?.jobs[stat.jobName];
-          if (!cmpJob || !stat.median) return 0;
-          return ((cmpJob.duration - stat.median) / stat.median) * 100;
-        };
-        cmp = getChange(a) - getChange(b);
-        break;
-      case "cmpSig":
-        const getSig = (stat) => {
-          const cmpJob = comparisonData?.jobs[stat.jobName];
-          if (!cmpJob || !stat.std || stat.std === 0) return 0;
-          return Math.abs((cmpJob.duration - stat.mean) / stat.std);
-        };
-        cmp = getSig(a) - getSig(b);
-        break;
     }
     return statsTableSortAsc ? cmp : -cmp;
   });
@@ -4634,9 +4345,6 @@ function updateStatsTable() {
     const aggRow = document.createElement("tr");
     aggRow.className = "aggregate-row";
     const aggTrendResult = formatTrend(aggTrend, null, true);
-    const aggComparisonCells = comparisonData
-      ? '<td class="comparison-col comparison-col-first"></td><td class="comparison-col"></td><td class="comparison-col"></td>'
-      : "";
     aggRow.innerHTML = `
                     <td>All (${jobStats.length} jobs)</td>
                     <td></td>
@@ -4647,7 +4355,6 @@ function updateStatsTable() {
                     <td></td>
                     <td></td>
                     <td>${allN}</td>
-                    ${aggComparisonCells}
                 `;
     tbody.appendChild(aggRow);
   }
@@ -4763,50 +4470,6 @@ function updateStatsTable() {
       ? `<td class="trend-cell" data-trend='${trendResult.trendData}'>${trendResult.html}</td>`
       : `<td>${trendResult.html}</td>`;
 
-    // Comparison columns
-    let comparisonCells = "";
-    if (comparisonData) {
-      const cmpJob = comparisonData.jobs[jobName];
-      if (cmpJob && median) {
-        const cmpDuration = cmpJob.duration;
-        const pctChange = ((cmpDuration - median) / median) * 100;
-        const zScore = std > 0 ? (cmpDuration - mean) / std : 0;
-        const pValue = 2 * (1 - normalCDF(Math.abs(zScore)));
-        const isSignificant = pValue < 0.05 && Math.abs(pctChange) > 5;
-
-        // Format change with color
-        const changeSign = pctChange > 0 ? "+" : "";
-        const changeColor = isSignificant
-          ? pctChange > 0
-            ? "var(--color-danger-fg)"
-            : "var(--color-success-fg)"
-          : "var(--color-fg-muted)";
-        const changeHtml = `<span style="color: ${changeColor}">${changeSign}${pctChange.toFixed(1)}%</span>`;
-
-        // Format significance
-        let sigHtml;
-        if (isSignificant) {
-          const stars = pValue < 0.001 ? "***" : pValue < 0.01 ? "**" : "*";
-          const sigColor =
-            pctChange > 0
-              ? "var(--color-danger-fg)"
-              : "var(--color-success-fg)";
-          sigHtml = `<span style="color: ${sigColor}" title="p=${pValue.toFixed(4)}, z=${zScore.toFixed(2)}">${stars}</span>`;
-        } else {
-          sigHtml = `<span class="text-muted" title="p=${pValue.toFixed(4)}, z=${zScore.toFixed(2)}">—</span>`;
-        }
-
-        comparisonCells = `
-                            <td class="duration comparison-col comparison-col-first">${formatDuration(cmpDuration)}</td>
-                            <td class="comparison-col">${changeHtml}</td>
-                            <td class="comparison-col">${sigHtml}</td>
-                        `;
-      } else {
-        comparisonCells =
-          '<td class="comparison-col comparison-col-first">—</td><td class="comparison-col">—</td><td class="comparison-col">—</td>';
-      }
-    }
-
     row.innerHTML = `
                     <td><span class="color-dot" style="background: ${color}"></span> ${convertEmoji(jobName)}</td>
                     <td>${hostsHtml}</td>
@@ -4817,7 +4480,6 @@ function updateStatsTable() {
                     <td class="duration">${formatDuration(max)}</td>
                     <td class="duration">${std != null ? "±" + formatDuration(std) : formatDuration(null)}</td>
                     <td>${n}</td>
-                    ${comparisonCells}
                 `;
     tbody.appendChild(row);
 
@@ -4956,9 +4618,6 @@ function updateStatsTable() {
         const hostTrendCell = hostTrendResult.trendData
           ? `<td class="trend-cell" data-trend='${hostTrendResult.trendData}'>${hostTrendResult.html}</td>`
           : `<td>${hostTrendResult.html}</td>`;
-        const hostComparisonCells = comparisonData
-          ? '<td class="comparison-col comparison-col-first"></td><td class="comparison-col"></td><td class="comparison-col"></td>'
-          : "";
         hostRow.innerHTML = `
                             <td><span class="color-dot" style="background: ${hostColor}"></span> ${escapeHtml(agent)}</td>
                             <td></td>
@@ -4969,7 +4628,6 @@ function updateStatsTable() {
                             <td class="duration">${formatDuration(hostMax)}</td>
                             <td class="duration">±${formatDuration(hostStd)}</td>
                             <td>${hostN}</td>
-                            ${hostComparisonCells}
                         `;
         tbody.appendChild(hostRow);
       }
@@ -5408,11 +5066,6 @@ function renderMatrixTable() {
   // Apply URL params (selection and time range) or localStorage or default
   const hasURLSelection = applyURLParams();
 
-  // Check if we're in comparison mode (takes priority over localStorage)
-  const hasComparisonMode = new URLSearchParams(window.location.search).has(
-    "c",
-  );
-
   // Always restore stats panel height from localStorage (independent of URL params)
   const storedConfig = loadFromLocalStorage();
   if (
@@ -5424,7 +5077,7 @@ function renderMatrixTable() {
       storedConfig.statsHeight + "px";
   }
 
-  if (!hasURLSelection && !hasComparisonMode) {
+  if (!hasURLSelection) {
     // Try localStorage for other settings
     if (storedConfig) {
       // Apply stored time range
@@ -5606,9 +5259,6 @@ function renderMatrixTable() {
       listContainer.appendChild(item);
     }
   }
-
-  // Apply comparison mode from URL params
-  applyComparisonParam();
 
   refreshAllUI();
 }
@@ -5913,12 +5563,7 @@ async function loadData() {
       selectedJobs.clear();
       const hasURLSelection = applyURLParams();
 
-      // Check if we're in comparison mode (takes priority over localStorage)
-      const hasComparisonMode = new URLSearchParams(window.location.search).has(
-        "c",
-      );
-
-      if (!hasURLSelection && !hasComparisonMode) {
+      if (!hasURLSelection) {
         // Try localStorage
         const storedConfig = loadFromLocalStorage();
         if (storedConfig?.selection) {
@@ -5939,8 +5584,8 @@ async function loadData() {
         }
       }
 
-      // If still nothing selected and not in comparison mode, select all matrix jobs
-      if (selectedJobs.size === 0 && !hasComparisonMode) {
+      // If still nothing selected, select all matrix jobs
+      if (selectedJobs.size === 0) {
         for (const platform of platformOrder) {
           for (const type of typeOrder) {
             for (const { name } of jobMatrix[platform]?.[type] || []) {
@@ -5949,9 +5594,6 @@ async function loadData() {
           }
         }
       }
-
-      // Re-apply comparison mode with complete data
-      applyComparisonParam();
 
       refreshAllUI();
     }
@@ -6165,7 +5807,6 @@ const DASHBOARD_PARAMS = new Set([
   "l", // line type
   "e", // expanded jobs in stats table
   "st", // state filter
-  "c", // comparison build pair
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "wq", // workers text filter
   "tab", // active tab
@@ -6299,7 +5940,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     .getElementById("ci-timing-view")
     .classList.toggle("view-hidden", !isCITab);
   // Hide CI-timing-specific banners
-  for (const id of ["stale-data-warning", "comparison-banner"]) {
+  for (const id of ["stale-data-warning"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = isCITab ? "" : "none";
   }

@@ -200,8 +200,8 @@ agents include:
   same benchmark).
 - Group-level summaries (e.g. geomean over time) so we can plot a
   single "is the suite getting faster or slower" line.
-- Correlating regressions with `julia/` commit metadata pulled from
-  the `.julia-repo-cache/` worktree.
+- Correlating regressions with `julia/` commit metadata (the `commits`
+  table, once a clone feeds it).
 - Filtering by inferred noise floor (`noise_pct`) so we don't chase
   benchmarks that bounce ±20% run to run.
 
