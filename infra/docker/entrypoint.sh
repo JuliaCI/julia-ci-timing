@@ -55,10 +55,14 @@ case "${1:-ingest}" in
   datasette)
     shift; exec /opt/datasette/bin/datasette "$@"
     ;;
+  api)
+    # The site's API (db/serve.jl); CI_TIMING_DB names the database
+    shift; exec julia --color=no --project /app/db/serve.jl --host 0.0.0.0 "$@"
+    ;;
   julia)
     shift; exec julia --project "$@"
     ;;
   *)
-    echo "usage: entrypoint.sh {ingest|export|sync-site|datasette ...|julia ...}" >&2; exit 64
+    echo "usage: entrypoint.sh {ingest|export|sync-site|datasette ...|api ...|julia ...}" >&2; exit 64
     ;;
 esac
