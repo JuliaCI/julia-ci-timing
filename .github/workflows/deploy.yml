@@ -5,13 +5,14 @@ name: Deploy to the ingest host
 # the host pulls the image, refreshes the site and runs one ingest. The AWS
 # role is assumed through GitHub's OIDC provider; no long-lived keys.
 #
-# Runs on push to main once the site is served from AWS; until then only by
-# hand (workflow_dispatch) on the branch being tested.
+# Runs on push to main once the site is served from AWS. workflow_dispatch
+# only works for workflows on the default branch, so while the beta host is
+# fed from db-migration-plan that branch is listed here too.
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, db-migration-plan]
     paths:
       - 'fetch_*.jl'
       - 'db/**'
