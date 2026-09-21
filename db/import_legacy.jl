@@ -19,7 +19,7 @@ using SQLite, DBInterface, JSON3, CodecZlib, Dates
 const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents"]
 
 function parse_args(args)
-    opts = Dict{String,Any}("db" => Store.DEFAULT_PATH,
+    opts = Dict{String,Any}("db" => Store.db_path(args),
                             "data" => joinpath(dirname(@__DIR__), "data"),
                             "only" => SOURCES)
     i = 1
