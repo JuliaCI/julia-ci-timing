@@ -10,11 +10,12 @@ restored the seed backup, every fetcher has run on it, the export renders
 `/data/*`, `/healthz` reports per-source success, `/db/` is Datasette over
 the live database, `/data/ci-timing.sqlite.gz` is the snapshot, and
 `.github/workflows/deploy.yml` builds and deploys on push to the branch.
-Not yet done: a hostname and HTTPS (`site_hostname` plus a DNS record), the
-daily Pages-vs-host diff job (stage 1 gate), starting the ingest with
-`--no-block` from `ci-timing-deploy`, the comparison feature deletion,
-`analysis/fetch_data.jl`, the historical median/std backfill, the AGENTS.md
-raw-access section, and everything in stage 2.
+The stage 1 gate is `db/compare_origins.jl`, run daily by
+`.github/workflows/compare-origins.yml` (from main only: schedules do not
+fire on other branches). Not yet done: a hostname and HTTPS (`site_hostname`
+plus a DNS record), the comparison feature deletion, `analysis/fetch_data.jl`,
+the historical median/std backfill, the AGENTS.md raw-access section, and
+everything in stage 2.
 
 ## Where we are
 
@@ -335,14 +336,17 @@ Rules for the database:
   pushes to ECR, `aws ssm send-command` pulls and restarts. The DB isn't touched.
   Instance replacement kept for base-image changes.
 - Monitoring: `/healthz` reports each source's last successful run from
-  `source_runs`; an Actions cron (or CloudWatch) alerts if any source is >6 h
-  stale, the disk is >80%, or the latest backup is >1 day old. Needed because
-  `fetch_agents.jl:77-80` exits 0 on 401/403.
+  `source_runs`; the daily gate below fails if any source's file is >6 h
+  stale. Needed because `fetch_agents.jl:77-80` exits 0 on 401/403. Disk
+  >80% and a latest backup >1 day old are not yet checked.
 - Hostname: e.g. next.perf.julialang.org, A record to the EIP. Needs the
   julialang.org DNS owner.
-- Gate: an Actions cron compares the two origins daily over a recursive manifest:
-  settled timing runs (older than the lookback), all benchmark/pkgeval/TTFX rows
-  by key, agents by freshness only.
+- Gate: `db/compare_origins.jl`, run daily by `compare-origins.yml`, compares
+  the two origins' `data/` by key: settled timing runs (builds below the
+  fetcher's fully-captured threshold), benchmark, pkgeval, TTFX, coverage and
+  download rows dated before 48 h ago, agents by freshness only. The host must
+  have every settled row of Pages unchanged; extras (history the files
+  dropped, reports the old fetchers skipped) are counted, not failed.
 
 ### Stage 2: cutover (a day, plus DNS lead time)
 
