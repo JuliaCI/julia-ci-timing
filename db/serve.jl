@@ -30,8 +30,9 @@
 # Every response carries an ETag from the database's change sequence, so a
 # browser's revalidation costs nothing until an ingest changes something.
 # Bodies are rendered once per (request, change sequence) and kept gzipped
-# in a bounded cache. The database is opened read-only and queried under a
-# lock, one request at a time.
+# in a bounded cache. Requests take a query-only connection from a small
+# pool, so a slow render (all of timing, a big benchmark group) does not
+# hold up the rest.
 #
 # --site DIR and --data DIR serve the static site and the extracts too, for
 # local development; on the host Caddy does that.
@@ -47,6 +48,7 @@ using HTTP, SQLite, JSON3, CodecZlib, Dates
 
 const CACHE_MAX_ENTRIES = 32
 const CACHE_MAX_BYTES = 64 * 1024 * 1024
+const POOL_SIZE = 4
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "host" => "127.0.0.1", "port" => 8002, "site" => nothing, "data" => nothing)
@@ -73,8 +75,8 @@ end
 # --- database ----------------------------------------------------------------
 
 mutable struct Server
-    db::SQLite.DB
-    lock::ReentrantLock
+    pool::Channel{SQLite.DB}
+    lock::ReentrantLock                            # the cache
     cache::Dict{String,Tuple{Int,Vector{UInt8}}}   # key => (change_seq, gzipped body)
     cache_order::Vector{String}
     cache_bytes::Int
@@ -90,8 +92,13 @@ function open_readonly(path)
     return db
 end
 
-withdb(f, s::Server) = lock(s.lock) do
-    f(s.db)
+function withdb(f, s::Server)
+    db = take!(s.pool)
+    try
+        return f(db)
+    finally
+        put!(s.pool, db)
+    end
 end
 
 change_seq(s::Server) = withdb(db -> Store.current_seq(db), s)
@@ -314,7 +321,9 @@ end
 
 function main(args)
     opts = parse_args(args)
-    s = Server(open_readonly(opts["db"]), ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"])
+    pool = Channel{SQLite.DB}(POOL_SIZE)
+    foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
+    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"])
     warm_up(s)
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
     HTTP.serve(req -> handle(s, req), opts["host"], opts["port"])
