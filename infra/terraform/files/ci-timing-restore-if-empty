@@ -1,0 +1,58 @@
+#!/bin/sh
+# ExecStartPre of the datasette unit: on a fresh host restore the database,
+# the export and Caddy's certificates from the latest backup. Fails (and so
+# keeps the unit failing visibly) when the database is missing and no backup
+# exists: seed it first (README).
+set -eu
+. /etc/ci-timing.host.env
+data_root="$CI_TIMING_DATA_DIR"
+db_name="$CI_TIMING_DB_FILENAME"
+db_missing=0; [ ! -s "${data_root}/${db_name}" ] && db_missing=1
+caddy_missing=0; [ -z "$(ls -A "$CI_TIMING_CADDY_DATA_DIR" 2>/dev/null || true)" ] && caddy_missing=1
+if [ "$db_missing" -eq 0 ] && [ "$caddy_missing" -eq 0 ]; then
+  exit 0
+fi
+fail_if_db_missing() {
+  if [ "$db_missing" -eq 1 ]; then
+    echo "Database ${data_root}/${db_name} is missing and was not restored; seed it, then restart ci-timing-datasette." >&2
+    exit 1
+  fi
+  exit 0
+}
+# Stage on the root volume: /tmp is a small tmpfs on AL2023
+staging_root="/var/lib/ci-timing-restore-staging"
+install -d -m 700 "$staging_root"
+work_dir="$(mktemp -d "${staging_root}/restore.XXXXXX")"
+trap 'rm -rf "$work_dir"' EXIT INT TERM
+restore_key="${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_LATEST_NAME}"
+if ! aws s3api head-object --bucket "$CI_TIMING_BACKUP_BUCKET" --key "$restore_key" >/dev/null 2>&1; then
+  restore_key="$(aws s3api list-objects-v2 --bucket "$CI_TIMING_BACKUP_BUCKET" \
+    --prefix "${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_ARCHIVE_DIR}/" \
+    --query 'sort_by(Contents, &LastModified)[-1].Key' --output text 2>/dev/null || true)"
+  [ "$restore_key" = "None" ] && restore_key=""
+  if [ -z "$restore_key" ]; then
+    echo "No backup found under s3://${CI_TIMING_BACKUP_BUCKET}/${CI_TIMING_BACKUP_PREFIX}/." >&2
+    fail_if_db_missing
+  fi
+fi
+if ! aws s3 cp "s3://${CI_TIMING_BACKUP_BUCKET}/${restore_key}" - --only-show-errors | tar -C "$work_dir" -xz; then
+  echo "Failed to download or extract s3://${CI_TIMING_BACKUP_BUCKET}/${restore_key}." >&2
+  fail_if_db_missing
+fi
+if [ "$db_missing" -eq 1 ]; then
+  [ -s "${work_dir}/${db_name}" ] || { echo "Backup does not contain ${db_name}." >&2; fail_if_db_missing; }
+  install -d -m 750 -o "$CI_TIMING_RUNTIME_UID" -g "$CI_TIMING_RUNTIME_GID" "$data_root" "$CI_TIMING_EXPORT_DIR"
+  mv "${work_dir}/${db_name}" "${data_root}/${db_name}"
+  rm -f "${data_root}/${db_name}-wal" "${data_root}/${db_name}-shm"
+  if [ -d "${work_dir}/export" ]; then
+    cp -a "${work_dir}/export/." "${CI_TIMING_EXPORT_DIR}/"
+  fi
+  chown -R "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" "$data_root"
+  chmod 640 "${data_root}/${db_name}"
+  echo "Restored ${db_name} from S3 backup." >&2
+fi
+if [ "$caddy_missing" -eq 1 ] && [ -d "${work_dir}/caddy-data" ]; then
+  install -d -m 755 "$CI_TIMING_CADDY_DATA_DIR"
+  cp -a "${work_dir}/caddy-data/." "$CI_TIMING_CADDY_DATA_DIR/"
+  echo "Restored Caddy certificate store from S3 backup." >&2
+fi

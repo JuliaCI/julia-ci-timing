@@ -4,11 +4,12 @@
 # The Workers tab infers agent presence from finished master jobs, which says nothing
 # about agents that only run PR jobs and lags a dropped agent by up to a day. This
 # script asks the agents API directly on every run of the update workflow and keeps
-# the answer under data/agents/:
+# the answer in the database (db/): one `agent_snapshots` row per run with the
+# connected agent names in `agent_snapshot_members`, and the latest details of
+# every agent in `agents`. db/export.jl renders data/agents/ from them:
 #
 #   history-YYYY-MM.ndjson  one line per run: the time and the agent names connected
-#                           then. Append-only plain text, so each run costs git one
-#                           line rather than a fresh binary blob.
+#                           then.
 #   latest.json             the latest details of every agent seen in the retained
 #                           window (host, queue, state, current job), with sorted
 #                           keys so the rewrite each run diffs cleanly.
@@ -27,11 +28,13 @@ using JSON3
 using Dates
 using DataStructures: OrderedDict
 
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
+
 const BUILDKITE_ORG = "julialang"
 const API_BASE = "https://api.buildkite.com/v2"
-const DATA_DIR = joinpath("data", "agents")
-const LATEST = joinpath(DATA_DIR, "latest.json")
-const RETAIN_MONTHS = 12
+const RETAIN_MONTHS = 12   # applied by the export, not by deletion
 const DATEFMT = dateformat"yyyy-mm-ddTHH:MM:SSZ"
 
 function get_token()
@@ -131,70 +134,61 @@ function agent_record(agent, snapshot_time::String, first_seen::String)
     )
 end
 
-function load_latest()
-    isfile(LATEST) || return Dict{String,Any}()
-    raw = JSON3.read(read(LATEST, String), Dict{String,Any})
-    return get(raw, "agents", Dict{String,Any}())
-end
+fold_key(name) = replace(name, r"\.\d+$" => "")
 
-history_file(t::DateTime) = joinpath(DATA_DIR, "history-" * Dates.format(t, dateformat"yyyy-mm") * ".ndjson")
+const AGENT_COLS = ["fold_key", "agent_id", "hostname", "queue", "os", "arch", "version", "meta_data", "state",
+                    "connected_at", "first_seen", "last_seen", "job_json"]
 
-# Fold one API listing into the data files. Only agents the API reports as
-# connected count as present in the snapshot; a lost or stopping agent keeps its
-# record so the state shows in the table.
-function record_snapshot!(agents, now_time::DateTime)
+# Fold one API listing into the database. Only agents the API reports as
+# connected count as present in the snapshot; a lost or stopping agent keeps
+# its record so the state shows in the table. Nothing is deleted: the
+# retention window is applied when the files are rendered.
+function record_snapshot!(db, agents, now_time::DateTime)
     snapshot_time = Dates.format(now_time, DATEFMT)
-    records = load_latest()
+    seq = next_seq!(db)
+    first_seen = Dict{String,String}()
+    for r in query(db, "SELECT name, first_seen FROM agents")
+        first_seen[String(r.name)] = r.first_seen === missing ? "" : String(r.first_seen)
+    end
+    stmt = upsert_stmt(db, "agents", ["name"], AGENT_COLS)
     connected = String[]
     for agent in agents
         name = str(get(agent, :name, nothing))
         isempty(name) && continue
-        old = get(records, name, nothing)
-        first_seen = old === nothing ? snapshot_time : String(get(old, "first_seen", snapshot_time))
-        rec = agent_record(agent, snapshot_time, first_seen)
+        rec = agent_record(agent, snapshot_time, get(first_seen, name, snapshot_time))
         rec["state"] == "connected" && push!(connected, name)
-        records[name] = rec
+        tags = something(get(agent, :meta_data, nothing), [])
+        upsert!(stmt, (name, fold_key(name), str(get(agent, :id, nothing)), rec["hostname"], rec["queue"], rec["os"], rec["arch"],
+                       rec["version"], JSON3.write(String.(tags)), rec["state"], rec["connected_at"], rec["first_seen"],
+                       rec["last_seen"], rec["job"] === nothing ? missing : JSON3.write(rec["job"]), seq))
     end
     sort!(connected)
     # A stale job on an agent that has since gone away must not look current
-    for (name, rec) in records
-        name in connected && continue
-        rec["job"] = nothing
-        get(rec, "state", "") == "connected" && (rec["state"] = "disconnected")
-    end
-    # Drop agents unseen for the retained window
-    cutoff = Dates.format(now_time - Month(RETAIN_MONTHS), DATEFMT)
-    filter!(((name, rec),) -> String(get(rec, "last_seen", "")) >= cutoff, records)
-
-    mkpath(DATA_DIR)
-    open(history_file(now_time), "a") do io
-        JSON3.write(io, OrderedDict("time" => snapshot_time, "connected" => connected))
-        println(io)
-    end
-    latest = OrderedDict{String,Any}(
-        "generated_at" => snapshot_time,
-        "agents" => OrderedDict{String,Any}(name => records[name] for name in sort!(collect(keys(records)))),
-    )
-    open(LATEST, "w") do io
-        JSON3.pretty(io, JSON3.write(latest), JSON3.AlignmentContext(indent=1))
-        println(io)
-    end
-    for f in readdir(DATA_DIR)
-        m = match(r"^history-(\d{4}-\d{2})\.ndjson$", f)
-        m === nothing && continue
-        m.captures[1] < Dates.format(now_time - Month(RETAIN_MONTHS), dateformat"yyyy-mm") && rm(joinpath(DATA_DIR, f))
+    DBInterface.execute(db, "UPDATE agents SET job_json = NULL, state = CASE state WHEN 'connected' THEN 'disconnected' ELSE state END, " *
+                            "change_seq = ? WHERE name NOT IN (SELECT value FROM json_each(?)) AND (job_json IS NOT NULL OR state = 'connected')",
+                        (seq, JSON3.write(connected)))
+    DBInterface.execute(db, "INSERT OR IGNORE INTO agent_snapshots (time) VALUES (?)", (snapshot_time,))
+    mstmt = DBInterface.prepare(db, "INSERT OR IGNORE INTO agent_snapshot_members (time, agent_name) VALUES (?, ?)")
+    for name in connected
+        DBInterface.execute(mstmt, (snapshot_time, name))
     end
     return connected
 end
 
-function main()
+function main(args=ARGS)
     agents = fetch_agents()
     agents === nothing && return 0
-    connected = record_snapshot!(agents, now(UTC))
-    @info "Agents listed" total=length(agents) connected=length(connected) file=LATEST
+    db = open_db(Store.db_path(args); create=false)
+    connected = source_run(db, "agents") do
+        transaction(db) do
+            record_snapshot!(db, agents, now(UTC))
+        end
+    end
+    @info "Agents listed" total=length(agents) connected=length(connected)
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end

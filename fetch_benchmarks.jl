@@ -1,18 +1,30 @@
 #!/usr/bin/env julia
-# Fetch Julia Base benchmark reports from NanosoldierReports
-# Clones the repo (sparse checkout of benchmark/by_date) and extracts raw timing
-# data from data.tar.zst files, computing per-group geometric mean times.
+# Fetch Julia Base benchmark reports from NanosoldierReports into the
+# database (db/). Clones the repo (sparse checkout of benchmark/by_date) and
+# reads each new report's data.tar.zst and report.md: every BenchmarkTools
+# estimate (minimum, median, mean, std; time, gctime, memory, allocs), the
+# per-group geomeans the site plots, Nanosoldier's own regression verdicts and
+# the run environment. db/export.jl renders data/benchmark* from the result.
 
 using JSON3
 using Dates
 using Statistics
-using DataStructures: SortedDict
 using CodecZstd
-using CodecZlib: GzipCompressor, GzipDecompressor
 using Tar
 
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
+
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
-const CLONE_DIR = joinpath(tempdir(), "NanosoldierReports")
+# Persistent on the ingest host; the update workflow caches it
+const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports-benchmark")
+
+# Statistics read from every new report, and the two the legacy files hold
+# (a report lacking one of those is parsed again; the others are backfilled
+# separately with --backfill-stats, since it means reading every tarball).
+const STATS = ("minimum", "median", "mean", "std")
+const LEGACY_STATS = ("minimum", "mean")
 
 function ensure_clone()
     by_date = joinpath(CLONE_DIR, "benchmark", "by_date")
@@ -23,6 +35,7 @@ function ensure_clone()
     else
         @info "Cloning NanosoldierReports (sparse)..." dir=CLONE_DIR
         rm(CLONE_DIR; force=true, recursive=true)
+        mkpath(dirname(CLONE_DIR))
         run(`git clone --depth 1 --filter=blob:none --sparse $REPORTS_REPO $CLONE_DIR`)
         run(`git -C $CLONE_DIR sparse-checkout set benchmark/by_date`)
     end
@@ -31,14 +44,12 @@ function ensure_clone()
 end
 
 function enumerate_report_dates(by_date_dir::String)
-    @info "Enumerating benchmark report dates..."
     dates = String[]
     for month in readdir(by_date_dir; sort=true)
         month_path = joinpath(by_date_dir, month)
         isdir(month_path) || continue
         for day in readdir(month_path; sort=true)
-            day_path = joinpath(month_path, day)
-            isdir(day_path) || continue
+            isdir(joinpath(month_path, day)) || continue
             push!(dates, "$month/$day")
         end
     end
@@ -51,95 +62,114 @@ function date_path_to_date(path::String)
     "$(parts[1])-$(lpad(parts[2], 2, '0'))"
 end
 
-"""
-Walk a BenchmarkTools JSON structure and collect all leaf `time` values per top-level group.
-The structure is: [metadata, [[\"BenchmarkGroup\", {\"data\": {group => ...}}]]]
-Returns Dict{group_name => Dict{benchmark_path => time_ns}}
-"""
-function collect_group_times(parsed)
-    result = Dict{String, Dict{String, Float64}}()
+# --- report.md ---------------------------------------------------------------
 
+"""
+Everything the report markdown states about the run: the commit and the
+baseline it was compared against, the summary counts, the environment from
+`## Version Info`, and the per-benchmark verdict table. Each field is
+`nothing` when absent.
+"""
+function parse_report_md(by_date_dir::String, date_path::String)
+    report_file = joinpath(by_date_dir, date_path, "report.md")
+    empty = (commit="", baseline_commit=nothing, baseline_date=nothing, total=nothing, regressions=nothing,
+             improvements=nothing, julia_version=nothing, llvm=nothing, cpu=nothing, os=nothing,
+             nanosoldier_commit=nothing, verdicts=NamedTuple[])
+    isfile(report_file) || return empty
+    text = read(report_file, String)
+    cap(re) = (m = match(re, text); m === nothing ? nothing : String(m.captures[1]))
+    m = match(r"\*\*(\d+)\*\* benchmarks were executed,\s*\*\*(\d+)\*\* showed\s*regressions,\s*and\s*\*\*(\d+)\*\* showed\s*improvements"s, text)
+    counts = m === nothing ? (nothing, nothing, nothing) : Tuple(parse(Int, c) for c in m.captures)
+    verdicts = NamedTuple[]
+    for vm in eachmatch(r"^\| `(\[.*?\])` \| ([0-9.]+) \(([0-9.]+)%\)\s*(:x:|:white_check_mark:)? *\| ([0-9.]+) \(([0-9.]+)%\)\s*(:x:|:white_check_mark:)? *\|"m, text)
+        id = parse_bench_id(vm.captures[1])
+        id === nothing && continue
+        flag = something(vm.captures[4], vm.captures[7], "")
+        push!(verdicts, (grp=id[1], name=id[2], time_ratio=parse(Float64, vm.captures[2]), time_tolerance=parse(Float64, vm.captures[3]) / 100,
+                         memory_ratio=parse(Float64, vm.captures[5]), memory_tolerance=parse(Float64, vm.captures[6]) / 100,
+                         verdict=flag == ":x:" ? "regression" : flag == ":white_check_mark:" ? "improvement" : "invariant"))
+    end
+    return (commit=something(cap(r"JuliaLang/julia@([0-9a-f]+)"), ""),
+            baseline_commit=cap(r"/compare/([0-9a-f]{40})\.\.\.[0-9a-f]{40}"),
+            baseline_date=cap(r"Daily Job:\*\s*\d{4}-\d{2}-\d{2}\s*vs\s*\[(\d{4}-\d{2}-\d{2})\]"),
+            total=counts[1], regressions=counts[2], improvements=counts[3],
+            julia_version=cap(r"^Julia Version (\S+)"m), llvm=cap(r"^\s*LLVM: (\S+)"m),
+            cpu=cap(r"^\s*CPU: (.+?):?\s*$"m), os=cap(r"^\s*OS: (.+?)\s*$"m),
+            nanosoldier_commit=cap(r"Nanosoldier commit: \[`([0-9a-f]+)`\]"),
+            verdicts=verdicts)
+end
+
+# `["array", "setindex!", ("setindex!", 1)]` -> ("array", "setindex!/('setindex!', 1)"),
+# the key form walk_estimates! produces from the JSON.
+function parse_bench_id(id::AbstractString)
+    inner = strip(id)[2:end-1]
+    parts = String[]
+    buf = IOBuffer(); depth = 0; inq = false
+    for c in inner
+        if c == '"'
+            inq = !inq
+        elseif !inq && c == '('
+            depth += 1
+        elseif !inq && c == ')'
+            depth -= 1
+        end
+        if c == ',' && depth == 0 && !inq
+            push!(parts, strip(String(take!(buf))))
+        else
+            write(buf, c)
+        end
+    end
+    push!(parts, strip(String(take!(buf))))
+    length(parts) >= 2 || return nothing
+    unquote(p) = startswith(p, '"') && endswith(p, '"') ? p[2:end-1] : p
+    grp = unquote(parts[1])
+    name = join((replace(unquote(p), '"' => '\'') for p in parts[2:end]), "/")
+    return (grp, name)
+end
+
+# --- data.tar.zst ------------------------------------------------------------
+
+# Walk a BenchmarkTools JSON structure ([metadata, [["BenchmarkGroup", {"data": ...}]]])
+# and collect every TrialEstimate per top-level group:
+# group => benchmark path => (time, gctime, memory, allocs)
+function collect_group_estimates(parsed)
+    result = Dict{String,Dict{String,NTuple{4,Float64}}}()
     data_root = parsed[2][1][2]["data"]
     for (group_name, group_node) in data_root
-        benchmarks = Dict{String, Float64}()
-        walk_times!(benchmarks, group_node, String[])
-        if !isempty(benchmarks)
-            result[String(group_name)] = benchmarks
-        end
+        benchmarks = Dict{String,NTuple{4,Float64}}()
+        walk_estimates!(benchmarks, group_node, String[])
+        isempty(benchmarks) || (result[String(group_name)] = benchmarks)
     end
     return result
 end
 
-function walk_times!(benchmarks::Dict{String, Float64}, node, path::Vector{String})
+function walk_estimates!(benchmarks, node, path::Vector{String})
     node isa AbstractVector && length(node) == 2 || return
     tag = node[1]
     tag isa AbstractString || return
     if tag == "TrialEstimate"
         t = get(node[2], "time", nothing)
-        if t !== nothing
-            key = join(path, "/")
-            benchmarks[key] = Float64(t)
-        end
+        t === nothing && return
+        num(k) = (v = get(node[2], k, nothing); v === nothing ? NaN : Float64(v))
+        benchmarks[join(path, "/")] = (Float64(t), num("gctime"), num("memory"), num("allocs"))
     elseif tag == "BenchmarkGroup"
         for (name, child) in get(node[2], "data", Dict())
-            walk_times!(benchmarks, child, [path; replace(String(name), '"' => '\'')])
+            walk_estimates!(benchmarks, child, [path; replace(String(name), '"' => '\'')])
         end
     end
 end
 
-function geomean(xs)
-    isempty(xs) && return 0.0
-    exp(mean(log, xs))
-end
-
-function extract_commit(by_date_dir::String, date_path::String)
-    report_file = joinpath(by_date_dir, date_path, "report.md")
-    isfile(report_file) || return ""
-    for line in eachline(report_file)
-        m = match(r"JuliaLang/julia@([0-9a-f]+)", line)
-        m !== nothing && return String(m.captures[1])
-    end
-    return ""
-end
+geomean(xs) = isempty(xs) ? 0.0 : exp(mean(log, xs))
 
 """
-Extract the official summary counts and the baseline comparison date from the report markdown.
-Returns a NamedTuple with fields `total`, `regressions`, `improvements`, `baseline_date` (each may be `nothing`).
-The summary line looks like: `**4818** benchmarks were executed, **89** showed regressions, and **168** showed improvements.`
-The baseline line looks like: `*Daily Job:* 2026-04-26 vs [2026-04-18](../../2026-04/18/report.md)`
-"""
-function extract_report_summary(by_date_dir::String, date_path::String)
-    report_file = joinpath(by_date_dir, date_path, "report.md")
-    if !isfile(report_file)
-        return (total=nothing, regressions=nothing, improvements=nothing, baseline_date=nothing)
-    end
-    total = nothing
-    regressions = nothing
-    improvements = nothing
-    baseline_date = nothing
-    text = read(report_file, String)
-    m = match(r"\*\*(\d+)\*\* benchmarks were executed,\s*\*\*(\d+)\*\* showed\s*regressions,\s*and\s*\*\*(\d+)\*\* showed\s*improvements"s, text)
-    if m !== nothing
-        total = parse(Int, m.captures[1])
-        regressions = parse(Int, m.captures[2])
-        improvements = parse(Int, m.captures[3])
-    end
-    bm = match(r"Daily Job:\*\s*\d{4}-\d{2}-\d{2}\s*vs\s*\[(\d{4}-\d{2}-\d{2})\]", text)
-    if bm !== nothing
-        baseline_date = String(bm.captures[1])
-    end
-    return (total=total, regressions=regressions, improvements=improvements, baseline_date=baseline_date)
-end
+    parse_tarball(by_date_dir, date_path, stats) -> Dict(stat => group => bench => estimate), errors
 
-function parse_tarball(by_date_dir::String, date_path::String)
-    date = date_path_to_date(date_path)
+The estimates of the requested statistics, plus the `errors.json` list.
+`nothing` when there is no tarball or it cannot be read.
+"""
+function parse_tarball(by_date_dir::String, date_path::String, stats)
     tarball = joinpath(by_date_dir, date_path, "data.tar.zst")
     isfile(tarball) || return nothing
-
-    commit = extract_commit(by_date_dir, date_path)
-    summary_stats = extract_report_summary(by_date_dir, date_path)
-
-    # Extract into a temp directory
     tmpdir = mktempdir()
     try
         open(tarball) do io
@@ -147,440 +177,186 @@ function parse_tarball(by_date_dir::String, date_path::String)
             Tar.extract(stream, tmpdir)
             close(stream)
         end
+        by_stat = Dict{String,Any}()
+        for stat in stats
+            files = filter(f -> endswith(f, "_primary.$stat.json"), readdir(tmpdir))
+            isempty(files) && continue
+            parsed = try
+                JSON3.read(read(joinpath(tmpdir, files[1]), String); allow_inf=true)
+            catch e
+                @warn "Failed to parse JSON" date_path stat error=e
+                continue
+            end
+            by_stat[stat] = collect_group_estimates(parsed)
+        end
+        errors = Any[]
+        efile = filter(f -> endswith(f, "_primary.errors.json"), readdir(tmpdir))
+        if !isempty(efile)
+            errors = try
+                collect(JSON3.read(read(joinpath(tmpdir, efile[1]), String)))
+            catch e
+                @warn "Failed to parse errors.json" date_path error=e
+                Any[]
+            end
+        end
+        return by_stat, errors
     catch e
         @warn "Failed to extract tarball" date_path error=e
-        rm(tmpdir; recursive=true, force=true)
         return nothing
-    end
-
-    by_group = SortedDict{String, Any}()
-
-    for stat_type in ("minimum", "mean")
-        json_files = filter(f -> endswith(f, "_primary.$stat_type.json"), readdir(tmpdir))
-        isempty(json_files) && continue
-        json_path = joinpath(tmpdir, json_files[1])
-
-        local parsed
-        try
-            parsed = JSON3.read(read(json_path, String); allow_inf=true)
-        catch e
-            @warn "Failed to parse JSON" date_path stat_type error=e
-            continue
-        end
-
-        group_times = collect_group_times(parsed)
-        for (group, benchmarks) in group_times
-            if !haskey(by_group, group)
-                by_group[group] = Dict{String, Any}()
-            end
-            times = collect(values(benchmarks))
-            by_group[group]["$(stat_type)_geomean_ns"] = geomean(times)
-            by_group[group]["$(stat_type)_count"] = length(times)
-            by_group[group]["$(stat_type)_benchmarks"] = SortedDict{String, Any}(
-                k => v for (k, v) in benchmarks
-            )
-        end
-    end
-
-    rm(tmpdir; recursive=true, force=true)
-
-    isempty(by_group) && return nothing
-
-    result = SortedDict(
-        "date" => date,
-        "date_path" => date_path,
-        "commit" => commit,
-        "by_group" => by_group,
-    )
-    summary_stats.total !== nothing && (result["report_total"] = summary_stats.total)
-    summary_stats.regressions !== nothing && (result["report_regressions"] = summary_stats.regressions)
-    summary_stats.improvements !== nothing && (result["report_improvements"] = summary_stats.improvements)
-    summary_stats.baseline_date !== nothing && (result["report_baseline_date"] = summary_stats.baseline_date)
-    return result
-end
-
-function load_existing_data(output_dir)
-    summary_gz = joinpath(output_dir, "benchmark_summary.json.gz")
-    summary_file = joinpath(output_dir, "benchmark_summary.json")
-    local summary
-    try
-        if isfile(summary_gz)
-            summary = JSON3.read(transcode(GzipDecompressor, read(summary_gz)))
-        elseif isfile(summary_file)
-            summary = JSON3.read(read(summary_file, String))
-        else
-            return (nothing, Set{String}())
-        end
-    catch e
-        @warn "Failed to load summary" error=e
-        return (nothing, Set{String}())
-    end
-
-    reports = get(summary, :reports, [])
-    @info "Loaded existing summary" reports=length(reports)
-
-    # Check if per-group detail files exist — if not, need full re-parse
-    benchdir = joinpath(output_dir, "benchmarks")
-    has_detail = isdir(benchdir) && any(endswith(f, ".json") || endswith(f, ".json.gz") for f in readdir(benchdir))
-    if !has_detail && !isempty(reports)
-        @info "No per-group detail files found, forcing full re-parse"
-        return (nothing, Set{String}())
-    end
-
-    known_dates = Set{String}()
-    for report in reports
-        d = get(report, :date, nothing)
-        d !== nothing && push!(known_dates, String(d))
-    end
-
-    return (summary, known_dates)
-end
-
-function generate_json_output(new_reports, existing_summary; output_dir="data")
-    mkpath(output_dir)
-    mkpath(joinpath(output_dir, "benchmarks"))
-
-    reports_by_date = SortedDict{String, Any}()
-
-    if existing_summary !== nothing
-        for report in get(existing_summary, :reports, [])
-            d = String(get(report, :date, ""))
-            isempty(d) && continue
-            entry = SortedDict{String, Any}(
-                "date" => d,
-                "date_path" => String(get(report, :date_path, d)),
-                "commit" => String(get(report, :commit, "")),
-                "by_group" => let bg = get(report, :by_group, Dict())
-                    SortedDict{String, Any}(String(k) => Dict{String, Any}(
-                        String(fk) => fv for (fk, fv) in pairs(v)
-                    ) for (k, v) in pairs(bg))
-                end
-            )
-            for fld in (:report_total, :report_regressions, :report_improvements, :report_baseline_date)
-                v = get(report, fld, nothing)
-                v === nothing && continue
-                entry[String(fld)] = v isa AbstractString ? String(v) : v
-            end
-            reports_by_date[d] = entry
-        end
-    end
-
-    for report in new_reports
-        reports_by_date[report["date"]] = report
-    end
-
-    reports = [reports_by_date[k] for k in sort(collect(keys(reports_by_date)))]
-
-    # Build summary reports (geomean only, no _benchmarks)
-    summary_reports = []
-    for report in reports
-        sr = SortedDict{String, Any}("date" => report["date"], "date_path" => get(report, "date_path", report["date"]), "commit" => get(report, "commit", ""))
-        for fld in ("report_total", "report_regressions", "report_improvements", "report_baseline_date")
-            haskey(report, fld) && (sr[fld] = report[fld])
-        end
-        sr_groups = SortedDict{String, Any}()
-        for (group, gdata) in report["by_group"]
-            sg = Dict{String, Any}()
-            for (k, v) in gdata
-                endswith(String(k), "_benchmarks") && continue
-                sg[String(k)] = v
-            end
-            sr_groups[String(group)] = sg
-        end
-        sr["by_group"] = sr_groups
-        push!(summary_reports, sr)
-    end
-
-    generated_at = Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ")
-
-    # Write per-group detail files (merge new data into existing)
-    # Only new_reports have _benchmarks data; existing reports don't
-    new_dates_with_benchmarks = filter(r -> any(
-        endswith(String(k), "_benchmarks") for g in values(r["by_group"]) for k in keys(g)
-    ), new_reports)
-
-    if !isempty(new_dates_with_benchmarks)
-        # Find all groups that have benchmark data in new reports
-        groups_to_update = Set{String}()
-        for report in new_dates_with_benchmarks
-            for group in keys(report["by_group"])
-                push!(groups_to_update, String(group))
-            end
-        end
-
-        for group in sort(collect(groups_to_update))
-            update_group_detail(output_dir, group, new_dates_with_benchmarks)
-        end
-    end
-
-    # Write summary
-    summary = SortedDict(
-        "generated_at" => generated_at,
-        "reports" => summary_reports
-    )
-
-    summary_file = joinpath(output_dir, "benchmark_summary.json")
-    write_if_changed(summary_file, summary; gzip=true)
-
-    return summary_file
-end
-
-function update_group_detail(output_dir, group, new_reports)
-    group_file = joinpath(output_dir, "benchmarks", "$(group).json")
-    group_file_gz = group_file * ".gz"
-
-    # Load existing detail (prefer .json.gz, fall back to .json)
-    existing = Dict{String, Any}()
-    if isfile(group_file_gz)
-        try
-            existing = JSON3.read(transcode(GzipDecompressor, read(group_file_gz)))
-        catch e
-            @warn "Failed to load existing group detail, rebuilding" group error=e
-        end
-    elseif isfile(group_file)
-        try
-            existing = JSON3.read(read(group_file, String))
-        catch e
-            @warn "Failed to load existing group detail, rebuilding" group error=e
-        end
-    end
-
-    for stat_type in ("minimum", "mean")
-        # Load existing series
-        old = get(existing, Symbol(stat_type), nothing)
-        old_dates = old !== nothing ? [String(d) for d in old[:dates]] : String[]
-        old_commits = old !== nothing ? [String(c) for c in old[:commits]] : String[]
-        old_date_paths = old !== nothing && haskey(old, :date_paths) ? [String(p) for p in old[:date_paths]] : copy(old_dates)
-        old_benchmarks = Dict{String, Vector{Any}}()
-        if old !== nothing
-            for (name, vals) in pairs(old[:benchmarks])
-                old_benchmarks[String(name)] = collect(vals)
-            end
-        end
-
-        old_date_set = Set(old_dates)
-
-        # Collect new entries
-        new_entries = []
-        for report in new_reports
-            report["date"] in old_date_set && continue
-            gdata = get(report["by_group"], group, nothing)
-            gdata === nothing && continue
-            benchmarks = get(gdata, "$(stat_type)_benchmarks", nothing)
-            benchmarks === nothing && continue
-            push!(new_entries, (date=report["date"], date_path=get(report, "date_path", report["date"]), commit=get(report, "commit", ""), benchmarks=benchmarks))
-        end
-
-        isempty(new_entries) && continue
-
-        # Collect all benchmark names
-        all_names = Set(keys(old_benchmarks))
-        for entry in new_entries
-            for name in keys(entry.benchmarks)
-                push!(all_names, String(name))
-            end
-        end
-        sorted_names = sort(collect(all_names))
-
-        # Pad existing series for any new benchmark names
-        n_old = length(old_dates)
-        merged_benchmarks = SortedDict{String, Vector{Any}}()
-        for name in sorted_names
-            if haskey(old_benchmarks, name)
-                merged_benchmarks[name] = old_benchmarks[name]
-            else
-                merged_benchmarks[name] = fill(nothing, n_old)
-            end
-        end
-
-        # Append new entries (sorted by date)
-        sort!(new_entries; by=e -> e.date)
-        merged_dates = copy(old_dates)
-        merged_commits = copy(old_commits)
-        merged_date_paths = copy(old_date_paths)
-        for entry in new_entries
-            push!(merged_dates, entry.date)
-            push!(merged_commits, entry.commit)
-            push!(merged_date_paths, entry.date_path)
-            for name in sorted_names
-                v = get(entry.benchmarks, name, nothing)
-                push!(merged_benchmarks[name], v)
-            end
-        end
-
-        # Backfilled dates can predate existing entries; keep series date-sorted.
-        if !issorted(merged_dates)
-            perm = sortperm(merged_dates)
-            merged_dates = merged_dates[perm]
-            merged_commits = merged_commits[perm]
-            merged_date_paths = merged_date_paths[perm]
-            for name in sorted_names
-                merged_benchmarks[name] = merged_benchmarks[name][perm]
-            end
-        end
-
-        existing_dict = existing isa Dict ? existing : Dict{String, Any}(String(k) => v for (k, v) in pairs(existing))
-        existing_dict[stat_type] = SortedDict(
-            "dates" => merged_dates,
-            "date_paths" => merged_date_paths,
-            "commits" => merged_commits,
-            "benchmarks" => merged_benchmarks
-        )
-        existing = existing_dict
-    end
-
-    write_if_changed(group_file, SortedDict{String, Any}(String(k) => v for (k, v) in pairs(existing)); gzip=true)
-end
-
-# Dates present in a per-group detail file for some stat but missing for
-# `stat` in that same file, i.e. dates that need re-parsing to backfill a
-# newly added stat. Decided per file: a date one group has for `stat` says
-# nothing about the others.
-function dates_missing_stat(output_dir, stat)
-    benchdir = joinpath(output_dir, "benchmarks")
-    isdir(benchdir) || return Set{String}()
-    missing_dates = Set{String}()
-    for f in readdir(benchdir)
-        endswith(f, ".json.gz") || continue
-        local d
-        try
-            d = JSON3.read(transcode(GzipDecompressor, read(joinpath(benchdir, f))))
-        catch e
-            @warn "Failed to read group detail" file=f error=e
-            continue
-        end
-        all_dates = Set{String}()
-        have = Set{String}()
-        for (st, block) in pairs(d)
-            haskey(block, :dates) || continue
-            for dt in block[:dates]
-                push!(all_dates, String(dt))
-                String(st) == stat && push!(have, String(dt))
-            end
-        end
-        union!(missing_dates, setdiff(all_dates, have))
-    end
-    return missing_dates
-end
-
-# Structural comparison that ignores key order and generated_at: the summary is
-# stamped on every run, and rewriting a file that only differs there is a commit
-# of unchanged data.
-function normalize_for_compare(x)
-    if x isa AbstractDict
-        out = Dict{String,Any}()
-        for (k, v) in pairs(x)
-            ks = String(k)
-            ks == "generated_at" && continue
-            out[ks] = normalize_for_compare(v)
-        end
-        return out
-    elseif x isa AbstractVector
-        return Any[normalize_for_compare(v) for v in x]
-    else
-        return x
-    end
-end
-unchanged(existing_json::AbstractString, new_json::AbstractString) =
-    normalize_for_compare(JSON3.read(existing_json)) == normalize_for_compare(JSON3.read(new_json))
-
-function write_if_changed(filepath, data; gzip=false)
-    new_json = JSON3.write(data)
-    if gzip
-        filepath = replace(filepath, r"\.json$" => ".json.gz")
-        if isfile(filepath)
-            existing = String(transcode(GzipDecompressor, read(filepath)))
-            if unchanged(existing, new_json)
-                @info "No changes, skipping write" file=filepath
-                return
-            end
-        end
-        write(filepath, transcode(GzipCompressor, Vector{UInt8}(new_json)))
-        @info "Wrote" file=filepath size=filesize(filepath)
-    else
-        if isfile(filepath)
-            existing = read(filepath, String)
-            if unchanged(existing, new_json)
-                @info "No changes, skipping write" file=filepath
-                return
-            end
-        end
-        write(filepath, new_json)
-        @info "Wrote" file=filepath size=filesize(filepath)
+    finally
+        rm(tmpdir; recursive=true, force=true)
     end
 end
 
-function main()
+# --- database ------------------------------------------------------------------
+
+const REPORT_COLS = ["kind", "date", "commit_sha", "baseline_commit_sha", "baseline_date", "julia_version", "llvm", "cpu", "os",
+                     "nanosoldier_commit", "report_total", "report_regressions", "report_improvements"]
+
+sql(x) = x === nothing ? missing : x
+nan_missing(x) = isnan(x) ? missing : x
+
+function report_id(db, path)
+    r = query(db, "SELECT id FROM bench_reports WHERE path = ?", (path,))
+    return isempty(r) ? nothing : Int(r[1].id)
+end
+
+# Write one report: its header row from report.md, then for every parsed
+# statistic the per-group summary and the per-benchmark estimates. Existing
+# rows for a re-parsed statistic are replaced, others left alone.
+function write_report!(db, date_path, md, parsed, names, seq)
+    path = "by_date/" * date_path
+    rstmt = upsert_stmt(db, "bench_reports", ["path"], REPORT_COLS)
+    upsert!(rstmt, (path, "daily", date_path_to_date(date_path), md.commit, sql(md.baseline_commit), sql(md.baseline_date),
+                    sql(md.julia_version), sql(md.llvm), sql(md.cpu), sql(md.os), sql(md.nanosoldier_commit),
+                    sql(md.total), sql(md.regressions), sql(md.improvements), seq))
+    id = report_id(db, path)
+    parsed === nothing && return 0
+    by_stat, errors = parsed
+    gstmt = upsert_stmt(db, "bench_report_groups", ["report_id", "grp", "stat"],
+                        ["geomean_ns", "count", "gctime_geomean_ns", "gctime_count", "memory_geomean_bytes", "memory_count",
+                         "allocs_geomean", "allocs_count"]; seq=false)
+    estmt = upsert_stmt(db, "bench_results", ["report_id", "bench_id", "stat"], ["time_ns", "gctime_ns", "memory_bytes", "allocs"]; seq=false)
+    n = 0
+    for (stat, groups) in by_stat
+        for (grp, benches) in groups
+            times = [e[1] for e in values(benches)]
+            # The other estimates' geomeans over the benchmarks with a positive value
+            positive(i) = Float64[e[i] for e in values(benches) if !isnan(e[i]) && e[i] > 0]
+            gc, mem, al = positive(2), positive(3), positive(4)
+            upsert!(gstmt, (id, grp, stat, geomean(times), length(times), geomean(gc), length(gc), geomean(mem), length(mem),
+                            geomean(al), length(al)))
+            for (name, e) in benches
+                bid = getid!(names, db, "bench_names", ("grp", "name"), (grp, name))
+                upsert!(estmt, (id, bid, stat, e[1], nan_missing(e[2]), nan_missing(e[3]) === missing ? missing : Int(e[3]),
+                                nan_missing(e[4]) === missing ? missing : Int(e[4])))
+                n += 1
+            end
+        end
+    end
+    vstmt = upsert_stmt(db, "bench_verdicts", ["report_id", "bench_id"],
+                        ["time_ratio", "time_tolerance", "memory_ratio", "memory_tolerance", "verdict"]; seq=false)
+    unmatched = 0
+    for v in md.verdicts
+        bid = get(names, (v.grp, v.name), nothing)
+        if bid === nothing
+            r = query(db, "SELECT id FROM bench_names WHERE grp = ? AND name = ?", (v.grp, v.name))
+            bid = isempty(r) ? nothing : Int(r[1].id)
+        end
+        bid === nothing && (unmatched += 1; continue)
+        upsert!(vstmt, (id, bid, v.time_ratio, v.time_tolerance, v.memory_ratio, v.memory_tolerance, v.verdict))
+    end
+    unmatched > 0 && @warn "Verdict rows whose benchmark name did not match" date_path unmatched
+    err_stmt = upsert_stmt(db, "bench_errors", ["report_id", "bench_id"], ["error"]; seq=false)
+    for e in errors
+        id2 = e isa AbstractString ? parse_bench_id(e) : nothing
+        id2 === nothing && continue
+        bid = getid!(names, db, "bench_names", ("grp", "name"), id2)
+        upsert!(err_stmt, (id, bid, String(e)))
+    end
+    return n
+end
+
+# Known reports and, per report, the statistics with detail rows
+function known_reports(db)
+    known = Dict{String,Set{String}}()
+    for r in DBInterface.execute(db, "SELECT r.date, g.stat FROM bench_reports r LEFT JOIN bench_report_groups g ON g.report_id = r.id WHERE r.kind = 'daily'")
+        s = get!(known, String(r.date), Set{String}())
+        r.stat === missing || push!(s, String(r.stat))
+    end
+    return known
+end
+
+function main(args=ARGS)
+    backfill_all = "--backfill-stats" in args
+    db = open_db(Store.db_path(args); create=false)
     by_date_dir = ensure_clone()
-
-    existing_summary, known_dates = load_existing_data("data")
-    @info "Known dates" count=length(known_dates)
-
+    known = known_reports(db)
+    @info "Known reports" count=length(known)
     all_dates = enumerate_report_dates(by_date_dir)
 
-    # Dates needing a re-parse because a stat (e.g. "mean", added later) is
-    # missing from the per-group detail files.
-    backfill_dates = union((dates_missing_stat("data", st) for st in ("minimum", "mean"))...)
-    isempty(backfill_dates) || @info "Dates to backfill for missing stats" count=length(backfill_dates)
+    required = backfill_all ? STATS : LEGACY_STATS
+    new_dates = filter(d -> !issubset(required, get(known, date_path_to_date(d), Set{String}())), all_dates)
+    @info "Reports to parse" count=length(new_dates)
 
-    new_dates = filter(all_dates) do d
-        date = date_path_to_date(d)
-        date ∉ known_dates || date in backfill_dates
-    end
-    @info "New reports to parse" count=length(new_dates)
-
-    new_reports = []
-    for (i, date_path) in enumerate(new_dates)
-        @info "Parsing report $i/$(length(new_dates)): $date_path"
-        report = parse_tarball(by_date_dir, date_path)
-        if report !== nothing
-            push!(new_reports, report)
-        else
-            @warn "No data extracted" date_path
+    names = Dict{Tuple,Int}()
+    n = source_run(db, "benchmarks") do
+        written = 0
+        for (i, date_path) in enumerate(new_dates)
+            @info "Parsing report $i/$(length(new_dates)): $date_path"
+            md = parse_report_md(by_date_dir, date_path)
+            parsed = parse_tarball(by_date_dir, date_path, STATS)
+            parsed === nothing && (@warn "No data extracted" date_path; continue)
+            transaction(db) do
+                written += write_report!(db, date_path, md, parsed, names, next_seq!(db))
+            end
         end
-    end
-
-    @info "Parsed new reports" count=length(new_reports)
-
-    # Backfill report summary fields (counts + baseline) for known dates that lack them.
-    # This is cheap: we only read report.md files for dates that don't already have report_total.
-    if existing_summary !== nothing
-        backfilled = 0
-        for report in get(existing_summary, :reports, [])
-            haskey(report, :report_total) && haskey(report, :report_baseline_date) && continue
-            d = String(get(report, :date, ""))
-            isempty(d) && continue
-            d in known_dates || continue
-            # Skip if a freshly-parsed entry already covers this date
-            any(r -> r["date"] == d, new_reports) && continue
-            date_path = String(get(report, :date_path, ""))
-            isempty(date_path) && continue
-            stats = extract_report_summary(by_date_dir, date_path)
-            (stats.total === nothing && stats.baseline_date === nothing) && continue
-            entry = SortedDict{String, Any}(
-                "date" => d,
-                "date_path" => date_path,
-                "commit" => String(get(report, :commit, "")),
-                "by_group" => let bg = get(report, :by_group, Dict())
-                    SortedDict{String, Any}(String(k) => Dict{String, Any}(
-                        String(fk) => fv for (fk, fv) in pairs(v)
-                    ) for (k, v) in pairs(bg))
-                end,
-            )
-            stats.total !== nothing && (entry["report_total"] = stats.total)
-            stats.regressions !== nothing && (entry["report_regressions"] = stats.regressions)
-            stats.improvements !== nothing && (entry["report_improvements"] = stats.improvements)
-            stats.baseline_date !== nothing && (entry["report_baseline_date"] = stats.baseline_date)
-            push!(new_reports, entry)
-            backfilled += 1
+        # Geomeans of the other estimates for group summaries written before
+        # the columns existed, from the stored results (once per row)
+        transaction(db) do
+            DBInterface.execute(db, """
+                UPDATE bench_report_groups AS g SET
+                  gctime_geomean_ns = (SELECT exp(avg(ln(r.gctime_ns))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                       WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.gctime_ns > 0),
+                  gctime_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.gctime_ns > 0),
+                  memory_geomean_bytes = (SELECT exp(avg(ln(r.memory_bytes))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                          WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.memory_bytes > 0),
+                  memory_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.memory_bytes > 0),
+                  allocs_geomean = (SELECT exp(avg(ln(r.allocs))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                    WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.allocs > 0),
+                  allocs_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.allocs > 0)
+                WHERE g.memory_count IS NULL""")
+            filled = Int(query(db, "SELECT changes() AS n")[1].n)
+            filled > 0 && @info "Filled the other estimates' group geomeans" rows=filled
         end
-        @info "Backfilled report summaries" count=backfilled
+        # Summary fields for known reports that lack them, from report.md
+        # alone (cheap): the same backfill the file-based fetcher ran.
+        transaction(db) do
+            seq = next_seq!(db)
+            stmt = DBInterface.prepare(db, "UPDATE bench_reports SET report_total = ?, report_regressions = ?, report_improvements = ?, " *
+                                           "baseline_date = ?, baseline_commit_sha = COALESCE(baseline_commit_sha, ?), change_seq = ? WHERE id = ?")
+            backfilled = 0
+            for r in query(db, "SELECT id, path FROM bench_reports WHERE kind = 'daily' AND (report_total IS NULL OR baseline_date IS NULL)")
+                date_path = replace(String(r.path), "by_date/" => "")
+                date_path in new_dates && continue
+                md = parse_report_md(by_date_dir, date_path)
+                (md.total === nothing && md.baseline_date === nothing) && continue
+                DBInterface.execute(stmt, (sql(md.total), sql(md.regressions), sql(md.improvements), sql(md.baseline_date),
+                                           sql(md.baseline_commit), seq, Int(r.id)))
+                backfilled += 1
+            end
+            backfilled > 0 && @info "Backfilled report summaries" count=backfilled
+        end
+        written
     end
-
-    generate_json_output(new_reports, existing_summary)
+    @info "Stored benchmark estimates" rows=n
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end

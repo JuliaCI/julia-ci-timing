@@ -7,7 +7,30 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-Per-group BaseBenchmarks history is stored as gzipped JSON under
+The source of truth is a SQLite database on the site's host
+(`docs/database-migration.md`); the six `fetch_*.jl` scripts write to it
+every two hours and the site reads it through a small API. Three ways to get
+at it, depending on what you need:
+
+- **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/` (the
+  same on the beta host at `http://3.82.159.74/db/`), public and read-only.
+  The schema is `db/schema.sql`. One request per query:
+  `curl "https://perf.julialang.org/db/ci-timing.json?sql=SELECT+...&_shape=array"`.
+  Bounded by the row limit and the query time limit; for anything heavy,
+  take the snapshot instead.
+- **The whole database**: `https://perf.julialang.org/data/ci-timing.sqlite.gz`,
+  a copy taken after every ingest (about 80 MB). Download once and run any
+  SQL locally with `sqlite3`, no limits and no load on the host.
+- **The extracts**: the gzipped JSON files described below, at
+  `https://perf.julialang.org/data/<file>`, rendered from the database
+  after every ingest. `julia --project analysis/fetch_data.jl` downloads
+  them all into `data/` (revalidating by ETag), which is what the analysis
+  scripts and `tools/inspect-bench.mjs` read.
+
+The site's own API (`db/serve.jl`, `api/...` routes listed in its header)
+serves the same shapes with a time window; it is not a stable interface.
+
+Per-group BaseBenchmarks history is the extract
 `data/benchmarks/<group>.json.gz`. Each file has the shape:
 
 ```text
@@ -75,7 +98,7 @@ last year, keys sorted:
 
 `state` is the API's connection state at the last listing and `job` is
 only set for agents connected in the latest snapshot. Month files older
-than a year are deleted.
+than a year are not rendered.
 
 The `build`, `test` and `launch` queues (the Julia cluster) and the Secure
 cluster's `default` queue have no resident agents: each host's scheduler (JuliaCI/sandboxed-buildkite-agent) starts one
@@ -200,8 +223,8 @@ agents include:
   same benchmark).
 - Group-level summaries (e.g. geomean over time) so we can plot a
   single "is the suite getting faster or slower" line.
-- Correlating regressions with `julia/` commit metadata pulled from
-  the `.julia-repo-cache/` worktree.
+- Correlating regressions with `julia/` commit metadata (the `commits`
+  table, once a clone feeds it).
 - Filtering by inferred noise floor (`noise_pct`) so we don't chase
   benchmarks that bounce ±20% run to run.
 

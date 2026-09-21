@@ -1,12 +1,18 @@
 #!/usr/bin/env julia
 # Fetch PkgEval results from NanosoldierReports
 # Uses git ls-tree to enumerate dates, then fetches db.json files concurrently
-# via GitHub raw content URLs. Extracts per-date status counts (ok/fail/crash/skip/kill).
+# via GitHub raw content URLs. Extracts per-date status counts (ok/fail/crash/skip/kill)
+# and the per-package rows. Reports imported from the legacy summary file have
+# no package rows; `--backfill-packages N` re-fetches the newest N such
+# reports (about 1.5 MB and 13k rows each).
 
 using JSON3
 using HTTP
 using Dates
-using CodecZlib: GzipCompressor, GzipDecompressor
+
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
 
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
 const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports")
@@ -81,6 +87,21 @@ function fetch_db_json(date_path::String)
     end
 end
 
+# Versions come as strings or as {major, minor, patch, prerelease} objects
+function version_string(ver)
+    ver === nothing && return ""
+    ver isa AbstractString && return String(ver)
+    major = get(ver, :major, 0)
+    minor = get(ver, :minor, 0)
+    patch = get(ver, :patch, 0)
+    pre = get(ver, :prerelease, nothing)
+    version_str = "$major.$minor.$patch"
+    if pre !== nothing && !isempty(pre)
+        version_str *= "-" * join(pre, ".")
+    end
+    return version_str
+end
+
 function count_statuses(db, date_path::String)
     tests = get(db, :tests, nothing)
     tests === nothing && return nothing
@@ -102,21 +123,7 @@ function count_statuses(db, date_path::String)
     version_str = ""
     commit = ""
     if build !== nothing
-        ver = get(build, :version, nothing)
-        if ver !== nothing
-            if ver isa AbstractString
-                version_str = String(ver)
-            else
-                major = get(ver, :major, 0)
-                minor = get(ver, :minor, 0)
-                patch = get(ver, :patch, 0)
-                pre = get(ver, :prerelease, nothing)
-                version_str = "$major.$minor.$patch"
-                if pre !== nothing && !isempty(pre)
-                    version_str *= "-" * join(pre, ".")
-                end
-            end
-        end
+        version_str = version_string(get(build, :version, nothing))
         sha = string(get(build, :sha, ""))
         commit = sha[1:min(8, length(sha))]
     end
@@ -136,95 +143,109 @@ function count_statuses(db, date_path::String)
     )
 end
 
-function load_existing(output_dir)
-    path_gz = joinpath(output_dir, "pkgeval_summary.json.gz")
-    try
-        if isfile(path_gz)
-            data = JSON3.read(transcode(GzipDecompressor, read(path_gz)))
-            reports = get(data, :reports, [])
-            known = Set(String(get(r, :date, "")) for r in reports)
-            @info "Loaded existing pkgeval summary" reports=length(reports)
-            return (data, known)
+# Per-package rows and per-reason counts for one report; the summary counts
+# come from count_statuses above, unchanged.
+function package_rows(db_json)
+    tests = get(db_json, :tests, nothing)
+    tests === nothing && return (NamedTuple[], Dict{Tuple{String,String},Int}())
+    rows = NamedTuple[]
+    reasons = Dict{Tuple{String,String},Int}()
+    for (pkg, info) in pairs(tests)
+        status = String(get(info, :status, "unknown"))
+        reason = get(info, :reason, nothing)
+        reason = reason === nothing ? "" : String(reason)
+        dur = get(info, :duration, nothing)
+        version = version_string(get(info, :version, nothing))
+        push!(rows, (package = String(pkg), version = isempty(version) ? missing : version,
+                     status = status, reason = isempty(reason) ? missing : reason,
+                     duration_s = dur === nothing ? missing : Float64(dur)))
+        reasons[(status, reason)] = get(reasons, (status, reason), 0) + 1
+    end
+    return rows, reasons
+end
+
+const REPORT_COLS = ["kind", "date", "commit_sha", "julia_version", "total", "ok", "fail", "crash", "skip", "kill"]
+
+function write_reports!(db, reports)
+    seq = next_seq!(db)
+    rstmt = upsert_stmt(db, "pkgeval_reports", ["path"], REPORT_COLS)
+    reason_stmt = upsert_stmt(db, "pkgeval_reasons", ["report_id", "status", "reason"], ["count"]; seq=false)
+    result_stmt = upsert_stmt(db, "pkgeval_results", ["report_id", "package_id"], ["version", "status", "reason", "duration_s"]; seq=false)
+    packages = Dict{Tuple,Int}()
+    n = 0
+    for (summary, sha, pkgs, reasons) in reports
+        path = "by_date/" * summary["date_path"]
+        upsert!(rstmt, (path, "daily", summary["date"], sha, summary["version"], summary["total"], summary["ok"],
+                        summary["fail"], summary["crash"], summary["skip"], summary["kill"], seq))
+        id = Int(query(db, "SELECT id FROM pkgeval_reports WHERE path = ?", (path,))[1].id)
+        for ((status, reason), count) in reasons
+            upsert!(reason_stmt, (id, status, reason, count))
         end
-    catch e
-        @warn "Failed to load existing summary" error=e
+        for r in pkgs
+            pid = getid!(packages, db, "packages", ("name",), (r.package,))
+            upsert!(result_stmt, (id, pid, r.version, r.status, r.reason, r.duration_s))
+            n += 1
+        end
     end
-    return (nothing, Set{String}())
+    return n
 end
 
-# Structural comparison, so key order and the generated_at stamp do not count
-function normalize_for_compare(x)
-    if x isa AbstractDict
-        return Dict{String,Any}(String(k) => normalize_for_compare(v) for (k, v) in pairs(x))
-    elseif x isa AbstractVector
-        return Any[normalize_for_compare(v) for v in x]
-    else
-        return x
-    end
+function backfill_count(args)
+    i = findfirst(==("--backfill-packages"), args)
+    i === nothing && return 0
+    return i < length(args) ? parse(Int, args[i+1]) : 365
 end
-reports_unchanged(existing_data, reports) =
-    normalize_for_compare(get(existing_data, :reports, [])) == normalize_for_compare(reports)
 
-function main()
-    output_dir = "data"
-    mkpath(output_dir)
-
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
     ensure_clone()
 
     all_dates = enumerate_pkgeval_dates()
-    existing_data, known_dates = load_existing(output_dir)
-
-    new_dates = filter(d -> date_path_to_date(d) ∉ known_dates, all_dates)
-    @info "New dates to process" count=length(new_dates)
+    # Known by path: a db.json without a date field would otherwise be new forever
+    known_paths = Set(String(r.path) for r in query(db, "SELECT path FROM pkgeval_reports"))
+    new_dates = filter(d -> "by_date/" * d ∉ known_paths, all_dates)
+    @info "New dates to process" count=length(new_dates) known=length(known_paths)
+    backfill = backfill_count(args)
+    if backfill > 0
+        without = Set(String(r.path) for r in query(db, "SELECT r.path FROM pkgeval_reports r " *
+            "WHERE r.kind = 'daily' AND NOT EXISTS (SELECT 1 FROM pkgeval_results p WHERE p.report_id = r.id)"))
+        todo = filter(d -> "by_date/" * d in without, all_dates)
+        todo = todo[max(1, end - backfill + 1):end]
+        @info "Backfilling package rows" reports=length(todo) without_rows=length(without)
+        append!(new_dates, todo)
+    end
 
     done = Threads.Atomic{Int}(0)
     total = length(new_dates)
     results = asyncmap(new_dates; ntasks=CONCURRENCY) do date_path
-        db = fetch_db_json(date_path)
+        db_json = fetch_db_json(date_path)
         n = Threads.atomic_add!(done, 1) + 1
         if n % 50 == 0 || n == total
             @info "Progress: $n/$total"
         end
-        db === nothing && return nothing
-        return count_statuses(db, date_path)
+        db_json === nothing && return nothing
+        summary = count_statuses(db_json, date_path)
+        summary === nothing && return nothing
+        build = get(db_json, :build, nothing)
+        sha = build === nothing ? "" : string(get(build, :sha, ""))
+        pkgs, reasons = package_rows(db_json)
+        return (summary, sha, pkgs, reasons)
     end
-    new_reports = filter(!isnothing, results)
     # The concurrent fetches leave pooled keep-alive connections whose idle
     # monitors otherwise die noisily when the process exits
     HTTP.Connections.closeall()
+    reports = filter(!isnothing, results)
 
-    reports_by_date = Dict{String,Any}()
-    if existing_data !== nothing
-        for r in get(existing_data, :reports, [])
-            d = String(get(r, :date, ""))
-            isempty(d) && continue
-            reports_by_date[d] = Dict{String,Any}(String(k) => v for (k, v) in pairs(r))
+    n = source_run(db, "pkgeval") do
+        transaction(db) do
+            write_reports!(db, reports)
         end
     end
-    for r in new_reports
-        isempty(r["date"]) && continue
-        reports_by_date[r["date"]] = r
-    end
-
-    sorted_reports = [reports_by_date[k] for k in sort(collect(keys(reports_by_date)))]
-
-    summary = Dict{String,Any}(
-        "generated_at" => Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
-        "reports" => sorted_reports,
-    )
-
-    output_path = joinpath(output_dir, "pkgeval_summary.json.gz")
-    if existing_data !== nothing && isfile(output_path) && reports_unchanged(existing_data, sorted_reports)
-        @info "No changes to data, skipping write" file=output_path
-        return 0
-    end
-    json_bytes = Vector{UInt8}(JSON3.write(summary))
-    gz_bytes = transcode(GzipCompressor, json_bytes)
-    write(output_path, gz_bytes)
-    @info "Wrote $(length(sorted_reports)) reports to $output_path"
+    @info "Stored pkgeval reports" reports=length(reports) package_rows=n
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end

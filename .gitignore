@@ -1,6 +1,9 @@
-# Data files are tracked but can be regenerated
-# Uncomment if you don't want to track them:
-# data/
+# The data lives in the database on the host (docs/database-migration.md);
+# analysis/fetch_data.jl fills data/ with the extracts. Only the two
+# hand-maintained files are tracked.
+data/*
+!data/ttfx_annotations.json
+!data/methodology_changes.json
 
 # Julia
 *.jl.cov
@@ -17,5 +20,9 @@ Thumbs.db
 *~
 .vscode/
 .idea/
-.julia-repo-cache
 .cache/
+
+# Local database (db/)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

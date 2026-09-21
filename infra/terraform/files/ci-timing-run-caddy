@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+. /etc/ci-timing.host.env
+docker rm -f ci-timing-caddy >/dev/null 2>&1 || true
+exec docker run --name ci-timing-caddy \
+  --network host \
+  --volume /etc/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  --volume "${CI_TIMING_CADDY_DATA_DIR}":/data \
+  --volume "${CI_TIMING_CADDY_CONFIG_DIR}":/config \
+  --volume "${CI_TIMING_SITE_DIR}":"${CI_TIMING_SITE_DIR}":ro \
+  --volume "${CI_TIMING_EXPORT_DIR}":"${CI_TIMING_EXPORT_DIR}":ro \
+  "$CI_TIMING_CADDY_IMAGE" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
