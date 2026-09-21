@@ -17,7 +17,8 @@ ARG RUNTIME_UID=10001
 ARG RUNTIME_GID=10001
 RUN groupadd -g ${RUNTIME_GID} ci-timing && useradd -m -u ${RUNTIME_UID} -g ${RUNTIME_GID} ci-timing
 
-ENV JULIA_DEPOT_PATH=/depot \
+# The trailing colon keeps the bundled depot (precompiled stdlibs) on the path
+ENV JULIA_DEPOT_PATH=/depot: \
     JULIA_PROJECT=/app \
     JULIA_NUM_THREADS=2
 
