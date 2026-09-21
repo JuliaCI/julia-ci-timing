@@ -35,7 +35,7 @@ function parse_args(args)
     return opts
 end
 
-rows(db, sql, params=()) = SQLite.Tables.rowtable(DBInterface.execute(db, sql, params))
+rows(db, sql, params=()) = query(db, sql, params)
 
 # SQL NULL comes back as `missing`; the files use null (or "" where the
 # fetcher wrote strings).

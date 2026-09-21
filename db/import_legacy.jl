@@ -75,7 +75,7 @@ function import_timing!(db, data_dir)
             id = get(build_ids, key, nothing)
             if id === nothing
                 upsert!(build_stmt, (key[1], key[2], meta..., seq))
-                id = Int(first(DBInterface.execute(db, "SELECT id FROM builds WHERE pipeline = ? AND number = ?", key)).id)
+                id = Int(query(db, "SELECT id FROM builds WHERE pipeline = ? AND number = ?", key)[1].id)
                 build_ids[key] = id
                 build_meta[key] = meta
             elseif build_meta[key] != meta
@@ -112,7 +112,7 @@ function import_benchmarks!(db, data_dir)
         upsert!(report_stmt, (p, "daily", String(r.date), sqlstr(r.commit), sql(get(r, :report_baseline_date, nothing)),
                               sql(get(r, :report_total, nothing)), sql(get(r, :report_regressions, nothing)),
                               sql(get(r, :report_improvements, nothing)), seq))
-        id = Int(first(DBInterface.execute(db, "SELECT id FROM bench_reports WHERE path = ?", (p,))).id)
+        id = Int(query(db, "SELECT id FROM bench_reports WHERE path = ?", (p,))[1].id)
         report_ids[String(r.date)] = id
         for (grp, g) in pairs(r.by_group)
             for stat in ("minimum", "mean")

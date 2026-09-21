@@ -321,7 +321,7 @@ end
 
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
-    existing = SQLite.Tables.rowtable(DBInterface.execute(db, "SELECT build, job_uuid, n_metrics FROM ttfx_jobs"))
+    existing = query(db, "SELECT build, job_uuid, n_metrics FROM ttfx_jobs")
     # Rows short of a metric: the recent ones are fetched again, the rest
     # padded (their metric arrays already read as nulls; only the length
     # marker changes)
