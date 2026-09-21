@@ -31,7 +31,7 @@ seeded history is absent and they must not start from nothing.
 """
 function open_db(path::AbstractString=DEFAULT_PATH; create::Bool=true)
     if !create && !isfile(path)
-        error("database $path does not exist; run db/import_legacy.jl first or pass --bootstrap")
+        error("database $path does not exist; restore it from a backup (infra/terraform/README.md)")
     end
     db = SQLite.DB(path)
     # SQLite.execute (not DBInterface.execute) closes its statement at once.

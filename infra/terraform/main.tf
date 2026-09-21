@@ -393,7 +393,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = "*"
       },
       {
-        # The daily gate (compare-origins.yml) checks the age of the latest backup
+        # The daily health check (health.yml) reads the age of the latest backup
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
         Resource = aws_s3_bucket.backups.arn

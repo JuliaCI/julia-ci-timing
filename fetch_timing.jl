@@ -2,8 +2,8 @@
 
 # Fetch Julia CI timing data from Buildkite API into the database (db/).
 # Buildkite only retains a window of builds, so the database must already
-# hold the history (db/import_legacy.jl seeds it); the site's files are
-# rendered from it by db/export.jl.
+# hold the history (the host restores it from the latest backup); the
+# site reads it through db/serve.jl and db/export.jl renders the extracts.
 
 using HTTP
 using JSON3

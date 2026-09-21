@@ -39,46 +39,11 @@ let data = null;
 let statsTableSortColumn = "median";
 let statsTableSortAsc = false; // false = descending (largest first)
 
-// Fetch a gzipped JSON file and return the parsed value.
-// Throws on non-2xx responses; AbortError if the signal fires.
-// Defaults to `cache: "no-cache"` so the browser always revalidates with the
-// origin (via If-None-Match / If-Modified-Since) and picks up freshly
-// regenerated data files instead of serving a stale disk-cached copy. Callers
-// can override `cache` via options if they need a different policy.
-async function loadGzipJson(url, options = {}) {
-  const resp = await fetch(url, { cache: "no-cache", ...options });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
-  return new Response(decompressed).json();
-}
-
 // === Data source ===
-// The site reads from the API (db/serve.jl, at api/ on the host), which
-// serves the database with a time window, and falls back to the rendered
-// files under data/ where there is no API: the GitHub Pages copy and a plain
-// checkout served statically. Both give the loaders the same shapes.
+// The site reads the database through the API (db/serve.jl, at api/ on
+// the host), which serves each tab's shape with a time window. Locally,
+// `julia --project db/serve.jl --db X.sqlite --site .` serves both.
 const API_BASE = "api";
-let dataSource = null; // "api" | "files", settled by the first probe
-let dataSourceProbe = null;
-let apiStatus = null; // the last api/status payload
-
-function probeDataSource() {
-  if (dataSource) return Promise.resolve(dataSource);
-  if (!dataSourceProbe) {
-    dataSourceProbe = fetch(`${API_BASE}/status`, { cache: "no-cache" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((status) => {
-        if (!status || typeof status.change_seq !== "number") throw new Error("not the API");
-        apiStatus = status;
-        dataSource = "api";
-      })
-      .catch(() => {
-        dataSource = "files";
-      })
-      .then(() => dataSource);
-  }
-  return dataSourceProbe;
-}
 
 // GET an API route; empty parameters are left out of the query
 async function apiGet(path, params = {}, options = {}) {
@@ -246,11 +211,6 @@ function buildsLoadError(message) {
 }
 
 async function renderBuildsView() {
-  if (dataSource === null) await probeDataSource();
-  if (dataSource !== "api") {
-    buildsLoadError("Build wall times and queue waits need the database API; this copy of the site is served from the rendered files.");
-    return;
-  }
   const since = apiSince(getTimeRangeCutoff());
   const stale = !buildsData || buildsData.changeSeq !== timingChangeSeq || (since !== buildsData.since && (since === "" || since < buildsData.since));
   if (stale && !buildsLoading) {
@@ -415,62 +375,17 @@ function drawBuildsView() {
 }
 
 // === Agent snapshots (Workers tab) ===
-// data/agents/, from fetch_agents.jl: latest.json holds the latest details per
-// agent and history-YYYY-MM.ndjson one line per update run listing the agent
-// names connected then. Unlike the job grid this covers every queue and
-// pipeline, PR builds included.
+// api/agents/latest holds the latest details per agent and
+// api/agents/snapshots one entry per update run listing the agent names
+// connected then, from fetch_agents.jl. Unlike the job grid this covers
+// every queue and pipeline, PR builds included.
 let agentsData = null;
 let agentsDataPromise = null;
 let agentsChart = null;
 
 async function loadAgentsData() {
-  if ((await probeDataSource()) === "api") {
-    const [latest, snapshots] = await Promise.all([
-      apiGet("agents/latest"),
-      apiGet("agents/snapshots"),
-    ]);
-    return { generated_at: latest.generated_at, agents: latest.agents || {}, snapshots };
-  }
-  const resp = await fetch("data/agents/latest.json", { cache: "no-cache" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const latest = await resp.json();
-  const agents = latest.agents || {};
-  // Every month file from the earliest first_seen to now; a month with no
-  // snapshots has no file and is skipped
-  let earliest = Date.parse(latest.generated_at || "") || Date.now();
-  for (const rec of Object.values(agents)) {
-    const t = Date.parse(rec.first_seen || "");
-    if (!isNaN(t) && t < earliest) earliest = t;
-  }
-  const months = [];
-  const cursor = new Date(earliest);
-  cursor.setUTCDate(1);
-  cursor.setUTCHours(0, 0, 0, 0);
-  const end = new Date();
-  while (cursor <= end && months.length < 24) {
-    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  const texts = await Promise.all(
-    months.map((m) =>
-      fetch(`data/agents/history-${m}.ndjson`, { cache: "no-cache" }).then((r) =>
-        r.ok ? r.text() : "",
-      ),
-    ),
-  );
-  const snapshots = [];
-  for (const text of texts) {
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        snapshots.push(JSON.parse(line));
-      } catch (err) {
-        console.warn("Skipping malformed agent snapshot line", err);
-      }
-    }
-  }
-  snapshots.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-  return { generated_at: latest.generated_at, agents, snapshots };
+  const [latest, snapshots] = await Promise.all([apiGet("agents/latest"), apiGet("agents/snapshots")]);
+  return { generated_at: latest.generated_at, agents: latest.agents || {}, snapshots };
 }
 const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // The build, test and launch queues (the Julia cluster) and the Secure cluster's
@@ -5330,18 +5245,12 @@ function timeAgo(dateString) {
 
 // === Timing data ===
 // `data` is { generated_at, jobs: { name: { recent: [runs newest first] } },
-// coverage }. From the API it holds the runs of builds created since
-// `timingSince` (a UTC day, "" for all time), extended on demand as the
-// time range widens and never shrunk; refreshes ask for what changed after
-// `timingChangeSeq`. From the files it is the whole extract.
+// coverage }: the runs of builds created since `timingSince` (a UTC day, ""
+// for all time), extended on demand as the time range widens and never
+// shrunk; refreshes ask for what changed after `timingChangeSeq`.
 let timingSince = null;
 let timingChangeSeq = 0;
 let timingExtending = null; // in-flight window extension, keyed by its since
-
-async function loadData() {
-  if ((await probeDataSource()) === "api") return loadTimingFromApi();
-  return loadTimingFromFiles();
-}
 
 const runKey = (r) => `${r.pipeline}#${r.build}/${r.retry || 0}`;
 
@@ -5438,7 +5347,7 @@ function showTimingLoadError() {
               `;
 }
 
-async function loadTimingFromApi() {
+async function loadData() {
   try {
     renderMatrixSkeleton();
     const since = apiSince(initialTimingCutoff());
@@ -5458,9 +5367,9 @@ async function loadTimingFromApi() {
 }
 
 // Widen the loaded window to the range being shown; the chart redraws when
-// the older runs arrive. A no-op from the files, which hold everything.
+// the older runs arrive
 function ensureTimingWindow() {
-  if (dataSource !== "api" || !data || timingSince === null || timingSince === "") return;
+  if (!data || timingSince === null || timingSince === "") return;
   const wanted = apiSince(getTimeRangeCutoff());
   if (wanted !== "" && wanted >= timingSince) return;
   if (timingExtending === wanted) return;
@@ -5504,198 +5413,6 @@ async function refreshTimingFromApi(signal) {
   setTimingUpdated();
 }
 
-async function loadTimingFromFiles() {
-  try {
-    // Render empty matrix skeleton immediately
-    renderMatrixSkeleton();
-
-    // no-cache like loadGzipJson: always revalidate against the server
-    const resp = await fetch("data/timing_summary.json.gz", {
-      cache: "no-cache",
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    // Stream and parse JSON progressively (decompress gzip on the fly)
-    const decompressed = resp.body.pipeThrough(new DecompressionStream("gzip"));
-    const reader = decompressed.getReader();
-    const decoder = new TextDecoder();
-    let jsonText = "";
-    let jobCount = 0;
-    let uiRendered = false;
-    let lastProgressTime = 0;
-    const PROGRESS_INTERVAL = 100; // ms between progress updates
-
-    // Initialize data structure
-    data = { jobs: {} };
-
-    // Calculate cutoff date for early UI render based on default time range
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - DEFAULT_TIME_RANGE);
-    const cutoffStr = cutoffDate.toISOString().slice(0, 10); // "yyyy-mm-dd"
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      jsonText += decoder.decode(value, { stream: true });
-
-      const now = performance.now();
-      if (now - lastProgressTime > PROGRESS_INTERVAL) {
-        // Extract generated_at if we haven't yet
-        if (!data.generated_at) {
-          const match = jsonText.match(/"generated_at":\s*"([^"]+)"/);
-          if (match) {
-            data.generated_at = match[1];
-            const updatedEl = document.getElementById("last-updated");
-            updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-            updatedEl.title = data.generated_at;
-          }
-        }
-
-        // Count jobs to show progress
-        const jobMatches = jsonText.match(/":\s*\{\s*"recent"/g);
-        const newCount = jobMatches ? jobMatches.length : 0;
-        if (newCount > jobCount) {
-          jobCount = newCount;
-          const bytesLoaded = jsonText.length;
-          const mbLoaded = (bytesLoaded / (1024 * 1024)).toFixed(1);
-          document.getElementById("chart-loading").innerHTML =
-            `<span class="loading">Loading... ${jobCount} jobs (${mbLoaded} MB)</span>`;
-        }
-
-        // Try to render UI early once we have enough data for the default time range
-        if (!uiRendered && jobCount >= 5) {
-          // Check if we have data beyond the cutoff date (older data)
-          // The JSON has jobs sorted newest first, so look for dates older than cutoff
-          const hasOldEnoughData =
-            jsonText.includes(`"date": "${cutoffStr}`) ||
-            (jsonText.includes(`"date": "20`) &&
-              jsonText.lastIndexOf('"date":') > jsonText.length - 5000);
-
-          // Try a partial parse to see if we can render
-          if (hasOldEnoughData || jsonText.length > 500000) {
-            const partialData = tryParsePartialJSON(jsonText);
-            if (partialData && Object.keys(partialData.jobs).length >= 5) {
-              data = partialData;
-              populateJobSelector();
-              document.getElementById("chart-loading").style.display = "none";
-              uiRendered = true;
-            }
-          }
-        }
-
-        lastProgressTime = now;
-      }
-    }
-
-    // Final parse
-    jsonText += decoder.decode();
-    data = JSON.parse(jsonText);
-
-    const updatedEl = document.getElementById("last-updated");
-    updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-    updatedEl.title = data.generated_at;
-
-    // Check if data is stale (more than 3 days old)
-    checkStaleData(data.generated_at);
-
-    if (!uiRendered) {
-      populateJobSelector();
-      document.getElementById("chart-loading").style.display = "none";
-    } else {
-      // Update with complete data - rebuild matrix with all jobs
-      buildJobMatrix();
-      buildJobIndex();
-
-      // Reassign colors for any new jobs from complete data
-      const allJobs = Object.keys(data.jobs);
-      const colors = generateColors(allJobs.length);
-      allJobs.forEach((name, i) => {
-        jobColors[name] = colors[i];
-      });
-
-      // Recalculate pass rates with complete data and re-render matrix
-      calculateAllPassRates();
-      calculateAllBreakages();
-      renderMatrixTable();
-
-      // Re-apply URL params with complete data to get full selection
-      // (partial data may have missed some jobs in matrix cells)
-      selectedJobs.clear();
-      const hasURLSelection = applyURLParams();
-
-      if (!hasURLSelection) {
-        // Try localStorage
-        const storedConfig = loadFromLocalStorage();
-        if (storedConfig?.selection) {
-          const sel = decodeSelection(storedConfig.selection);
-          if (sel) {
-            for (const { platform, type } of sel.matrix) {
-              const jobs = jobMatrix[platform]?.[type] || [];
-              for (const { name } of jobs) selectedJobs.add(name);
-            }
-            for (const group of sel.special) {
-              const jobs = specialJobGroups[group] || [];
-              for (const { name } of jobs) selectedJobs.add(name);
-            }
-            for (const idx of sel.indices) {
-              if (jobNameList[idx]) selectedJobs.add(jobNameList[idx]);
-            }
-          }
-        }
-      }
-
-      // If still nothing selected, select all matrix jobs
-      if (selectedJobs.size === 0) {
-        for (const platform of platformOrder) {
-          for (const type of typeOrder) {
-            for (const { name } of jobMatrix[platform]?.[type] || []) {
-              selectedJobs.add(name);
-            }
-          }
-        }
-      }
-
-      refreshAllUI();
-    }
-    if (activeTab === "overview") renderOverview();
-  } catch (err) {
-    console.error("Failed to load data:", err);
-    showTimingLoadError();
-  }
-}
-
-// Try to parse partial JSON by closing open structures
-function tryParsePartialJSON(jsonText) {
-  try {
-    // Find the last complete job entry
-    // Jobs look like: "jobname": { "recent": [...], "stats": {...} }
-    // Find a point where we can safely truncate
-
-    // Look for the pattern where a job's stats section ends
-    const statsEndPattern = /"std_seconds":\s*[\d.]+\s*\}\s*\}/g;
-    let lastMatch = null;
-    let match;
-    while ((match = statsEndPattern.exec(jsonText)) !== null) {
-      lastMatch = match;
-    }
-
-    if (!lastMatch) return null;
-
-    // Truncate at the end of the last complete job and close the JSON
-    const truncateAt = lastMatch.index + lastMatch[0].length;
-    let partial = jsonText.slice(0, truncateAt);
-
-    // Close any remaining open braces
-    partial += "}}"; // Close jobs object and root object
-
-    return JSON.parse(partial);
-  } catch (e) {
-    return null;
-  }
-}
-
-// Render empty matrix immediately so users see structure
 function renderMatrixSkeleton() {
   const matrixContainer = document.getElementById("job-matrix");
   let html = '<table class="matrix-table">';
@@ -5748,32 +5465,8 @@ async function refreshData() {
   // Abort any in-flight refresh so we don't race with ourselves.
   if (refreshController) refreshController.abort();
   refreshController = new AbortController();
-  const signal = refreshController.signal;
   try {
-    if (dataSource === "api") return await refreshTimingFromApi(signal);
-    if (dataSource !== "files") return;
-    const newData = await loadGzipJson("data/timing_summary.json.gz", {
-      signal,
-    });
-    if (signal.aborted) return;
-
-    // Only update if data actually changed
-    if (newData.generated_at !== data.generated_at) {
-      data = newData;
-      const updatedEl = document.getElementById("last-updated");
-      updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-      updatedEl.title = data.generated_at;
-      checkStaleData(data.generated_at);
-      // Rebuild all derived state (job matrix/index, colors, pass rates,
-      // breakages, sidebar) — new jobs can appear and caches go stale
-      populateJobSelector();
-      refreshAllUI();
-      if (activeTab === "overview") renderOverview();
-    } else {
-      // Update the "ago" time even if data hasn't changed
-      const updatedEl = document.getElementById("last-updated");
-      updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-    }
+    await refreshTimingFromApi(refreshController.signal);
   } catch (err) {
     // Silently ignore refresh errors (including AbortError)
   }
@@ -6086,8 +5779,8 @@ let benchGroupColors = {};
 let benchExpandedGroups = new Set();
 let benchGroupDetail = {}; // group => fetched detail data
 let benchGroupDetailLoading = {}; // group => in-flight Promise
-// From the API the detail covers reports since this UTC day ("" for all
-// time); widening the range drops it and reloads. The files hold everything.
+// The detail covers reports since this UTC day ("" for all time); widening
+// the range drops it and reloads
 let benchDetailSince = null;
 let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 // Whether to draw vertical methodology-change annotations on the chart.
@@ -6316,19 +6009,15 @@ function setBenchTimeRange(value) {
   updateBenchURL();
 }
 
-// Fetch one group's detail: from the API for the reports in range, or the
-// whole file
+// One group's detail for the reports in range
 function fetchBenchGroupDetail(group) {
-  if (dataSource === "api") {
-    return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
-  }
-  return loadGzipJson(`data/benchmarks/${encodeURIComponent(group)}.json.gz`);
+  return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
 }
 
 // Drop windowed detail that no longer covers the range and reload what is
 // selected; in-flight loads for the old window are ignored on arrival
 function ensureBenchDetailWindow() {
-  if (dataSource !== "api" || benchDetailSince === null || benchDetailSince === "") return;
+  if (benchDetailSince === null || benchDetailSince === "") return;
   const wanted = apiSince(getBenchCutoff());
   if (wanted !== "" && wanted >= benchDetailSince) return;
   benchDetailSince = wanted;
@@ -6565,7 +6254,7 @@ function benchMetricLabel() {
 }
 
 async function setBenchMetric(value) {
-  if (!(value in BENCH_METRIC_LABELS) || value === benchMetric || dataSource !== "api") return;
+  if (!(value in BENCH_METRIC_LABELS) || value === benchMetric) return;
   benchMetric = value;
   const sel = document.getElementById("bench-metric");
   if (sel) sel.value = value;
@@ -6589,15 +6278,8 @@ async function loadBenchmarkData() {
     // before the chart computes anything.
     await BenchCore.loadMethodologyChanges();
     updateBenchMethodologyNotesCount();
-    if ((await probeDataSource()) === "api") {
-      benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
-      benchDetailSince = apiSince(getBenchCutoff());
-      // The metric and Nanosoldier's verdicts only exist in the database
-      document.getElementById("bench-metric")?.classList.remove("view-hidden");
-      document.getElementById("bench-view-verdicts")?.classList.remove("view-hidden");
-    } else {
-      benchData = await loadGzipJson("data/benchmark_summary.json.gz");
-    }
+    benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
+    benchDetailSince = apiSince(getBenchCutoff());
 
     document.getElementById("bench-chart-loading").style.display = "none";
 
@@ -7343,10 +7025,6 @@ function renderBenchVerdictsTable() {
                 <th class="bench-time-header" title="Time against the baseline report; the tolerance is Nanosoldier's threshold">Time ratio</th>
                 <th class="bench-time-header" title="Memory against the baseline report">Memory ratio</th>
             </tr>`;
-  if (dataSource !== "api") {
-    tbody.innerHTML = '<tr><td colspan="6">Verdicts are only available from the database API.</td></tr>';
-    return;
-  }
   const since = apiSince(getBenchCutoff());
   const covered = benchVerdicts && (benchVerdicts.since === since || benchVerdicts.since === "" || (since !== "" && benchVerdicts.since < since));
   if (!covered) {
@@ -8173,7 +7851,7 @@ function setPackagesTimeRange(val) {
 }
 
 function setPackagesClientType(val) {
-  if (packagesDownloadsData && dataSource === "api") setTimeout(loadPackagesTop, 0);
+  if (packagesDownloadsData) setTimeout(loadPackagesTop, 0);
   if (val === "all" || val === "user" || val === "ci") {
     packagesClientType = val;
   } else {
@@ -8425,7 +8103,7 @@ let packagesSuggestTimer = null;
 function suggestPackagesPackages(value) {
   clearTimeout(packagesSuggestTimer);
   const q = (value || "").trim();
-  if (q.length < 2 || dataSource !== "api") return;
+  if (q.length < 2) return;
   packagesSuggestTimer = setTimeout(async () => {
     try {
       const names = await apiGet("downloads/packages", { q });
@@ -8446,7 +8124,7 @@ async function setPackagesPackage(name) {
   const panel = document.getElementById("packages-package-view");
   const tableEl = document.getElementById("packages-package-table");
   updatePackagesURL();
-  if (!packagesPackage || dataSource !== "api") {
+  if (!packagesPackage) {
     if (panel) panel.classList.add("view-hidden");
     if (packagesPackageChart) {
       packagesPackageChart.destroy();
@@ -8517,7 +8195,7 @@ function renderPackagesPackage(d) {
 // The most requested packages over the last week of data
 async function loadPackagesTop() {
   const panel = document.getElementById("packages-top");
-  if (!panel || dataSource !== "api") return;
+  if (!panel) return;
   let d;
   try {
     d = await apiGet("downloads/top", { days: 7, client: packagesClientType === "all" ? "all" : packagesClientType });
@@ -8553,10 +8231,7 @@ async function loadPackagesTop() {
 async function loadPackagesDownloadsData() {
   const loadingEl = document.getElementById("packages-chart-loading");
   try {
-    packagesDownloadsData =
-      (await probeDataSource()) === "api"
-        ? await apiGet("downloads/summary")
-        : await loadGzipJson("data/packages_downloads_summary.json.gz");
+    packagesDownloadsData = await apiGet("downloads/summary");
     const series = packagesDownloadsData.series || [];
     packagesDownloadsData.maxDate =
       packagesDownloadsData.maxDate ||
@@ -8571,11 +8246,8 @@ async function loadPackagesDownloadsData() {
     if (loadingEl) loadingEl.style.display = "none";
     populatePackagesMinorFilterOptions();
     updatePackagesDownloadsChart();
-    if (dataSource === "api") {
-      document.getElementById("packages-package-search")?.classList.remove("view-hidden");
-      loadPackagesTop();
-      if (packagesPackage) setPackagesPackage(packagesPackage);
-    }
+    loadPackagesTop();
+    if (packagesPackage) setPackagesPackage(packagesPackage);
   } catch (err) {
     console.error("Failed to load ecosystem packages downloads:", err);
     if (loadingEl) {
@@ -9305,7 +8977,7 @@ let pkgevalSuggestTimer = null;
 function suggestPkgevalPackages(value) {
   clearTimeout(pkgevalSuggestTimer);
   const q = (value || "").trim();
-  if (q.length < 2 || dataSource !== "api") return;
+  if (q.length < 2) return;
   pkgevalSuggestTimer = setTimeout(async () => {
     try {
       const names = await apiGet("pkgeval/packages", { q });
@@ -9325,7 +8997,7 @@ async function setPkgevalPackage(name) {
   if (clear) clear.hidden = !pkgevalPackage;
   const panel = document.getElementById("pkgeval-package-view");
   updatePkgevalURL();
-  if (!pkgevalPackage || dataSource !== "api") {
+  if (!pkgevalPackage) {
     pkgevalPackageData = null;
     if (panel) panel.classList.add("view-hidden");
     return;
@@ -9407,7 +9079,7 @@ function renderPkgevalPackage() {
 // Status and reason counts of the newest report with package rows
 async function loadPkgevalReasons() {
   const panel = document.getElementById("pkgeval-reasons");
-  if (!panel || dataSource !== "api") return;
+  if (!panel) return;
   let d;
   try {
     d = await apiGet("pkgeval/reasons");
@@ -9450,10 +9122,7 @@ function getPkgevalFilteredReports() {
 
 async function loadPkgevalData() {
   try {
-    pkgevalData =
-      (await probeDataSource()) === "api"
-        ? await apiGet("pkgeval/summary")
-        : await loadGzipJson("data/pkgeval_summary.json.gz");
+    pkgevalData = await apiGet("pkgeval/summary");
 
     const updatedEl = document.getElementById("pkgeval-last-updated");
     updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
@@ -9462,11 +9131,8 @@ async function loadPkgevalData() {
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
     updatePkgevalTable();
-    if (dataSource === "api") {
-      document.getElementById("pkgeval-package-search")?.classList.remove("view-hidden");
-      loadPkgevalReasons();
-      if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
-    }
+    loadPkgevalReasons();
+    if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
     document.getElementById("pkgeval-chart-loading").innerHTML =
@@ -9741,7 +9407,7 @@ function highlightPkgevalPoint(date) {
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===
-// data/ttfx_summary.json.gz, from fetch_ttfx.jl: one row per julia-ci TTFX
+// api/ttfx/summary, from fetch_ttfx.jl: one row per julia-ci TTFX
 // job, with each task's per-metric minimum over the job's ABBA blocks as
 // [precompile, load, run, warm] seconds. Failed tasks are in row.failed.
 let ttfxData = null;
@@ -10116,9 +9782,8 @@ function applyTtfxURLParams() {
 
 async function loadTtfxData() {
   try {
-    const source = await probeDataSource();
     [ttfxData, ttfxAnnotations] = await Promise.all([
-      source === "api" ? apiGet("ttfx/summary") : loadGzipJson("data/ttfx_summary.json.gz"),
+      apiGet("ttfx/summary"),
       fetch("data/ttfx_annotations.json")
         .then((r) => (r.ok ? r.json() : { annotations: [] }))
         .then((d) => d.annotations || [])
@@ -10750,30 +10415,23 @@ function overviewColors() {
 }
 
 async function loadOverviewSources() {
-  const quiet = (p, what) =>
-    p.catch((err) => {
-      console.error(`Failed to load ${what}:`, err);
+  const quiet = (route, params) =>
+    apiGet(route, params).catch((err) => {
+      console.error(`Failed to load ${route}:`, err);
       return null;
     });
-  const api = (await probeDataSource()) === "api";
-  const load = (route, file) => quiet(api ? apiGet(route) : loadGzipJson(file), api ? route : file);
-  // What only the database has: the latest builds' timing, the failure
+  // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
-  const extra = (route, params) => (api ? quiet(apiGet(route, params), route) : Promise.resolve(null));
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
   const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top] = await Promise.all([
-    pkgevalData || load("pkgeval/summary", "data/pkgeval_summary.json.gz"),
-    benchData || load("benchmarks/summary", "data/benchmark_summary.json.gz"),
-    ttfxData || load("ttfx/summary", "data/ttfx_summary.json.gz"),
-    packagesDownloadsData || load("downloads/summary", "data/packages_downloads_summary.json.gz"),
-    api
-      ? quiet(apiGet("agents/latest"), "agents/latest")
-      : fetch("data/agents/latest.json", { cache: "no-cache" })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-    extra("timing/builds", { since: weekAgo }),
-    extra("pkgeval/reasons"),
-    extra("downloads/top", { days: 7, client: "user" }),
+    pkgevalData || quiet("pkgeval/summary"),
+    benchData || quiet("benchmarks/summary"),
+    ttfxData || quiet("ttfx/summary"),
+    packagesDownloadsData || quiet("downloads/summary"),
+    quiet("agents/latest"),
+    quiet("timing/builds", { since: weekAgo }),
+    quiet("pkgeval/reasons"),
+    quiet("downloads/top", { days: 7, client: "user" }),
   ]);
   return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top };
 }

@@ -47,7 +47,8 @@ terraform apply
 ```
 
 First bring-up, in order: apply, upload a seed backup (a tar.gz holding
-`ci-timing.sqlite` from `db/import_legacy.jl` and an `export/` directory) to
+`ci-timing.sqlite` and an `export/` directory; the bucket's `runtime/` and
+daily archives are what a replacement host restores) to
 `s3://<backup bucket>/runtime/latest.tar.gz`, put the Buildkite token
 (`aws ssm put-parameter --name /ci-timing/buildkite-api-token --type SecureString --overwrite --value ...`),
 set the repository variable `CI_TIMING_DEPLOY_ROLE_ARN` to the
