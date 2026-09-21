@@ -200,13 +200,22 @@ CREATE TABLE IF NOT EXISTS bench_errors (
 
 -- Presence and summary per (report, group, statistic). A row means the
 -- statistic's detail data was read for that group on that report; the
--- geomean/count are what benchmark_summary.json carries per group.
+-- geomean/count are what benchmark_summary.json carries per group. The
+-- other estimates get their own geomean over the benchmarks with a
+-- positive value (added by Store's column migrations; NULL until a report
+-- is parsed from its tarball).
 CREATE TABLE IF NOT EXISTS bench_report_groups (
-    report_id  INTEGER NOT NULL REFERENCES bench_reports (id),
-    grp        TEXT NOT NULL,
-    stat       TEXT NOT NULL,
-    geomean_ns REAL NOT NULL,
-    count      INTEGER NOT NULL,
+    report_id            INTEGER NOT NULL REFERENCES bench_reports (id),
+    grp                  TEXT NOT NULL,
+    stat                 TEXT NOT NULL,
+    geomean_ns           REAL NOT NULL,
+    count                INTEGER NOT NULL,
+    gctime_geomean_ns    REAL,
+    gctime_count         INTEGER,
+    memory_geomean_bytes REAL,
+    memory_count         INTEGER,
+    allocs_geomean       REAL,
+    allocs_count         INTEGER,
     PRIMARY KEY (report_id, grp, stat)
 ) WITHOUT ROWID;
 

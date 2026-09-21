@@ -65,6 +65,17 @@ function db_path(args=ARGS)
     return get(ENV, "CI_TIMING_DB", DEFAULT_PATH)
 end
 
+# Columns added after a table first shipped: CREATE TABLE IF NOT EXISTS
+# leaves an existing table alone, so these are added when missing.
+const COLUMN_MIGRATIONS = [
+    ("bench_report_groups", "gctime_geomean_ns", "REAL"),
+    ("bench_report_groups", "gctime_count", "INTEGER"),
+    ("bench_report_groups", "memory_geomean_bytes", "REAL"),
+    ("bench_report_groups", "memory_count", "INTEGER"),
+    ("bench_report_groups", "allocs_geomean", "REAL"),
+    ("bench_report_groups", "allocs_count", "INTEGER"),
+]
+
 function apply_schema!(db::SQLite.DB)
     sql = read(SCHEMA_FILE, String)
     # Strip comments (some hold semicolons), then split on statement
@@ -74,6 +85,10 @@ function apply_schema!(db::SQLite.DB)
         s = strip(stmt)
         isempty(s) && continue
         SQLite.execute(db, s)
+    end
+    for (table, column, type) in COLUMN_MIGRATIONS
+        any(r -> String(r.name) == column, query(db, "PRAGMA table_info($table)")) && continue
+        SQLite.execute(db, "ALTER TABLE $table ADD COLUMN $column $type")
     end
 end
 

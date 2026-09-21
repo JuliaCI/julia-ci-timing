@@ -233,13 +233,19 @@ function write_report!(db, date_path, md, parsed, names, seq)
     id = report_id(db, path)
     parsed === nothing && return 0
     by_stat, errors = parsed
-    gstmt = upsert_stmt(db, "bench_report_groups", ["report_id", "grp", "stat"], ["geomean_ns", "count"]; seq=false)
+    gstmt = upsert_stmt(db, "bench_report_groups", ["report_id", "grp", "stat"],
+                        ["geomean_ns", "count", "gctime_geomean_ns", "gctime_count", "memory_geomean_bytes", "memory_count",
+                         "allocs_geomean", "allocs_count"]; seq=false)
     estmt = upsert_stmt(db, "bench_results", ["report_id", "bench_id", "stat"], ["time_ns", "gctime_ns", "memory_bytes", "allocs"]; seq=false)
     n = 0
     for (stat, groups) in by_stat
         for (grp, benches) in groups
             times = [e[1] for e in values(benches)]
-            upsert!(gstmt, (id, grp, stat, geomean(times), length(times)))
+            # The other estimates' geomeans over the benchmarks with a positive value
+            positive(i) = Float64[e[i] for e in values(benches) if !isnan(e[i]) && e[i] > 0]
+            gc, mem, al = positive(2), positive(3), positive(4)
+            upsert!(gstmt, (id, grp, stat, geomean(times), length(times), geomean(gc), length(gc), geomean(mem), length(mem),
+                            geomean(al), length(al)))
             for (name, e) in benches
                 bid = getid!(names, db, "bench_names", ("grp", "name"), (grp, name))
                 upsert!(estmt, (id, bid, stat, e[1], nan_missing(e[2]), nan_missing(e[3]) === missing ? missing : Int(e[3]),
@@ -304,6 +310,27 @@ function main(args=ARGS)
             transaction(db) do
                 written += write_report!(db, date_path, md, parsed, names, next_seq!(db))
             end
+        end
+        # Geomeans of the other estimates for group summaries written before
+        # the columns existed, from the stored results (once per row)
+        transaction(db) do
+            DBInterface.execute(db, """
+                UPDATE bench_report_groups AS g SET
+                  gctime_geomean_ns = (SELECT exp(avg(ln(r.gctime_ns))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                       WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.gctime_ns > 0),
+                  gctime_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.gctime_ns > 0),
+                  memory_geomean_bytes = (SELECT exp(avg(ln(r.memory_bytes))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                          WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.memory_bytes > 0),
+                  memory_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.memory_bytes > 0),
+                  allocs_geomean = (SELECT exp(avg(ln(r.allocs))) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                    WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.allocs > 0),
+                  allocs_count = (SELECT count(*) FROM bench_results r JOIN bench_names n ON n.id = r.bench_id
+                                  WHERE r.report_id = g.report_id AND r.stat = g.stat AND n.grp = g.grp AND r.allocs > 0)
+                WHERE g.memory_count IS NULL""")
+            filled = Int(query(db, "SELECT changes() AS n")[1].n)
+            filled > 0 && @info "Filled the other estimates' group geomeans" rows=filled
         end
         # Summary fields for known reports that lack them, from report.md
         # alone (cheap): the same backfill the file-based fetcher ran.
