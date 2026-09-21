@@ -3,24 +3,19 @@
 Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
 are folded in below and in `db/schema.sql`.
 
-Status (2026-09-21, night): stages 0, 1 and 3 are done and the branch is
-ready to merge as the stage 2 cutover, short of DNS. The host at
-http://3.82.159.74 (`infra/terraform`, applied as the `ci-timing` profile in
-the julia-perf-website-prod account) runs the fetchers every two hours, the
-API (`db/serve.jl` at `/api/`, which the site reads exclusively), Datasette at
+Status (2026-09-22): merged as JuliaCI/julia-ci-timing#42. The host
+(`infra/terraform`, applied as the `ci-timing` profile in the
+julia-perf-website-prod account) runs the fetchers every two hours, the API
+(`db/serve.jl` at `/api/`, which the site reads exclusively), Datasette at
 `/db/`, the extracts at `/data/*` with the database snapshot, and `/healthz`;
-`.github/workflows/deploy.yml` builds and deploys on push, `health.yml`
-checks freshness, disk and backup age daily. The benchmark history was
-re-parsed on the host (`fetch_benchmarks.jl --backfill-stats`: every
-statistic, memory, allocations, Nanosoldier's verdicts) and the last year of
-PkgEval reports fetched again (`fetch_pkgeval.jl --backfill-packages 365`).
-The committed `data/` is gone except the two hand-maintained files: main's
-last copy is archived at `s3://ci-timing-393686272827-us-east-1-backups/legacy/`
-(and in the git history until the squash). The GitHub Pages site stays as
-its last deployment, frozen, until perf.julialang.org points at the host;
-its update workflow, the fetch-and-commit job and the stage 1 gate are
-deleted. Left: the DNS change and HTTPS (`site_hostname`, a Caddyfile
-change that replaces the instance), then turning Pages off.
+`.github/workflows/deploy.yml` builds and deploys on push to main,
+`health.yml` checks freshness, disk and backup age daily. Caddy serves
+`perf.julialang.org` over HTTPS once the DNS record (an A record to the
+Elastic IP, at Namecheap) replaces the CNAME to GitHub Pages; the Pages
+deployment stays frozen at its last state until then and can be turned off
+after. The committed `data/` is gone except the two hand-maintained files;
+main's last copy is archived at
+`s3://ci-timing-393686272827-us-east-1-backups/legacy/`.
 
 ## Where we are
 
