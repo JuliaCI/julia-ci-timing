@@ -1,0 +1,15 @@
+#!/bin/bash
+# On a fresh host: deploy the image the workflow last shipped, recorded in
+# SSM, so the site comes up without waiting for the next deploy. Runs once
+# per boot after the datasette unit's restore; a host that already has its
+# site directory does nothing.
+set -uo pipefail
+set -a; . /etc/ci-timing.host.env; set +a
+if [ -n "$(ls -A "$CI_TIMING_SITE_DIR" 2>/dev/null)" ]; then
+  exit 0
+fi
+ref="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_IMAGE_PARAMETER" --query Parameter.Value --output text 2>/dev/null || true)"
+case "$ref" in
+  *@sha256:*) exec /usr/local/bin/ci-timing-deploy "$ref" ;;
+  *) echo "No deployed image recorded in $CI_TIMING_IMAGE_PARAMETER; run the deploy workflow." >&2; exit 0 ;;
+esac
