@@ -19,3 +19,8 @@ Thumbs.db
 .idea/
 .julia-repo-cache
 .cache/
+
+# Local database (db/)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
