@@ -115,7 +115,8 @@ end
 function export_benchmarks(db, out)
     reports = rows(db, "SELECT id, date, path, commit_sha, baseline_date, report_total, report_regressions, report_improvements " *
                        "FROM bench_reports WHERE kind = 'daily' ORDER BY date")
-    groups = rows(db, "SELECT report_id, grp, stat, geomean_ns, count FROM bench_report_groups")
+    # The files carry the two legacy statistics; median and std stay in the database
+    groups = rows(db, "SELECT report_id, grp, stat, geomean_ns, count FROM bench_report_groups WHERE stat IN ('minimum', 'mean')")
     by_report = Dict{Int,Dict{String,Dict{String,Any}}}()
     for g in groups
         d = get!(by_report, Int(g.report_id), Dict{String,Dict{String,Any}}())
@@ -184,7 +185,7 @@ function export_pkgeval(db, out)
         push!(reports, OrderedDict("date" => String(r.date), "date_path" => replace(String(r.path), "by_date/" => ""),
                                    "total" => Int(r.total), "ok" => Int(r.ok), "fail" => Int(r.fail), "crash" => Int(r.crash),
                                    "skip" => Int(r.skip), "kill" => Int(r.kill), "version" => String(r.julia_version),
-                                   "commit" => String(r.commit_sha)))
+                                   "commit" => first(String(r.commit_sha), 8)))
     end
     write_gz_json(joinpath(out, "pkgeval_summary.json.gz"),
                   OrderedDict("generated_at" => generated_at(db, "pkgeval"), "reports" => reports))
@@ -251,7 +252,10 @@ function export_packages(db, out)
         return collect(values(per_date))
     end
     tag(r) = OrderedDict("tag" => String(r.tag), "date" => String(r.date), "published_at" => String(r.published_at), "url" => String(r.url))
-    tags(pre) = [tag(r) for r in rows(db, "SELECT tag, date, published_at, url FROM julia_tags WHERE prerelease = ? ORDER BY date, published_at DESC", (pre,))]
+    # The fetcher lists releases of the last two years; the table keeps them all
+    tag_cutoff = Dates.format(Date(now(UTC)) - Year(2), dateformat"yyyy-mm-dd")
+    tags(pre) = [tag(r) for r in rows(db, "SELECT tag, date, published_at, url FROM julia_tags WHERE prerelease = ? AND date >= ? " *
+                                          "ORDER BY date, published_at DESC", (pre, tag_cutoff))]
     payload = OrderedDict(
         "generated_at" => generated_at(db, "packages"),
         "source" => DL_SOURCE,
@@ -270,18 +274,27 @@ end
 
 # --- agents ------------------------------------------------------------------
 
+const AGENT_RETAIN_MONTHS = 12
+
+# Fixed field order, as the fetcher wrote it, so the file diffs cleanly
+job_record(j) = OrderedDict{String,Any}("name" => get(j, :name, ""), "pipeline" => get(j, :pipeline, ""),
+                                        "build" => get(j, :build, nothing), "started_at" => get(j, :started_at, ""))
+
 function export_agents(db, out)
     dir = joinpath(out, "agents")
+    times = [String(r.time) for r in rows(db, "SELECT time FROM agent_snapshots ORDER BY time")]
+    gen = isempty(times) ? generated_at(db, "agents") : times[end]
+    # The fetcher used to delete agents and month files older than a year;
+    # now the window is applied here, relative to the latest snapshot.
+    cutoff = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Month(AGENT_RETAIN_MONTHS))
     records = OrderedDict{String,Any}()
-    for a in rows(db, "SELECT * FROM agents ORDER BY name")
+    for a in rows(db, "SELECT * FROM agents WHERE last_seen >= ? ORDER BY name", (cutoff,))
         records[String(a.name)] = OrderedDict{String,Any}(
             "hostname" => String(a.hostname), "queue" => String(a.queue), "os" => String(a.os), "arch" => String(a.arch),
             "version" => String(a.version), "state" => String(a.state), "connected_at" => jstr(a.connected_at),
             "first_seen" => jstr(a.first_seen), "last_seen" => jstr(a.last_seen),
-            "job" => a.job_json === missing ? nothing : JSON3.read(String(a.job_json), OrderedDict{String,Any}))
+            "job" => a.job_json === missing ? nothing : job_record(JSON3.read(String(a.job_json))))
     end
-    times = [String(r.time) for r in rows(db, "SELECT time FROM agent_snapshots ORDER BY time")]
-    gen = isempty(times) ? generated_at(db, "agents") : times[end]
     latest = OrderedDict{String,Any}("generated_at" => gen, "agents" => records)
     write_atomic(joinpath(dir, "latest.json")) do io
         JSON3.pretty(io, JSON3.write(latest), JSON3.AlignmentContext(indent=1))
@@ -293,6 +306,7 @@ function export_agents(db, out)
     end
     by_month = OrderedDict{String,Vector{String}}()
     for t in times
+        t[1:7] < cutoff[1:7] && continue
         push!(get!(by_month, t[1:7], String[]), t)
     end
     for (month, ts) in by_month

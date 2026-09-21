@@ -14,13 +14,15 @@
 using HTTP
 using JSON3
 using Dates
-using CodecZlib: GzipCompressor, GzipDecompressor
+
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
 
 const BUILDKITE_ORG = "julialang"
 const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
 const API_BASE = "https://api.buildkite.com/v2"
-const OUTPUT = joinpath("data", "ttfx_summary.json.gz")
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml); the
 # triplet keeps the group's "Launch TTFX benchmark jobs" step from matching
 const TTFX_JOB = r"\bTTFX\s+([a-z0-9_]+-[a-z0-9_-]+)$"
@@ -92,22 +94,6 @@ end
 
 function parse_datetime(s::AbstractString)
     return DateTime(s[1:19], dateformat"yyyy-mm-ddTHH:MM:SS")
-end
-
-function load_existing()
-    try
-        if isfile(OUTPUT)
-            data = JSON3.read(transcode(GzipDecompressor, read(OUTPUT)))
-            rows = [Dict{String,Any}(String(k) => v for (k, v) in pairs(r)) for r in get(data, :builds, [])]
-            # Rows an earlier version made from the launch step, which has no artifacts
-            filter!(r -> match(r"^[a-z0-9_]+-[a-z0-9_-]+$", String(get(r, "triplet", ""))) !== nothing, rows)
-            @info "Loaded existing TTFX summary" rows=length(rows)
-            return rows
-        end
-    catch e
-        @warn "Failed to load existing summary, starting fresh" error=e
-    end
-    return Dict{String,Any}[]
 end
 
 # results.json records for one arm, reduced to the minimum over blocks of each metric.
@@ -185,6 +171,12 @@ function build_row(build, job, results, meta)
         "n_tasks" => settings === nothing ? length(tasks) + length(failed) : get(settings, :n_tasks, nothing),
         "tasks" => tasks,
         "failed" => failed,
+        # Database-only extras, not part of the exported row
+        "_arm" => arm,
+        "_arms" => arms,
+        "_job" => job,
+        "_results" => results,
+        "_meta" => meta,
     )
 end
 
@@ -264,61 +256,100 @@ function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
     return rows
 end
 
-function write_summary(rows; output=OUTPUT)
-    sort!(rows; by=r -> (r["date"], r["build"]))
-    # Rows read back from the file carry Symbol keys, new rows String keys
-    task_names = sort!(unique(String[String(k) for r in rows for d in (r["tasks"], r["failed"]) for k in keys(d)]))
-    summary = Dict{String,Any}(
-        "generated_at" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
-        "pipeline" => CI_PIPELINE,
-        "branch" => BRANCH,
-        "metrics" => collect(METRICS),
-        "tasks" => task_names,
-        "builds" => rows,
-    )
-    mkpath(dirname(output))
-    write(output, transcode(GzipCompressor, Vector{UInt8}(JSON3.write(summary))))
-    @info "Wrote summary" file=output rows=length(rows) tasks=length(task_names)
-end
-
 row_key(r) = "$(r["build"]):$(r["job_id"])"
-short_row(r) = any(length(v) < length(METRICS) for v in values(r["tasks"]))
 
-function pad_row!(r)
-    r["tasks"] = Dict{String,Any}(
-        String(k) => vcat(Any[x for x in v], fill(nothing, length(METRICS) - length(v))) for (k, v) in pairs(r["tasks"]))
-    return r
+at(x) = x === nothing ? missing : Store.iso(Store.parse_upstream(String(x)))
+str_or_missing(x) = x === nothing ? missing : String(x)
+jsonstr(x) = x === nothing ? missing : JSON3.write(x)
+
+const JOB_COLS = ["pipeline", "build", "triplet", "state", "build_created_at", "commit_sha", "version", "message", "agent", "cpu",
+                  "snippets", "blocks", "n_tasks", "n_metrics", "selected_arm", "started_at", "finished_at", "web_url", "has_samples"]
+
+# Store one row and its children, replacing whatever the job had before.
+function write_row!(db, r, seq, stmts)
+    uuid = r["job_id"]
+    job = r["_job"]
+    upsert!(stmts.job, (uuid, CI_PIPELINE, r["build"], r["triplet"], r["state"], legacy_minute_to_iso(r["date"]), r["commit"],
+                        r["version"], r["message"], r["agent"], r["cpu"], r["snippets"], something(r["blocks"], missing),
+                        something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
+                        at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
+                        r["_results"] === nothing ? 0 : 1, seq))
+    for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples")
+        DBInterface.execute(db, "DELETE FROM $t WHERE job_uuid = ?", (uuid,))
+    end
+    for (task, vals) in r["tasks"]
+        DBInterface.execute(stmts.result, (uuid, task, (something(v, missing) for v in vals)...))
+    end
+    for (task, err) in r["failed"]
+        DBInterface.execute(stmts.failure, (uuid, task, err))
+    end
+    if r["_arms"] !== nothing
+        for (arm, info) in pairs(r["_arms"])
+            DBInterface.execute(stmts.arm, (uuid, String(arm), str_or_missing(get(info, :commit, nothing)), str_or_missing(get(info, :version, nothing))))
+        end
+    end
+    if r["_results"] !== nothing
+        for (i, rec) in enumerate(r["_results"])
+            DBInterface.execute(stmts.sample, (uuid, i, String(get(rec, :package, "")) * "/" * String(get(rec, :task, "")),
+                String(get(rec, :arm, "")), get(rec, :block, nothing) === nothing ? missing : Int(rec.block),
+                str_or_missing(get(rec, :status, nothing)), str_or_missing(get(rec, :error, nothing)), str_or_missing(get(rec, :error_gcoff, nothing)),
+                get(rec, :precompile_time, nothing) === nothing ? missing : Float64(rec.precompile_time),
+                jsonstr(get(rec, :load_times, nothing)), jsonstr(get(rec, :run_times, nothing)), jsonstr(get(rec, :total_times, nothing)),
+                jsonstr(get(rec, :load_times_gcoff, nothing)), jsonstr(get(rec, :run_times_gcoff, nothing)), jsonstr(get(rec, :total_times_gcoff, nothing))))
+        end
+    end
+    # The artifacts expire on Buildkite; keep what was parsed
+    DBInterface.execute(stmts.raw, (uuid, iso_now(), r["_results"] === nothing ? missing : compress_zst(JSON3.write(r["_results"])),
+                                    r["_meta"] === nothing ? missing : compress_zst(JSON3.write(r["_meta"]))))
 end
 
-function main()
-    mkpath("data")
-    existing = load_existing()
-    # Rows short of a metric: the recent ones are fetched again, the rest padded
-    builds_desc = sort!(unique(r["build"] for r in existing); rev=true)
-    refetch_from = isempty(builds_desc) ? 0 : builds_desc[min(REFETCH_BUILDS, end)]
-    refetch = Set(row_key(r) for r in existing if short_row(r) && r["build"] >= refetch_from)
-    isempty(refetch) || @info "Rows fetched again for the metrics they lack" count=length(refetch)
-    for r in existing
-        short_row(r) && !(row_key(r) in refetch) && pad_row!(r)
+function write_rows!(db, rows)
+    seq = next_seq!(db)
+    stmts = (
+        job = upsert_stmt(db, "ttfx_jobs", ["job_uuid"], JOB_COLS),
+        result = DBInterface.prepare(db, "INSERT INTO ttfx_results (job_uuid, task, $(join(METRICS, ", "))) VALUES (?, ?, $(join(fill("?", length(METRICS)), ", ")))"),
+        failure = DBInterface.prepare(db, "INSERT INTO ttfx_failures (job_uuid, task, error) VALUES (?, ?, ?)"),
+        arm = DBInterface.prepare(db, "INSERT INTO ttfx_arms (job_uuid, arm, commit_sha, version) VALUES (?, ?, ?, ?)"),
+        sample = DBInterface.prepare(db, "INSERT INTO ttfx_samples (job_uuid, seq, task, arm, block, status, error, error_gcoff, precompile_s, " *
+                                         "load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s) VALUES ($(join(fill("?", 15), ", ")))"),
+        raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst) VALUES (?, ?, ?, ?)"))
+    for r in rows
+        write_row!(db, r, seq, stmts)
     end
-    known = Set(row_key(r) for r in existing if !(row_key(r) in refetch))
+    return length(rows)
+end
+
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
+    existing = SQLite.Tables.rowtable(DBInterface.execute(db, "SELECT build, job_uuid, n_metrics FROM ttfx_jobs"))
+    # Rows short of a metric: the recent ones are fetched again, the rest
+    # padded (their metric arrays already read as nulls; only the length
+    # marker changes)
+    builds_desc = sort!(unique(Int(r.build) for r in existing); rev=true)
+    refetch_from = isempty(builds_desc) ? 0 : builds_desc[min(REFETCH_BUILDS, end)]
+    refetch = Set("$(r.build):$(r.job_uuid)" for r in existing if r.n_metrics < length(METRICS) && r.build >= refetch_from)
+    isempty(refetch) || @info "Rows fetched again for the metrics they lack" count=length(refetch)
+    known = Set("$(r.build):$(r.job_uuid)" for r in existing if !("$(r.build):$(r.job_uuid)" in refetch))
 
     new_rows = fetch_new_rows(known)
     @info "New TTFX rows" count=length(new_rows)
-    if isempty(new_rows) && isfile(OUTPUT)
-        @info "No changes to data, skipping write" file=OUTPUT
-        return 0
-    end
     if isempty(new_rows) && isempty(existing)
         @error "No TTFX results found and no existing data - check the token and that julia-ci runs the TTFX job"
         return 1
     end
 
-    replaced = Set(row_key(r) for r in new_rows)
-    write_summary(vcat(filter(r -> !(row_key(r) in replaced), existing), new_rows))
+    source_run(db, "ttfx") do
+        transaction(db) do
+            seq = next_seq!(db)
+            DBInterface.execute(db, "UPDATE ttfx_jobs SET n_metrics = ?, change_seq = ? WHERE n_metrics < ? AND build < ?",
+                                (length(METRICS), seq, length(METRICS), refetch_from))
+            write_rows!(db, new_rows)
+        end
+    end
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end
