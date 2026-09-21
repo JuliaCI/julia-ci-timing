@@ -13,7 +13,7 @@ module Store
 
 using SQLite, DBInterface, Dates, JSON3, CodecZstd, Statistics
 
-export open_db, transaction, next_seq!, upsert_stmt, upsert!, getid!,
+export open_db, db_path, transaction, next_seq!, upsert_stmt, upsert!, getid!,
        source_run, compress_zst, decompress_zst,
        iso_now, legacy_minute_to_iso, iso_to_legacy_minute, TIMING_SOURCE
 
@@ -39,6 +39,18 @@ function open_db(path::AbstractString=DEFAULT_PATH; create::Bool=true)
     DBInterface.execute(db, "PRAGMA foreign_keys = ON")
     apply_schema!(db)
     return db
+end
+
+"""
+    db_path(args=ARGS) -> String
+
+`--db PATH` from the arguments, else `CI_TIMING_DB` from the environment,
+else `DEFAULT_PATH`. Every fetcher and CLI resolves the database this way.
+"""
+function db_path(args=ARGS)
+    i = findfirst(==("--db"), args)
+    i === nothing || return String(args[i+1])
+    return get(ENV, "CI_TIMING_DB", DEFAULT_PATH)
 end
 
 function apply_schema!(db::SQLite.DB)

@@ -4,7 +4,8 @@
 #
 #   julia --project db/compare.jl REFERENCE_DIR EXPORT_DIR
 #
-# Ignores `generated_at`, compares numbers by value (11 == 11.0), and reports
+# Ignores `generated_at`, compares numbers by value (11 == 11.0, floats to
+# 1e-9 relative), and reports
 # arrays that differ only in element order separately from real
 # differences. Exit 1 on any real difference or missing file.
 
@@ -51,7 +52,9 @@ isnum(x) = x isa Number && !(x isa Bool)
 
 function compare!(rep, a, b, path)
     if isnum(a) && isnum(b)
-        a == b || note!(rep, path, "$a != $b")
+        # Computed floats (geomeans, stats) may differ in the last digits
+        # with the summation order; that is not a data difference
+        isapprox(a, b; rtol=1e-9) || note!(rep, path, "$a != $b")
     elseif a isa Dict && b isa Dict
         for k in union(keys(a), keys(b))
             k in IGNORED_KEYS && continue

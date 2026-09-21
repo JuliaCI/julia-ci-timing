@@ -1,12 +1,17 @@
 #!/usr/bin/env julia
-# Fetch Julia CI timing data from Buildkite API
+
+# Fetch Julia CI timing data from Buildkite API into the database (db/).
+# Buildkite only retains a window of builds, so the database must already
+# hold the history (db/import_legacy.jl seeds it); the site's files are
+# rendered from it by db/export.jl.
 
 using HTTP
 using JSON3
 using Dates
-using Statistics
-using DataStructures: SortedDict
-using CodecZlib: GzipCompressor, GzipDecompressor
+
+include(joinpath(@__DIR__, "db", "Store.jl"))
+using .Store
+using SQLite, DBInterface
 
 const BUILDKITE_ORG = "julialang"
 const PIPELINE = "julia-master"
@@ -121,197 +126,162 @@ function job_duration_seconds(job)
     return Dates.value(end_dt - start_dt) / 1000  # milliseconds to seconds
 end
 
-function extract_job_timings(builds, pipeline::String)
-    # Group job durations by job name
-    job_timings = Dict{String, Vector{@NamedTuple{
-        commit::String,
-        build_number::Int,
-        created_at::DateTime,
-        duration_seconds::Float64,
-        message::String,
-        author::String,
-        state::String,
-        agent::String,
-        pipeline::String,
-        retry::Int
-    }}}()
 
+# Buildkite ISO timestamp to the store's second-precision UTC form
+at(x) = x === nothing ? missing : Store.iso(Store.parse_upstream(String(x)))
+str_or_missing(x) = x === nothing ? missing : String(x)
+
+meta_value(tags, key) = (i = findfirst(t -> startswith(String(t), key * "="), tags);
+                         i === nothing ? missing : String(tags[i])[length(key)+2:end])
+
+"""
+    extract_builds_and_jobs(builds, pipeline) -> (build_rows, job_rows)
+
+One row per build and one per finished script job. The filters (script
+jobs only, no musl, started and finished) and the per-name `retry`
+ordinal within a build are unchanged from the file-based fetcher; the
+rest of the Buildkite payload the schema has columns for is kept too.
+"""
+function extract_builds_and_jobs(builds, pipeline::String)
+    build_rows = NamedTuple[]
+    job_rows = NamedTuple[]
     for build in builds
-        build_num = build.number
-        commit = String(build.commit)[1:min(8, length(build.commit))]
-        created = parse_datetime(build.created_at)
-
-        # Extract commit message (first line only)
+        sha = String(build.commit)
         raw_message = get(build, :message, "")
         message = isnothing(raw_message) ? "" : split(String(raw_message), '\n')[1]
         message = length(message) > 80 ? first(message, 77) * "..." : message
-
-        # Extract author from creator
         creator = get(build, :creator, nothing)
-        author = if creator !== nothing
-            get(creator, :name, "")
-        else
-            ""
-        end
-        author = isnothing(author) ? "" : String(author)
+        author = creator === nothing ? "" : something(get(creator, :name, ""), "")
+        pr = get(build, :pull_request, nothing)
+        pr_number = pr === nothing ? missing : tryparse(Int, String(something(get(pr, :id, nothing), "")))
+        push!(build_rows, (
+            pipeline = pipeline, number = Int(build.number),
+            commit_prefix = sha[1:min(8, length(sha))], commit_sha = length(sha) == 40 ? sha : missing,
+            branch = str_or_missing(get(build, :branch, nothing)), state = str_or_missing(get(build, :state, nothing)),
+            source = str_or_missing(get(build, :source, nothing)),
+            blocked = get(build, :blocked, nothing) === nothing ? missing : Int(build.blocked),
+            pull_request = pr_number === nothing ? missing : pr_number,
+            author = String(author), message = String(message),
+            created_at = at(build.created_at), scheduled_at = at(get(build, :scheduled_at, nothing)),
+            started_at = at(get(build, :started_at, nothing)), finished_at = at(get(build, :finished_at, nothing)),
+            web_url = str_or_missing(get(build, :web_url, nothing)),
+            raw = JSON3.write(build)))
 
-        # Track retry counts per job name within this build
-        job_retry_counts = Dict{String, Int}()
-
-        jobs = get(build, :jobs, [])
-        for job in jobs
+        job_retry_counts = Dict{String,Int}()
+        for job in get(build, :jobs, [])
             name = get(job, :name, nothing)
             name === nothing && continue
             name = String(name)
-
-            # Skip non-script jobs (like wait, block, trigger)
             get(job, :type, nothing) == "script" || continue
-
-            # Skip musl jobs
             occursin("musl", name) && continue
-
             duration = job_duration_seconds(job)
             duration === nothing && continue
-
-            # Get job state (passed, failed, etc.)
-            job_state = String(get(job, :state, "unknown"))
-
-            # Get agent hostname
             agent_info = get(job, :agent, nothing)
-            agent_hostname = if agent_info !== nothing
-                String(get(agent_info, :hostname, ""))
-            else
-                ""
+            tags = agent_info === nothing ? [] : something(get(agent_info, :meta_data, nothing), [])
+            queue = meta_value(tags, "queue")
+            if queue === missing
+                queue = meta_value(something(get(job, :agent_query_rules, nothing), []), "queue")
             end
-
-            # Track retry number (0 = first attempt, 1+ = retries)
             retry_num = get(job_retry_counts, name, 0)
             job_retry_counts[name] = retry_num + 1
-
-            entry = (
-                commit = commit,
-                build_number = build_num,
-                created_at = created,
-                duration_seconds = duration,
-                message = message,
-                author = author,
-                state = job_state,
-                agent = agent_hostname,
-                pipeline = pipeline,
-                retry = retry_num
-            )
-
-            if haskey(job_timings, name)
-                push!(job_timings[name], entry)
-            else
-                job_timings[name] = [entry]
-            end
+            push!(job_rows, (
+                pipeline = pipeline, number = Int(build.number), name = name, retry = retry_num,
+                job_uuid = str_or_missing(get(job, :id, nothing)), step_key = str_or_missing(get(job, :step_key, nothing)),
+                agent_hostname = agent_info === nothing ? "" : String(something(get(agent_info, :hostname, nothing), "")),
+                agent_name = agent_info === nothing ? missing : str_or_missing(get(agent_info, :name, nothing)),
+                queue = queue,
+                state = String(get(job, :state, "unknown")),
+                exit_status = get(job, :exit_status, nothing) === nothing ? missing : Int(job.exit_status),
+                soft_failed = get(job, :soft_failed, nothing) === nothing ? missing : Int(job.soft_failed),
+                retried = get(job, :retried, nothing) === nothing ? missing : Int(job.retried),
+                retries_count = get(job, :retries_count, nothing) === nothing ? missing : Int(job.retries_count),
+                retry_type = str_or_missing(get(job, :retry_type, nothing)),
+                parallel_group_index = get(job, :parallel_group_index, nothing) === nothing ? missing : Int(job.parallel_group_index),
+                # 0.1 s, as the file-based fetcher stored it; started_at and
+                # finished_at keep the full precision
+                duration_s = round(duration; digits=1),
+                created_at = at(get(job, :created_at, nothing)), scheduled_at = at(get(job, :scheduled_at, nothing)),
+                runnable_at = at(get(job, :runnable_at, nothing)), started_at = at(job.started_at), finished_at = at(job.finished_at),
+                web_url = str_or_missing(get(job, :web_url, nothing))))
         end
     end
-
-    return job_timings
+    return build_rows, job_rows
 end
 
-function compute_stats(timings)
-    durations = [t.duration_seconds for t in timings]
-    return (
-        count = length(durations),
-        mean = mean(durations),
-        median = median(durations),
-        min = minimum(durations),
-        max = maximum(durations),
-        std = length(durations) > 1 ? std(durations) : 0.0
-    )
-end
+rows(db, sql, params=()) = SQLite.Tables.rowtable(DBInterface.execute(db, sql, params))
 
-function load_existing_data(output_dir)
-    summary_gz = joinpath(output_dir, "timing_summary.json.gz")
-    summary_file = joinpath(output_dir, "timing_summary.json")
-    try
-        if isfile(summary_gz)
-            data = JSON3.read(transcode(GzipDecompressor, read(summary_gz)))
-            @info "Loaded existing data" file=summary_gz num_jobs=length(get(data, :jobs, Dict()))
-            return data
-        elseif isfile(summary_file)
-            data = JSON3.read(read(summary_file, String))
-            @info "Loaded existing data" file=summary_file num_jobs=length(get(data, :jobs, Dict()))
-            return data
-        end
-    catch e
-        # Starting fresh here would commit a summary holding only the builds
-        # still on Buildkite over the whole history
-        @error "Failed to load existing data; refusing to rebuild from scratch" error=e
-        rethrow()
+# Builds below this number are fully captured: the oldest build among the
+# newest `lookback` records of the key jobs, per pipeline (records ordered
+# as the export orders them).
+function fully_captured_threshold(db; key_jobs=[":linux: test x86_64-linux-gnu", ":linux: build x86_64-linux-gnu"], lookback=50)
+    mins = Dict{String,Int}()
+    for job_name in key_jobs, pipeline in (PIPELINE, SCHEDULED_PIPELINE, CI_PIPELINE)
+        r = rows(db, "SELECT MIN(number) AS m FROM (SELECT b.number FROM jobs j JOIN builds b ON b.id = j.build_id " *
+                     "WHERE j.name = ? AND b.pipeline = ? ORDER BY b.created_at DESC, j.retry ASC, b.number DESC LIMIT ?)",
+                 (job_name, pipeline, lookback))
+        m = r[1].m
+        m === missing && continue
+        mins[pipeline] = min(get(mins, pipeline, typemax(Int)), Int(m))
     end
-    return Dict{String, Any}()
+    return (master=get(mins, PIPELINE, 0), scheduled=get(mins, SCHEDULED_PIPELINE, 0), ci=get(mins, CI_PIPELINE, 0))
 end
 
-function get_known_build_numbers(existing_data)
-    # Returns (master_builds, scheduled_builds) since the pipelines have independent numbering
-    # These are builds we've seen before - but we should refetch builds that may have more jobs now
-    master_builds = Set{Int}()
-    scheduled_builds = Set{Int}()
-    jobs = get(existing_data, :jobs, Dict())
-    for (name, job) in pairs(jobs)
-        recent = get(job, :recent, [])
-        for record in recent
-            build = get(record, :build, nothing)
-            build === nothing && continue
-            # Use the pipeline field to determine which set to add to
-            pipeline = get(record, :pipeline, "julia-master")
-            if pipeline == "julia-master-scheduled"
-                push!(scheduled_builds, build)
-            else
-                push!(master_builds, build)
-            end
-        end
+const BUILD_COLS = ["commit_prefix", "commit_sha", "branch", "state", "source", "blocked", "pull_request", "author", "message",
+                    "created_at", "scheduled_at", "started_at", "finished_at", "web_url"]
+const JOB_COLS = ["job_uuid", "step_key", "agent_hostname", "agent_name", "queue", "state", "exit_status", "soft_failed",
+                  "retried", "retries_count", "retry_type", "parallel_group_index", "duration_s",
+                  "created_at", "scheduled_at", "runnable_at", "started_at", "finished_at", "web_url"]
+
+# Upsert builds and jobs. A re-fetched build replaces its jobs by
+# (name, retry) and keeps any old rows the new payload no longer has, as the
+# file merge did.
+function write_timings!(db, build_rows, job_rows)
+    seq = next_seq!(db)
+    bstmt = upsert_stmt(db, "builds", ["pipeline", "number"], BUILD_COLS)
+    raw_stmt = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_builds (pipeline, number, fetched_at, json_zst) VALUES (?, ?, ?, ?)")
+    fetched_at = iso_now()
+    ids = Dict{Tuple{String,Int},Int}()
+    for b in build_rows
+        upsert!(bstmt, (b.pipeline, b.number, (getproperty(b, Symbol(c)) for c in BUILD_COLS)..., seq))
+        DBInterface.execute(raw_stmt, (b.pipeline, b.number, fetched_at, compress_zst(b.raw)))
+        ids[(b.pipeline, b.number)] = Int(rows(db, "SELECT id FROM builds WHERE pipeline = ? AND number = ?", (b.pipeline, b.number))[1].id)
     end
-    return (master=master_builds, scheduled=scheduled_builds)
-end
-
-# Get the minimum build number we should consider "fully captured"
-# This is based on the oldest build in the most recent N entries of key jobs
-function get_fully_captured_threshold(existing_data; key_jobs=[":linux: test x86_64-linux-gnu", ":linux: build x86_64-linux-gnu"], lookback=50)
-    # Minimum build number among the most recent `lookback` records of each
-    # pipeline (records are sorted newest-first)
-    mins = Dict{String, Int}()
-    jobs = get(existing_data, :jobs, Dict())
-
-    for job_name in key_jobs
-        job = get(jobs, Symbol(job_name), nothing)
-        job === nothing && continue
-        recent = get(job, :recent, [])
-        isempty(recent) && continue
-
-        seen = Dict{String, Int}()
-        for r in recent
-            build = get(r, :build, nothing)
-            build === nothing && continue
-            pipeline = String(get(r, :pipeline, "julia-master"))
-            count = get(seen, pipeline, 0)
-            count >= lookback && continue
-            seen[pipeline] = count + 1
-            mins[pipeline] = min(get(mins, pipeline, typemax(Int)), build)
-        end
+    jstmt = upsert_stmt(db, "jobs", ["build_id", "name", "retry"], JOB_COLS)
+    # A UUID already stored under another (name, retry) of the same build
+    # would violate the unique index; drop that row first (the payload's
+    # ordinal wins, as it does for the file merge).
+    for b in build_rows
+        id = ids[(b.pipeline, b.number)]
+        DBInterface.execute(db, "DELETE FROM jobs WHERE build_id = ? AND job_uuid IS NOT NULL AND job_uuid NOT IN " *
+                                "(SELECT value FROM json_each(?)) AND (name, retry) IN " *
+                                "(SELECT json_extract(value, '\$.n'), json_extract(value, '\$.r') FROM json_each(?))",
+                            (id, JSON3.write([j.job_uuid for j in job_rows if j.pipeline == b.pipeline && j.number == b.number && j.job_uuid !== missing]),
+                                 JSON3.write([Dict("n" => j.name, "r" => j.retry) for j in job_rows if j.pipeline == b.pipeline && j.number == b.number])))
     end
-
-    return (master=get(mins, PIPELINE, 0),
-            scheduled=get(mins, SCHEDULED_PIPELINE, 0),
-            ci=get(mins, CI_PIPELINE, 0))
+    for j in job_rows
+        upsert!(jstmt, (ids[(j.pipeline, j.number)], j.name, j.retry, (getproperty(j, Symbol(c)) for c in JOB_COLS)..., seq))
+    end
+    return length(job_rows)
 end
 
-# Fetch coverage data from Coveralls and Codecov APIs
-function fetch_coverage_data(existing_data; max_pages=20)
-    # Load existing coverage data
-    existing_coverage = get(existing_data, :coverage, Dict())
+function write_coverage!(db, coverage)
+    seq = next_seq!(db)
+    stmt = upsert_stmt(db, "coverage", ["commit_sha"], ["measured_at", "codecov", "coveralls"])
+    for (sha, c) in coverage
+        upsert!(stmt, (sha, something(c["date"], missing), something(c["codecov"], missing), something(c["coveralls"], missing), seq))
+    end
+    return length(coverage)
+end
+
+# Existing values are kept and only missing provider values filled in, so
+# the whole table is loaded first (a few thousand rows).
+function fetch_coverage_data(db; max_pages=20)
     coverage = Dict{String, Any}()
-    
-    # Copy existing coverage data
-    for (commit, cov) in pairs(existing_coverage)
-        coverage[String(commit)] = Dict(
-            "coveralls" => get(cov, :coveralls, nothing),
-            "codecov" => get(cov, :codecov, nothing),
-            "date" => get(cov, :date, nothing)
+    for r in rows(db, "SELECT commit_sha, measured_at, codecov, coveralls FROM coverage")
+        coverage[String(r.commit_sha)] = Dict(
+            "coveralls" => r.coveralls === missing ? nothing : r.coveralls,
+            "codecov" => r.codecov === missing ? nothing : r.codecov,
+            "date" => r.measured_at === missing ? nothing : String(r.measured_at)
         )
     end
     
@@ -414,147 +384,9 @@ function fetch_coverage_data(existing_data; max_pages=20)
     return coverage
 end
 
-function generate_json_output(job_timings; output_dir="data", coverage_data=Dict())
-    mkpath(output_dir)
-
-    # Load existing data to preserve history beyond Buildkite's window
-    existing = load_existing_data(output_dir)
-    existing_jobs = get(existing, :jobs, Dict())
-
-    summary = SortedDict{String, Any}()
-    summary["jobs"] = SortedDict{String, Any}()
-
-    # Collect all job names from both sources
-    all_job_names = union(keys(job_timings), String.(keys(existing_jobs)))
-
-    for name in all_job_names
-        # Start with new data
-        new_timings = get(job_timings, name, [])
-        new_records = [
-            SortedDict(
-                "agent" => t.agent,
-                "author" => t.author,
-                "build" => t.build_number,
-                "commit" => t.commit,
-                "date" => Dates.format(t.created_at, dateformat"yyyy-mm-dd HH:MM"),
-                "duration" => round(t.duration_seconds, digits=1),
-                "message" => t.message,
-                "pipeline" => t.pipeline,
-                "retry" => t.retry,
-                "state" => t.state
-            )
-            for t in new_timings
-        ]
-
-        # Merge with existing records (by build+retry to dedupe, supporting retries)
-        existing_job = get(existing_jobs, Symbol(name), nothing)
-        if existing_job !== nothing
-            existing_recent = get(existing_job, :recent, [])
-            # Use (pipeline, build, retry) tuple to identify unique job runs
-            # (build numbers are only unique within a pipeline, and julia-ci
-            # numbering restarted from 1)
-            new_keys = Set((r["pipeline"], r["build"], get(r, "retry", 0)) for r in new_records)
-            for old in existing_recent
-                build = get(old, :build, nothing)
-                retry = get(old, :retry, 0)
-                old_pipeline = String(get(old, :pipeline, "julia-master"))
-                if build !== nothing && (old_pipeline, build, retry) ∉ new_keys
-                    push!(new_records, SortedDict(
-                        "agent" => get(old, :agent, ""),
-                        "author" => get(old, :author, ""),
-                        "build" => build,
-                        "commit" => get(old, :commit, ""),
-                        "date" => get(old, :date, ""),
-                        "duration" => get(old, :duration, 0.0),
-                        "message" => get(old, :message, ""),
-                        "pipeline" => get(old, :pipeline, "julia-master"),
-                        "retry" => retry,
-                        "state" => get(old, :state, "passed")
-                    ))
-                end
-            end
-        end
-
-        isempty(new_records) && continue
-
-        # Sort by date descending, then by retry (so retries appear after original)
-        sorted = sort(new_records, by=r->(r["date"], -get(r, "retry", 0)), rev=true)
-        durations = [r["duration"] for r in sorted]
-        stats = (
-            count = length(durations),
-            mean = mean(durations),
-            median = median(durations),
-            min = minimum(durations),
-            max = maximum(durations),
-            std = length(durations) > 1 ? std(durations) : 0.0
-        )
-
-        summary["jobs"][name] = SortedDict(
-            "recent" => sorted,
-            "stats" => SortedDict(
-                "count" => stats.count,
-                "max_seconds" => round(stats.max, digits=1),
-                "mean_seconds" => round(stats.mean, digits=1),
-                "median_seconds" => round(stats.median, digits=1),
-                "min_seconds" => round(stats.min, digits=1),
-                "std_seconds" => round(stats.std, digits=1)
-            )
-        )
-    end
-
-    # Add coverage data to summary
-    if !isempty(coverage_data)
-        summary["coverage"] = SortedDict(coverage_data)
-    end
-
-    # Only write if data actually changed (ignore generated_at timestamp)
-    summary_file = joinpath(output_dir, "timing_summary.json.gz")
-
-    # Compare serialized data (normalize by re-serializing both sides)
-    new_jobs_json = JSON3.write(summary["jobs"])
-    new_coverage_json = JSON3.write(get(summary, "coverage", Dict()))
-    
-    if isfile(summary_file)
-        existing_parsed = JSON3.read(transcode(GzipDecompressor, read(summary_file)))
-        existing_jobs = get(existing_parsed, :jobs, nothing)
-        existing_coverage = get(existing_parsed, :coverage, nothing)
-        
-        jobs_unchanged = false
-        coverage_unchanged = false
-        
-        if existing_jobs !== nothing
-            existing_jobs_json = JSON3.write(existing_jobs)
-            jobs_unchanged = existing_jobs_json == new_jobs_json
-        end
-        
-        if existing_coverage !== nothing
-            existing_coverage_json = JSON3.write(existing_coverage)
-            coverage_unchanged = existing_coverage_json == new_coverage_json
-        elseif isempty(coverage_data)
-            coverage_unchanged = true
-        end
-        
-        if jobs_unchanged && coverage_unchanged
-            @info "No changes to data, skipping write" file=summary_file
-            return summary_file
-        end
-    end
-
-    # Update timestamp and write
-    summary["generated_at"] = Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ")
-    write(summary_file, transcode(GzipCompressor, Vector{UInt8}(JSON3.write(summary))))
-    @info "Wrote summary" file=summary_file num_jobs=length(summary["jobs"])
-
-    return summary_file
-end
-
-function main()
-    # Load existing data first to enable early stopping
-    @info "Loading existing data..."
-    existing = load_existing_data("data")
-    
-    # Get threshold: builds below this number are fully captured (have all expected jobs)
-    threshold = get_fully_captured_threshold(existing)
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
+    threshold = fully_captured_threshold(db)
     @info "Fully captured threshold" master=threshold.master scheduled=threshold.scheduled ci=threshold.ci
 
     @info "Fetching builds from Buildkite..."
@@ -562,7 +394,7 @@ function main()
     @info "Fetched julia-ci builds" count=length(ci_builds)
 
     # The legacy pipelines stopped receiving builds in July 2026; once their
-    # history is in the summary there is nothing to page for
+    # history is in the database there is nothing to page for
     builds = threshold.master > 0 ? [] :
         something(fetch_pipeline_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master), [])
     @info "Fetched julia-master builds" count=length(builds)
@@ -577,31 +409,28 @@ function main()
         return 1
     end
 
-    @info "Extracting job timings..."
-    job_timings = extract_job_timings(builds, PIPELINE)
+    build_rows = NamedTuple[]
+    job_rows = NamedTuple[]
+    for (pipeline, pipeline_builds) in ((PIPELINE, builds), (SCHEDULED_PIPELINE, scheduled_builds), (CI_PIPELINE, ci_builds))
+        b, j = extract_builds_and_jobs(pipeline_builds, pipeline)
+        append!(build_rows, b)
+        append!(job_rows, j)
+    end
+    @info "Extracted" builds=length(build_rows) jobs=length(job_rows)
 
-    # Merge timings from all pipelines
-    for (pipeline, pipeline_builds) in ((SCHEDULED_PIPELINE, scheduled_builds), (CI_PIPELINE, ci_builds))
-        for (name, timings) in extract_job_timings(pipeline_builds, pipeline)
-            if haskey(job_timings, name)
-                append!(job_timings[name], timings)
-            else
-                job_timings[name] = timings
-            end
+    @info "Fetching coverage data..."
+    coverage = fetch_coverage_data(db)
+    @info "Coverage data" entries=length(coverage)
+
+    source_run(db, TIMING_SOURCE) do
+        transaction(db) do
+            write_timings!(db, build_rows, job_rows) + write_coverage!(db, coverage)
         end
     end
-    @info "Found jobs in new builds" count=length(job_timings)
-
-    @info "Fetching coverage data from Coveralls..."
-    coverage_data = fetch_coverage_data(existing)
-    @info "Coverage data" entries=length(coverage_data)
-
-    @info "Generating JSON output..."
-    generate_json_output(job_timings; coverage_data)
-
+    close(db)
     return 0
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())
 end
