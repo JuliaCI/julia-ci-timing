@@ -21,6 +21,8 @@ const JULIA_VERSIONS_URL =
     "https://julialang-logs.s3.amazonaws.com/public_outputs/current/julia_versions_by_date.csv.gz"
 const JULIA_RELEASES_API = "https://api.github.com/repos/JuliaLang/julia/releases?per_page=100"
 const PUBLIC_OUTPUTS = "https://julialang-logs.s3.amazonaws.com/public_outputs/current/"
+# Package names for the uuids of package_requests_by_date
+const GENERAL_REGISTRY_TOML = "https://raw.githubusercontent.com/JuliaRegistries/General/master/Registry.toml"
 
 # The other rollups of the same family, stored as published (see
 # docs/database-migration.md, "Package downloads"). Upstream keeps only a
@@ -292,6 +294,24 @@ function store_rollup!(db, spec, lines)
     return n
 end
 
+# The [packages] table of Registry.toml: one `uuid = { name = "...", path = "..." }` per line
+function fetch_registry_packages()
+    resp = HTTP.get(GENERAL_REGISTRY_TOML; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    resp.status == 200 || error("Failed to fetch $GENERAL_REGISTRY_TOML: HTTP $(resp.status)")
+    packages = NamedTuple[]
+    for m in eachmatch(r"^([0-9a-f-]{36})\s*=\s*\{\s*name\s*=\s*\"([^\"]+)\"(?:\s*,\s*path\s*=\s*\"([^\"]*)\")?"m, String(resp.body))
+        push!(packages, (uuid = m.captures[1], name = m.captures[2], path = m.captures[3] === nothing ? missing : m.captures[3]))
+    end
+    length(packages) > 1000 || error("Registry.toml parsed to only $(length(packages)) packages")
+    return packages
+end
+
+function store_registry_packages!(db, packages)
+    stmt = upsert_stmt(db, "registry_packages", ["uuid"], ["name", "path"]; seq=false)
+    foreach(p -> upsert!(stmt, (p.uuid, p.name, p.path)), packages)
+    return length(packages)
+end
+
 # package_requests_by_date: successful requests only, the package as an id
 function store_package_requests!(db, lines)
     header = parse_csv_line(strip(lines[1]))
@@ -484,6 +504,8 @@ function main(args=ARGS)
         @info "Fetching rollup" name
         rollup_lines[name] = fetch_csv_lines(PUBLIC_OUTPUTS * name * ".csv.gz")
     end
+    @info "Fetching the General registry's package names"
+    registry = fetch_registry_packages()
 
     source_run(db, "packages") do
         transaction(db) do
@@ -492,6 +514,7 @@ function main(args=ARGS)
                 n += store_rollup!(db, spec, rollup_lines[spec.file])
             end
             n += store_package_requests!(db, rollup_lines["package_requests_by_date"])
+            n += store_registry_packages!(db, registry)
             @info "Stored rollup rows" rows=n
             seq = next_seq!(db)
             sstmt = upsert_stmt(db, "dl_series", ["date"], ["total_requests", "user_requests", "ci_requests"])
