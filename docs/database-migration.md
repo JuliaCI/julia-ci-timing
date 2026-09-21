@@ -438,17 +438,19 @@ files already had.
   serves them at `/api/` (routes in its header). Responses carry an ETag from
   the change sequence and are cached gzipped per (request, sequence).
 - Timing: `/api/timing/runs?since=` for the shown range (30 days is ~12k
-  rows, 0.8 MB gzipped, against 11 MB for the file); the range widening
+  rows, 0.2 MB gzipped with the build's commit, author, message and date
+  sent once per build, against 11 MB for the file); the range widening
   fetches the older runs and merges them by (pipeline, build, job, retry);
   refresh asks for `changed_since=<change_seq>` and upserts. Benchmarks:
   the summary plus per-group detail windowed on the report date, reloaded
   when the range widens. The other tabs read their summary in one request.
 - The browser probes `api/status` once: without it (the Pages copy, a
   static checkout) every loader reads the files as before.
-- The views the database made possible: a CI → Builds tab (wall time and
-  queue wait per master build, `/api/timing/builds`); on Benchmarks a metric
-  selector (time, GC time, memory, allocations: `?metric=` on the summary and
-  group routes, the non-time geomeans aggregated on demand and cached) and a
+- The views the database made possible: a CI → Builds tab (wall time, queue
+  wait and job time per master build, `/api/timing/builds`; the Commits tab
+  was folded into it); on Benchmarks a metric selector (time, GC time,
+  memory, allocations: `?metric=` on the summary and group routes, with the
+  geomeans materialized in `bench_report_groups` by the fetcher) and a
   Verdicts table (Nanosoldier's own regressions and improvements with time
   and memory ratios, `/api/benchmarks/verdicts`); on PkgEval a package box
   (status history per report, `/api/pkgeval/package/<name>`) and the failure
