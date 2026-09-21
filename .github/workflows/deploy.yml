@@ -79,7 +79,7 @@ jobs:
             --query 'Reservations[0].Instances[0].InstanceId' --output text)
           [ "$instance" != "None" ] || { echo "no running ci-timing-site instance"; exit 1; }
           cmd=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
-            --comment "deploy $IMAGE_REF" --timeout-seconds 5400 \
+            --comment "deploy ${GITHUB_SHA::12}" --timeout-seconds 5400 \
             --parameters "commands=[\"/usr/local/bin/ci-timing-deploy $IMAGE_REF\"],executionTimeout=[\"5400\"]" \
             --query 'Command.CommandId' --output text)
           echo "SSM command $cmd on $instance"
