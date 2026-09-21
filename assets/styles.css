@@ -2256,6 +2256,103 @@ body {
   color: var(--color-attention-fg);
 }
 
+/* Per-package panels (PkgEval history and reasons, package downloads) */
+.package-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.package-search input {
+  width: 180px;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-canvas-default);
+  color: var(--color-fg-default);
+}
+.package-search .btn {
+  padding: 2px 6px;
+}
+.package-panel {
+  flex-shrink: 0;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-canvas-subtle);
+  font-size: 12px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.package-panel h3 {
+  font-size: 14px;
+  margin: 4px 0 6px;
+}
+.package-panel .package-panel-help {
+  color: var(--color-fg-muted);
+  margin: 0 0 8px;
+}
+.package-panel-chart {
+  position: relative;
+  height: 220px;
+  margin-bottom: 8px;
+}
+.package-panel table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.package-panel th,
+.package-panel td {
+  text-align: left;
+  padding: 3px 10px 3px 0;
+  border-bottom: 1px solid var(--color-border-muted);
+  white-space: nowrap;
+}
+.package-panel th {
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+.package-panel th.num,
+.package-panel td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.package-panel td.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.package-panel .pe-ok { color: var(--color-success-fg); }
+.package-panel .pe-fail { color: var(--color-danger-fg); }
+.package-panel .pe-crash { color: var(--color-severe-fg); }
+.package-panel .pe-skip { color: var(--color-fg-muted); }
+.package-panel .pe-kill { color: var(--color-attention-fg); }
+/* One cell per report, colored by status */
+.pkgeval-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin: 4px 0 10px;
+}
+.pkgeval-strip span {
+  width: 6px;
+  height: 14px;
+  background: var(--color-neutral-muted);
+  cursor: default;
+}
+.pkgeval-strip .st-ok { background: var(--color-success-emphasis, #1a7f37); }
+.pkgeval-strip .st-fail { background: var(--color-danger-emphasis, #cf222e); }
+.pkgeval-strip .st-crash { background: var(--color-severe-emphasis, #bc4c00); }
+.pkgeval-strip .st-kill { background: var(--color-attention-emphasis, #9a6700); }
+.pkgeval-strip .st-skip { background: var(--color-neutral-muted, #d0d7de); }
+.package-panel tr.clickable {
+  cursor: pointer;
+}
+.package-panel tr.clickable:hover td {
+  background: var(--color-canvas-default);
+}
+
 /* Per-commit averages view */
 .commits-view {
   display: flex;
@@ -2319,6 +2416,17 @@ body {
   white-space: normal;
   overflow-wrap: anywhere;
   color: var(--color-fg-muted);
+}
+.commits-reg-table th.num,
+.commits-reg-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#builds-table tr[data-url] {
+  cursor: pointer;
+}
+#builds-table tr[data-url]:hover td {
+  background: var(--color-canvas-subtle);
 }
 
 /* CI TTFX view */

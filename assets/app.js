@@ -158,6 +158,7 @@ function refreshAllUI() {
   updateToolbarButtons();
   if (ciSubview === "workers") renderWorkerPresence();
   if (ciSubview === "commits") renderCommitsView();
+  if (ciSubview === "builds") renderBuildsView();
 }
 
 // CI Timing sub-view: 'jobs' (default), 'commits', or 'workers'
@@ -170,12 +171,13 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
 ];
 
 function setCITimingSubview(name, { updateUrl = true } = {}) {
-  if (name !== "jobs" && name !== "workers" && name !== "commits")
+  if (name !== "jobs" && name !== "workers" && name !== "commits" && name !== "builds")
     name = "jobs";
   ciSubview = name;
   const isJobs = name === "jobs";
   const isWorkers = name === "workers";
   const isCommits = name === "commits";
+  const isBuilds = name === "builds";
 
   const view = document.getElementById("ci-timing-view");
   if (view) {
@@ -190,6 +192,8 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
   const commitsView = document.getElementById("commits-view");
   if (commitsView) commitsView.classList.toggle("view-hidden", !isCommits);
+  const buildsView = document.getElementById("builds-view");
+  if (buildsView) buildsView.classList.toggle("view-hidden", !isBuilds);
 
   // Hide controls that don't apply to the workers/commits views
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
@@ -201,6 +205,7 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
 
   if (isWorkers) renderWorkerPresence();
   if (isCommits) renderCommitsView();
+  if (isBuilds) renderBuildsView();
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
 
@@ -227,6 +232,172 @@ function setWorkersFilter(value, { immediate = false } = {}) {
   };
   if (immediate) apply();
   else workersFilterTimer = setTimeout(apply, 150);
+}
+
+// === Builds (CI → Builds tab) ===
+// api/timing/builds: every master build fetched from the Buildkite API with
+// its wall time and the queue wait of its jobs. Only from the API: the
+// files carry no timestamps.
+let buildsData = null; // { since, changeSeq, builds }
+let buildsLoading = null;
+let buildsChart = null;
+
+function buildsLoadError(message) {
+  const tableEl = document.getElementById("builds-table");
+  if (tableEl) tableEl.innerHTML = `<div class="workers-empty">${escapeHtml(message)}</div>`;
+  if (buildsChart) {
+    buildsChart.destroy();
+    buildsChart = null;
+  }
+}
+
+async function renderBuildsView() {
+  if (dataSource === null) await probeDataSource();
+  if (dataSource !== "api") {
+    buildsLoadError("Build wall times and queue waits need the database API; this copy of the site is served from the rendered files.");
+    return;
+  }
+  const since = apiSince(getTimeRangeCutoff());
+  const stale = !buildsData || buildsData.changeSeq !== timingChangeSeq || (since !== buildsData.since && (since === "" || since < buildsData.since));
+  if (stale && !buildsLoading) {
+    buildsLoading = apiGet("timing/builds", { since })
+      .then((builds) => {
+        buildsData = { since, changeSeq: timingChangeSeq, builds };
+      })
+      .catch((err) => {
+        console.error("Failed to load builds:", err);
+        buildsLoadError("Failed to load builds.");
+      })
+      .finally(() => {
+        buildsLoading = null;
+        if (ciSubview === "builds") drawBuildsView();
+      });
+    if (!buildsData) return;
+  }
+  drawBuildsView();
+}
+
+const buildkiteBuildUrl = (b) => b.url || `https://buildkite.com/julialang/${b.pipeline}/builds/${b.build}`;
+
+function drawBuildsView() {
+  const canvas = document.getElementById("builds-chart");
+  const tableEl = document.getElementById("builds-table");
+  if (!canvas || !tableEl || !buildsData) return;
+  const cutoff = getTimeRangeCutoff();
+  const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
+  const builds = buildsData.builds
+    .filter((b) => Date.parse(b.created_at) >= cutoffMs)
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  if (builds.length === 0) {
+    buildsLoadError("No builds with timestamps in the selected time range.");
+    return;
+  }
+  const isDark = isDarkMode();
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const point = (b, y) => ({ x: Date.parse(b.created_at), y, build: b });
+  const minutes = (s) => (s == null ? null : s / 60);
+  const datasets = [
+    {
+      label: "Wall time",
+      data: builds.filter((b) => b.wall_s != null).map((b) => point(b, minutes(b.wall_s))),
+      borderColor: colors.build,
+      backgroundColor: colors.build,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      tension: 0.1,
+      yAxisID: "y",
+    },
+    {
+      label: "Queue wait (median job)",
+      data: builds.filter((b) => b.queue_median_s != null).map((b) => point(b, minutes(b.queue_median_s))),
+      borderColor: colors.test,
+      backgroundColor: colors.test,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      tension: 0.1,
+      yAxisID: "y",
+    },
+  ];
+  if (buildsChart) buildsChart.destroy();
+  buildsChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "nearest", intersect: false },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const b = items.length && items[0].raw.build;
+              return b ? `#${b.build} ${b.commit} — ${b.message || ""}` : "";
+            },
+            label: (ctx) => {
+              const b = ctx.raw.build;
+              const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
+              if (ctx.datasetIndex === 0) {
+                lines.push(`${b.jobs} jobs, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
+              } else {
+                lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total`);
+              }
+              return lines;
+            },
+          },
+        },
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const b = buildsChart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
+        window.open(buildkiteBuildUrl(b), "_blank", "noopener");
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor }),
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "minutes", color: textColor },
+          ticks: { color: textColor },
+          grid: { color: gridColor },
+        },
+      },
+    },
+  });
+
+  const recent = builds.slice().reverse().slice(0, 100);
+  const rows = recent
+    .map((b) => {
+      const url = escapeHtml(buildkiteBuildUrl(b));
+      return `<tr data-url="${url}">
+        <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
+        <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
+        <td class="commits-reg-msg"><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
+        <td>${escapeHtml(b.state)}</td>
+        <td class="num">${formatDuration(b.wall_s)}</td>
+        <td class="num">${b.jobs}</td>
+        <td class="num">${formatDuration(b.run_total_s)}</td>
+        <td class="num">${formatDuration(b.queue_median_s)}</td>
+        <td class="num">${formatDuration(b.queue_max_s)}</td>
+      </tr>`;
+    })
+    .join("");
+  tableEl.innerHTML = `
+    <h3 class="commits-reg-title">Builds (newest first${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
+    <table class="commits-reg-table">
+      <thead><tr><th>Created</th><th>Build</th><th>Commit</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num">Jobs</th><th class="num" title="Sum of the jobs' durations">Job time</th><th class="num" title="Median wait from runnable to started across the build's jobs">Queue (median)</th><th class="num">Queue (max)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  tableEl.querySelectorAll("tr[data-url]").forEach((tr) => {
+    tr.onclick = (e) => {
+      if (e.target.closest("a")) return;
+      window.open(tr.dataset.url, "_blank", "noopener");
+    };
+  });
 }
 
 // === Agent snapshots (Workers tab) ===
@@ -2366,6 +2537,7 @@ function setTimeRange(days) {
   updateStatsTable();
   if (ciSubview === "workers") renderWorkerPresence();
   if (ciSubview === "commits") renderCommitsView();
+  if (ciSubview === "builds") renderBuildsView();
   updateURL();
 }
 
@@ -5938,6 +6110,7 @@ const TAB_URL_MAP = {
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
+  "ci-builds": "ci-builds",
   "ci-commits": "ci-commits",
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
@@ -5952,6 +6125,7 @@ const TAB_SHORT_PATH = {
   perf: "/diff",
   benchmarks: "/history",
   "ci-timing": "/timing",
+  "ci-builds": "/builds",
   "ci-commits": "/commits",
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
@@ -5976,6 +6150,7 @@ const LEGACY_TAB_ALIASES = new Set([
   "perf",
   "benchmarks",
   "ci-timing",
+  "ci-builds",
   "ci-commits",
   "ci-workers",
   "packages",
@@ -6015,15 +6190,18 @@ const DASHBOARD_PARAMS = new Set([
   "bt", // bench time range
   "bs", // bench stat type
   "bv", // bench table view
+  "bm", // bench metric
   "bg", // bench groups
   "bpc", // bench show pre-change data
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
+  "pkg", // pkgeval package history
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
   "edp", // ecosystem downloads proportional toggle
   "edm", // ecosystem downloads view mode
+  "edpkg", // ecosystem downloads package
   "tm", // ttfx metric
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
@@ -6104,6 +6282,8 @@ window.addEventListener("message", (event) => {
 function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
+  } else if (tab === "ci-builds") {
+    setCITimingSubview("builds", { updateUrl: false });
   } else if (tab === "ci-commits") {
     setCITimingSubview("commits", { updateUrl: false });
   } else if (tab === "ci-timing") {
@@ -6113,6 +6293,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   activeTab = tab;
   const tabIds = {
     "ci-timing": "tab-ci-timing",
+    "ci-builds": "tab-ci-builds",
     "ci-commits": "tab-ci-commits",
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
@@ -6136,7 +6317,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   });
 
   const isCITab =
-    tab === "ci-timing" || tab === "ci-commits" || tab === "ci-workers";
+    tab === "ci-timing" || tab === "ci-builds" || tab === "ci-commits" || tab === "ci-workers";
 
   document
     .getElementById("ci-timing-view")
@@ -6222,6 +6403,12 @@ let benchChart = null;
 let benchSelectedGroups = new Set();
 let benchTimeRangeDays = 15;
 let benchStatType = "minimum";
+// Which estimate the API serves: time (the only one the files have), gctime,
+// memory or allocs
+let benchMetric = "time";
+const BENCH_METRIC_LABELS = { time: "Time", gctime: "GC time", memory: "Memory", allocs: "Allocations" };
+let benchVerdicts = null; // { since, verdicts } from api/benchmarks/verdicts
+let benchVerdictsLoading = null;
 let benchSortCol = "trendAbs"; // default view is "groups", which has no date column
 let benchSortAsc = false;
 let benchGroupColors = {};
@@ -6331,6 +6518,12 @@ function updateBenchURL() {
   } else {
     url.searchParams.delete("bv");
   }
+  // Metric (default time)
+  if (benchMetric !== "time") {
+    url.searchParams.set("bm", benchMetric);
+  } else {
+    url.searchParams.delete("bm");
+  }
   // Noisy view min latency (ns)
   if (benchNoisyMinNs !== BENCH_NOISY_DEFAULT_MIN_NS) {
     url.searchParams.set("bn", benchNoisyMinNs);
@@ -6393,11 +6586,21 @@ function applyBenchURLParams() {
     document.getElementById("bench-view-runs")?.classList.add("btn-primary");
   } else if (bv === "noisy") {
     benchTableView = "noisy";
-    document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
+    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
     document.getElementById("bench-view-noisy")?.classList.add("btn-primary");
+  } else if (bv === "verdicts") {
+    benchTableView = "verdicts";
+    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
+    document.getElementById("bench-view-verdicts")?.classList.add("btn-primary");
   }
   const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
   if (minNsLabel) minNsLabel.hidden = benchTableView !== "noisy";
+  const bm = params.get("bm");
+  if (bm !== null && bm in BENCH_METRIC_LABELS) {
+    benchMetric = bm;
+    const sel = document.getElementById("bench-metric");
+    if (sel) sel.value = bm;
+  }
 
   const bn = params.get("bn");
   if (bn !== null) {
@@ -6446,7 +6649,7 @@ function setBenchTimeRange(value) {
 // whole file
 function fetchBenchGroupDetail(group) {
   if (dataSource === "api") {
-    return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince });
+    return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
   }
   return loadGzipJson(`data/benchmarks/${encodeURIComponent(group)}.json.gz`);
 }
@@ -6671,6 +6874,44 @@ function formatTime(ns) {
   return (ns / 1e9).toFixed(2) + " s";
 }
 
+function formatBytes(b) {
+  if (b == null || b === 0) return "—";
+  if (b < 1024) return b.toFixed(0) + " B";
+  if (b < 1024 ** 2) return (b / 1024).toFixed(1) + " KiB";
+  if (b < 1024 ** 3) return (b / 1024 ** 2).toFixed(1) + " MiB";
+  return (b / 1024 ** 3).toFixed(2) + " GiB";
+}
+
+// A value of the selected benchmark metric
+function formatBenchValue(v) {
+  if (benchMetric === "memory") return formatBytes(v);
+  if (benchMetric === "allocs") return v == null || v === 0 ? "—" : Math.round(v).toLocaleString();
+  return formatTime(v);
+}
+
+function benchMetricLabel() {
+  return BENCH_METRIC_LABELS[benchMetric] || "Time";
+}
+
+async function setBenchMetric(value) {
+  if (!(value in BENCH_METRIC_LABELS) || value === benchMetric || dataSource !== "api") return;
+  benchMetric = value;
+  const sel = document.getElementById("bench-metric");
+  if (sel) sel.value = value;
+  try {
+    benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
+  } catch (err) {
+    console.error("Failed to load the benchmark summary:", err);
+    return;
+  }
+  benchGroupDetail = {};
+  benchGroupDetailLoading = {};
+  for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
+  updateBenchChart();
+  updateBenchTable();
+  updateBenchURL();
+}
+
 async function loadBenchmarkData() {
   try {
     // Load methodology-change registry first so cutoff helpers have data
@@ -6678,8 +6919,11 @@ async function loadBenchmarkData() {
     await BenchCore.loadMethodologyChanges();
     updateBenchMethodologyNotesCount();
     if ((await probeDataSource()) === "api") {
-      benchData = await apiGet("benchmarks/summary");
+      benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
       benchDetailSince = apiSince(getBenchCutoff());
+      // The metric and Nanosoldier's verdicts only exist in the database
+      document.getElementById("bench-metric")?.classList.remove("view-hidden");
+      document.getElementById("bench-view-verdicts")?.classList.remove("view-hidden");
     } else {
       benchData = await loadGzipJson("data/benchmark_summary.json.gz");
     }
@@ -7200,11 +7444,11 @@ function updateBenchChart() {
   } else {
     const yLabel =
       expandedWithDetail.length > 0 || noisyView
-        ? `${statLabel} Time`
-        : `${statLabel} Geomean Time`;
+        ? `${statLabel} ${benchMetricLabel()}`
+        : `${statLabel} Geomean ${benchMetricLabel()}`;
     yAxis.title = { display: true, text: yLabel, color: textColor };
     yAxis.ticks.callback = function (value) {
-      return formatTime(value);
+      return formatBenchValue(value);
     };
   }
 
@@ -7247,7 +7491,7 @@ function updateBenchChart() {
             },
             label: (item) => {
               const raw = item.raw;
-              const abs = formatTime(raw.yRaw);
+              const abs = formatBenchValue(raw.yRaw);
               if (multiSeries) {
                 const sign = raw.y >= 0 ? "+" : "";
                 return `${item.dataset.label}: ${sign}${raw.y.toFixed(1)}% (${abs})`;
@@ -7365,7 +7609,7 @@ function makeBenchRowComparator(defaultStrCol) {
 }
 
 function setBenchTableView(view) {
-  if (view !== "groups" && view !== "runs" && view !== "noisy") return;
+  if (view !== "groups" && view !== "runs" && view !== "noisy" && view !== "verdicts") return;
   if (view === benchTableView) return;
   const prev = benchTableView;
   benchTableView = view;
@@ -7378,6 +7622,9 @@ function setBenchTableView(view) {
   document
     .getElementById("bench-view-noisy")
     ?.classList.toggle("btn-primary", view === "noisy");
+  document
+    .getElementById("bench-view-verdicts")
+    ?.classList.toggle("btn-primary", view === "verdicts");
   const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
   if (minNsLabel) minNsLabel.hidden = view !== "noisy";
   // Reset sort to sensible default for the new view
@@ -7405,9 +7652,79 @@ function updateBenchTable() {
     renderBenchRunsTable();
   } else if (benchTableView === "noisy") {
     renderBenchNoisyTable();
+  } else if (benchTableView === "verdicts") {
+    renderBenchVerdictsTable();
   } else {
     renderBenchGroupsTable();
   }
+}
+
+// Nanosoldier's own regressions and improvements (api/benchmarks/verdicts)
+// for the reports in the selected range, newest first
+function renderBenchVerdictsTable() {
+  const thead = document.getElementById("bench-stats-thead");
+  const tbody = document.getElementById("bench-stats-tbody");
+  thead.innerHTML = `<tr>
+                <th>Date</th>
+                <th>Group</th>
+                <th>Benchmark</th>
+                <th>Verdict</th>
+                <th class="bench-time-header" title="Time against the baseline report; the tolerance is Nanosoldier's threshold">Time ratio</th>
+                <th class="bench-time-header" title="Memory against the baseline report">Memory ratio</th>
+            </tr>`;
+  if (dataSource !== "api") {
+    tbody.innerHTML = '<tr><td colspan="6">Verdicts are only available from the database API.</td></tr>';
+    return;
+  }
+  const since = apiSince(getBenchCutoff());
+  const covered = benchVerdicts && (benchVerdicts.since === since || benchVerdicts.since === "" || (since !== "" && benchVerdicts.since < since));
+  if (!covered) {
+    if (!benchVerdictsLoading) {
+      tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading...</td></tr>';
+      benchVerdictsLoading = apiGet("benchmarks/verdicts", { since })
+        .then((d) => {
+          benchVerdicts = { since, verdicts: d.verdicts || [] };
+        })
+        .catch((err) => {
+          console.error("Failed to load verdicts:", err);
+          benchVerdicts = { since, verdicts: [], failed: true };
+        })
+        .finally(() => {
+          benchVerdictsLoading = null;
+          if (benchTableView === "verdicts") renderBenchVerdictsTable();
+        });
+    }
+    return;
+  }
+  const cutoff = getBenchCutoff();
+  const rows = benchVerdicts.verdicts.filter(
+    (v) => benchSelectedGroups.has(v.group) && (!cutoff || new Date(v.date) >= cutoff),
+  );
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6">${benchVerdicts.failed ? "Failed to load verdicts." : "No regressions or improvements flagged for the selected groups and range" + (benchVerdicts.verdicts.length === 0 ? " (verdicts exist for reports parsed from their tarball)" : "") + "."}</td></tr>`;
+    return;
+  }
+  const ratio = (r, tol) => {
+    if (r == null) return "—";
+    const pct = (r - 1) * 100;
+    const cls = pct > 0 ? "bench-delta-pos" : pct < 0 ? "bench-delta-neg" : "";
+    const title = tol != null ? ` title="tolerance ±${(tol * 100).toFixed(0)}%"` : "";
+    return `<span class="${cls}"${title}>${r.toFixed(2)}× (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`;
+  };
+  let html = "";
+  for (const v of rows.slice(0, 500)) {
+    const url = nanosoldierReportUrl("benchmark", v.date_path || v.date);
+    html += `<tr>
+      <td><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(v.date)}</a></td>
+      <td>${escapeHtml(v.group)}</td>
+      <td>${escapeHtml(v.name)}</td>
+      <td class="${v.verdict === "regression" ? "bench-delta-pos" : "bench-delta-neg"}">${escapeHtml(v.verdict)}</td>
+      <td>${ratio(v.time_ratio, v.time_tolerance)}</td>
+      <td>${ratio(v.memory_ratio, v.memory_tolerance)}</td>
+    </tr>`;
+  }
+  if (rows.length > 500) html += `<tr><td colspan="6">${rows.length - 500} more not shown; narrow the range or the groups.</td></tr>`;
+  tbody.innerHTML = html;
 }
 
 function getNotesForBenchmark(group, name) {
@@ -7612,9 +7929,9 @@ function renderBenchRunsTable() {
     html += `<td>${commitDisplay}</td>`;
     html += `<td>${reportDisplay}</td>`;
     html += `<td>${comparisonDisplay}</td>`;
-    html += `<td class="bench-time">${formatTime(row.geomeanMin)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.geomeanMin)}</td>`;
     html += `<td class="bench-delta">${formatBenchDelta(row.deltaMin)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.geomeanMean)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.geomeanMean)}</td>`;
     html += `<td class="bench-delta">${formatBenchDelta(row.deltaMean)}</td>`;
     html += `<td>${fmtCount(row.improved, "bench-runs-improved")}</td>`;
     html += `<td>${fmtCount(row.regressed, "bench-runs-regressed")}</td>`;
@@ -7925,7 +8242,7 @@ async function renderBenchNoisyTable() {
     const noisyNotes = getNotesForBenchmark(row.group, row.name);
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td>${escapeHtml(row.name)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.latest)}</td>`;
     html += `<td class="bench-noise-cell">${formatNoise(row.noise)}</td>`;
     html += `<td>${row.samples}</td>`;
     html += renderNotesCell(noisyNotes);
@@ -8044,10 +8361,10 @@ function renderBenchGroupsTable() {
   if (overall) {
     html += `<tr class="bench-overall-row">`;
     html += `<td><strong>Overall</strong></td>`;
-    html += `<td class="bench-time"><strong>${formatTime(overall.latest)}</strong></td>`;
-    html += `<td class="bench-time">${formatTime(overall.avg)}</td>`;
-    html += `<td class="bench-time">${formatTime(overall.min)}</td>`;
-    html += `<td class="bench-time">${formatTime(overall.max)}</td>`;
+    html += `<td class="bench-time"><strong>${formatBenchValue(overall.latest)}</strong></td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.avg)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.min)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(overall.max)}</td>`;
     html += `<td class="bench-trend"><strong>${formatTrendPct(overall.trend)}</strong></td>`;
     html += `<td></td>`;
     html += `<td></td>`;
@@ -8061,10 +8378,10 @@ function renderBenchGroupsTable() {
     const groupNotes = getNotesForGroup(row.group);
     html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}">`;
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.latest)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.avg)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.min)}</td>`;
-    html += `<td class="bench-time">${formatTime(row.max)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.latest)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.avg)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.min)}</td>`;
+    html += `<td class="bench-time">${formatBenchValue(row.max)}</td>`;
     html += `<td class="bench-trend">${formatTrendPct(row.trend)}</td>`;
     html += `<td>${row.count}</td>`;
     html += `<td></td>`;
@@ -8123,10 +8440,10 @@ function renderBenchGroupsTable() {
           html += `<tr class="${detailClass}" data-bench-label="${escapeHtml(row.group + "/" + b.name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(b.name)}" style="cursor: pointer;" title="${escapeHtml(b.name)}">`;
           const benchNotes = getNotesForBenchmark(b.group, b.name);
           html += `<td>${escapeHtml(b.name)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.latest)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.avg)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.min)}</td>`;
-          html += `<td class="bench-time">${formatTime(b.max)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.latest)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.avg)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.min)}</td>`;
+          html += `<td class="bench-time">${formatBenchValue(b.max)}</td>`;
           html += `<td class="bench-trend">${formatTrendPct(b.trend)}</td>`;
           html += `<td></td>`;
           html += `<td class="bench-noise-cell">${formatNoise(b.noise)}</td>`;
@@ -8185,6 +8502,7 @@ function setPackagesTimeRange(val) {
 }
 
 function setPackagesClientType(val) {
+  if (packagesDownloadsData && dataSource === "api") setTimeout(loadPackagesTop, 0);
   if (val === "all" || val === "user" || val === "ci") {
     packagesClientType = val;
   } else {
@@ -8361,6 +8679,11 @@ function updatePackagesURL() {
   } else {
     url.searchParams.delete("edm");
   }
+  if (packagesPackage) {
+    url.searchParams.set("edpkg", packagesPackage);
+  } else {
+    url.searchParams.delete("edpkg");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -8396,6 +8719,12 @@ function applyPackagesURLParams() {
     const btn = document.getElementById("packages-btn-proportional");
     if (btn) btn.textContent = "Show counts";
   }
+  const edpkg = params.get("edpkg");
+  if (edpkg) {
+    packagesPackage = edpkg.trim();
+    const input = document.getElementById("packages-package");
+    if (input) input.value = packagesPackage;
+  }
   const edm = params.get("edm");
   if (edm === "prerelease-testing" || edm === "minor") {
     packagesViewMode = edm;
@@ -8415,6 +8744,139 @@ function getPackagesFilteredSeries() {
     if (packagesTimeRangeDays > 0 && new Date(row.date) < cutoff) return false;
     return true;
   });
+}
+
+// === Per-package downloads (API only) ===
+let packagesPackage = ""; // the package whose requests are shown, "" for none
+let packagesPackageChart = null;
+let packagesSuggestTimer = null;
+
+function suggestPackagesPackages(value) {
+  clearTimeout(packagesSuggestTimer);
+  const q = (value || "").trim();
+  if (q.length < 2 || dataSource !== "api") return;
+  packagesSuggestTimer = setTimeout(async () => {
+    try {
+      const names = await apiGet("downloads/packages", { q });
+      const list = document.getElementById("packages-package-list");
+      if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
+    } catch (err) {
+      console.error("Package suggestions failed:", err);
+    }
+  }, 150);
+}
+
+async function setPackagesPackage(name) {
+  packagesPackage = (name || "").trim();
+  const input = document.getElementById("packages-package");
+  if (input && input.value !== packagesPackage) input.value = packagesPackage;
+  const clear = document.getElementById("packages-package-clear");
+  if (clear) clear.hidden = !packagesPackage;
+  const panel = document.getElementById("packages-package-view");
+  const tableEl = document.getElementById("packages-package-table");
+  updatePackagesURL();
+  if (!packagesPackage || dataSource !== "api") {
+    if (panel) panel.classList.add("view-hidden");
+    if (packagesPackageChart) {
+      packagesPackageChart.destroy();
+      packagesPackageChart = null;
+    }
+    return;
+  }
+  panel.classList.remove("view-hidden");
+  tableEl.innerHTML = '<div class="loading">Loading...</div>';
+  let d;
+  try {
+    d = await apiGet(`downloads/package/${encodeURIComponent(packagesPackage)}`);
+  } catch (err) {
+    console.error("Failed to load the package's requests:", err);
+    tableEl.innerHTML = '<div class="error">Failed to load.</div>';
+    return;
+  }
+  if (d.name !== packagesPackage) return; // superseded
+  renderPackagesPackage(d);
+}
+
+function renderPackagesPackage(d) {
+  const canvas = document.getElementById("packages-package-chart");
+  const tableEl = document.getElementById("packages-package-table");
+  const series = d.series || [];
+  if (packagesPackageChart) {
+    packagesPackageChart.destroy();
+    packagesPackageChart = null;
+  }
+  if (series.length === 0) {
+    tableEl.innerHTML = `<p class="package-panel-help">No successful requests recorded for ${escapeHtml(d.name)}. Per-package requests are kept from the day the database started (the upstream rollup only holds the last few days).</p>`;
+    return;
+  }
+  const isDark = isDarkMode();
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const toPoints = (key) => series.map((s) => ({ x: Date.parse(s.date), y: s[key] }));
+  packagesPackageChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [
+        { label: "User", data: toPoints("user"), borderColor: colors.build, backgroundColor: colors.build, pointRadius: 2, borderWidth: 1.5, tension: 0.1 },
+        { label: "CI", data: toPoints("ci"), borderColor: colors.test, backgroundColor: colors.test, pointRadius: 2, borderWidth: 1.5, tension: 0.1 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true } },
+        title: { display: true, text: `${d.name}: successful package requests per day`, color: textColor },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString()}` } },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
+        y: { beginAtZero: true, ticks: { color: textColor }, grid: { color: gridColor } },
+      },
+    },
+  });
+  const sum = (key, from) => series.slice(from).reduce((n, s) => n + s[key], 0);
+  const week = Math.max(0, series.length - 7);
+  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", 0).toLocaleString()} requests (${sum("user", 0).toLocaleString()} user, ${sum("ci", 0).toLocaleString()} CI); last 7 days ${sum("all", week).toLocaleString()} (${sum("user", week).toLocaleString()} user, ${sum("ci", week).toLocaleString()} CI).</p>`;
+}
+
+// The most requested packages over the last week of data
+async function loadPackagesTop() {
+  const panel = document.getElementById("packages-top");
+  if (!panel || dataSource !== "api") return;
+  let d;
+  try {
+    d = await apiGet("downloads/top", { days: 7, client: packagesClientType === "all" ? "all" : packagesClientType });
+  } catch (err) {
+    console.error("Failed to load the top packages:", err);
+    return;
+  }
+  if (!d.packages || d.packages.length === 0) return;
+  const rows = d.packages
+    .map(
+      (p, i) => `<tr class="clickable" data-name="${escapeHtml(p.name || "")}">
+        <td class="num">${i + 1}</td>
+        <td>${p.name ? escapeHtml(p.name) : `<code title="not in General">${escapeHtml(p.uuid)}</code>`}</td>
+        <td class="num">${p.user.toLocaleString()}</td>
+        <td class="num">${p.ci.toLocaleString()}</td>
+        <td class="num">${p.all.toLocaleString()}</td>
+      </tr>`,
+    )
+    .join("");
+  panel.innerHTML = `
+    <h3>Most requested packages, ${escapeHtml(d.since)} to ${escapeHtml(d.until)} <span class="updated">by ${d.client === "all" ? "all" : d.client} clients</span></h3>
+    <p class="package-panel-help">Successful package requests to the package server, per package, over the last 7 days of data. Click a row for its daily history.</p>
+    <table>
+      <thead><tr><th class="num">#</th><th>Package</th><th class="num">User</th><th class="num">CI</th><th class="num">All</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-name]").forEach((tr) => {
+    tr.onclick = () => tr.dataset.name && setPackagesPackage(tr.dataset.name);
+  });
+  panel.classList.remove("view-hidden");
 }
 
 async function loadPackagesDownloadsData() {
@@ -8438,6 +8900,11 @@ async function loadPackagesDownloadsData() {
     if (loadingEl) loadingEl.style.display = "none";
     populatePackagesMinorFilterOptions();
     updatePackagesDownloadsChart();
+    if (dataSource === "api") {
+      document.getElementById("packages-package-search")?.classList.remove("view-hidden");
+      loadPackagesTop();
+      if (packagesPackage) setPackagesPackage(packagesPackage);
+    }
   } catch (err) {
     console.error("Failed to load ecosystem packages downloads:", err);
     if (loadingEl) {
@@ -9126,6 +9593,11 @@ function updatePkgevalURL() {
   } else {
     url.searchParams.delete("pp");
   }
+  if (pkgevalPackage) {
+    url.searchParams.set("pkg", pkgevalPackage);
+  } else {
+    url.searchParams.delete("pkg");
+  }
   history.replaceState(null, "", url);
 }
 
@@ -9145,6 +9617,155 @@ function applyPkgevalURLParams() {
     document.getElementById("pkgeval-btn-proportional").textContent =
       "Show counts";
   }
+  const pkg = params.get("pkg");
+  if (pkg) {
+    pkgevalPackage = pkg.trim();
+    const input = document.getElementById("pkgeval-package");
+    if (input) input.value = pkgevalPackage;
+  }
+}
+
+// === Per-package PkgEval history and failure reasons (API only) ===
+let pkgevalPackage = ""; // the package whose history is shown, "" for none
+let pkgevalPackageData = null; // api/pkgeval/package/<name>
+let pkgevalSuggestTimer = null;
+
+// Datalist suggestions for the package box, debounced
+function suggestPkgevalPackages(value) {
+  clearTimeout(pkgevalSuggestTimer);
+  const q = (value || "").trim();
+  if (q.length < 2 || dataSource !== "api") return;
+  pkgevalSuggestTimer = setTimeout(async () => {
+    try {
+      const names = await apiGet("pkgeval/packages", { q });
+      const list = document.getElementById("pkgeval-package-list");
+      if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
+    } catch (err) {
+      console.error("Package suggestions failed:", err);
+    }
+  }, 150);
+}
+
+async function setPkgevalPackage(name) {
+  pkgevalPackage = (name || "").trim();
+  const input = document.getElementById("pkgeval-package");
+  if (input && input.value !== pkgevalPackage) input.value = pkgevalPackage;
+  const clear = document.getElementById("pkgeval-package-clear");
+  if (clear) clear.hidden = !pkgevalPackage;
+  const panel = document.getElementById("pkgeval-package-view");
+  updatePkgevalURL();
+  if (!pkgevalPackage || dataSource !== "api") {
+    pkgevalPackageData = null;
+    if (panel) panel.classList.add("view-hidden");
+    return;
+  }
+  if (panel) {
+    panel.classList.remove("view-hidden");
+    panel.innerHTML = '<div class="loading">Loading...</div>';
+  }
+  try {
+    const d = await apiGet(`pkgeval/package/${encodeURIComponent(pkgevalPackage)}`);
+    if (d.name !== pkgevalPackage) return; // superseded
+    pkgevalPackageData = d;
+  } catch (err) {
+    console.error("Failed to load the package history:", err);
+    if (panel) panel.innerHTML = '<div class="error">Failed to load the package history.</div>';
+    return;
+  }
+  renderPkgevalPackage();
+}
+
+const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
+
+function renderPkgevalPackage() {
+  const panel = document.getElementById("pkgeval-package-view");
+  if (!panel || !pkgevalPackageData) return;
+  const history = (pkgevalPackageData.history || []).filter((h) => h.date);
+  const name = pkgevalPackageData.name;
+  if (history.length === 0) {
+    panel.innerHTML = `<h3>${escapeHtml(name)}</h3><p class="package-panel-help">No per-package results for this name. Package rows exist for the reports fetched into the database (the recent ones); check the spelling against the suggestions.</p>`;
+    return;
+  }
+  const counts = {};
+  for (const h of history) counts[h.status] = (counts[h.status] || 0) + 1;
+  const summary = PKGEVAL_STATUS_ORDER.filter((s) => counts[s])
+    .map((s) => `<span class="pe-${s}">${counts[s]} ${s}</span>`)
+    .join(", ");
+  const strip = history
+    .map((h) => {
+      const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}`;
+      return `<span class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"></span>`;
+    })
+    .join("");
+  // Rows where something changed, newest first, so a long green history
+  // collapses to its transitions
+  const changes = [];
+  let prev = null;
+  for (const h of history) {
+    if (!prev || h.status !== prev.status || (h.reason || "") !== (prev.reason || "") || (h.version || "") !== (prev.version || "")) changes.push(h);
+    prev = h;
+  }
+  changes.reverse();
+  const rows = changes
+    .slice(0, 200)
+    .map((h) => {
+      const url = nanosoldierReportUrl("pkgeval", h.date_path || h.date);
+      return `<tr class="clickable" data-url="${escapeHtml(url)}">
+        <td>${escapeHtml(h.date)}</td>
+        <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
+        <td>${escapeHtml(h.version || "")}</td>
+        <td class="pe-${escapeHtml(h.status)}">${escapeHtml(h.status)}</td>
+        <td class="wrap">${escapeHtml(h.reason || "")}</td>
+        <td class="num">${h.duration_s != null ? formatDuration(h.duration_s) : ""}</td>
+      </tr>`;
+    })
+    .join("");
+  panel.innerHTML = `
+    <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
+    <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
+    <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report.</p>
+    <table>
+      <thead><tr><th>Date</th><th>Julia</th><th>Version</th><th>Status</th><th>Reason</th><th class="num">Duration</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-url]").forEach((tr) => {
+    tr.onclick = () => window.open(tr.dataset.url, "_blank", "noopener");
+  });
+}
+
+// Status and reason counts of the newest report with package rows
+async function loadPkgevalReasons() {
+  const panel = document.getElementById("pkgeval-reasons");
+  if (!panel || dataSource !== "api") return;
+  let d;
+  try {
+    d = await apiGet("pkgeval/reasons");
+  } catch (err) {
+    console.error("Failed to load the failure reasons:", err);
+    return;
+  }
+  if (!d || !d.reasons || d.reasons.length === 0 || !d.date) return;
+  const total = d.reasons.reduce((n, r) => n + r.count, 0);
+  const rows = d.reasons
+    .filter((r) => r.status !== "ok")
+    .map(
+      (r) => `<tr>
+        <td class="pe-${escapeHtml(r.status)}">${escapeHtml(r.status)}</td>
+        <td>${escapeHtml(r.reason || "(none)")}</td>
+        <td class="num">${r.count.toLocaleString()}</td>
+        <td class="num">${((r.count / total) * 100).toFixed(1)}%</td>
+      </tr>`,
+    )
+    .join("");
+  const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
+  panel.innerHTML = `
+    <h3>Why packages did not pass on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
+    <p class="package-panel-help">Nanosoldier's reason for every package that was not ok in the latest report, out of ${total.toLocaleString()} packages. Type a package name above for its own history.</p>
+    <table>
+      <thead><tr><th>Status</th><th>Reason</th><th class="num">Packages</th><th class="num">Share</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.classList.remove("view-hidden");
 }
 
 function getPkgevalFilteredReports() {
@@ -9170,6 +9791,11 @@ async function loadPkgevalData() {
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
     updatePkgevalTable();
+    if (dataSource === "api") {
+      document.getElementById("pkgeval-package-search")?.classList.remove("view-hidden");
+      loadPkgevalReasons();
+      if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
+    }
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
     document.getElementById("pkgeval-chart-loading").innerHTML =

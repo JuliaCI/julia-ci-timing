@@ -163,6 +163,18 @@
             </button>
             <button
               class="tab-btn"
+              id="tab-ci-builds"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-builds')"
+              title="Wall time and queue wait of every master build"
+            >
+              Builds
+            </button>
+            <button
+              class="tab-btn"
               id="tab-ci-commits"
               role="tab"
               aria-selected="false"
@@ -447,7 +459,7 @@
       class="main view-hidden"
       id="ci-timing-view"
       role="tabpanel"
-      aria-labelledby="tab-ci-timing tab-ci-commits tab-ci-workers"
+      aria-labelledby="tab-ci-timing tab-ci-builds tab-ci-commits tab-ci-workers"
       tabindex="0"
     >
       <div class="ci-toolbar" id="ci-timing-controls">
@@ -778,6 +790,31 @@
             <div class="loading">Loading worker history...</div>
           </div>
         </div>
+        <div class="commits-view view-hidden" id="builds-view">
+          <div class="workers-note" role="note">
+            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
+            <span
+              >Each point is one <strong>master</strong> build: its wall time
+              from the first job starting to the last finishing, and the
+              median wait of its jobs between becoming runnable and starting
+              on an agent (the queue). Builds fetched from the Buildkite API
+              since the database started carry these timestamps; click a
+              point or row to open the build.</span
+            >
+          </div>
+          <div class="commits-chart-container">
+            <div class="chart-wrapper">
+              <canvas
+                id="builds-chart"
+                role="img"
+                aria-label="Wall time and median queue wait per master build"
+              ></canvas>
+            </div>
+          </div>
+          <div class="commits-regressions" id="builds-table">
+            <div class="loading">Loading...</div>
+          </div>
+        </div>
         <div class="commits-view view-hidden" id="commits-view">
           <div class="workers-note" role="note">
             <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
@@ -885,6 +922,21 @@
           </button>
           <div class="checkbox-dropdown-menu" id="packages-minor-filter-menu"></div>
         </div>
+        <label class="package-search view-hidden" id="packages-package-search" for="packages-package">
+          Package:
+          <input
+            type="text"
+            id="packages-package"
+            list="packages-package-list"
+            placeholder="name"
+            autocomplete="off"
+            spellcheck="false"
+            oninput="suggestPackagesPackages(this.value)"
+            onchange="setPackagesPackage(this.value)"
+          />
+          <datalist id="packages-package-list"></datalist>
+          <button class="btn" id="packages-package-clear" onclick="setPackagesPackage('')" hidden>×</button>
+        </label>
         <span class="updated packages-prerelease-headline" id="packages-prerelease-headline"></span>
         <span class="updated" id="packages-last-updated"></span>
       </div>
@@ -897,6 +949,11 @@
             <canvas id="packages-chart"></canvas>
           </div>
         </div>
+        <div class="package-panel view-hidden" id="packages-package-view">
+          <div class="package-panel-chart"><canvas id="packages-package-chart"></canvas></div>
+          <div id="packages-package-table"></div>
+        </div>
+        <div class="package-panel view-hidden" id="packages-top"></div>
       </div>
     </div>
 
@@ -935,8 +992,24 @@
         >
           Reset zoom
         </button>
+        <label class="package-search view-hidden" id="pkgeval-package-search" for="pkgeval-package">
+          Package:
+          <input
+            type="text"
+            id="pkgeval-package"
+            list="pkgeval-package-list"
+            placeholder="name"
+            autocomplete="off"
+            spellcheck="false"
+            oninput="suggestPkgevalPackages(this.value)"
+            onchange="setPkgevalPackage(this.value)"
+          />
+          <datalist id="pkgeval-package-list"></datalist>
+          <button class="btn" id="pkgeval-package-clear" onclick="setPkgevalPackage('')" hidden>×</button>
+        </label>
         <span class="updated" id="pkgeval-last-updated"></span>
       </div>
+      <div class="package-panel view-hidden" id="pkgeval-package-view"></div>
       <div class="pkgeval-chart-area">
         <div class="pkgeval-chart-container">
           <div class="pkgeval-chart-wrapper">
@@ -973,6 +1046,7 @@
               </tr>
             </tbody>
           </table>
+          <div class="package-panel view-hidden" id="pkgeval-reasons"></div>
         </div>
       </div>
     </div>
@@ -1167,6 +1241,18 @@
           <option value="minimum" selected>Minimum</option>
           <option value="mean">Mean</option>
         </select>
+        <select
+          class="time-select view-hidden"
+          id="bench-metric"
+          onchange="setBenchMetric(this.value)"
+          aria-label="Metric"
+          title="Which BenchmarkTools estimate to plot. GC time, memory and allocations exist for reports parsed from their tarball, not for the oldest history."
+        >
+          <option value="time" selected>Time</option>
+          <option value="gctime">GC time</option>
+          <option value="memory">Memory</option>
+          <option value="allocs">Allocations</option>
+        </select>
         <button class="btn" id="bench-btn-all" onclick="selectAllGroups()">
           All groups
         </button>
@@ -1195,6 +1281,14 @@
             title="Rank individual benchmarks by historical noise (median |Δ%| between consecutive runs)"
           >
             Noisy
+          </button>
+          <button
+            class="btn view-hidden"
+            id="bench-view-verdicts"
+            onclick="setBenchTableView('verdicts')"
+            title="The regressions and improvements Nanosoldier itself flagged in each daily report, with the time and memory ratios against the baseline"
+          >
+            Verdicts
           </button>
         </span>
         <label
