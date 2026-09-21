@@ -22,13 +22,16 @@ On the host (all from cloud-init, files under `files/`):
 - `ci-timing-datasette`: public read-only SQL over the database, run from the
   ingest image. Its `ExecStartPre` restores the database, export and Caddy's
   certificates from the latest S3 backup on a fresh host.
+- `ci-timing-api`: the site's API (`db/serve.jl`) from the same image, proxied
+  at `/api/`; the browser reads the database through it with a time window and
+  only falls back to the `/data/` files where there is no API.
 - `ci-timing-ingest.timer`: every two hours, runs the image (`fetch_*.jl`,
   then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`, then
   `ci-timing-backup` uploads `runtime/latest.tar.gz` and publishes
   `/data/ci-timing.sqlite.gz`.
 - `ci-timing-archive.timer`: daily dated copy of the latest backup.
 - `ci-timing-deploy <image@sha256:...>`: what the workflow runs over SSM: pull,
-  refresh the site directory, restart Datasette, start one ingest.
+  refresh the site directory, restart Datasette and the API, start one ingest.
 
 ## Operating
 
@@ -57,7 +60,8 @@ so run `ci-timing-backup` on the old host first (`aws ssm send-command ...
 has run since the last one.
 
 Shell on the host: `aws ssm start-session --target <instance_id>`. Logs:
-`journalctl -u ci-timing-ingest`, `-u ci-timing-datasette`, `-u ci-timing-caddy`.
+`journalctl -u ci-timing-ingest`, `-u ci-timing-datasette`, `-u ci-timing-api`,
+`-u ci-timing-caddy`.
 
 State is local (`terraform.tfstate`, ignored by git). Losing it means
 re-importing the resources; the data lives in the backup bucket.

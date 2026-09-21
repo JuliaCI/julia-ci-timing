@@ -13,4 +13,4 @@ runcmd:
   - install -d -m 750 -o ${runtime_uid} -g ${runtime_gid} ${data_mount_path} ${data_mount_path}/${export_dir} ${data_mount_path}/${site_dir} ${data_mount_path}/cache
   - install -d -m 755 ${caddy_data_dir} ${caddy_config_dir}
   - systemctl daemon-reload
-  - systemctl enable --now ci-timing-caddy ci-timing-datasette ci-timing-ingest.timer ci-timing-archive.timer
+  - systemctl enable --now ci-timing-caddy ci-timing-datasette ci-timing-api ci-timing-ingest.timer ci-timing-archive.timer

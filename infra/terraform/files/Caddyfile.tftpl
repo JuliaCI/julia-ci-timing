@@ -9,6 +9,10 @@
   handle /db/* {
     reverse_proxy 127.0.0.1:${datasette_port}
   }
+  # The site's own reads (db/serve.jl); its responses are already gzipped
+  handle /api/* {
+    reverse_proxy 127.0.0.1:${api_port}
+  }
   # What the ingest renders: the files the site reads, health.json, the
   # database snapshot
   handle_path /data/* {
