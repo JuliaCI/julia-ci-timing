@@ -1,0 +1,19 @@
+[Unit]
+Description=Public read-only Datasette over the ci-timing database
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# The restore on a fresh host downloads the whole backup; no finite timeout
+TimeoutStartSec=infinity
+ExecStartPre=/usr/local/bin/ci-timing-restore-if-empty
+ExecStart=/usr/local/bin/ci-timing-run-datasette
+ExecStop=/usr/bin/docker stop ci-timing-datasette
+Restart=always
+# Fails until the first deploy has pulled the image
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

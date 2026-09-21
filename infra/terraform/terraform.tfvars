@@ -1,0 +1,8 @@
+aws_region          = "us-east-1"
+name_prefix         = "ci-timing"
+instance_type       = "t4g.medium"
+availability_zone   = "us-east-1a"
+root_volume_size_gb = 50
+site_hostname       = null
+github_repository   = "JuliaCI/julia-ci-timing"
+github_deploy_refs  = ["refs/heads/main", "refs/heads/db-migration-plan"]

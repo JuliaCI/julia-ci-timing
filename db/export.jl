@@ -320,6 +320,24 @@ function export_agents(db, out)
     @info "agents" agents=length(records) snapshots=length(times) months=length(by_month)
 end
 
+# --- health --------------------------------------------------------------------
+
+# /healthz for monitoring: the latest run and latest success per source.
+function export_health(db, out)
+    sources = OrderedDict{String,Any}()
+    for r in rows(db, "SELECT source, MAX(CASE WHEN ok = 1 THEN finished_at END) AS last_ok_at, MAX(started_at) AS last_run_at " *
+                      "FROM source_runs GROUP BY source ORDER BY source")
+        last = rows(db, "SELECT ok, rows_written, error, finished_at FROM source_runs WHERE source = ? ORDER BY id DESC LIMIT 1", (String(r.source),))[1]
+        sources[String(r.source)] = OrderedDict("last_ok_at" => js(r.last_ok_at), "last_run_at" => js(r.last_run_at),
+                                                "last_ok" => last.ok === missing ? nothing : last.ok == 1,
+                                                "last_rows" => js(last.rows_written), "last_error" => js(last.error))
+    end
+    write_atomic(joinpath(out, "health.json")) do io
+        JSON3.write(io, OrderedDict("generated_at" => Store.iso_now(), "change_seq" => Store.current_seq(db), "sources" => sources))
+        println(io)
+    end
+end
+
 const EXPORTERS = Dict("timing" => export_timing, "benchmarks" => export_benchmarks, "pkgeval" => export_pkgeval,
                        "ttfx" => export_ttfx, "packages" => export_packages, "agents" => export_agents)
 
@@ -331,6 +349,7 @@ function main(args)
         t = @elapsed EXPORTERS[String(source)](db, opts["out"])
         @info "exported $source" seconds=round(t; digits=1)
     end
+    export_health(db, opts["out"])
     close(db)
 end
 

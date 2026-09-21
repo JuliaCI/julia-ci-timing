@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+. /etc/ci-timing.host.env
+db="${CI_TIMING_DATA_DIR}/${CI_TIMING_DB_FILENAME}"
+if [ ! -s "$db" ]; then
+  echo "Expected SQLite database at $db." >&2
+  exit 1
+fi
+docker rm -f ci-timing-datasette >/dev/null 2>&1 || true
+# Datasette lives in the ingest image (no arm64 build of the official one).
+# The data directory is mounted writable: a reader of a WAL database needs
+# to create the -shm file when the writer (the ingest) is not running.
+# Datasette itself never writes; the container filesystem is read-only.
+exec docker run --name ci-timing-datasette \
+  --publish "127.0.0.1:${CI_TIMING_DATASETTE_PORT}:${CI_TIMING_DATASETTE_PORT}" \
+  --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
+  "$CI_TIMING_IMAGE_REF" datasette serve "/data/${CI_TIMING_DB_FILENAME}" \
+  --host 0.0.0.0 \
+  --port "$CI_TIMING_DATASETTE_PORT" \
+  --setting base_url /db/ \
+  --setting allow_download off \
+  --setting sql_time_limit_ms 2000 \
+  --setting max_returned_rows 5000 \
+  --setting default_page_size 100 \
+  --cors

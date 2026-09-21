@@ -1,0 +1,96 @@
+name: Deploy to the ingest host
+
+# Builds the ingest image (fetchers, export, static site) and deploys it to
+# the EC2 host from infra/terraform: push to ECR, then an SSM Run Command on
+# the host pulls the image, refreshes the site and runs one ingest. The AWS
+# role is assumed through GitHub's OIDC provider; no long-lived keys.
+#
+# Runs on push to main once the site is served from AWS; until then only by
+# hand (workflow_dispatch) on the branch being tested.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'fetch_*.jl'
+      - 'db/**'
+      - 'index.html'
+      - 'assets/**'
+      - 'favicon.svg'
+      - 'data/ttfx_annotations.json'
+      - 'data/methodology_changes.json'
+      - 'Project.toml'
+      - 'Dockerfile'
+      - 'infra/docker/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ci-timing-ingest
+
+jobs:
+  build-and-deploy:
+    # Native arm64: the host is Graviton
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.CI_TIMING_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          git rev-parse HEAD > BUILD_COMMIT
+          tag="sha-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+          image="$REGISTRY/$ECR_REPOSITORY:$tag"
+          docker build --platform linux/arm64 -t "$image" .
+          docker push "$image"
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$tag" \
+            --query 'imageDetails[0].imageDigest' --output text)
+          echo "image_ref=$REGISTRY/$ECR_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $image ($digest)"
+
+      - name: Deploy on the host
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.image_ref }}
+        run: |
+          instance=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=ci-timing" "Name=tag:Name,Values=ci-timing-site" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          [ "$instance" != "None" ] || { echo "no running ci-timing-site instance"; exit 1; }
+          cmd=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
+            --comment "deploy $IMAGE_REF" --timeout-seconds 5400 \
+            --parameters "commands=[\"/usr/local/bin/ci-timing-deploy $IMAGE_REF\"],executionTimeout=[\"5400\"]" \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command $cmd on $instance"
+          for i in $(seq 1 180); do
+            status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut|Undeliverable|Terminated)
+                aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query '[StandardOutputContent,StandardErrorContent]' --output text | tail -60
+                echo "deploy $status"; exit 1 ;;
+            esac
+            sleep 20
+          done
+          aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query 'StandardOutputContent' --output text | tail -40
+          [ "$status" = "Success" ] || { echo "deploy did not finish in time ($status)"; exit 1; }
