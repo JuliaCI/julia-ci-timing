@@ -297,7 +297,8 @@ function handle(s::Server, req::HTTP.Request)
     end
 end
 
-# Compile every route before listening, so the first visitors do not wait
+# Compile every route right after start, on another thread, so a page
+# loading during the warm-up is served slowly rather than refused
 function warm_up(s::Server)
     t = @elapsed begin
         since = Dates.format(Date(now(UTC)) - Day(7), dateformat"yyyy-mm-dd")
@@ -334,9 +335,14 @@ function main(args)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
     s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"])
-    warm_up(s)
+    server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
-    HTTP.serve(req -> handle(s, req), opts["host"], opts["port"])
+    Threads.@spawn try
+        warm_up(s)
+    catch e
+        @error "warm-up failed" exception=(e, catch_backtrace())
+    end
+    wait(server)
 end
 
 abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)
