@@ -1,0 +1,16 @@
+[Unit]
+Description=Deploy the last shipped ci-timing image on a fresh host
+# After the datasette unit's start job, whose ExecStartPre restores the
+# database; that job fails on a fresh host (no image yet) and this is what
+# fixes it
+After=network-online.target docker.service ci-timing-datasette.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ci-timing-bootstrap
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

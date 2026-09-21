@@ -40,6 +40,7 @@ locals {
   ecr_repository_name = "${var.name_prefix}-ingest"
   backup_bucket_name  = lower("${var.name_prefix}-${data.aws_caller_identity.current.account_id}-${var.aws_region}-backups")
   token_parameter     = "/${var.name_prefix}/buildkite-api-token"
+  image_parameter     = "/${var.name_prefix}/image-ref" # the deployed image, for a replacement host
 
   site_hostname = var.site_hostname == null ? "" : trimspace(var.site_hostname)
   # What the host pulls until the first deploy replaces it
@@ -250,6 +251,19 @@ resource "aws_ssm_parameter" "buildkite_token" {
   }
 }
 
+# The digest-pinned image last deployed: written by the deploy workflow,
+# read by a fresh host so that a replacement comes up serving the site
+# without waiting for the next deploy
+resource "aws_ssm_parameter" "image_ref" {
+  name        = local.image_parameter
+  description = "Digest-pinned ingest image last deployed to the ${var.name_prefix} host"
+  type        = "String"
+  value       = "unset"
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 data "aws_kms_alias" "ssm" {
   name = "alias/aws/ssm"
 }
@@ -311,8 +325,21 @@ resource "aws_iam_role_policy" "app" {
       },
       {
         Effect   = "Allow"
+        Action   = ["ssm:GetParameter", "ssm:PutParameter"]
+        Resource = aws_ssm_parameter.image_ref.arn
+      },
+      {
+        Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = data.aws_kms_alias.ssm.target_key_arn
+      },
+      {
+        # AmazonSSMManagedInstanceCore allows reading every parameter in the
+        # account, and anyone who can run commands on this host holds its
+        # role: keep it to this project's parameters
+        Effect      = "Deny"
+        Action      = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+        NotResource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name_prefix}/*"
       },
     ]
   })
@@ -398,6 +425,12 @@ resource "aws_iam_role_policy" "github_deploy" {
         Action   = ["s3:ListBucket"]
         Resource = aws_s3_bucket.backups.arn
       },
+      {
+        # The deploy records the image it shipped
+        Effect   = "Allow"
+        Action   = ["ssm:PutParameter"]
+        Resource = aws_ssm_parameter.image_ref.arn
+      },
     ]
   })
 }
@@ -420,9 +453,11 @@ locals {
     "/usr/local/bin/ci-timing-archive"                = "0755"
     "/usr/local/bin/ci-timing-restore-if-empty"       = "0755"
     "/usr/local/bin/ci-timing-deploy"                 = "0755"
+    "/usr/local/bin/ci-timing-bootstrap"              = "0755"
     "/etc/systemd/system/ci-timing-caddy.service"     = "0644"
     "/etc/systemd/system/ci-timing-datasette.service" = "0644"
     "/etc/systemd/system/ci-timing-api.service"       = "0644"
+    "/etc/systemd/system/ci-timing-bootstrap.service" = "0644"
     "/etc/systemd/system/ci-timing-ingest.service"    = "0644"
     "/etc/systemd/system/ci-timing-ingest.timer"      = "0644"
     "/etc/systemd/system/ci-timing-archive.service"   = "0644"
@@ -451,6 +486,7 @@ locals {
         caddy_data_dir     = local.caddy_data_dir
         caddy_config_dir   = local.caddy_config_dir
         token_parameter    = local.token_parameter
+        image_parameter    = local.image_parameter
       }) }
       "/etc/caddy/Caddyfile" = { mode = "0644", content = templatefile("${path.module}/files/Caddyfile.tftpl", {
         public_ip       = aws_eip.site.public_ip

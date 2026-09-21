@@ -10,7 +10,7 @@ db_name="$CI_TIMING_DB_FILENAME"
 lock_file="/var/lock/ci-timing-backup.lock"
 staging_root="/var/lib/ci-timing-backup-staging"
 snapshot_dir=""
-cleanup() { [ -n "$snapshot_dir" ] && rm -rf "$snapshot_dir"; }
+cleanup() { [ -n "$snapshot_dir" ] && rm -rf "$snapshot_dir"; rm -f "$staging_root/latest.tar.gz"; }
 trap cleanup EXIT INT TERM
 exec 9>"$lock_file"
 flock -n 9
@@ -33,5 +33,9 @@ gzip -c "${snapshot_dir}/${db_name}" > "${CI_TIMING_EXPORT_DIR}/${db_name}.gz.tm
 mv "${CI_TIMING_EXPORT_DIR}/${db_name}.gz.tmp" "${CI_TIMING_EXPORT_DIR}/${db_name}.gz"
 chown "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" "${CI_TIMING_EXPORT_DIR}/${db_name}.gz"
 
-# pipefail: a failed tar must not promote a truncated archive
-tar -C "$snapshot_dir" -czf - . | aws s3 cp - "s3://${CI_TIMING_BACKUP_BUCKET}/${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_LATEST_NAME}" --only-show-errors
+# The archive is finished on disk before it replaces latest.tar.gz, so a
+# failed tar (set -e) never publishes a truncated one
+archive="$staging_root/latest.tar.gz"
+tar -C "$snapshot_dir" -czf "$archive" .
+aws s3 cp "$archive" "s3://${CI_TIMING_BACKUP_BUCKET}/${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_LATEST_NAME}" --only-show-errors
+rm -f "$archive"
