@@ -59,6 +59,17 @@ so run `ci-timing-backup` on the old host first (`aws ssm send-command ...
 --parameters 'commands=["/usr/local/bin/ci-timing-backup"]'`) if an ingest
 has run since the last one.
 
+A one-off fetcher run (a backfill) runs the image the way the ingest does,
+under the ingest lock so the timer waits for it, in the background:
+
+```sh
+aws ssm send-command --instance-ids <instance_id> --document-name AWS-RunShellScript \
+  --parameters 'commands=["set -a; . /etc/ci-timing.host.env; set +a; nohup flock /var/lock/ci-timing-ingest.lock docker run --rm --user $CI_TIMING_RUNTIME_UID:$CI_TIMING_RUNTIME_GID --env CI_TIMING_DB=/data/$CI_TIMING_DB_FILENAME --mount type=bind,src=$CI_TIMING_DATA_DIR,dst=/data $CI_TIMING_IMAGE_REF julia /app/fetch_pkgeval.jl --backfill-packages 365 > /var/log/ci-timing-backfill.log 2>&1 &"]'
+```
+
+(`fetch_benchmarks.jl --backfill-stats` re-parses every report's tarball;
+both were run once on 2026-09-21.)
+
 Shell on the host: `aws ssm start-session --target <instance_id>`. Logs:
 `journalctl -u ci-timing-ingest`, `-u ci-timing-datasette`, `-u ci-timing-api`,
 `-u ci-timing-caddy`.
