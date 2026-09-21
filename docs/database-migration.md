@@ -15,9 +15,14 @@ The stage 1 gate is `db/compare_origins.jl`, run daily by
 fire on other branches). Stage 3 is in: the site reads the database through
 `db/serve.jl` (`/api/`, see "Stage 3" below) and falls back to the `/data/`
 files where there is no API, the comparison feature is gone, and
-`analysis/fetch_data.jl` downloads the extracts. Not yet done: a hostname and
-HTTPS (`site_hostname` plus a DNS record, deferred until the cutover), the
-historical median/std backfill, and the stage 2 cutover itself.
+`analysis/fetch_data.jl` downloads the extracts. The benchmark history was
+re-parsed on the host with `fetch_benchmarks.jl --backfill-stats` (all four
+statistics, memory, allocations and Nanosoldier's verdicts for every report),
+and the last year of PkgEval reports fetched again with
+`fetch_pkgeval.jl --backfill-packages 365` for per-package rows. The new
+views the database supports are in (see "Stage 3"). Not yet done: a hostname
+and HTTPS (`site_hostname` plus a DNS record, deferred until the cutover) and
+the stage 2 cutover itself.
 
 ## Where we are
 
@@ -338,9 +343,9 @@ Rules for the database:
   pushes to ECR, `aws ssm send-command` pulls and restarts. The DB isn't touched.
   Instance replacement kept for base-image changes.
 - Monitoring: `/healthz` reports each source's last successful run from
-  `source_runs`; the daily gate below fails if any source's file is >6 h
-  stale. Needed because `fetch_agents.jl:77-80` exits 0 on 401/403. Disk
-  >80% and a latest backup >1 day old are not yet checked.
+  `source_runs` and the disk in use; the daily gate below fails if any
+  source's file is >6 h stale, the disk is >80% full, or the latest backup in
+  S3 is >1 day old. Needed because `fetch_agents.jl:77-80` exits 0 on 401/403.
 - Hostname: e.g. next.perf.julialang.org, A record to the EIP. Needs the
   julialang.org DNS owner.
 - Gate: `db/compare_origins.jl`, run daily by `compare-origins.yml`, compares
@@ -440,9 +445,18 @@ files already had.
   when the range widens. The other tabs read their summary in one request.
 - The browser probes `api/status` once: without it (the Pages copy, a
   static checkout) every loader reads the files as before.
-- Not yet: the new views the data supports (queue wait and build wall time,
-  allocation and memory regressions, per-package status history and
-  failure reasons, per-package downloads).
+- The views the database made possible: a CI → Builds tab (wall time and
+  queue wait per master build, `/api/timing/builds`); on Benchmarks a metric
+  selector (time, GC time, memory, allocations: `?metric=` on the summary and
+  group routes, the non-time geomeans aggregated on demand and cached) and a
+  Verdicts table (Nanosoldier's own regressions and improvements with time
+  and memory ratios, `/api/benchmarks/verdicts`); on PkgEval a package box
+  (status history per report, `/api/pkgeval/package/<name>`) and the failure
+  reasons of the latest report (`/api/pkgeval/reasons`); on Downloads a
+  package box (daily requests, `/api/downloads/package/<name>`) and the most
+  requested packages of the last week (`/api/downloads/top`), with names from
+  the General registry (`registry_packages`). All API-only; the file copy
+  hides them.
 
 ## Cost
 
