@@ -15,7 +15,7 @@ sed -i "s|^CI_TIMING_IMAGE_REF=.*|CI_TIMING_IMAGE_REF=${image_ref}|" /etc/ci-tim
 docker run --rm --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --mount type=bind,src="${CI_TIMING_SITE_DIR}",dst=/site "$image_ref" sync-site
 echo "site synced from $image_ref"
-systemctl restart ci-timing-datasette.service
+systemctl restart ci-timing-datasette.service ci-timing-api.service
 # The ingest takes minutes and its outcome is on /healthz; the deploy
 # returns as soon as the site is synced
 systemctl start --no-block ci-timing-ingest.service

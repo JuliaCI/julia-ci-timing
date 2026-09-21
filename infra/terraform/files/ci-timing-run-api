@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+. /etc/ci-timing.host.env
+db="${CI_TIMING_DATA_DIR}/${CI_TIMING_DB_FILENAME}"
+if [ ! -s "$db" ]; then
+  echo "Expected SQLite database at $db." >&2
+  exit 1
+fi
+docker rm -f ci-timing-api >/dev/null 2>&1 || true
+# The API (db/serve.jl) runs from the ingest image. As for Datasette, the
+# data directory is mounted writable so a reader can create the WAL's -shm
+# file; the server opens the database query-only. Not --read-only: Julia
+# writes usage logs and compile caches under its depot in the image.
+exec docker run --name ci-timing-api \
+  --publish "127.0.0.1:${CI_TIMING_API_PORT}:${CI_TIMING_API_PORT}" \
+  --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
+  --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
+  "$CI_TIMING_IMAGE_REF" api --port "$CI_TIMING_API_PORT"

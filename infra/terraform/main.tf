@@ -22,6 +22,7 @@ locals {
   export_dir       = "export" # under data_mount_path; Caddy serves it at /data/
   site_dir         = "site"   # under data_mount_path; the static site
   datasette_port   = 8001     # served from the ingest image, see files/ci-timing-run-datasette
+  api_port         = 8002     # db/serve.jl from the same image, see files/ci-timing-run-api
   caddy_image      = "caddy:2.8.4-alpine"
   caddy_data_dir   = "/var/lib/caddy/data"
   caddy_config_dir = "/var/lib/caddy/config"
@@ -407,6 +408,7 @@ locals {
   plain_files = {
     "/usr/local/bin/ci-timing-run-caddy"              = "0755"
     "/usr/local/bin/ci-timing-run-datasette"          = "0755"
+    "/usr/local/bin/ci-timing-run-api"                = "0755"
     "/usr/local/bin/ci-timing-ingest"                 = "0755"
     "/usr/local/bin/ci-timing-backup"                 = "0755"
     "/usr/local/bin/ci-timing-archive"                = "0755"
@@ -414,6 +416,7 @@ locals {
     "/usr/local/bin/ci-timing-deploy"                 = "0755"
     "/etc/systemd/system/ci-timing-caddy.service"     = "0644"
     "/etc/systemd/system/ci-timing-datasette.service" = "0644"
+    "/etc/systemd/system/ci-timing-api.service"       = "0644"
     "/etc/systemd/system/ci-timing-ingest.service"    = "0644"
     "/etc/systemd/system/ci-timing-ingest.timer"      = "0644"
     "/etc/systemd/system/ci-timing-archive.service"   = "0644"
@@ -425,6 +428,7 @@ locals {
       "/etc/ci-timing.host.env" = { mode = "0600", content = templatefile("${path.module}/files/host.env.tftpl", {
         aws_region         = var.aws_region
         datasette_port     = local.datasette_port
+        api_port           = local.api_port
         data_mount_path    = local.data_mount_path
         db_filename        = local.db_filename
         export_dir         = local.export_dir
@@ -446,6 +450,7 @@ locals {
         public_ip       = aws_eip.site.public_ip
         public_hostname = local.site_hostname
         datasette_port  = local.datasette_port
+        api_port        = local.api_port
         site_root       = "${local.data_mount_path}/${local.site_dir}"
         export_root     = "${local.data_mount_path}/${local.export_dir}"
       }) }
