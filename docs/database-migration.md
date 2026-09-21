@@ -377,20 +377,39 @@ AGENTS.md gets a section pointing at all three once stage 1 is up.
 Nothing here touches julia-perf (JuliaCI/julia-perf, the Benchmarks tab's
 backend): it keeps its own instance, `julia.db`, backup bucket and
 Datasette, and this deployment has its own Terraform state and
-`name_prefix`. Guards worth adding before stage 1, in order of value:
+`name_prefix`. The account is `julia-perf-website-prod` (393686272827), reached through
+IAM Identity Center (`aws sso login --sso-session julialang`, the 1Password
+item "IanButterworth - JuliaLang AWS"). Guards applied on 2026-09-21:
 
-1. Scoped credentials for this work: an IAM role or user whose policy has an
-   explicit `Deny` on every `rustc-perf-*` resource (instance by tag, bucket,
-   ECR repository, IAM role), used for all Terraform and CLI work here. A
-   Deny cannot be overridden by a mistaken plan.
-2. S3 versioning on the julia-perf backup bucket, so an overwritten or
-   deleted `latest.tar.gz` is recoverable (cheap; the archive prefix already
-   has 30-day retention).
-3. A one-off EBS snapshot of the julia-perf root volume before any work in
-   the account starts, as a restore point independent of its own backups.
-4. In julia-perf's own Terraform (their call): `prevent_destroy` on the
-   bucket and `disable_api_termination` on the instance, which needs
-   `deploy.sh` to lift it before an instance replacement.
+1. **Scoped credentials.** IAM role `ci-timing-deployer` (PowerUserAccess,
+   plus `ci-timing-deployer-iam` for IAM on `ci-timing-*` names only, plus
+   `ci-timing-deny-rustc-perf`: an explicit `Deny` on everything tagged
+   `Project=rustc-perf` and on each julia-perf resource by id: the bucket,
+   ECR repository, IAM role/profile/policy names, instance, volume, snapshot,
+   EIP, VPC, subnet, security groups, IGW, route tables, plus SSM/Instance
+   Connect to the instance). Every Terraform and CLI action for this project
+   runs as the `ci-timing` AWS profile, which assumes that role; the SSO
+   PowerUser/Admin profiles are only for account-level chores. Verified:
+   reads, writes, IAM and SSM against julia-perf all fail with the deny named.
+2. **S3 versioning** on `rustc-perf-393686272827-us-east-1-backups`, with a
+   lifecycle rule `expire-noncurrent-versions` (noncurrent versions expire
+   after 7 days, expired delete markers cleaned) so the daily 834 MB overwrite
+   of `latest.tar.gz` does not accumulate forever (about 12 GB extra, under
+   $0.30/month). The lifecycle configuration is managed by julia-perf's
+   Terraform (`aws_s3_bucket_lifecycle_configuration.backups`), so a
+   `terraform apply` there would drop the added rule while versioning stays
+   on; the rule (and an `aws_s3_bucket_versioning` resource) should be added
+   to julia-perf's `main.tf` to make it permanent.
+3. **EBS snapshot** `snap-0dd4dc81dca859105` of the root volume
+   `vol-0b02abeabbc3272f8`, tagged `Purpose=manual-restore-point`, taken
+   before any other change in the account.
+4. Still julia-perf's call: `prevent_destroy` on the bucket and
+   `disable_api_termination` on the instance, which needs `deploy.sh` to lift
+   it before an instance replacement.
+
+A separate AWS account for perf.julialang.org would make 1 structural
+rather than policy-based; it needs the organization admin and can be done
+later without changing anything here.
 
 ### Stage 3: use the database (incremental, tab by tab)
 
