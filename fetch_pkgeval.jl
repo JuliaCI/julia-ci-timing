@@ -152,6 +152,7 @@ function package_rows(db_json)
     reasons = Dict{Tuple{String,String},Int}()
     for (pkg, info) in pairs(tests)
         status = String(get(info, :status, "unknown"))
+        status == "test" && (status = "ok")   # db.json's name for a passing package, as count_statuses reads it
         reason = get(info, :reason, nothing)
         reason = reason === nothing ? "" : String(reason)
         dur = get(info, :duration, nothing)
