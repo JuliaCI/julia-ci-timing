@@ -2,8 +2,9 @@ name: Deploy to the ingest host
 
 # Builds the ingest image (fetchers, export, static site) and deploys it to
 # the EC2 host from infra/terraform: push to ECR, then an SSM Run Command on
-# the host pulls the image, refreshes the site and runs one ingest. The AWS
-# role is assumed through GitHub's OIDC provider; no long-lived keys.
+# the host pulls the image, refreshes the site and starts one ingest (its
+# outcome is on /healthz). The AWS role is assumed through GitHub's OIDC
+# provider; no long-lived keys.
 #
 # Runs on push to main once the site is served from AWS. workflow_dispatch
 # only works for workflows on the default branch, so while the beta host is
@@ -79,11 +80,11 @@ jobs:
             --query 'Reservations[0].Instances[0].InstanceId' --output text)
           [ "$instance" != "None" ] || { echo "no running ci-timing-site instance"; exit 1; }
           cmd=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
-            --comment "deploy ${GITHUB_SHA::12}" --timeout-seconds 5400 \
-            --parameters "commands=[\"/usr/local/bin/ci-timing-deploy $IMAGE_REF\"],executionTimeout=[\"5400\"]" \
+            --comment "deploy ${GITHUB_SHA::12}" --timeout-seconds 900 \
+            --parameters "commands=[\"/usr/local/bin/ci-timing-deploy $IMAGE_REF\"],executionTimeout=[\"900\"]" \
             --query 'Command.CommandId' --output text)
           echo "SSM command $cmd on $instance"
-          for i in $(seq 1 180); do
+          for i in $(seq 1 45); do
             status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)
             case "$status" in
               Success) break ;;
