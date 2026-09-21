@@ -1,6 +1,13 @@
 # Plan: move julia-ci-timing to a database on AWS (#13)
 
-Drafted 2026-09-21. Reviewed by Codex (gpt-6-astra); 11 of 13 findings folded in.
+Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
+are folded in below and in `db/schema.sql`.
+
+Status: stage 0 in progress on branch `db-migration-plan`. `db/schema.sql`,
+`db/Store.jl`, `db/import_legacy.jl`, `db/export.jl` and `db/compare.jl` exist and
+the import -> export round trip reproduces `data/` structurally (gate passed
+2026-09-21). Fetchers still write the JSON files; next is switching them to the
+store.
 
 ## Where we are
 
@@ -50,6 +57,17 @@ HTTP server in v1.
 **Not doing:** RDS, EFS, Lambda, CloudFront, DynamoDB.
 
 ## Schema sketch
+
+`db/schema.sql` is the source of truth; this sketch is the rationale. Where the
+two differ the schema won: benchmark times are REAL (the legacy data is
+Float64), `jobs` carries `duration_s` and a nullable `job_uuid` because
+imported rows have neither timestamps nor UUIDs, `bench_results` has one row
+per statistic, `bench_reports`/`pkgeval_reports` are keyed by path so PR
+reports can share a day, the download tables have composite keys over every
+rollup dimension, `dl_series`/`dl_mix`/`ttfx_results` are materialized because
+legacy history cannot be re-derived, and `change_seq` (a monotonic counter
+advanced only on content change) replaces `updated_at` as the incremental
+cursor.
 
 Full SHAs, second-precision UTC instants, one row per fact. Legacy exports
 truncate to today's formats.
