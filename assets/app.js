@@ -11084,7 +11084,7 @@ function overviewPkgevalCard(src) {
     title: "PkgEval",
     status,
     description:
-      "Nanosoldier runs the test suite of every registered package against a recent Julia master build, every 2 to 3 days. A package is ok when its tests pass; fail, crash, skip and kill are the other outcomes.",
+      "Nanosoldier tests every registered package against Julia master, every 2 to 3 days.",
     headline: passPct != null ? `${passPct.toFixed(1)}%` : "—",
     headlineLabel: `of ${last.total} packages passing`,
     delta,
@@ -11146,7 +11146,7 @@ function overviewBenchCard(src) {
     title: "Performance benchmarks",
     status,
     description:
-      "Nanosoldier runs the BaseBenchmarks suite (about 9,000 microbenchmarks of the language and standard library) against a Julia master commit most days and compares it with the previous run. The History tab charts the results, the Diff tab compares any two commits.",
+      "Nanosoldier's daily BaseBenchmarks run against Julia master, compared with the previous run.",
     headline: hasCounts ? `${last.report_regressions}` : null,
     headlineLabel: hasCounts
       ? `regressions, ${last.report_improvements} improvements, of ${last.report_total} benchmarks${last.report_baseline_date ? ` against ${escapeHtml(last.report_baseline_date)}` : ""}`
@@ -11290,7 +11290,7 @@ function overviewCICard() {
     title: "CI builds",
     status,
     description:
-      "Every commit to Julia's master branch is built and tested on Buildkite across Linux, macOS, Windows and FreeBSD. The Timing, Builds and Workers tabs track how long the jobs take, how long each build waits and runs, and which machines are doing the work.",
+      "Buildkite builds and tests of every Julia master commit: pass rates, job times, queue waits.",
     headline: passRate != null ? `${passRate.toFixed(1)}%` : null,
     headlineLabel: passRate != null ? "of master job runs passed this week" : null,
     delta,
@@ -11355,7 +11355,7 @@ function overviewTtfxCard(src) {
     title: "TTFX",
     status,
     description:
-      "Time to first X on every master build: for each Julia-TTFX-Snippets task, the time to precompile its packages from a cleared cache, then to load and to first run the task script in a fresh process, on a macOS aarch64 runner.",
+      "Time to precompile, load and first run a set of packages, measured on every master build.",
     headline: geomean != null ? formatTtfxSeconds(geomean) : null,
     headlineLabel: geomean != null ? `precompile geomean over ${common.length} snippets in the latest build` : null,
     delta,
@@ -11474,7 +11474,7 @@ function overviewPackagesCard(src) {
     title: "Package downloads",
     status,
     description:
-      "Requests served by Julia's package server (pkg.julialang.org), from the public logs: every package install or update by a user or a CI job, split by the Julia version that asked.",
+      "Package installs served by pkg.julialang.org, by client type and Julia version.",
     headline: overviewCompact(week.all),
     headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(maxDate)}`,
     delta,
@@ -11529,7 +11529,7 @@ function overviewAgentsCard(src) {
     title: "CI workers",
     status,
     description:
-      "The machines behind Julia's CI: Buildkite agents on the build, test and launch queues (one agent per job on the Julia cluster) and the other queues. Snapshots every couple of hours show which hosts are working and which have gone quiet.",
+      "The machines running Julia's CI, and which of them have gone quiet.",
     headline: `${connected.size}`,
     headlineLabel: "agents connected in the latest snapshot",
     donut,
