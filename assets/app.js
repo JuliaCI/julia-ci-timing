@@ -224,7 +224,8 @@ async function renderBuildsView() {
       })
       .finally(() => {
         buildsLoading = null;
-        if (ciSubview === "builds") drawBuildsView();
+        // The range may have widened meanwhile: check again rather than draw
+        if (ciSubview === "builds") renderBuildsView();
       });
     if (!buildsData) return;
   }
@@ -5382,6 +5383,10 @@ function ensureTimingWindow() {
       Object.assign(data.coverage, payload.coverage);
       timingSince = wanted;
       timingExtending = null;
+      // A refresh that ran meanwhile only covered the narrow window; the
+      // next one starts from this response's cursor so the older builds
+      // get their changes too
+      if (payload.change_seq < timingChangeSeq) timingChangeSeq = payload.change_seq;
       populateJobSelector();
       refreshAllUI();
     })
@@ -5780,8 +5785,10 @@ let benchExpandedGroups = new Set();
 let benchGroupDetail = {}; // group => fetched detail data
 let benchGroupDetailLoading = {}; // group => in-flight Promise
 // The detail covers reports since this UTC day ("" for all time); widening
-// the range drops it and reloads
+// the range drops it and reloads. Every window or metric change bumps the
+// generation, and a response from an earlier one is dropped on arrival.
 let benchDetailSince = null;
+let benchDetailGeneration = 0;
 let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 // Whether to draw vertical methodology-change annotations on the chart.
 // Toggled by Notes button hover/focus and while the methodology popup is open.
@@ -6009,9 +6016,12 @@ function setBenchTimeRange(value) {
   updateBenchURL();
 }
 
-// One group's detail for the reports in range
-function fetchBenchGroupDetail(group) {
-  return apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
+// One group's detail for the reports in range; null when the window or
+// metric changed while it was in flight
+async function fetchBenchGroupDetail(group) {
+  const generation = benchDetailGeneration;
+  const detail = await apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
+  return generation === benchDetailGeneration ? detail : null;
 }
 
 // Drop windowed detail that no longer covers the range and reload what is
@@ -6021,6 +6031,7 @@ function ensureBenchDetailWindow() {
   const wanted = apiSince(getBenchCutoff());
   if (wanted !== "" && wanted >= benchDetailSince) return;
   benchDetailSince = wanted;
+  benchDetailGeneration++;
   benchGroupDetail = {};
   benchGroupDetailLoading = {};
   for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
@@ -6191,7 +6202,7 @@ function ensureBenchGroupDetailLoaded(group) {
   if (benchGroupDetail[group] || benchGroupDetailLoading[group]) return;
   const request = fetchBenchGroupDetail(group)
     .then((data) => {
-      if (benchGroupDetailLoading[group] !== request) return; // superseded
+      if (benchGroupDetailLoading[group] !== request || !data) return; // superseded
       benchGroupDetail[group] = data;
       delete benchGroupDetailLoading[group];
       // Only redraw if this group is still selected.
@@ -6256,16 +6267,20 @@ function benchMetricLabel() {
 async function setBenchMetric(value) {
   if (!(value in BENCH_METRIC_LABELS) || value === benchMetric) return;
   benchMetric = value;
+  benchDetailGeneration++;
+  benchGroupDetail = {};
+  benchGroupDetailLoading = {};
   const sel = document.getElementById("bench-metric");
   if (sel) sel.value = value;
+  let summary;
   try {
-    benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
+    summary = await apiGet("benchmarks/summary", { metric: value });
   } catch (err) {
     console.error("Failed to load the benchmark summary:", err);
     return;
   }
-  benchGroupDetail = {};
-  benchGroupDetailLoading = {};
+  if (benchMetric !== value) return; // changed again meanwhile
+  benchData = summary;
   for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
   updateBenchChart();
   updateBenchTable();
@@ -6389,14 +6404,17 @@ async function toggleExpandGroup(group) {
   benchExpandedGroups.add(group);
 
   if (!benchGroupDetail[group]) {
+    let detail = null;
     try {
-      benchGroupDetail[group] = await fetchBenchGroupDetail(group);
+      detail = await fetchBenchGroupDetail(group);
     } catch (err) {
       console.error(`Failed to load detail for ${group}:`, err);
       benchExpandedGroups.delete(group);
       updateBenchTable();
       return;
     }
+    if (!detail) return; // the window or metric changed meanwhile; its reload redraws
+    benchGroupDetail[group] = detail;
   }
 
   updateBenchTable();
@@ -7452,7 +7470,7 @@ async function ensureAllGroupDetail() {
   const results = await Promise.allSettled(
     groups.map((g) =>
       fetchBenchGroupDetail(g).then((d) => {
-        benchGroupDetail[g] = d;
+        if (d) benchGroupDetail[g] = d;
       }),
     ),
   );
