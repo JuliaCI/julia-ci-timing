@@ -17,10 +17,15 @@ ARG RUNTIME_UID=10001
 ARG RUNTIME_GID=10001
 RUN groupadd -g ${RUNTIME_GID} ci-timing && useradd -m -u ${RUNTIME_UID} -g ${RUNTIME_GID} ci-timing
 
-# The trailing colon keeps the bundled depot (precompiled stdlibs) on the path
+# The trailing colon keeps the bundled depot (precompiled stdlibs) on the path.
+# The package images are compiled here for the host's CPU (Graviton2 is
+# neoverse-n1) with a generic fallback: the build runner is a newer Neoverse,
+# and an image compiled for it is rejected on the host, which then
+# recompiled every package on every run.
 ENV JULIA_DEPOT_PATH=/depot: \
     JULIA_PROJECT=/app \
-    JULIA_NUM_THREADS=2
+    JULIA_NUM_THREADS=2 \
+    JULIA_CPU_TARGET="generic;neoverse-n1,clone_all"
 
 WORKDIR /app
 # Dependencies first, so source-only changes reuse the instantiated layer
