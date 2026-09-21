@@ -1,0 +1,57 @@
+name: Host health
+
+# Once a day: every source on the host fetched within 6 hours, the disk
+# under 80%, the latest backup in S3 under a day old. A failed run emails
+# the repository's watchers.
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SITE_URL: ${{ vars.CI_TIMING_SITE_URL || 'http://3.82.159.74' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sources fresh and disk not full
+        shell: bash
+        run: |
+          curl -sSf --max-time 60 "$SITE_URL/healthz" > health.json
+          jq . health.json
+          now=$(date -u +%s)
+          failed=0
+          for source in $(jq -r '.sources | keys[]' health.json); do
+            last=$(jq -r ".sources[\"$source\"].last_ok_at // empty" health.json)
+            age=$(( (now - $(date -u -d "${last:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))
+            ok=$(jq -r ".sources[\"$source\"].last_ok" health.json)
+            echo "$source: last success ${age} h ago, last run ok=$ok"
+            [ "$age" -le 6 ] || { echo "::error::$source has not succeeded for ${age} h"; failed=1; }
+          done
+          disk=$(jq -r '.disk_used_pct // 0' health.json)
+          echo "disk: ${disk}% used"
+          [ "$disk" -le 80 ] || { echo "::error::disk ${disk}% used"; failed=1; }
+          exit $failed
+
+      - name: Configure AWS credentials (OIDC)
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.CI_TIMING_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Latest backup under a day old
+        if: always()
+        shell: bash
+        run: |
+          modified=$(aws s3api list-objects-v2 --bucket ci-timing-393686272827-us-east-1-backups \
+            --prefix runtime/latest.tar.gz --query 'Contents[0].LastModified' --output text)
+          age=$(( $(date -u +%s) - $(date -u -d "$modified" +%s) ))
+          echo "latest backup: $modified ($((age / 3600)) h ago)"
+          [ "$age" -lt 86400 ] || { echo "::error::backup older than a day"; exit 1; }

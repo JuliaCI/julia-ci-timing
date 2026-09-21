@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
-# Structural comparison of two data directories: the committed data/ against
-# what db/export.jl rendered from the database.
+# Structural comparison of two data directories, e.g. what db/export.jl
+# rendered before and after a change to db/Render.jl.
 #
 #   julia --project db/compare.jl REFERENCE_DIR EXPORT_DIR
 #

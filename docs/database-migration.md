@@ -3,26 +3,24 @@
 Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
 are folded in below and in `db/schema.sql`.
 
-Status (2026-09-21, evening): stage 1 duplicate is live at http://3.82.159.74
-(no hostname yet) from branch `db-migration-plan`. `infra/terraform` is applied
-in the julia-perf-website-prod account as the `ci-timing` profile; the host
-restored the seed backup, every fetcher has run on it, the export renders
-`/data/*`, `/healthz` reports per-source success, `/db/` is Datasette over
-the live database, `/data/ci-timing.sqlite.gz` is the snapshot, and
-`.github/workflows/deploy.yml` builds and deploys on push to the branch.
-The stage 1 gate is `db/compare_origins.jl`, run daily by
-`.github/workflows/compare-origins.yml` (from main only: schedules do not
-fire on other branches). Stage 3 is in: the site reads the database through
-`db/serve.jl` (`/api/`, see "Stage 3" below) and falls back to the `/data/`
-files where there is no API, the comparison feature is gone, and
-`analysis/fetch_data.jl` downloads the extracts. The benchmark history was
-re-parsed on the host with `fetch_benchmarks.jl --backfill-stats` (all four
-statistics, memory, allocations and Nanosoldier's verdicts for every report),
-and the last year of PkgEval reports fetched again with
-`fetch_pkgeval.jl --backfill-packages 365` for per-package rows. The new
-views the database supports are in (see "Stage 3"). Not yet done: a hostname
-and HTTPS (`site_hostname` plus a DNS record, deferred until the cutover) and
-the stage 2 cutover itself.
+Status (2026-09-21, night): stages 0, 1 and 3 are done and the branch is
+ready to merge as the stage 2 cutover, short of DNS. The host at
+http://3.82.159.74 (`infra/terraform`, applied as the `ci-timing` profile in
+the julia-perf-website-prod account) runs the fetchers every two hours, the
+API (`db/serve.jl` at `/api/`, which the site reads exclusively), Datasette at
+`/db/`, the extracts at `/data/*` with the database snapshot, and `/healthz`;
+`.github/workflows/deploy.yml` builds and deploys on push, `health.yml`
+checks freshness, disk and backup age daily. The benchmark history was
+re-parsed on the host (`fetch_benchmarks.jl --backfill-stats`: every
+statistic, memory, allocations, Nanosoldier's verdicts) and the last year of
+PkgEval reports fetched again (`fetch_pkgeval.jl --backfill-packages 365`).
+The committed `data/` is gone except the two hand-maintained files: main's
+last copy is archived at `s3://ci-timing-393686272827-us-east-1-backups/legacy/`
+(and in the git history until the squash). The GitHub Pages site stays as
+its last deployment, frozen, until perf.julialang.org points at the host;
+its update workflow, the fetch-and-commit job and the stage 1 gate are
+deleted. Left: the DNS change and HTTPS (`site_hostname`, a Caddyfile
+change that replaces the instance), then turning Pages off.
 
 ## Where we are
 

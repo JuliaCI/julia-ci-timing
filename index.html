@@ -883,7 +883,7 @@
           </button>
           <div class="checkbox-dropdown-menu" id="packages-minor-filter-menu"></div>
         </div>
-        <label class="package-search view-hidden" id="packages-package-search" for="packages-package">
+        <label class="package-search" id="packages-package-search" for="packages-package">
           Package:
           <input
             type="text"
@@ -953,7 +953,7 @@
         >
           Reset zoom
         </button>
-        <label class="package-search view-hidden" id="pkgeval-package-search" for="pkgeval-package">
+        <label class="package-search" id="pkgeval-package-search" for="pkgeval-package">
           Package:
           <input
             type="text"
@@ -1203,7 +1203,7 @@
           <option value="mean">Mean</option>
         </select>
         <select
-          class="time-select view-hidden"
+          class="time-select"
           id="bench-metric"
           onchange="setBenchMetric(this.value)"
           aria-label="Metric"
@@ -1244,7 +1244,7 @@
             Noisy
           </button>
           <button
-            class="btn view-hidden"
+            class="btn"
             id="bench-view-verdicts"
             onclick="setBenchTableView('verdicts')"
             title="The regressions and improvements Nanosoldier itself flagged in each daily report, with the time and memory ratios against the baseline"

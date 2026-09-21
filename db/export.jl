@@ -6,8 +6,7 @@
 #
 # The shapes come from db/Render.jl, which db/serve.jl also serves on
 # demand. Files are written to a temporary name and renamed into place, so a
-# reader never sees a partial file. db/compare.jl checks an export against
-# data/.
+# reader never sees a partial file. db/compare.jl compares two exports.
 
 using Pkg
 Pkg.activate(dirname(@__DIR__); io=devnull)
