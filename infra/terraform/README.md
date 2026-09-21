@@ -28,7 +28,7 @@ On the host (all from cloud-init, files under `files/`):
   `/data/ci-timing.sqlite.gz`.
 - `ci-timing-archive.timer`: daily dated copy of the latest backup.
 - `ci-timing-deploy <image@sha256:...>`: what the workflow runs over SSM: pull,
-  refresh the site directory, restart Datasette, run one ingest.
+  refresh the site directory, restart Datasette, start one ingest.
 
 ## Operating
 

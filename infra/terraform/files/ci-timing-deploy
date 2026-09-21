@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy an image: record it as the host's image, pull it, refresh the static
-# site from it and run one ingest. Invoked through SSM Run Command by
+# site from it and start one ingest. Invoked through SSM Run Command by
 # .github/workflows/deploy.yml with the digest-pinned image reference.
 set -euo pipefail
 image_ref="${1:?usage: ci-timing-deploy <repository>@sha256:<digest>}"
@@ -16,6 +16,7 @@ docker run --rm --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --mount type=bind,src="${CI_TIMING_SITE_DIR}",dst=/site "$image_ref" sync-site
 echo "site synced from $image_ref"
 systemctl restart ci-timing-datasette.service
-systemctl start ci-timing-ingest.service
-systemctl --no-pager --lines=0 status ci-timing-ingest.service || true
+# The ingest takes minutes and its outcome is on /healthz; the deploy
+# returns as soon as the site is synced
+systemctl start --no-block ci-timing-ingest.service
 docker image prune -f >/dev/null
