@@ -327,12 +327,31 @@ end
 # Alongside: how many of the `top_n` most downloaded are not passing, the
 # share of downloads going to passing packages (with a history over the
 # reports of the past year, weighted by today's downloads), and the
-# packages that passed the previous report but not this one. The weighting
+# packages that passed the previous report but not this one. Each listed
+# package carries how long it has been failing (`failing_runs`). The weighting
 # counts the `PKGEVAL_WEIGHT_N` most downloaded packages, which carry
 # nearly all downloads; over every package the year's history takes five
 # seconds instead of under one.
 const PKGEVAL_TOP_N = 100
 const PKGEVAL_WEIGHT_N = 2000
+
+# Each package's current run of failures: the first daily report after the
+# last one it passed (or its first report with package rows, when it never
+# passed; `last_passed` is then null and the run may be longer), and how
+# many reports the run spans
+function failing_runs(db, names)
+    out = Dict{String,Any}()
+    isempty(names) && return out
+    for r in rows(db, "WITH k AS (SELECT id, name FROM packages WHERE name IN (SELECT value FROM json_each(?))), " *
+                      "h AS (SELECT k.name, r.date, p.status FROM k JOIN pkgeval_results p ON p.package_id = k.id " *
+                      "JOIN pkgeval_reports r ON r.id = p.report_id WHERE r.kind = 'daily'), " *
+                      "ok AS (SELECT name, MAX(date) AS d FROM h WHERE status = 'ok' GROUP BY name) " *
+                      "SELECT h.name, MIN(h.date) AS since, COUNT(*) AS n, ok.d AS last_passed FROM h LEFT JOIN ok ON ok.name = h.name " *
+                      "WHERE ok.d IS NULL OR h.date > ok.d GROUP BY h.name", (JSON3.write(names),))
+        out[String(r.name)] = Dict("failing_since" => String(r.since), "failing_reports" => Int(r.n), "last_passed" => js(r.last_passed))
+    end
+    return out
+end
 
 function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
     reports = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
@@ -357,6 +376,11 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
                                   "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
                                   "WHERE p.report_id = ? AND p.status IN (SELECT value FROM json_each(?)) " *
                                   "ORDER BY ranked.rank LIMIT ?", (since, until, report_id, JSON3.write(collect(statuses)), limit))]
+    # How long each has been failing
+    runs = failing_runs(db, [p["name"] for p in packages])
+    for p in packages
+        merge!(p, get(runs, p["name"], Dict("failing_since" => nothing, "failing_reports" => 0, "last_passed" => nothing)))
+    end
     # Of the top N by these downloads that the report tested, how many are not ok
     top = rows(db, dl * "SELECT COUNT(*) AS tested, SUM(CASE WHEN p.status != 'ok' THEN 1 ELSE 0 END) AS not_ok " *
                         "FROM ranked JOIN packages k ON k.name = ranked.name JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *

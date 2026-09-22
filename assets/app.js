@@ -9241,6 +9241,8 @@ function renderPkgevalPackage() {
 
 // The most downloaded packages that did not pass the newest report: the
 // failures that reach the most users, ranked by their downloads
+// Failures that began within this many days of the report are highlighted
+const PKGEVAL_RECENT_DAYS = 14;
 async function loadPkgevalPopular() {
   const panel = document.getElementById("pkgeval-popular");
   if (!panel) return;
@@ -9253,16 +9255,28 @@ async function loadPkgevalPopular() {
   }
   if (!d || !d.packages || d.packages.length === 0 || !d.date) return;
   const rows = d.packages
-    .map(
-      (p) => `<tr data-name="${escapeHtml(p.name)}">
+    .map((p) => {
+      const days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
+      // New on this report, or broken within the last two weeks
+      const recency = p.failing_since === d.date ? "pe-row-new" : days != null && days <= PKGEVAL_RECENT_DAYS ? "pe-row-recent" : "";
+      const title = p.last_passed
+        ? `Last passed on ${p.last_passed}; ${p.failing_reports} report${p.failing_reports === 1 ? "" : "s"} failing since`
+        : `Has not passed on any report with package results; ${p.failing_reports} report${p.failing_reports === 1 ? "" : "s"}`;
+      const since = !p.failing_since
+        ? ""
+        : p.failing_since === d.date
+          ? "new"
+          : `${escapeHtml(p.failing_since)}${p.last_passed ? "" : " or earlier"} <span class="col-secondary">(${days} d)</span>`;
+      return `<tr data-name="${escapeHtml(p.name)}" class="${recency}">
         <td class="num">${p.rank.toLocaleString()}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
+        <td title="${escapeHtml(title)}">${since}</td>
         <td>${escapeHtml(p.reason || "(none)")}</td>
         <td class="num">${p.user.toLocaleString()}</td>
-      </tr>`,
-    )
+      </tr>`;
+    })
     .join("");
   const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
   const weighted =
@@ -9273,43 +9287,13 @@ async function loadPkgevalPopular() {
     d.top_tested > 0
       ? `${d.top_not_ok} of the ${d.top_tested} most downloaded packages the report tested (of the top ${d.top_n}) did not pass`
       : "";
-  // What passed on the previous report and does not now: the breakage to look at first
-  const broken = d.newly_broken || [];
-  const brokenRows = broken
-    .map(
-      (p) => `<tr data-name="${escapeHtml(p.name)}">
-        <td class="num">${p.rank.toLocaleString()}</td>
-        <td>${escapeHtml(p.name)}</td>
-        <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
-        <td>${escapeHtml(p.reason || "(none)")}</td>
-        <td class="num">${p.user.toLocaleString()}</td>
-      </tr>`,
-    )
-    .join("");
-  const brokenSection = d.previous_date
-    ? `<h3>Passed on ${escapeHtml(d.previous_date)}, not on ${escapeHtml(d.date)}</h3>
-    ${
-      broken.length
-        ? `<table>
-      <thead><tr><th class="num">Rank</th><th>Package</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
-      <tbody>${brokenRows}</tbody>
-    </table>`
-        : `<p class="package-panel-help">No package that passed the previous report stopped passing.</p>`
-    }`
-    : "";
   panel.innerHTML = `
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
-    <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Click a row for the package's history.</p>
-    <div class="pkgeval-popular-columns">
-      ${brokenSection ? `<div>${brokenSection}</div>` : ""}
-      <div>
-        <h3>All packages not passing, by downloads</h3>
-        <table>
-          <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
+    <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Failing since is the first report after the last one the package passed; <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
+    <table>
+      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Failing since</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   panel.querySelectorAll("tr[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });

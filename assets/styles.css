@@ -2212,13 +2212,14 @@ body {
 .pkgeval-panels .package-panel:first-child {
   border-top: none;
 }
-/* The newly broken and the full list side by side when both fit, stacked
-   otherwise */
-.pkgeval-popular-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
-  gap: 0 24px;
-  align-items: start;
+/* Failures that are new on the report, and those that began recently */
+.pe-row-new,
+.pkgeval-panels tr.pe-row-new td {
+  background: var(--color-danger-subtle);
+}
+.pe-row-recent,
+.pkgeval-panels tr.pe-row-recent td {
+  background: color-mix(in srgb, var(--color-attention-subtle) 45%, transparent);
 }
 
 /* Per-package panels (PkgEval history and reasons, package downloads) */
