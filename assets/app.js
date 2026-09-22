@@ -9268,12 +9268,16 @@ async function loadPkgevalPopular() {
   panel.innerHTML = `
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
     <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Click a row for the package's history.</p>
-    ${brokenSection}
-    <h3>All packages not passing, by downloads</h3>
-    <table>
-      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    <div class="pkgeval-popular-columns">
+      ${brokenSection ? `<div>${brokenSection}</div>` : ""}
+      <div>
+        <h3>All packages not passing, by downloads</h3>
+        <table>
+          <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
   panel.querySelectorAll("tr[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });

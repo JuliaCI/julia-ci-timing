@@ -2219,6 +2219,14 @@ body {
 .pkgeval-panels .package-panel:first-child {
   border-top: none;
 }
+/* The newly broken and the full list side by side when both fit, stacked
+   otherwise */
+.pkgeval-popular-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  gap: 0 24px;
+  align-items: start;
+}
 
 /* Per-package panels (PkgEval history and reasons, package downloads) */
 .package-search {
