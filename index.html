@@ -142,7 +142,7 @@
           aria-controls="commit-view"
           tabindex="-1"
           onclick="switchTab('commit')"
-          title="One commit or PR across every source: its CI jobs and TTFX against the builds before it, and the benchmark and PkgEval reports that include it"
+          title="One commit or PR across every source: its CI jobs and TTFX against the previous commit, and the benchmark and PkgEval reports that include it"
         >
           Commit
         </button>
@@ -486,19 +486,22 @@
             type="text"
             id="commit-ref"
             name="ref"
-            placeholder="SHA or #PR"
+            placeholder="latest, or SHA or #PR"
             autocomplete="off"
             spellcheck="false"
           />
           <button class="btn" type="submit">Look up</button>
         </form>
         <span class="overview-note"
-          >Master commits only. Job and TTFX times are compared with the median
-          of the builds before this one; benchmarks and PkgEval show the first
-          daily report that includes the commit.</span
+          >Master commits only. Job and TTFX times are compared with the
+          previous commit's; benchmarks and PkgEval show the first daily report
+          that includes the commit.</span
         >
       </div>
-      <div class="overview-body" id="commit-body"></div>
+      <div class="commit-layout">
+        <nav class="commit-list" id="commit-list" aria-label="Master commits, newest first"></nav>
+        <div class="overview-body" id="commit-body"></div>
+      </div>
     </div>
 
     <main

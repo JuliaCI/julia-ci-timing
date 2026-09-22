@@ -11557,7 +11557,7 @@ function drawOverview() {
 
 // === Commit lookup (Commit tab) ===
 // One master commit across every source, from api/commit/<ref>: its builds,
-// its jobs and TTFX against the builds before it, the first benchmark and
+// its jobs and TTFX against the previous commit's, the first benchmark and
 // PkgEval reports that include it, and coverage. The ref is a SHA prefix or
 // a PR number; the server finds a PR by its merge commit's subject, which
 // builds keep cut at 80 characters, so a PR it cannot find is resolved to
@@ -11568,9 +11568,11 @@ const COMMIT_REF_RE = /^(\d{1,6}|[0-9a-f]{7,40})$/;
 const COMMIT_SHOWN_ROWS = 12;
 // Job and TTFX changes beyond this are coloured and listed first
 const COMMIT_CHANGE_PCT = 10;
-// Fewer passing runs than this before the build make no baseline
-const COMMIT_MIN_BASELINE = 3;
 const COMMIT_FAILED_STATES = new Set(["failed", "timed_out", "broken"]);
+const COMMIT_LIST_PAGE = 100;
+// The sidebar: master commits newest first, a page at a time
+let commitList = null; // { commits, loadedAt, done }
+let commitListLoading = null;
 
 // Accepts "#123", a SHA, or a GitHub commit or pull request URL
 function normalizeCommitRef(value) {
@@ -11627,19 +11629,28 @@ async function renderCommitView() {
   const body = document.getElementById("commit-body");
   const input = document.getElementById("commit-ref");
   if (document.activeElement !== input) input.value = commitRef;
-  if (!commitRef) {
-    body.innerHTML = commitIntroHtml();
-    return;
+  const listReady = loadCommitList();
+  // No ref: the newest commit, left out of the URL so a reload shows the
+  // newest again
+  let ref = commitRef;
+  if (!ref) {
+    if (!commitList) body.innerHTML = '<div class="loading">Loading commits...</div>';
+    await listReady.catch(() => {});
+    if (commitRef) return; // a lookup started meanwhile
+    ref = commitList?.commits[0]?.commit;
+    if (!ref) {
+      body.innerHTML = commitIntroHtml();
+      return;
+    }
   }
-  if (!COMMIT_REF_RE.test(commitRef)) {
+  if (!COMMIT_REF_RE.test(ref)) {
     body.innerHTML = `<p class="commit-message">Enter a commit SHA (at least 7 characters) or a PR number.</p>`;
     return;
   }
-  if (commitResult?.ref === commitRef) {
+  if (commitResult?.ref === ref) {
     drawCommit(commitResult);
     return;
   }
-  const ref = commitRef;
   body.innerHTML = '<div class="loading">Looking up...</div>';
   let result;
   try {
@@ -11651,23 +11662,105 @@ async function renderCommitView() {
     }
     result = { ref, data, pr };
   } catch (err) {
-    if (ref === commitRef && activeTab === "commit") {
+    if (ref === (commitRef || commitList?.commits[0]?.commit) && activeTab === "commit") {
       body.innerHTML = `<p class="commit-message">Lookup failed: ${escapeHtml(err.message)}</p>`;
     }
     return;
   }
   // A later lookup has taken over
-  if (ref !== commitRef) return;
+  if (ref !== (commitRef || commitList?.commits[0]?.commit)) return;
   commitResult = result;
   if (activeTab === "commit") drawCommit(result);
+}
+
+// The first page, again once it is older than the data refresh interval
+async function loadCommitList() {
+  const fresh = commitList && Date.now() - commitList.loadedAt < DATA_REFRESH_INTERVAL;
+  if (fresh) return;
+  if (!commitListLoading) {
+    commitListLoading = apiGet("commits", { limit: COMMIT_LIST_PAGE })
+      .then((d) => {
+        commitList = { commits: d.commits, loadedAt: Date.now(), done: d.commits.length < COMMIT_LIST_PAGE };
+        drawCommitList();
+      })
+      .finally(() => {
+        commitListLoading = null;
+      });
+  }
+  return commitListLoading;
+}
+
+async function loadOlderCommits(button) {
+  if (!commitList || commitList.done) return;
+  button.disabled = true;
+  button.textContent = "Loading...";
+  const last = commitList.commits[commitList.commits.length - 1];
+  try {
+    const d = await apiGet("commits", { before: last.first_at, limit: COMMIT_LIST_PAGE });
+    commitList.commits.push(...d.commits);
+    commitList.done = d.commits.length < COMMIT_LIST_PAGE;
+  } finally {
+    drawCommitList();
+  }
+}
+
+// One entry per commit under a heading per UTC day of its first build
+function drawCommitList() {
+  const el = document.getElementById("commit-list");
+  if (!commitList) return;
+  const scroll = el.scrollTop;
+  let day = "";
+  const parts = [];
+  for (const c of commitList.commits) {
+    const d = c.first_at.slice(0, 10);
+    if (d !== day) {
+      day = d;
+      parts.push(`<div class="commit-list-day">${escapeHtml(d)}</div>`);
+    }
+    const state = c.state || "unknown";
+    const badges = [
+      c.benchmarks ? '<span class="commit-badge" title="A daily benchmark report ran on this commit">bench</span>' : "",
+      c.pkgeval ? '<span class="commit-badge" title="A daily PkgEval run ran on this commit">pkgeval</span>' : "",
+    ].join("");
+    const r = escapeHtml(c.commit);
+    parts.push(`<a class="commit-item" data-commit="${r}" href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="lookupCommit('${r}');return false">
+      <span class="commit-dot commit-dot-${escapeHtml(state)}" title="Latest build: ${escapeHtml(state)}"></span>
+      <span class="commit-item-main">
+        <span class="commit-item-msg">${escapeHtml(c.message)}</span>
+        <span class="commit-item-meta"><code>${r}</code> ${escapeHtml(c.first_at.slice(11, 16))} · ${escapeHtml(c.author)}${badges}</span>
+      </span>
+    </a>`);
+  }
+  if (!commitList.done) {
+    parts.push('<button class="btn commit-list-more" onclick="loadOlderCommits(this)">Older commits</button>');
+  }
+  el.innerHTML = parts.join("");
+  el.scrollTop = scroll;
+  markCommitListSelection(commitResult?.data?.commit?.prefix);
+}
+
+function markCommitListSelection(prefix) {
+  const el = document.getElementById("commit-list");
+  let selected = null;
+  el.querySelectorAll(".commit-item").forEach((a) => {
+    const on = !!prefix && a.dataset.commit === prefix;
+    a.classList.toggle("selected", on);
+    if (on) {
+      a.setAttribute("aria-current", "true");
+      selected = a;
+    } else {
+      a.removeAttribute("aria-current");
+    }
+  });
+  selected?.scrollIntoView({ block: "nearest" });
 }
 
 function commitIntroHtml() {
   return `<div class="commit-message">
     <p>Look up a Julia master commit by its SHA, or a pull request by its number, to see everything this site recorded for it:</p>
     <ul>
-      <li>its CI builds, which jobs failed and whether they were already failing, and how each job's time compares with the builds before it;</li>
-      <li>its TTFX results against the median of the previous runs;</li>
+      <li>its CI builds, which jobs failed and whether they were already failing, and how each job's time compares with the previous commit's build;</li>
+      <li>its TTFX results against the previous commit's;</li>
       <li>the Nanosoldier benchmark and PkgEval daily reports that first include it, with their regressions and newly broken packages;</li>
       <li>coverage, when it was measured on this commit.</li>
     </ul>
@@ -11714,6 +11807,7 @@ function commitRowsWithMore(head, shown, all, what) {
 
 function drawCommit({ ref, data, pr }) {
   const body = document.getElementById("commit-body");
+  markCommitListSelection(data.commit?.prefix);
   if (!data.commit) {
     body.innerHTML = commitMatchesHtml(ref, data, pr);
     return;
@@ -11816,7 +11910,8 @@ function commitJobsHtml(j) {
   const jobs = j.jobs.map((x) => ({
     ...x,
     failed: COMMIT_FAILED_STATES.has(x.state) && !x.soft_failed,
-    pct: x.baseline_n >= COMMIT_MIN_BASELINE && x.state === "passed" ? commitPct(x.duration_s, x.baseline_s) : null,
+    // A failed run stops early, so only two passing runs compare
+    pct: x.state === "passed" && x.previous_state === "passed" ? commitPct(x.duration_s, x.previous_s) : null,
   }));
   const failed = jobs.filter((x) => x.failed);
   const newly = failed.filter((x) => x.previous_state === "passed");
@@ -11826,17 +11921,19 @@ function commitJobsHtml(j) {
   let summary = `Build #${j.build}: ${jobs.length} jobs`;
   if (failed.length) summary += `, <span class="commit-worse">${failed.length} failed</span> (${newly.length} passed on the previous build)`;
   if (running.length) summary += `, ${running.length} still running`;
-  summary += `; ${slower.length} more than ${COMMIT_CHANGE_PCT}% slower and ${faster.length} faster than the median of their passing runs on the ${j.baseline_builds} builds before.`;
+  summary += j.previous
+    ? `; ${slower.length} more than ${COMMIT_CHANGE_PCT}% slower and ${faster.length} faster than on build #${j.previous.build} (${commitLink(j.previous.commit, `<code>${escapeHtml(j.previous.commit)}</code>`)}).`
+    : ".";
   const row = (x) => `<tr>
     <td>${x.url ? `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${convertEmoji(x.name)}</a>` : convertEmoji(x.name)}</td>
     <td class="${x.failed ? "commit-worse" : ""}">${escapeHtml(x.state)}${x.soft_failed ? " (soft)" : ""}${x.failed && x.previous_state === "passed" ? " · new" : ""}</td>
     <td class="num">${formatDuration(x.duration_s)}</td>
-    <td class="num" title="${x.baseline_n} passing runs">${formatDuration(x.baseline_s)}</td>
+    <td class="num" title="${escapeHtml(x.previous_state || "")}">${formatDuration(x.previous_s)}</td>
     <td class="num">${commitPctHtml(x.pct)}</td>
     <td>${escapeHtml(x.agent || "")}</td>
   </tr>`;
   const head =
-    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num" title="Median of the passing runs on the builds before">Baseline</th><th class="num">Change</th><th>Agent</th>';
+    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num" title="The same job on the build of the previous commit">Previous</th><th class="num">Change</th><th>Agent</th>';
   // Failures first, newly failing before those that were already failing,
   // then the biggest changes
   const byChange = (a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0);
@@ -11853,7 +11950,7 @@ function commitTtfxHtml(data) {
   const metrics = t.metrics;
   const tasks = t.tasks.map((x) => ({
     ...x,
-    pcts: metrics.map((_, i) => commitPct(x.now?.[i], x.baseline?.[i])),
+    pcts: metrics.map((_, i) => commitPct(x.now?.[i], x.previous?.[i])),
   }));
   // Geometric mean of the ratios over the tasks with both, per metric
   const figures = metrics.map((m, i) => {
@@ -11877,7 +11974,10 @@ function commitTtfxHtml(data) {
     .filter((x) => !x.failed && worst(x) >= COMMIT_CHANGE_PCT)
     .sort((a, b) => worst(b) - worst(a))
     .slice(0, COMMIT_SHOWN_ROWS);
-  const intro = `<p class="commit-line">Build #${t.build}${t.version ? `, ${escapeHtml(t.version)}` : ""}, ${escapeHtml(t.state)}: each time against the median of the ${t.baseline_jobs} TTFX runs before it. Geometric mean change over the tasks:</p>`;
+  const against = t.previous
+    ? `each time against the previous TTFX run, build #${t.previous.build} (${commitLink(t.previous.commit, `<code>${escapeHtml(t.previous.commit)}</code>`)})`
+    : "no earlier TTFX run to compare with";
+  const intro = `<p class="commit-line">Build #${t.build}${t.version ? `, ${escapeHtml(t.version)}` : ""}, ${escapeHtml(t.state)}: ${against}. Geometric mean change over the tasks:</p>`;
   const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
   return commitCard(
     "TTFX",

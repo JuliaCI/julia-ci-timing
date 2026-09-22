@@ -27,6 +27,7 @@
 #   /api/downloads/top?days=&client=            most requested packages
 #   /api/agents/latest                          agents/latest.json
 #   /api/agents/snapshots?since=                the history-*.ndjson lines, as an array
+#   /api/commits?before=&limit=                 master commits newest first, one row per commit
 #   /api/commit/<ref>                           one commit across every source; ref is a SHA
 #                                               prefix (7 to 40 hex) or a PR number
 #
@@ -216,6 +217,9 @@ function render(db, segments, params)
         return Render.agents_latest(db)
     elseif segments == ["agents", "snapshots"]
         return Render.agent_snapshots(db; since=instant(params, "since"))
+    elseif segments == ["commits"]
+        limit = cursor(params, "limit")
+        return Render.commit_list(db; before=instant(params, "before"), limit=limit == 0 ? 100 : min(limit, 500))
     elseif length(segments) == 2 && segments[1] == "commit"
         ref = lowercase(segments[2])
         occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))
@@ -358,7 +362,8 @@ function warm_up(s::Server)
                     (["downloads", "packages"], Dict("q" => "A")),
                     (["downloads", "package", "Example"], Dict()),
                     (["downloads", "top"], Dict("days" => "7")),
-                    (["commit", "0000000"], Dict()))
+                    (["commit", "0000000"], Dict()),
+                    (["commits"], Dict()))
                 gzip(Vector{UInt8}(JSON3.write(render(db, segments, Dict{String,String}(params)))))
             end
             groups = Render.bench_groups(db)
