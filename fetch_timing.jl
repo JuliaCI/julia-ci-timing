@@ -35,11 +35,11 @@ end
 # GET with retries on connection errors, 429 and 5xx, honouring Retry-After
 # when the server sends one. HTTP.jl's own retry layer never sees a status
 # code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, readtimeout=120, connect_timeout=30, kwargs...)
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, read_idle_timeout=120, connect_timeout=30, kwargs...)
     local resp
     for attempt in 1:attempts
         resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, readtimeout, connect_timeout, kwargs...)
+            HTTP.get(url, headers; status_exception=false, retry=false, read_idle_timeout, connect_timeout, kwargs...)
         catch e
             attempt == attempts && rethrow()
             @warn "Request failed, retrying" url attempt error=e
@@ -306,7 +306,7 @@ function fetch_coverage_data(db; max_pages=20)
     try
         for page in 1:max_pages
             url = "https://coveralls.io/github/JuliaLang/julia.json?page=$page"
-            resp = HTTP.get(url; status_exception=false, readtimeout=120, connect_timeout=30)
+            resp = HTTP.get(url; status_exception=false, read_idle_timeout=120, connect_timeout=30)
             if resp.status != 200
                 @warn "Coveralls API request failed" page resp.status
                 break
@@ -350,7 +350,7 @@ function fetch_coverage_data(db; max_pages=20)
         page = 1
         while page <= max_pages
             url = "https://codecov.io/api/v2/github/JuliaLang/repos/julia/commits?branch=master&page=$page&page_size=100"
-            resp = HTTP.get(url; status_exception=false, readtimeout=120, connect_timeout=30)
+            resp = HTTP.get(url; status_exception=false, read_idle_timeout=120, connect_timeout=30)
             if resp.status != 200
                 @warn "Codecov API request failed" page resp.status
                 break

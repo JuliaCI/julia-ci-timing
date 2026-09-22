@@ -30,9 +30,10 @@ jobs:
           failed=0
           # How old each source's newest data may be, in hours: a run that
           # succeeds but stores nothing (an upstream answering with nothing)
-          # shows up here. Benchmarks and PkgEval run every few days, the
-          # rollups lag a day or two, master can be quiet over a weekend.
-          declare -A max_data_age=([timing]=72 [ttfx]=120 [agents]=6 [benchmarks]=168 [pkgeval]=168 [packages]=168)
+          # shows up here. Nanosoldier's daily jobs pause for a week or two
+          # at times (no report is not our failure), the rollups lag a day
+          # or two, master can be quiet over a weekend.
+          declare -A max_data_age=([timing]=72 [ttfx]=120 [agents]=6 [benchmarks]=504 [pkgeval]=504 [packages]=168)
           for source in $(jq -r '.sources | keys[]' health.json); do
             last=$(jq -r ".sources[\"$source\"].last_ok_at // empty" health.json)
             age=$(( (now - $(date -u -d "${last:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))

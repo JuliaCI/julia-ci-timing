@@ -101,7 +101,7 @@ function fetch_recent_stable_julia_tags(; years::Int=2)
 
     while true
         url = JULIA_RELEASES_API * "&page=$(page)"
-        resp = http_get_retry(url, github_headers(); connect_timeout=30, readtimeout=120)
+        resp = http_get_retry(url, github_headers(); connect_timeout=30, read_idle_timeout=120)
         resp.status == 200 || error("Failed to fetch Julia releases: HTTP $(resp.status)")
         releases = JSON3.read(resp.body)
         isempty(releases) && break
@@ -159,7 +159,7 @@ function fetch_recent_prerelease_julia_tags(; years::Int=2)
 
     while true
         url = JULIA_RELEASES_API * "&page=$(page)"
-        resp = http_get_retry(url, github_headers(); connect_timeout=30, readtimeout=120)
+        resp = http_get_retry(url, github_headers(); connect_timeout=30, read_idle_timeout=120)
         resp.status == 200 || error("Failed to fetch Julia releases: HTTP $(resp.status)")
         releases = JSON3.read(resp.body)
         isempty(releases) && break
@@ -263,7 +263,7 @@ end
 
 
 function fetch_csv_lines(url)
-    resp = HTTP.get(url; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    resp = HTTP.get(url; retry=true, retries=3, connect_timeout=30, read_idle_timeout=120)
     resp.status == 200 || error("Failed to fetch $url: HTTP $(resp.status)")
     lines = split(String(transcode(GzipDecompressor, resp.body)), '\n'; keepempty=false)
     length(lines) >= 2 || error("$url appears empty")
@@ -296,7 +296,7 @@ end
 
 # The [packages] table of Registry.toml: one `uuid = { name = "...", path = "..." }` per line
 function fetch_registry_packages()
-    resp = HTTP.get(GENERAL_REGISTRY_TOML; retry=true, retries=3, connect_timeout=30, readtimeout=120)
+    resp = HTTP.get(GENERAL_REGISTRY_TOML; retry=true, retries=3, connect_timeout=30, read_idle_timeout=120)
     resp.status == 200 || error("Failed to fetch $GENERAL_REGISTRY_TOML: HTTP $(resp.status)")
     packages = NamedTuple[]
     for m in eachmatch(r"^([0-9a-f-]{36})\s*=\s*\{\s*name\s*=\s*\"([^\"]+)\"(?:\s*,\s*path\s*=\s*\"([^\"]*)\")?"m, String(resp.body))

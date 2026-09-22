@@ -75,10 +75,10 @@ function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs..
     return resp
 end
 
-function fetch_db_json(date_path::String)
+function fetch_db_json(date_path::String; client=nothing)
     url = "$RAW_BASE/$date_path/db.json"
     try
-        resp = http_get_retry(url; connect_timeout=15, readtimeout=30)
+        resp = http_get_retry(url; client, connect_timeout=15, read_idle_timeout=30)
         resp.status == 200 || return nothing
         return JSON3.read(String(resp.body))
     catch e
@@ -218,8 +218,11 @@ function main(args=ARGS)
 
     done = Threads.Atomic{Int}(0)
     total = length(new_dates)
+    # One client for the concurrent fetches, closed afterwards: its pooled
+    # keep-alive connections would otherwise die noisily when the process exits
+    client = HTTP.Client()
     results = asyncmap(new_dates; ntasks=CONCURRENCY) do date_path
-        db_json = fetch_db_json(date_path)
+        db_json = fetch_db_json(date_path; client)
         n = Threads.atomic_add!(done, 1) + 1
         if n % 50 == 0 || n == total
             @info "Progress: $n/$total"
@@ -232,9 +235,7 @@ function main(args=ARGS)
         pkgs, reasons = package_rows(db_json)
         return (summary, sha, pkgs, reasons)
     end
-    # The concurrent fetches leave pooled keep-alive connections whose idle
-    # monitors otherwise die noisily when the process exits
-    HTTP.Connections.closeall()
+    close(client)
     reports = filter(!isnothing, results)
 
     n = source_run(db, "pkgeval") do
