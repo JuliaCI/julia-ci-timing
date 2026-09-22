@@ -3,17 +3,17 @@
 Drafted 2026-09-21. Reviewed twice by Codex (gpt-6-astra); the accepted findings
 are folded in below and in `db/schema.sql`.
 
-Status (2026-09-22): merged as JuliaCI/julia-ci-timing#42. The host
+Status (2026-09-22): done. perf.julialang.org is served from the EC2 host
 (`infra/terraform`, applied as the `ci-timing` profile in the
-julia-perf-website-prod account) runs the fetchers every two hours, the API
-(`db/serve.jl` at `/api/`, which the site reads exclusively), Datasette at
-`/db/`, the extracts at `/data/*` with the database snapshot, and `/healthz`;
-`.github/workflows/deploy.yml` builds and deploys on push to main,
-`health.yml` checks freshness, disk and backup age daily. Caddy serves
-`perf.julialang.org` over HTTPS once the DNS record (an A record to the
-Elastic IP, at Namecheap) replaces the CNAME to GitHub Pages; the Pages
-deployment stays frozen at its last state until then and can be turned off
-after. The committed `data/` is gone except the two hand-maintained files;
+julia-perf-website-prod account) over HTTPS, with the fetchers writing the
+database every two hours, the API (`db/serve.jl` at `/api/`) behind the site,
+Datasette at `/db/`, the extracts and the database snapshot at `/data/*`, and
+`/healthz`. `deploy.yml` builds and deploys on push to main, `health.yml`
+checks freshness, disk and backup age daily. The DNS record changed from a
+CNAME to GitHub Pages to an A record at the Elastic IP on 2026-09-22 and Caddy
+issued the certificate; the frozen Pages deployment remains at
+juliaci.github.io/julia-ci-timing as a fallback until its custom domain is
+removed. The committed `data/` is gone except the two hand-maintained files;
 main's last copy is archived at
 `s3://ci-timing-393686272827-us-east-1-backups/legacy/`.
 

@@ -14,7 +14,7 @@ permissions:
   id-token: write
 
 env:
-  SITE_URL: ${{ vars.CI_TIMING_SITE_URL || 'http://3.82.159.74' }}
+  SITE_URL: ${{ vars.CI_TIMING_SITE_URL || 'https://perf.julialang.org' }}
 
 jobs:
   check:
