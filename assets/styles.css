@@ -1480,7 +1480,8 @@ body {
   flex-direction: column;
   flex: 0 0 auto;
   gap: 6px;
-  max-height: 55%;
+  min-height: 120px;
+  max-height: 80vh;
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border-default);
 }
@@ -1514,20 +1515,12 @@ body {
   height: 150px;
   min-height: 80px;
   flex: 0 0 auto;
-  resize: vertical;
   overflow: hidden;
 }
 .agents-table-wrapper {
-  /* auto basis so a height dragged in with the resize grip is honored */
   flex: 1 1 auto;
   min-height: 40px;
   overflow: auto;
-  resize: vertical;
-}
-/* The 55% cap is only the default height: once the table has been dragged,
-   the browser's inline height marks it as the user's choice */
-.agents-section:has(.agents-table-wrapper[style*="height"]) {
-  max-height: 85%;
 }
 .agents-table {
   border-collapse: collapse;
@@ -2257,12 +2250,11 @@ body {
   min-height: 60px;
   max-height: 45vh;
   overflow-y: auto;
-  resize: vertical;
 }
-/* 45vh is only the default height; the inline height the browser writes on
-   resize marks the panel as the user's choice */
-.package-panel[style*="height"] {
-  max-height: 85vh;
+/* Its height comes from the drag bar above it */
+#packages-top {
+  min-height: 50px;
+  max-height: 80vh;
 }
 .package-panel h3 {
   font-size: 14px;
@@ -2277,7 +2269,6 @@ body {
   height: 220px;
   min-height: 100px;
   margin-bottom: 8px;
-  resize: vertical;
   overflow: hidden;
 }
 .package-panel table {
@@ -2345,11 +2336,9 @@ body {
 }
 .commits-chart-container {
   position: relative;
-  flex: 0 0 auto;
-  height: min(440px, 55vh);
+  flex: 1 1 auto;
   min-height: 160px;
   padding: 8px 12px;
-  resize: vertical;
   overflow: hidden;
 }
 .commits-chart-container .chart-wrapper {
@@ -2363,9 +2352,10 @@ body {
   height: 100%;
 }
 .commits-regressions {
+  flex: 0 0 auto;
   padding: 4px 12px 16px;
-  min-height: 80px;
-  resize: vertical;
+  min-height: 50px;
+  max-height: 80vh;
   overflow: auto;
 }
 .commits-reg-title {

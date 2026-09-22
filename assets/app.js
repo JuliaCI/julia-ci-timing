@@ -3929,6 +3929,25 @@ makeResizablePanel({
   defaultHeight: 320,
 });
 makeResizablePanel({
+  handleId: "builds-resize-handle",
+  targetId: "builds-table",
+  storageKey: "builds-table-height",
+  defaultHeight: 300,
+});
+makeResizablePanel({
+  handleId: "packages-top-handle",
+  targetId: "packages-top",
+  storageKey: "packages-top-height",
+});
+// The bar sits under the section, so dragging down grows it
+makeResizablePanel({
+  handleId: "agents-resize-handle",
+  targetId: "agents-section",
+  storageKey: "agents-section-height",
+  direction: "down",
+  defaultHeight: 440,
+});
+makeResizablePanel({
   handleId: "ttfx-resize-handle",
   targetId: "ttfx-stats",
   storageKey: "ttfx-stats-height",
@@ -8358,6 +8377,7 @@ async function loadPackagesTop() {
     tr.onclick = () => tr.dataset.name && setPackagesPackage(tr.dataset.name);
   });
   panel.classList.remove("view-hidden");
+  document.getElementById("packages-top-handle")?.classList.remove("view-hidden");
 }
 
 async function loadPackagesDownloadsData() {

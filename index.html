@@ -770,6 +770,13 @@
               <div class="loading">Loading agent snapshots...</div>
             </div>
           </div>
+          <div
+            class="resize-handle"
+            id="agents-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the agents section"
+          ></div>
           <div class="workers-toolbar">
             <span class="workers-help"
               >Jobs run per host per day on <strong>master</strong> builds
@@ -816,6 +823,13 @@
               ></canvas>
             </div>
           </div>
+          <div
+            class="resize-handle"
+            id="builds-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize builds table"
+          ></div>
           <div class="commits-regressions" id="builds-table">
             <div class="loading">Loading...</div>
           </div>
@@ -931,6 +945,13 @@
           <div class="package-panel-chart"><canvas id="packages-package-chart"></canvas></div>
           <div id="packages-package-table"></div>
         </div>
+        <div
+          class="resize-handle view-hidden"
+          id="packages-top-handle"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the most requested packages table"
+        ></div>
         <div class="package-panel view-hidden" id="packages-top"></div>
       </div>
     </div>
