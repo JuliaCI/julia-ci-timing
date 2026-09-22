@@ -112,6 +112,7 @@ mutable struct Server
     site::Union{Nothing,String}
     data::Union{Nothing,String}
     refreshed_at::Float64                          # the refresher's last finished pass
+    inflight::Dict{String,Base.Event}              # renders under way, by cache key (under `lock`)
 end
 
 function open_readonly(path)
@@ -256,12 +257,14 @@ function cache_get(s::Server, key)
     end
 end
 
-function cache_put!(s::Server, key, seq, body, segments, params; hit_at=time())
+# A new entry counts as used now; a render of an existing one (the
+# refresher's) keeps its last use, so what nobody asks for still ages out
+function cache_put!(s::Server, key, seq, body, segments, params)
     lock(s.lock) do
         old = get(s.cache, key, nothing)
+        hit_at = old === nothing ? time() : old.hit_at
         if old !== nothing
             s.cache_bytes -= length(old.body)
-            hit_at = max(hit_at, old.hit_at)
             filter!(!=(key), s.cache_order)
         end
         s.cache[key] = CacheEntry(seq, body, segments, params, hit_at)
@@ -284,6 +287,38 @@ function cache_delete!(s::Server, key)
     end
 end
 
+# Render a key into the cache, once at a time: a request, the warm-up and the
+# refresher asking for the same key while it renders wait for that render
+# rather than starting another (after a restart they would all compile and
+# run the same heavy query side by side). Returns (seq, body), or nothing
+# when the route has no such resource.
+function render_cached!(s::Server, key, segments, params, seq)
+    while true
+        ev, mine = lock(s.lock) do
+            e = get(s.inflight, key, nothing)
+            e === nothing || return (e, false)
+            e = s.inflight[key] = Base.Event()
+            return (e, true)
+        end
+        if mine
+            try
+                value = withdb(db -> render(db, segments, params), s)
+                value === nothing && return nothing
+                body = gzip(Vector{UInt8}(JSON3.write(value)))
+                cache_put!(s, key, seq, body, segments, params)
+                return (seq, body)
+            finally
+                lock(() -> delete!(s.inflight, key), s.lock)
+                notify(ev)
+            end
+        end
+        wait(ev)
+        hit = cache_get(s, key)
+        # The other render found nothing or failed: try it here
+        hit === nothing || return hit
+    end
+end
+
 # An ingest moves a source's sequence and so outdates the entries that read
 # it; rendering them again here, rather than for the next visitor, means
 # nobody waits on a render the cache has already been asked for (pkgeval's
@@ -300,12 +335,7 @@ function refresh_stale!(s::Server)
         end
         seq = route_seq(s, segments)
         seq == old && continue
-        value = withdb(db -> render(db, segments, params), s)
-        if value === nothing
-            cache_delete!(s, key)
-        else
-            cache_put!(s, key, seq, gzip(Vector{UInt8}(JSON3.write(value))), segments, params; hit_at)
-        end
+        render_cached!(s, key, segments, params, seq) === nothing && cache_delete!(s, key)
     end
 end
 
@@ -348,24 +378,28 @@ function api(s::Server, req::HTTP.Request)
     # unless the refresher has stopped
     hit !== nothing && hit[1] != seq && !refresher_healthy(s) && (hit = nothing)
     served = hit === nothing ? seq : hit[1]
-    etag = "W/\"$served-$BUILD_ID\""
-    headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => etag,
-               "Cache-Control" => "no-cache", "Vary" => "Accept-Encoding"]
-    # A browser revalidates per URL, so the window is implied by the match
-    HTTP.header(req, "If-None-Match", "") == etag && return HTTP.Response(304, headers)
-    if hit === nothing
+    headers(n) = ["Content-Type" => "application/json; charset=utf-8", "ETag" => "W/\"$n-$BUILD_ID\"",
+                  "Cache-Control" => "no-cache", "Vary" => "Accept-Encoding"]
+    # A browser revalidates per URL, so the window is implied by the match;
+    # checked before any render, so a current browser is answered at once
+    # even while the cache fills after a restart
+    HTTP.header(req, "If-None-Match", "") == "W/\"$served-$BUILD_ID\"" && return HTTP.Response(304, headers(served))
+    if hit !== nothing
+        body = hit[2]
+    elseif cacheable
+        r = render_cached!(s, key, segments, params, seq)
+        r === nothing && return json_response(404, Dict("error" => "not found"))
+        # A render already under way when this request came may be older
+        served, body = r
+    else
         value = withdb(db -> render(db, segments, params), s)
         value === nothing && return json_response(404, Dict("error" => "not found"))
         body = gzip(Vector{UInt8}(JSON3.write(value)))
-        cacheable && cache_put!(s, key, seq, body, segments, params)
-    else
-        body = hit[2]
     end
     if accepts_gzip(req)
-        push!(headers, "Content-Encoding" => "gzip")
-        return HTTP.Response(200, headers, body)
+        return HTTP.Response(200, push!(headers(served), "Content-Encoding" => "gzip"), body)
     end
-    return HTTP.Response(200, headers, transcode(GzipDecompressor, body))
+    return HTTP.Response(200, headers(served), transcode(GzipDecompressor, body))
 end
 
 const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text/javascript; charset=utf-8",
@@ -432,9 +466,7 @@ function warm_up(s::Server)
         for (route, query) in cached
             segments = String.(split(route, '/'))
             params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(query))
-            seq = route_seq(s, segments)
-            value = withdb(db -> render(db, segments, params), s)
-            value === nothing || cache_put!(s, cache_key(segments, query), seq, gzip(Vector{UInt8}(JSON3.write(value))), segments, params)
+            render_cached!(s, cache_key(segments, query), segments, params, route_seq(s, segments))
         end
         withdb(s) do db
             since = day(7)
@@ -462,7 +494,7 @@ function main(args)
     opts = parse_args(args)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
-    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"], 0.0)
+    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"], 0.0, Dict())
     server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
     Threads.@spawn begin
