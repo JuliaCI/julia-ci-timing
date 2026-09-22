@@ -3923,9 +3923,10 @@ makeResizablePanel({
   storageKey: "bench-stats-height",
 });
 makeResizablePanel({
-  handleId: "pkgeval-resize-handle",
-  targetId: "pkgeval-stats",
-  storageKey: "pkgeval-stats-height",
+  handleId: "pkgeval-panels-handle",
+  targetId: "pkgeval-panels",
+  storageKey: "pkgeval-panels-height",
+  defaultHeight: 320,
 });
 makeResizablePanel({
   handleId: "ttfx-resize-handle",
@@ -9050,7 +9051,6 @@ function togglePkgevalProportional() {
 function setPkgevalTimeRange(val) {
   pkgevalTimeRangeDays = parseInt(val);
   updatePkgevalChart();
-  updatePkgevalTable();
   updatePkgevalURL();
 }
 
@@ -9244,6 +9244,7 @@ async function loadPkgevalPopular() {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });
   panel.classList.remove("view-hidden");
+  document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
 }
 
 function getPkgevalFilteredReports() {
@@ -9265,15 +9266,12 @@ async function loadPkgevalData() {
 
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
-    updatePkgevalTable();
     loadPkgevalPopular();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
     document.getElementById("pkgeval-chart-loading").innerHTML =
       '<span class="error">Failed to load pkgeval data. Run <code>julia fetch_pkgeval.jl</code> to generate data.</span>';
-    document.getElementById("pkgeval-stats-tbody").innerHTML =
-      '<tr><td colspan="8" class="error">Failed to load data</td></tr>';
   }
 }
 
@@ -9443,9 +9441,6 @@ function updatePkgevalChart() {
       },
       onHover: (evt, elements) => {
         evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
-        highlightPkgevalRow(
-          elements.length > 0 ? reports[elements[0].index]?.date : null,
-        );
       },
       scales: {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
@@ -9474,76 +9469,6 @@ function updatePkgevalChart() {
     pkgevalChart.destroy();
   }
   pkgevalChart = new Chart(canvas, config);
-}
-
-function highlightPkgevalRow(date) {
-  const tbody = document.getElementById("pkgeval-stats-tbody");
-  const prev = tbody.querySelector("tr.highlight");
-  if (prev) prev.classList.remove("highlight");
-  if (!date) {
-    cancelHoverScroll();
-    return;
-  }
-  const row = tbody.querySelector(`tr[data-date="${CSS.escape(date)}"]`);
-  if (row) {
-    row.classList.add("highlight");
-    const container = tbody.closest(".pkgeval-stats");
-    if (container) {
-      scrollRowAfterHover("pkgeval:" + date, () => {
-        const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
-        const rowRect = row.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        const visibleTop = containerRect.top + headerHeight;
-        if (rowRect.top < visibleTop || rowRect.bottom > containerRect.bottom) {
-          const rowTop = row.offsetTop - headerHeight;
-          container.scrollTo({ top: rowTop - 4, behavior: "smooth" });
-        }
-      });
-    }
-  }
-}
-
-function updatePkgevalTable() {
-  const reports = getPkgevalFilteredReports();
-  const tbody = document.getElementById("pkgeval-stats-tbody");
-  if (!reports.length) {
-    tbody.innerHTML = '<tr><td colspan="8">No data</td></tr>';
-    return;
-  }
-  // Show most recent first
-  const recent = reports.slice().reverse();
-  let html = "";
-  for (const r of recent) {
-    const url = nanosoldierReportUrl("pkgeval", r.date_path || r.date);
-    const t = r.total || 0;
-    const pct = (v) => (t > 0 ? ((v / t) * 100).toFixed(1) : "0.0");
-    html += `<tr data-date="${escapeHtml(r.date)}" data-report-url="${escapeHtml(url)}">`;
-    html += `<td>${escapeHtml(r.date)}</td>`;
-    html += `<td class="col-secondary">${escapeHtml(r.version || "")}</td>`;
-    html += `<td class="num">${t.toLocaleString()}</td>`;
-    html += `<td class="num pe-ok">${(r.ok || 0).toLocaleString()} <small>(${pct(r.ok || 0)}%)</small></td>`;
-    html += `<td class="num pe-fail">${(r.fail || 0).toLocaleString()} <small>(${pct(r.fail || 0)}%)</small></td>`;
-    html += `<td class="num pe-crash">${(r.crash || 0).toLocaleString()} <small>(${pct(r.crash || 0)}%)</small></td>`;
-    html += `<td class="num pe-skip col-secondary">${(r.skip || 0).toLocaleString()} <small>(${pct(r.skip || 0)}%)</small></td>`;
-    html += `<td class="num pe-kill col-secondary">${(r.kill || 0).toLocaleString()} <small>(${pct(r.kill || 0)}%)</small></td>`;
-    html += "</tr>";
-  }
-  tbody.innerHTML = html;
-  tbody.querySelectorAll("tr[data-report-url]").forEach((tr) => {
-    tr.onclick = () => window.open(tr.dataset.reportUrl, "_blank", "noopener");
-    tr.addEventListener("mouseenter", () => highlightPkgevalPoint(tr.dataset.date));
-    tr.addEventListener("mouseleave", () => setChartActivePoints(pkgevalChart, []));
-  });
-}
-
-function highlightPkgevalPoint(date) {
-  if (!pkgevalChart) return;
-  const index = pkgevalChart.data.labels.indexOf(date);
-  if (index < 0) return setChartActivePoints(pkgevalChart, []);
-  setChartActivePoints(
-    pkgevalChart,
-    pkgevalChart.data.datasets.map((_, datasetIndex) => ({ datasetIndex, index })),
-  );
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===

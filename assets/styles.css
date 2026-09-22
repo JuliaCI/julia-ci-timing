@@ -1197,8 +1197,6 @@ body {
   .stats-bar th,
   .stats-bar td,
   .stats-bar tr.host-row td,
-  .pkgeval-stats th,
-  .pkgeval-stats td,
   .ttfx-stats th,
   .ttfx-stats td,
   .benchmarks-stats th,
@@ -1225,7 +1223,6 @@ body {
   .stats-bar th,
   .stats-bar td,
   .stats-bar tr.host-row td,
-  .pkgeval-stats td,
   .ttfx-stats td,
   .benchmarks-stats td {
     font-size: 12px;
@@ -2201,26 +2198,14 @@ body {
   touch-action: pan-y;
   max-width: 100% !important;
 }
-.pkgeval-stats {
+/* The scroll region for the list under the chart; its height comes from
+   the drag bar above it (makeResizablePanel), collapsed until loaded */
+.pkgeval-panels {
   flex-shrink: 0;
   min-height: 50px;
   max-height: 80vh;
   overflow-y: auto;
   border-top: 1px solid var(--color-border-default);
-}
-/* One bounded, resizable scroll region for the panels under the report
-   table, so neither hides behind the other's scrollbar; collapsed while
-   both are still hidden */
-.pkgeval-panels {
-  flex-shrink: 0;
-  min-height: 60px;
-  max-height: 32vh;
-  overflow-y: auto;
-  resize: vertical;
-  border-top: 1px solid var(--color-border-default);
-}
-.pkgeval-panels[style*="height"] {
-  max-height: 85vh;
 }
 .pkgeval-panels:not(:has(.package-panel:not(.view-hidden))) {
   display: none;
@@ -2233,65 +2218,6 @@ body {
 }
 .pkgeval-panels .package-panel:first-child {
   border-top: none;
-}
-.pkgeval-stats table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-canvas-subtle);
-  font-size: 12px;
-}
-.pkgeval-stats th,
-.pkgeval-stats td {
-  padding: 6px 12px;
-  text-align: left;
-  border-bottom: 1px solid var(--color-border-muted);
-}
-.pkgeval-stats th {
-  background: var(--color-canvas-inset);
-  color: var(--color-fg-muted);
-  font-weight: 600;
-  font-size: 11px;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  user-select: none;
-}
-.pkgeval-stats td {
-  font-family:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
-}
-.pkgeval-stats tr:hover,
-.pkgeval-stats tr.highlight {
-  background: var(--color-neutral-muted);
-}
-.pkgeval-stats tr {
-  cursor: pointer;
-}
-.pkgeval-stats td.num {
-  text-align: right;
-}
-.pkgeval-stats td.num small {
-  opacity: 0.7;
-  font-size: 10px;
-}
-.pkgeval-stats th.num {
-  text-align: right;
-}
-.pkgeval-stats .pe-ok {
-  color: var(--color-success-fg);
-}
-.pkgeval-stats .pe-fail {
-  color: var(--color-danger-fg);
-}
-.pkgeval-stats .pe-crash {
-  color: var(--color-severe-fg);
-}
-.pkgeval-stats .pe-skip {
-  color: var(--color-fg-muted);
-}
-.pkgeval-stats .pe-kill {
-  color: var(--color-attention-fg);
 }
 
 /* Per-package panels (PkgEval history and reasons, package downloads) */

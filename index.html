@@ -997,37 +997,15 @@
             <canvas id="pkgeval-chart"></canvas>
           </div>
         </div>
+        <!-- Under the chart: the latest report's most downloaded failures,
+             behind the same drag bar the other tabs' tables have -->
         <div
-          class="resize-handle resize-handle-pkgeval"
-          id="pkgeval-resize-handle"
+          class="resize-handle resize-handle-pkgeval view-hidden"
+          id="pkgeval-panels-handle"
           role="separator"
           aria-orientation="horizontal"
-          aria-label="Resize pkgeval table"
+          aria-label="Resize the package list"
         ></div>
-        <div class="pkgeval-stats" id="pkgeval-stats" style="height: 280px">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th class="col-secondary">Version</th>
-                <th class="num">Total</th>
-                <th class="num pe-ok">OK</th>
-                <th class="num pe-fail">Fail</th>
-                <th class="num pe-crash">Crash</th>
-                <th class="num pe-skip col-secondary">Skip</th>
-                <th class="num pe-kill col-secondary">Kill</th>
-              </tr>
-            </thead>
-            <tbody id="pkgeval-stats-tbody">
-              <tr>
-                <td colspan="8" class="loading">Loading...</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <!-- Below the report table, not inside its scroll region (where it
-             would sit after 2,000 rows): the latest report's most downloaded
-             failures -->
         <div class="pkgeval-panels" id="pkgeval-panels">
           <div class="package-panel view-hidden" id="pkgeval-popular"></div>
         </div>
