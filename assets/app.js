@@ -9262,17 +9262,19 @@ async function loadPkgevalPopular() {
       const title = p.last_passed
         ? `Last passed on ${p.last_passed}; ${p.failing_reports} report${p.failing_reports === 1 ? "" : "s"} failing since`
         : `Has not passed on any report with package results; ${p.failing_reports} report${p.failing_reports === 1 ? "" : "s"}`;
+      // Days from the first failing report to this one; at least that many
+      // for a package that never passed
       const since = !p.failing_since
         ? ""
         : p.failing_since === d.date
           ? "new"
-          : `${escapeHtml(p.failing_since)}${p.last_passed ? "" : " or earlier"} <span class="col-secondary">(${days} d)</span>`;
+          : `${p.last_passed ? "" : "≥ "}${days} day${days === 1 ? "" : "s"} <span class="col-secondary">since ${escapeHtml(p.failing_since)}</span>`;
       return `<tr data-name="${escapeHtml(p.name)}" class="${recency}">
         <td class="num">${p.rank.toLocaleString()}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
-        <td title="${escapeHtml(title)}">${since}</td>
+        <td class="num" title="${escapeHtml(title)}">${since}</td>
         <td>${escapeHtml(p.reason || "(none)")}</td>
         <td class="num">${p.user.toLocaleString()}</td>
       </tr>`;
@@ -9289,9 +9291,9 @@ async function loadPkgevalPopular() {
       : "";
   panel.innerHTML = `
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
-    <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Failing since is the first report after the last one the package passed; <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
+    <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
     <table>
-      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Failing since</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th class="num" title="Days from the first failing report after the last pass to this report">Days failing</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   panel.querySelectorAll("tr[data-name]").forEach((tr) => {
