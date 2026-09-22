@@ -11467,9 +11467,9 @@ function drawOverview() {
   const cards = [
     overviewTtfxCard(src.ttfx),
     overviewPackagesCard(src.packages),
+    overviewPkgevalCard(src.pkgeval),
     overviewCICard(),
     overviewBenchCard(src.bench),
-    overviewPkgevalCard(src.pkgeval),
     overviewAgentsCard(src.agents),
   ];
   const grid = document.getElementById("overview-grid");
