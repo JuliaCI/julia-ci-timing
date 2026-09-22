@@ -1,8 +1,9 @@
 name: Host health
 
-# Once a day: every source on the host fetched within 6 hours, the disk
-# under 80%, the latest backup in S3 under a day old. A failed run emails
-# the repository's watchers.
+# Once a day: every source on the host fetched within 6 hours and holding
+# data newer than its own allowance, the API and Datasette answering, the
+# disk under 80%, the latest backup in S3 under a day old. A failed run
+# emails the repository's watchers.
 
 on:
   schedule:
@@ -20,24 +21,42 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Sources fresh and disk not full
+      - name: Sources fresh, data current, disk not full
         shell: bash
         run: |
           curl -sSf --max-time 60 "$SITE_URL/healthz" > health.json
           jq . health.json
           now=$(date -u +%s)
           failed=0
+          # How old each source's newest data may be, in hours: a run that
+          # succeeds but stores nothing (an upstream answering with nothing)
+          # shows up here. Benchmarks and PkgEval run every few days, the
+          # rollups lag a day or two, master can be quiet over a weekend.
+          declare -A max_data_age=([timing]=72 [ttfx]=120 [agents]=6 [benchmarks]=168 [pkgeval]=168 [packages]=168)
           for source in $(jq -r '.sources | keys[]' health.json); do
             last=$(jq -r ".sources[\"$source\"].last_ok_at // empty" health.json)
             age=$(( (now - $(date -u -d "${last:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))
             ok=$(jq -r ".sources[\"$source\"].last_ok" health.json)
-            echo "$source: last success ${age} h ago, last run ok=$ok"
+            latest=$(jq -r ".sources[\"$source\"].latest_data // empty" health.json)
+            data_age=$(( (now - $(date -u -d "${latest:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))
+            echo "$source: last success ${age} h ago, last run ok=$ok, newest data ${data_age} h old"
             [ "$age" -le 6 ] || { echo "::error::$source has not succeeded for ${age} h"; failed=1; }
+            limit=${max_data_age[$source]:-168}
+            [ "$data_age" -le "$limit" ] || { echo "::error::$source's newest data is ${data_age} h old (limit ${limit})"; failed=1; }
           done
           disk=$(jq -r '.disk_used_pct // 0' health.json)
           echo "disk: ${disk}% used"
           [ "$disk" -le 80 ] || { echo "::error::disk ${disk}% used"; failed=1; }
           exit $failed
+
+      - name: API and Datasette answering
+        if: always()
+        shell: bash
+        run: |
+          # /healthz is a file the export writes, so a dead API (the only
+          # thing the browser reads) or Datasette would pass the step above
+          curl -sSf --max-time 60 "$SITE_URL/api/status" | jq -e '.change_seq > 0' >/dev/null
+          curl -sSf --max-time 60 -o /dev/null "$SITE_URL/db/ci-timing.json?sql=select+1"
 
       - name: Configure AWS credentials (OIDC)
         if: always()

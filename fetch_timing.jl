@@ -18,14 +18,16 @@ const PIPELINE = "julia-master"
 const API_BASE = "https://api.buildkite.com/v2"
 
 function get_token()
-    token = get(ENV, "BUILDKITE_API_TOKEN", nothing)
-    if token === nothing
+    # An empty variable (the host exports one when the parameter is unset)
+    # counts as unset
+    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
+    if isempty(token)
         token_file = joinpath(homedir(), ".buildkite_token")
         if isfile(token_file)
             token = strip(read(token_file, String))
         end
     end
-    token === nothing && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
+    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
     return token
 end
 
@@ -33,11 +35,11 @@ end
 # GET with retries on connection errors, 429 and 5xx, honouring Retry-After
 # when the server sends one. HTTP.jl's own retry layer never sees a status
 # code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, readtimeout=120, connect_timeout=30, kwargs...)
     local resp
     for attempt in 1:attempts
         resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+            HTTP.get(url, headers; status_exception=false, retry=false, readtimeout, connect_timeout, kwargs...)
         catch e
             attempt == attempts && rethrow()
             @warn "Request failed, retrying" url attempt error=e
@@ -238,7 +240,11 @@ const JOB_COLS = ["job_uuid", "step_key", "agent_hostname", "agent_name", "queue
 function write_timings!(db, build_rows, job_rows)
     seq = next_seq!(db)
     bstmt = upsert_stmt(db, "builds", ["pipeline", "number"], BUILD_COLS)
-    raw_stmt = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_builds (pipeline, number, fetched_at, json_zst) VALUES (?, ?, ?, ?)")
+    # Rewritten only when the payload differs, so a run that saw nothing new
+    # commits nothing (and the change sequence stays put)
+    raw_stmt = DBInterface.prepare(db, "INSERT INTO raw_builds (pipeline, number, fetched_at, json_zst) VALUES (?, ?, ?, ?) " *
+                                       "ON CONFLICT (pipeline, number) DO UPDATE SET fetched_at = excluded.fetched_at, json_zst = excluded.json_zst " *
+                                       "WHERE raw_builds.json_zst IS NOT excluded.json_zst")
     fetched_at = iso_now()
     ids = Dict{Tuple{String,Int},Int}()
     for b in build_rows
@@ -247,16 +253,25 @@ function write_timings!(db, build_rows, job_rows)
         ids[(b.pipeline, b.number)] = Int(rows(db, "SELECT id FROM builds WHERE pipeline = ? AND number = ?", (b.pipeline, b.number))[1].id)
     end
     jstmt = upsert_stmt(db, "jobs", ["build_id", "name", "retry"], JOB_COLS)
-    # A UUID already stored under another (name, retry) of the same build
-    # would violate the unique index; drop that row first (the payload's
-    # ordinal wins, as it does for the file merge).
+    # The upsert is keyed on (build, name, retry) but job_uuid is unique
+    # too, and a same-name job's ordinal can shift between fetches. Two
+    # rows of the build would then collide with the payload: one holding a
+    # UUID the payload no longer has in a slot the payload fills, and one
+    # holding a payload UUID in a slot other than the payload's for it.
+    # Drop both first (the payload's ordinal wins, as it did for the file
+    # merge), or the INSERT would fail and roll back the whole run.
     for b in build_rows
         id = ids[(b.pipeline, b.number)]
+        slots = JSON3.write([Dict("u" => j.job_uuid === missing ? nothing : j.job_uuid, "n" => j.name, "r" => j.retry)
+                             for j in job_rows if j.pipeline == b.pipeline && j.number == b.number])
         DBInterface.execute(db, "DELETE FROM jobs WHERE build_id = ? AND job_uuid IS NOT NULL AND job_uuid NOT IN " *
-                                "(SELECT value FROM json_each(?)) AND (name, retry) IN " *
-                                "(SELECT json_extract(value, '\$.n'), json_extract(value, '\$.r') FROM json_each(?))",
-                            (id, JSON3.write([j.job_uuid for j in job_rows if j.pipeline == b.pipeline && j.number == b.number && j.job_uuid !== missing]),
-                                 JSON3.write([Dict("n" => j.name, "r" => j.retry) for j in job_rows if j.pipeline == b.pipeline && j.number == b.number])))
+                                "(SELECT json_extract(value, '\$.u') FROM json_each(?) WHERE json_extract(value, '\$.u') IS NOT NULL) " *
+                                "AND (name, retry) IN (SELECT json_extract(value, '\$.n'), json_extract(value, '\$.r') FROM json_each(?))",
+                            (id, slots, slots))
+        DBInterface.execute(db, "DELETE FROM jobs WHERE build_id = ? AND job_uuid IS NOT NULL AND EXISTS " *
+                                "(SELECT 1 FROM json_each(?) e WHERE json_extract(e.value, '\$.u') = jobs.job_uuid " *
+                                "AND (json_extract(e.value, '\$.n') != jobs.name OR json_extract(e.value, '\$.r') != jobs.retry))",
+                            (id, slots))
     end
     for j in job_rows
         upsert!(jstmt, (ids[(j.pipeline, j.number)], j.name, j.retry, (getproperty(j, Symbol(c)) for c in JOB_COLS)..., seq))
@@ -291,7 +306,7 @@ function fetch_coverage_data(db; max_pages=20)
     try
         for page in 1:max_pages
             url = "https://coveralls.io/github/JuliaLang/julia.json?page=$page"
-            resp = HTTP.get(url; status_exception=false)
+            resp = HTTP.get(url; status_exception=false, readtimeout=120, connect_timeout=30)
             if resp.status != 200
                 @warn "Coveralls API request failed" page resp.status
                 break
@@ -335,7 +350,7 @@ function fetch_coverage_data(db; max_pages=20)
         page = 1
         while page <= max_pages
             url = "https://codecov.io/api/v2/github/JuliaLang/repos/julia/commits?branch=master&page=$page&page_size=100"
-            resp = HTTP.get(url; status_exception=false)
+            resp = HTTP.get(url; status_exception=false, readtimeout=120, connect_timeout=30)
             if resp.status != 200
                 @warn "Codecov API request failed" page resp.status
                 break
@@ -384,29 +399,40 @@ function fetch_coverage_data(db; max_pages=20)
     return coverage
 end
 
+# A listing that failed (bad token, Buildkite down) is a failed run,
+# recorded in source_runs so /healthz and the daily check see it, not an
+# empty one that would count as success
+function list_builds(pipeline; kwargs...)
+    builds = fetch_pipeline_builds(pipeline; kwargs...)
+    builds === nothing && error("listing $pipeline builds failed")
+    @info "Fetched $pipeline builds" count=length(builds)
+    return builds
+end
+
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
+    source_run(db, TIMING_SOURCE) do
+        run!(db)
+    end
+    close(db)
+    return 0
+end
+
+function run!(db)
     threshold = fully_captured_threshold(db)
     @info "Fully captured threshold" master=threshold.master scheduled=threshold.scheduled ci=threshold.ci
 
     @info "Fetching builds from Buildkite..."
-    ci_builds = something(fetch_pipeline_builds(CI_PIPELINE; max_pages=30, fully_captured_below=threshold.ci), [])
-    @info "Fetched julia-ci builds" count=length(ci_builds)
+    ci_builds = list_builds(CI_PIPELINE; max_pages=30, fully_captured_below=threshold.ci)
 
     # The legacy pipelines stopped receiving builds in July 2026; once their
     # history is in the database there is nothing to page for
-    builds = threshold.master > 0 ? [] :
-        something(fetch_pipeline_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master), [])
-    @info "Fetched julia-master builds" count=length(builds)
-
-    scheduled_builds = threshold.scheduled > 0 ? [] :
-        something(fetch_pipeline_builds(SCHEDULED_PIPELINE; max_pages=10, fully_captured_below=threshold.scheduled), [])
-    @info "Fetched julia-master-scheduled builds" count=length(scheduled_builds)
+    builds = threshold.master > 0 ? [] : list_builds(PIPELINE; max_pages=30, fully_captured_below=threshold.master)
+    scheduled_builds = threshold.scheduled > 0 ? [] : list_builds(SCHEDULED_PIPELINE; max_pages=10, fully_captured_below=threshold.scheduled)
 
     if isempty(ci_builds) && isempty(builds) && isempty(scheduled_builds) &&
        threshold.master == 0 && threshold.scheduled == 0 && threshold.ci == 0
-        @error "No builds fetched and no existing data - check your token and permissions"
-        return 1
+        error("No builds fetched and no existing data - check your token and permissions")
     end
 
     build_rows = NamedTuple[]
@@ -422,13 +448,9 @@ function main(args=ARGS)
     coverage = fetch_coverage_data(db)
     @info "Coverage data" entries=length(coverage)
 
-    source_run(db, TIMING_SOURCE) do
-        transaction(db) do
-            write_timings!(db, build_rows, job_rows) + write_coverage!(db, coverage)
-        end
+    transaction(db) do
+        write_timings!(db, build_rows, job_rows) + write_coverage!(db, coverage)
     end
-    close(db)
-    return 0
 end
 
 if abspath(PROGRAM_FILE) == (@__FILE__)

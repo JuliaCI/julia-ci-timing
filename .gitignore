@@ -5,10 +5,9 @@ data/*
 !data/ttfx_annotations.json
 !data/methodology_changes.json
 
-# Julia
+# Julia (Manifest.toml is tracked: the image instantiates from it)
 *.jl.cov
 *.jl.mem
-Manifest.toml
 
 # OS
 .DS_Store

@@ -1,6 +1,6 @@
 (site_common) {
-  # The site and its data files are static; .json.gz files must reach the
-  # browser as gzip bytes (app.js decompresses them itself), which the
+  # The site and its data files are static; .json.gz files must reach a
+  # client as gzip bytes (the analysis scripts decompress them), which the
   # encoder leaves alone since it only compresses text-like types.
   encode zstd gzip
   root * ${site_root}

@@ -310,8 +310,10 @@ Rules for the database:
 - Each `fetch_*.jl` reads "known" state from the DB and upserts, and captures the
   extra columns from "What else to store" (same endpoints, more fields; the only
   new requests are `include_retried_jobs=true`, the extra download CSVs and the
-  bare julia clone). Lookbacks unchanged. Refuse to run against an empty DB
-  unless `--bootstrap` is passed.
+  bare julia clone). Lookbacks unchanged. Refuse to run without an existing
+  database (`open_db(create=false)`); `db/import_legacy.jl` built it once and
+  was deleted at the cutover (in git history, and the last `data/` is archived
+  under `legacy/` in the backup bucket).
 - `db/export.jl`: renders every current file (`data/*.json.gz`,
   `data/benchmarks/*.json.gz`, `data/agents/*`), atomic writes.
 - `analysis/fetch_data.jl`: downloads the extracts into a gitignored `data/` so
@@ -373,10 +375,10 @@ The site's own files are not the only way out of the database:
 - **`/data/*.json.gz`**: the extracts keep being published, so anything that
   reads them today (the `analysis/` scripts, the TTFX skill) keeps working
   with a URL instead of a checkout.
-- **A daily database snapshot** at `/data/ci-timing.sqlite.zst` (the
-  online-backup copy, compressed): one download and any agent can run
-  arbitrary SQL locally with `sqlite3`, with no load on the host and no row
-  limits. About 50 MB today.
+- **A database snapshot** at `/data/ci-timing.sqlite.gz` (the online-backup
+  copy, compressed, refreshed by every backup): one download and any agent
+  can run arbitrary SQL locally with `sqlite3`, with no load on the host and
+  no row limits. About 80 MB today.
 
 AGENTS.md gets a section pointing at all three once stage 1 is up.
 
@@ -437,8 +439,9 @@ files already had.
   refresh asks for `changed_since=<change_seq>` and upserts. Benchmarks:
   the summary plus per-group detail windowed on the report date, reloaded
   when the range widens. The other tabs read their summary in one request.
-- The browser probes `api/status` once: without it (the Pages copy, a
-  static checkout) every loader reads the files as before.
+- The browser reads the API only (the probe-and-fall-back-to-files path
+  went at the cutover with the committed `data/`); the extracts at `/data/`
+  are for scripts. The frozen Pages copy therefore no longer renders.
 - The views the database made possible: a CI → Builds tab (wall time, queue
   wait and job time per master build, `/api/timing/builds`; the Commits tab
   was folded into it); on Benchmarks a metric selector (time, GC time,

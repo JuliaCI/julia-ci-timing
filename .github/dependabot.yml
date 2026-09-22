@@ -5,7 +5,27 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Project.toml compat and the tracked Manifest.toml
   - package-ecosystem: "julia"
     directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The julia base image of the ingest image
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Datasette, installed into the ingest image
+  - package-ecosystem: "pip"
+    directory: "/infra/docker"
+    schedule:
+      interval: "weekly"
+
+  # The AWS provider (versions.tf and the lock file); the Caddy image tag in
+  # main.tf is a plain string Dependabot cannot follow
+  - package-ecosystem: "terraform"
+    directory: "/infra/terraform"
     schedule:
       interval: "weekly"

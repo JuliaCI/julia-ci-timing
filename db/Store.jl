@@ -13,7 +13,7 @@ module Store
 
 using SQLite, DBInterface, Dates, JSON3, CodecZstd, Statistics
 
-export open_db, db_path, transaction, query, next_seq!, upsert_stmt, upsert!, getid!,
+export open_db, db_path, transaction, query, next_seq!, current_seq, source_seq, upsert_stmt, upsert!, getid!,
        source_run, compress_zst, decompress_zst,
        iso_now, legacy_minute_to_iso, iso_to_legacy_minute, TIMING_SOURCE
 
@@ -41,6 +41,9 @@ function open_db(path::AbstractString=DEFAULT_PATH; create::Bool=true)
     SQLite.execute(db, "PRAGMA journal_mode = WAL")
     SQLite.execute(db, "PRAGMA synchronous = NORMAL")
     SQLite.execute(db, "PRAGMA foreign_keys = ON")
+    # Writers are serialized by the ingest lock; this covers a reader that
+    # opens during WAL recovery or a schema migration
+    SQLite.busy_timeout(db, 5000)
     apply_schema!(db)
     return db
 end
@@ -92,7 +95,43 @@ function apply_schema!(db::SQLite.DB)
     end
 end
 
-transaction(f, db::SQLite.DB) = SQLite.transaction(f, db)
+# The source whose run is in progress (set by source_run), so a committing
+# transaction can record the change sequence per source as well as globally
+const CURRENT_SOURCE = Ref{Union{Nothing,String}}(nothing)
+
+"""
+    transaction(f, db)
+
+Run `f` in one write transaction: BEGIN IMMEDIATE, COMMIT when it returns,
+ROLLBACK when it throws; inside an open transaction it just runs `f`. Not
+`SQLite.transaction`, which sets `PRAGMA synchronous = OFF` for the duration
+and so drops the WAL sync a crash-safe commit needs. If any row changed,
+the commit advances `meta.change_seq` (and the running source's own
+`change_seq:<source>`) to the value `next_seq!` handed out, so a run that
+changed nothing leaves every cursor and ETag alone.
+"""
+function transaction(f, db::SQLite.DB)
+    SQLite.intransaction(db) && return f()
+    SQLite.execute(db, "BEGIN IMMEDIATE")
+    try
+        before = total_changes(db)
+        result = f()
+        if total_changes(db) > before
+            seq = current_seq(db) + 1
+            setmeta!(db, "change_seq", seq)
+            CURRENT_SOURCE[] === nothing || setmeta!(db, "change_seq:" * CURRENT_SOURCE[], seq)
+        end
+        SQLite.execute(db, "COMMIT")
+        return result
+    catch
+        # An error SQLite already rolled back for (disk full, I/O) leaves no
+        # transaction; a ROLLBACK then would throw over the real error
+        SQLite.intransaction(db) && SQLite.execute(db, "ROLLBACK")
+        rethrow()
+    end
+end
+
+total_changes(db::SQLite.DB) = Int(query(db, "SELECT total_changes() AS n")[1].n)
 
 meta(db, key) = query(db, "SELECT value FROM meta WHERE key = ?", (key,))[1].value
 setmeta!(db, key, value) = DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, string(value)))
@@ -100,16 +139,25 @@ setmeta!(db, key, value) = DBInterface.execute(db, "INSERT OR REPLACE INTO meta 
 """
     next_seq!(db) -> Int
 
-Advance and return the change sequence. Call once per write transaction
-and stamp every row that transaction changes with the value.
+The change sequence to stamp the current transaction's rows with: one past
+the committed value. The counter itself moves when the transaction commits
+with at least one changed row (see `transaction`).
 """
-function next_seq!(db::SQLite.DB)
-    seq = parse(Int, meta(db, "change_seq")) + 1
-    setmeta!(db, "change_seq", seq)
-    return seq
-end
+next_seq!(db::SQLite.DB) = current_seq(db) + 1
 
 current_seq(db::SQLite.DB) = parse(Int, meta(db, "change_seq"))
+
+"""
+    source_seq(db, source) -> Int
+
+The change sequence of the last commit that changed `source`'s rows: the
+ETag of that source's API routes. Falls back to the global sequence for a
+source that has not committed since the per-source counters were added.
+"""
+function source_seq(db::SQLite.DB, source::AbstractString)
+    r = query(db, "SELECT value FROM meta WHERE key = ?", ("change_seq:" * source,))
+    return isempty(r) ? current_seq(db) : parse(Int, r[1].value)
+end
 
 """
     upsert_stmt(db, table, keys, cols; seq=true)
@@ -166,6 +214,7 @@ message. The error is rethrown after recording.
 function source_run(f, db::SQLite.DB, source::AbstractString)
     DBInterface.execute(db, "INSERT INTO source_runs (source, started_at) VALUES (?, ?)", (source, iso_now()))
     id = SQLite.last_insert_rowid(db)
+    CURRENT_SOURCE[] = String(source)
     try
         n = f()
         rows = n isa Integer ? Int(n) : 0
@@ -177,6 +226,8 @@ function source_run(f, db::SQLite.DB, source::AbstractString)
         DBInterface.execute(db, "UPDATE source_runs SET finished_at = ?, ok = 0, error = ? WHERE id = ?",
                             (iso_now(), first(msg, 2000), id))
         rethrow()
+    finally
+        CURRENT_SOURCE[] = nothing
     end
 end
 

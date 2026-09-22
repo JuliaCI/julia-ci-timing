@@ -4,9 +4,9 @@ Render: the shapes the site reads, built from the database.
     include("db/Render.jl"); using .Render
     Render.timing(db; since="2026-08-01T00:00:00Z")
 
-`db/export.jl` writes these to `data/*` (the extracts and the fallback the
-static site reads); `db/serve.jl` serves them on demand with a window, so
-the browser only loads what it shows. Every function takes an open
+`db/export.jl` writes these to `data/*` (the extracts scripts download);
+`db/serve.jl` serves them on demand with a window, so the browser only
+loads what it shows. Every function takes an open
 `SQLite.DB` and returns a JSON-serializable value in the shape the
 fetchers wrote before the database existed (`docs/database-migration.md`).
 """
@@ -43,8 +43,10 @@ end
 # --- timing ----------------------------------------------------------------
 
 # Runs per job, newest first. `since`/`until` bound the build's created_at,
-# `changed_since` selects rows written after that change sequence (an
-# incremental refresh); with `stats` each job also carries the all-time
+# `changed_since` selects every job of the builds touched after that change
+# sequence (an incremental refresh: the client replaces those builds' runs,
+# so a row the fetcher deleted, a job moved to another retry slot, goes
+# away too, and a build-only change is carried); with `stats` each job also carries the all-time
 # duration statistics the legacy file had. With a `builds` dictionary the
 # runs carry only what is theirs (agent, state, duration) and the build's
 # commit, author, message and date go into it once, keyed pipeline#number:
@@ -54,7 +56,12 @@ function timing_jobs(db; since="", until="", changed_since=0, stats=false, build
     # Legacy order: date descending, then retry ascending. Number descending
     # settles ties within a pipeline the way the fetcher's merge did; ties
     # across pipelines in the same minute were fetch-order accidents.
-    where, params = where_clause("b.created_at", since, until; seq_col="j.change_seq", changed_since)
+    where, params = where_clause("b.created_at", since, until)
+    if changed_since > 0
+        where *= (isempty(where) ? " WHERE " : " AND ") *
+                 "j.build_id IN (SELECT build_id FROM jobs WHERE change_seq > ? UNION SELECT id FROM builds WHERE change_seq > ?)"
+        push!(params, changed_since, changed_since)
+    end
     q = rows(db, "SELECT j.name, j.retry, j.agent_hostname, j.state, j.duration_s, " *
                  "b.pipeline, b.number, b.commit_prefix, b.author, b.message, b.created_at " *
                  "FROM jobs j JOIN builds b ON b.id = j.build_id" * where *
@@ -494,16 +501,29 @@ function disk_used_pct(db)
     end
 end
 
+# The newest instant or day each source has data for: a run that succeeds
+# without storing anything (an upstream returning nothing) shows here.
+const LATEST_DATA = Dict(
+    "timing" => "SELECT MAX(created_at) AS t FROM builds",
+    "benchmarks" => "SELECT MAX(date) AS t FROM bench_reports",
+    "pkgeval" => "SELECT MAX(date) AS t FROM pkgeval_reports",
+    "ttfx" => "SELECT MAX(build_created_at) AS t FROM ttfx_jobs",
+    "packages" => "SELECT MAX(date) AS t FROM dl_series",
+    "agents" => "SELECT MAX(time) AS t FROM agent_snapshots")
+
 # /healthz for monitoring: the latest run and latest success per source,
-# and the disk.
+# the newest data each holds, and the disk.
 function health(db)
     sources = OrderedDict{String,Any}()
     for r in rows(db, "SELECT source, MAX(CASE WHEN ok = 1 THEN finished_at END) AS last_ok_at, MAX(started_at) AS last_run_at " *
                       "FROM source_runs GROUP BY source ORDER BY source")
-        last = rows(db, "SELECT ok, rows_written, error, finished_at FROM source_runs WHERE source = ? ORDER BY id DESC LIMIT 1", (String(r.source),))[1]
-        sources[String(r.source)] = OrderedDict("last_ok_at" => js(r.last_ok_at), "last_run_at" => js(r.last_run_at),
-                                                "last_ok" => last.ok === missing ? nothing : last.ok == 1,
-                                                "last_rows" => js(last.rows_written), "last_error" => js(last.error))
+        source = String(r.source)
+        last = rows(db, "SELECT ok, rows_written, error, finished_at FROM source_runs WHERE source = ? ORDER BY id DESC LIMIT 1", (source,))[1]
+        latest = haskey(LATEST_DATA, source) ? js(rows(db, LATEST_DATA[source])[1].t) : nothing
+        sources[source] = OrderedDict("last_ok_at" => js(r.last_ok_at), "last_run_at" => js(r.last_run_at),
+                                      "last_ok" => last.ok === missing ? nothing : last.ok == 1,
+                                      "last_rows" => js(last.rows_written), "last_error" => js(last.error),
+                                      "latest_data" => latest)
     end
     return OrderedDict("generated_at" => Store.iso_now(), "change_seq" => Store.current_seq(db),
                        "disk_used_pct" => disk_used_pct(db), "sources" => sources)

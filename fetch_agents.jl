@@ -20,8 +20,8 @@
 # JuliaCI/sandboxed-buildkite-agent), so a listing only shows the slots mid-job
 # and the site judges those per host, by the last snapshot any slot appeared in.
 #
-# Needs a token with the read_agents scope. Without it the script warns and exits
-# cleanly so a missing scope does not fail the workflow and block deploys.
+# Needs a token with the read_agents scope. Without it the run fails and says so in
+# source_runs, where /healthz and the daily check pick it up.
 
 using HTTP
 using JSON3
@@ -38,23 +38,25 @@ const RETAIN_MONTHS = 12   # applied by the export, not by deletion
 const DATEFMT = dateformat"yyyy-mm-ddTHH:MM:SSZ"
 
 function get_token()
-    token = get(ENV, "BUILDKITE_API_TOKEN", nothing)
-    if token === nothing
+    # An empty variable (the host exports one when the parameter is unset)
+    # counts as unset
+    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
+    if isempty(token)
         token_file = joinpath(homedir(), ".buildkite_token")
         isfile(token_file) && (token = strip(read(token_file, String)))
     end
-    token === nothing && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
+    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
     return token
 end
 
 # GET with retries on connection errors, 429 and 5xx, honouring Retry-After
 # when the server sends one. HTTP.jl's own retry layer never sees a status
 # code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, readtimeout=120, connect_timeout=30, kwargs...)
     local resp
     for attempt in 1:attempts
         resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+            HTTP.get(url, headers; status_exception=false, retry=false, readtimeout, connect_timeout, kwargs...)
         catch e
             attempt == attempts && rethrow()
             @warn "Request failed, retrying" url attempt error=e
@@ -70,16 +72,14 @@ function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs..
     return resp
 end
 
-# Every agent the API lists, across pages. Returns nothing when the token cannot
-# read agents, so the caller can skip rather than fail.
+# Every agent the API lists, across pages
 function fetch_agents(; token=get_token(), per_page=100)
     agents = Any[]
     for page in 1:50
         url = "$API_BASE/organizations/$BUILDKITE_ORG/agents?per_page=$per_page&page=$page"
         resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
         if resp.status in (401, 403)
-            @warn "The token cannot list agents (needs the read_agents scope); skipping" resp.status
-            return nothing
+            error("The token cannot list agents (HTTP $(resp.status); it needs the read_agents scope)")
         end
         if resp.status != 200
             error("Agents request failed with HTTP $(resp.status): $(String(resp.body))")
@@ -176,15 +176,14 @@ function record_snapshot!(db, agents, now_time::DateTime)
 end
 
 function main(args=ARGS)
-    agents = fetch_agents()
-    agents === nothing && return 0
     db = open_db(Store.db_path(args); create=false)
-    connected = source_run(db, "agents") do
-        transaction(db) do
+    source_run(db, "agents") do
+        agents = fetch_agents()
+        connected = transaction(db) do
             record_snapshot!(db, agents, now(UTC))
         end
+        @info "Agents listed" total=length(agents) connected=length(connected)
     end
-    @info "Agents listed" total=length(agents) connected=length(connected)
     close(db)
     return 0
 end

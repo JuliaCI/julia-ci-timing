@@ -6,8 +6,9 @@
 # cache, then cold load and run time of the task script, each measured in ABBA blocks.
 # The job uploads ttfx/results.json (one record per task and block) and
 # ttfx/results-meta.json (the build, machine and settings) as artifacts. This script pulls
-# both for every finished TTFX job it has not seen and keeps one row per job in
-# data/ttfx_summary.json.gz, with the minimum over blocks of each metric per task. The
+# both for every finished TTFX job it has not seen and keeps one row per job in the
+# database (ttfx_jobs and its children), with the minimum over blocks of each metric per
+# task; db/export.jl renders data/ttfx_summary.json.gz from them. The
 # job repeats each task script with the GC disabled as well; those give the load, run
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
 
@@ -34,12 +35,14 @@ const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff",
 const REFETCH_BUILDS = 30
 
 function get_token()
-    token = get(ENV, "BUILDKITE_API_TOKEN", nothing)
-    if token === nothing
+    # An empty variable (the host exports one when the parameter is unset)
+    # counts as unset
+    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
+    if isempty(token)
         token_file = joinpath(homedir(), ".buildkite_token")
         isfile(token_file) && (token = strip(read(token_file, String)))
     end
-    token === nothing && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
+    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
     return token
 end
 
@@ -47,11 +50,11 @@ end
 # GET with retries on connection errors, 429 and 5xx, honouring Retry-After
 # when the server sends one. HTTP.jl's own retry layer never sees a status
 # code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
+function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, readtimeout=120, connect_timeout=30, kwargs...)
     local resp
     for attempt in 1:attempts
         resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
+            HTTP.get(url, headers; status_exception=false, retry=false, readtimeout, connect_timeout, kwargs...)
         catch e
             attempt == attempts && rethrow()
             @warn "Request failed, retrying" url attempt error=e
@@ -203,8 +206,13 @@ end
 # New rows for finished TTFX jobs not in `known`. Builds are listed newest first; stop
 # once a page holds nothing new and is older than everything already known, or, before
 # any row exists, once a page has no TTFX job at all (the job only exists from a point on).
-function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
+# `refetch` names the known jobs being fetched again for the metrics their row lacks;
+# one whose artifacts have expired keeps its row (returned in `expired`, so the caller
+# pads it) instead of being rewritten empty. A failed listing throws: the run is then
+# recorded as failed rather than as one that found nothing.
+function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), per_page=100, max_pages=30)
     rows = Dict{String,Any}[]
+    expired = String[]
     # Everything older than the 50 newest known builds counts as captured, so
     # the pages walked per run do not grow with the history
     known_builds = sort!(unique(parse(Int, first(split(k, ':'))) for k in known); rev=true)
@@ -213,7 +221,8 @@ function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
     for page in 1:max_pages
         params = Dict("branch" => BRANCH, "per_page" => per_page, "page" => page)
         builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds"; params)
-        (builds === nothing || isempty(builds)) && break
+        builds === nothing && error("listing $CI_PIPELINE builds failed (page $page)")
+        isempty(builds) && break
         new_in_page = 0
         ttfx_in_page = 0
         oldest = typemax(Int)
@@ -234,6 +243,12 @@ function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
                     continue
                 end
                 results, meta = fetched
+                if results === nothing && key in refetch
+                    @warn "The artifacts are gone; the row keeps what it has" build=build.number
+                    push!(expired, String(job.id))
+                    push!(known, key)
+                    continue
+                end
                 if results === nothing
                     @info "No results artifact" build=build.number
                 end
@@ -253,7 +268,7 @@ function fetch_new_rows(known::Set{String}; per_page=100, max_pages=30)
             break
         end
     end
-    return rows
+    return rows, expired
 end
 
 row_key(r) = "$(r["build"]):$(r["job_id"])"
@@ -321,6 +336,14 @@ end
 
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
+    source_run(db, "ttfx") do
+        run!(db)
+    end
+    close(db)
+    return 0
+end
+
+function run!(db)
     existing = query(db, "SELECT build, job_uuid, n_metrics FROM ttfx_jobs")
     # Rows short of a metric: the recent ones are fetched again, the rest
     # padded (their metric arrays already read as nulls; only the length
@@ -331,23 +354,22 @@ function main(args=ARGS)
     isempty(refetch) || @info "Rows fetched again for the metrics they lack" count=length(refetch)
     known = Set("$(r.build):$(r.job_uuid)" for r in existing if !("$(r.build):$(r.job_uuid)" in refetch))
 
-    new_rows = fetch_new_rows(known)
+    new_rows, expired = fetch_new_rows(known; refetch)
     @info "New TTFX rows" count=length(new_rows)
     if isempty(new_rows) && isempty(existing)
-        @error "No TTFX results found and no existing data - check the token and that julia-ci runs the TTFX job"
-        return 1
+        error("No TTFX results found and no existing data - check the token and that julia-ci runs the TTFX job")
     end
 
-    source_run(db, "ttfx") do
-        transaction(db) do
-            seq = next_seq!(db)
-            DBInterface.execute(db, "UPDATE ttfx_jobs SET n_metrics = ?, change_seq = ? WHERE n_metrics < ? AND build < ?",
-                                (length(METRICS), seq, length(METRICS), refetch_from))
-            write_rows!(db, new_rows)
-        end
+    transaction(db) do
+        seq = next_seq!(db)
+        DBInterface.execute(db, "UPDATE ttfx_jobs SET n_metrics = ?, change_seq = ? WHERE n_metrics < ? AND build < ?",
+                            (length(METRICS), seq, length(METRICS), refetch_from))
+        # Padded like the old rows: nothing more will ever be fetched for them
+        isempty(expired) || DBInterface.execute(db, "UPDATE ttfx_jobs SET n_metrics = ?, change_seq = ? " *
+                                                    "WHERE job_uuid IN (SELECT value FROM json_each(?))",
+                                                (length(METRICS), seq, JSON3.write(expired)))
+        write_rows!(db, new_rows)
     end
-    close(db)
-    return 0
 end
 
 if abspath(PROGRAM_FILE) == (@__FILE__)

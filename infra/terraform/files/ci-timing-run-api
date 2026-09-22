@@ -13,6 +13,7 @@ docker rm -f ci-timing-api >/dev/null 2>&1 || true
 # writes usage logs and compile caches under its depot in the image.
 exec docker run --name ci-timing-api \
   --publish "127.0.0.1:${CI_TIMING_API_PORT}:${CI_TIMING_API_PORT}" \
+  --log-opt max-size=50m --log-opt max-file=3 \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --security-opt no-new-privileges:true \

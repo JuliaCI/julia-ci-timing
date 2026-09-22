@@ -13,6 +13,7 @@ docker rm -f ci-timing-datasette >/dev/null 2>&1 || true
 # Datasette itself never writes; the container filesystem is read-only.
 exec docker run --name ci-timing-datasette \
   --publish "127.0.0.1:${CI_TIMING_DATASETTE_PORT}:${CI_TIMING_DATASETTE_PORT}" \
+  --log-opt max-size=50m --log-opt max-file=3 \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \

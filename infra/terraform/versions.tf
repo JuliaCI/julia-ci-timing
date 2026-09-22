@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.7.0" # removed blocks
 
   # State is local, like julia-perf's. Add a remote S3 backend with locking
   # here (and run `terraform init -migrate-state`) if more than one person

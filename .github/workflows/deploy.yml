@@ -10,16 +10,21 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Everything the image or the synced site is built from (Dockerfile,
+    # .dockerignore and infra/docker/entrypoint.sh sync-site)
     paths:
       - 'fetch_*.jl'
       - 'db/**'
       - 'index.html'
+      - '*/index.html'
       - 'assets/**'
       - 'favicon.svg'
       - 'data/ttfx_annotations.json'
       - 'data/methodology_changes.json'
       - 'Project.toml'
+      - 'Manifest.toml'
       - 'Dockerfile'
+      - '.dockerignore'
       - 'infra/docker/**'
       - '.github/workflows/deploy.yml'
 
@@ -80,8 +85,6 @@ jobs:
             --parameters "commands=[\"/usr/local/bin/ci-timing-deploy $IMAGE_REF\"],executionTimeout=[\"900\"]" \
             --query 'Command.CommandId' --output text)
           echo "SSM command $cmd on $instance"
-          # A replacement host deploys this image on first boot (ci-timing-bootstrap)
-          aws ssm put-parameter --name /ci-timing/image-ref --type String --overwrite --value "$IMAGE_REF" >/dev/null
           for i in $(seq 1 45); do
             status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)
             case "$status" in
@@ -94,3 +97,7 @@ jobs:
           done
           aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query 'StandardOutputContent' --output text | tail -40
           [ "$status" = "Success" ] || { echo "deploy did not finish in time ($status)"; exit 1; }
+          # A replacement host deploys this image on first boot (ci-timing-bootstrap);
+          # only an image that deployed is recorded (the host records it too, this
+          # covers a host that could not)
+          aws ssm put-parameter --name /ci-timing/image-ref --type String --overwrite --value "$IMAGE_REF" >/dev/null

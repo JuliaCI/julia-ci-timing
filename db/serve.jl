@@ -27,10 +27,11 @@
 #   /api/agents/latest                          agents/latest.json
 #   /api/agents/snapshots?since=                the history-*.ndjson lines, as an array
 #
-# Every response carries an ETag from the database's change sequence, so a
-# browser's revalidation costs nothing until an ingest changes something.
-# Bodies are rendered once per (request, change sequence) and kept gzipped
-# in a bounded cache. Requests take a query-only connection from a small
+# Every response carries an ETag from its source's change sequence (the
+# last commit that changed that source's rows; /api/status uses the global
+# one), so a browser's revalidation costs nothing until an ingest changes
+# that source. Bodies are rendered once per (request, sequence) and kept
+# gzipped in a bounded cache. Requests take a query-only connection from a small
 # pool, so a slow render (all of timing, a big benchmark group) does not
 # hold up the rest.
 #
@@ -89,6 +90,9 @@ function open_readonly(path)
     db = SQLite.DB(path)
     # A reader of a WAL database; never a writer, even by accident
     SQLite.execute(db, "PRAGMA query_only = 1")
+    # WAL recovery after a restore or crash, or the ingest's schema
+    # migration on open, would otherwise answer SQLITE_BUSY at once
+    SQLite.busy_timeout(db, 5000)
     return db
 end
 
@@ -102,6 +106,15 @@ function withdb(f, s::Server)
 end
 
 change_seq(s::Server) = withdb(db -> Store.current_seq(db), s)
+
+# The source each route family reads, for its ETag; nothing means global
+const ROUTE_SOURCES = Dict("timing" => "timing", "benchmarks" => "benchmarks", "pkgeval" => "pkgeval",
+                           "ttfx" => "ttfx", "downloads" => "packages", "agents" => "agents")
+
+function route_seq(s::Server, segments)
+    source = isempty(segments) ? nothing : get(ROUTE_SOURCES, segments[1], nothing)
+    return source === nothing ? change_seq(s) : withdb(db -> Store.source_seq(db, source), s)
+end
 
 # --- parameters --------------------------------------------------------------
 
@@ -226,7 +239,7 @@ function api(s::Server, req::HTTP.Request)
     segments = String[String(x) for x in split(uri.path, '/'; keepempty=false)]
     popfirst!(segments)   # "api"
     params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
-    seq = change_seq(s)
+    seq = route_seq(s, segments)
     etag = "W/\"$seq\""
     headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => etag,
                "Cache-Control" => "no-cache", "Vary" => "Accept-Encoding"]

@@ -6,6 +6,7 @@ Description=Deploy the last shipped ci-timing image on a fresh host
 After=network-online.target docker.service ci-timing-datasette.service
 Wants=network-online.target
 Requires=docker.service
+RequiresMountsFor=/var/lib/ci-timing
 
 [Service]
 Type=oneshot
