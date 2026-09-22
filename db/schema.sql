@@ -9,8 +9,10 @@
 --     (*_ns): BenchmarkTools estimates are Float64 and the legacy data has
 --     fractional values.
 --   * Every fact table carries change_seq, a monotonic integer taken from
---     meta.change_seq. It only advances on a content change, so
---     "change_seq > N" is a reliable incremental cursor.
+--     meta.change_seq. Store.transaction advances it only when a commit
+--     changed a row (and records it per source under change_seq:<source>),
+--     so "change_seq > N" is a reliable incremental cursor and the API's
+--     ETags hold still across runs that fetched nothing new.
 --   * Legacy rows imported from the committed data/ files leave upstream
 --     identifiers (job UUIDs, full SHAs, timestamps) NULL rather than
 --     fabricating them.
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS builds (
 );
 CREATE INDEX IF NOT EXISTS builds_created ON builds (created_at);
 CREATE INDEX IF NOT EXISTS builds_commit ON builds (commit_prefix);
+CREATE INDEX IF NOT EXISTS builds_seq ON builds (change_seq);
 
 -- Buildkite step names carry emoji and drift; classify once at ingest.
 CREATE TABLE IF NOT EXISTS job_kinds (

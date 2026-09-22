@@ -1,11 +1,12 @@
 #!/bin/bash
 # On a fresh host: deploy the image the workflow last shipped, recorded in
 # SSM, so the site comes up without waiting for the next deploy. Runs once
-# per boot after the datasette unit's restore; a host that already has its
-# site directory does nothing.
+# per boot after the datasette unit's restore; a host whose image is
+# already pulled does nothing. (The site directory is no test: it lives on
+# the data volume and survives a replacement, the pulled images do not.)
 set -uo pipefail
 set -a; . /etc/ci-timing.host.env; set +a
-if [ -n "$(ls -A "$CI_TIMING_SITE_DIR" 2>/dev/null)" ]; then
+if docker image inspect "$CI_TIMING_IMAGE_REF" >/dev/null 2>&1; then
   exit 0
 fi
 ref="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_IMAGE_PARAMETER" --query Parameter.Value --output text 2>/dev/null || true)"

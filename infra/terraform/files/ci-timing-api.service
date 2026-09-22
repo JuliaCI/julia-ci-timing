@@ -3,6 +3,7 @@ Description=The site's API over the ci-timing database
 After=network-online.target docker.service ci-timing-datasette.service
 Wants=network-online.target
 Requires=docker.service
+RequiresMountsFor=/var/lib/ci-timing
 
 [Service]
 Type=simple

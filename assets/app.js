@@ -5285,8 +5285,19 @@ function hydrateTimingRuns(payload) {
   return payload;
 }
 
-// Upsert the API's jobs into `data.jobs`, run by run
-function mergeTimingRuns(jobs) {
+// Upsert the API's jobs into `data.jobs`, run by run. An incremental
+// refresh sends every run of the builds touched since the cursor, so those
+// builds' runs are dropped first: a run the fetcher deleted (a job moved to
+// another retry slot) is not in the payload and must not survive the merge
+function mergeTimingRuns(jobs, replaceBuilds = null) {
+  if (replaceBuilds && replaceBuilds.size > 0) {
+    const of = (r) => `${r.pipeline}#${r.build}`;
+    for (const job of Object.values(data.jobs)) {
+      if (job.recent.some((r) => replaceBuilds.has(of(r)))) {
+        job.recent = job.recent.filter((r) => !replaceBuilds.has(of(r)));
+      }
+    }
+  }
   for (const [name, job] of Object.entries(jobs)) {
     const existing = data.jobs[name];
     if (!existing) {
@@ -5403,12 +5414,18 @@ async function refreshTimingFromApi(signal) {
     { signal },
   );
   if (signal.aborted) return;
-  if (payload.change_seq !== timingChangeSeq) {
-    mergeTimingRuns(hydrateTimingRuns(payload).jobs);
+  // The cursor moves whenever any source committed; only redraw when
+  // timing itself has something new
+  const changed =
+    Object.keys(payload.jobs || {}).length > 0 || Object.keys(payload.coverage || {}).length > 0;
+  if (changed) {
+    mergeTimingRuns(hydrateTimingRuns(payload).jobs, new Set(Object.keys(payload.builds || {})));
     Object.assign(data.coverage, payload.coverage);
-    data.generated_at = payload.generated_at;
-    timingChangeSeq = payload.change_seq;
-    checkStaleData(data.generated_at);
+  }
+  data.generated_at = payload.generated_at;
+  timingChangeSeq = payload.change_seq;
+  checkStaleData(data.generated_at);
+  if (changed) {
     // Rebuild all derived state (job matrix/index, colors, pass rates,
     // breakages, sidebar): new jobs can appear and caches go stale
     populateJobSelector();

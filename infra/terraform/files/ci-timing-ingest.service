@@ -3,8 +3,13 @@ Description=ci-timing ingest: fetchers, export, backup
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
+RequiresMountsFor=/var/lib/ci-timing
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/ci-timing-ingest
+# The timeout kills the docker CLI, not the container it started: make
+# sure a hung run's container goes with it, or it keeps writing to the
+# database after the lock is released and its name blocks the next run
+ExecStopPost=-/usr/bin/docker rm -f ci-timing-ingest
 TimeoutStartSec=90min

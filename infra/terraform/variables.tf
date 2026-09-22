@@ -14,8 +14,14 @@ variable "instance_type" {
 }
 
 variable "root_volume_size_gb" {
-  description = "Root gp3 volume size in GiB. Holds the OS, Docker data, the SQLite database, the export and the report clones."
+  description = "Root gp3 volume size in GiB. Holds the OS and Docker's images and logs."
   type        = number
+}
+
+variable "data_volume_size_gb" {
+  description = "Data gp3 volume size in GiB, mounted at /var/lib/ci-timing: the SQLite database, the export, the site and the report clones. Outlives the instance."
+  type        = number
+  default     = 50
 }
 
 variable "site_hostname" {

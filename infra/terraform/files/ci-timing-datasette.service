@@ -3,6 +3,7 @@ Description=Public read-only Datasette over the ci-timing database
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
+RequiresMountsFor=/var/lib/ci-timing
 
 [Service]
 Type=simple

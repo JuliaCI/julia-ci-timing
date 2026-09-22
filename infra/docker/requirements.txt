@@ -1,0 +1,3 @@
+# Datasette for the public /db/ (Dockerfile); Dependabot's pip ecosystem
+# tracks it here
+datasette==0.65.5

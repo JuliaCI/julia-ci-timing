@@ -9,23 +9,31 @@ exec 9>"$lock_file"
 flock 9
 
 # The token never lands on disk: read at run time into the container's env
-token="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_TOKEN_PARAMETER" --with-decryption \
+# (passed by name, so it is not on the docker command line either)
+BUILDKITE_API_TOKEN="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_TOKEN_PARAMETER" --with-decryption \
   --query Parameter.Value --output text)"
-if [ -z "$token" ] || [ "$token" = "unset" ]; then
+if [ -z "$BUILDKITE_API_TOKEN" ] || [ "$BUILDKITE_API_TOKEN" = "unset" ]; then
   echo "Buildkite token not set in $CI_TIMING_TOKEN_PARAMETER; the Buildkite fetchers will fail" >&2
+  BUILDKITE_API_TOKEN=""
 fi
+export BUILDKITE_API_TOKEN
 
-docker run --rm --name ci-timing-ingest \
+# A run the unit's timeout killed can leave its container behind (the CLI
+# dies, the container does not), and its name would refuse every later run
+docker rm -f ci-timing-ingest >/dev/null 2>&1 || true
+# --init: a PID 1 that forwards the CLI's proxied SIGTERM to the fetchers
+docker run --rm --name ci-timing-ingest --init \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
-  --env BUILDKITE_API_TOKEN="$token" \
+  --log-opt max-size=50m --log-opt max-file=3 \
+  --env BUILDKITE_API_TOKEN \
   --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
   --env CI_TIMING_EXPORT_DIR=/data/export \
   --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
   "$CI_TIMING_IMAGE_REF" ingest
 rc=$?
-unset token
+unset BUILDKITE_API_TOKEN
 # Back up even after a partly failed run: whatever was written is worth keeping
 /usr/local/bin/ci-timing-backup || echo "backup failed" >&2
 exit $rc

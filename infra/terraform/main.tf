@@ -3,8 +3,9 @@
 # Caddy for HTTP/HTTPS, a read-only Datasette at /db/, an S3 bucket for
 # backups, ECR for the ingest image, Session Manager as the only operator
 # path. The differences: the site is static files Caddy serves from the host,
-# the ingest is a systemd timer running the image every two hours, and a
-# deploy pulls a new image and restarts (no instance replacement).
+# the ingest is a systemd timer running the image every two hours, a deploy
+# pulls a new image and restarts (no instance replacement), and the data
+# lives on its own EBS volume that outlives the instance.
 #
 # See docs/database-migration.md and README.md in this directory.
 
@@ -39,7 +40,10 @@ locals {
   ecr_max_images      = 10
   ecr_repository_name = "${var.name_prefix}-ingest"
   backup_bucket_name  = lower("${var.name_prefix}-${data.aws_caller_identity.current.account_id}-${var.aws_region}-backups")
+  # Created and filled outside Terraform (README), so the token is never
+  # read into the state file; only its ARN is derived here
   token_parameter     = "/${var.name_prefix}/buildkite-api-token"
+  token_parameter_arn = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.token_parameter}"
   image_parameter     = "/${var.name_prefix}/image-ref" # the deployed image, for a replacement host
 
   site_hostname = var.site_hostname == null ? "" : trimspace(var.site_hostname)
@@ -238,16 +242,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "backups" {
 
 # ------------------------------------------------------------------ secrets --
 
-# The Buildkite token the fetchers use. Terraform only creates the parameter;
-# the value is put with `aws ssm put-parameter --overwrite` (README) and
-# never enters this configuration or its state.
-resource "aws_ssm_parameter" "buildkite_token" {
-  name        = local.token_parameter
-  description = "Buildkite API token (read_builds, read_artifacts, read_agents) for the ${var.name_prefix} fetchers"
-  type        = "SecureString"
-  value       = "unset"
+# The Buildkite token the fetchers use lives in the SSM parameter
+# local.token_parameter, created and filled with `aws ssm put-parameter`
+# (README). It used to be a resource here with ignore_changes on the value,
+# which still read the decrypted value into the state file on every
+# refresh; this forgets it without deleting the parameter.
+removed {
+  from = aws_ssm_parameter.buildkite_token
   lifecycle {
-    ignore_changes = [value]
+    destroy = false
   }
 }
 
@@ -321,7 +324,7 @@ resource "aws_iam_role_policy" "app" {
       {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = aws_ssm_parameter.buildkite_token.arn
+        Resource = local.token_parameter_arn
       },
       {
         Effect   = "Allow"
@@ -445,23 +448,24 @@ data "aws_ssm_parameter" "al2023_ami" {
 # under files/; the two that need Terraform values are rendered from templates.
 locals {
   plain_files = {
-    "/usr/local/bin/ci-timing-run-caddy"              = "0755"
-    "/usr/local/bin/ci-timing-run-datasette"          = "0755"
-    "/usr/local/bin/ci-timing-run-api"                = "0755"
-    "/usr/local/bin/ci-timing-ingest"                 = "0755"
-    "/usr/local/bin/ci-timing-backup"                 = "0755"
-    "/usr/local/bin/ci-timing-archive"                = "0755"
-    "/usr/local/bin/ci-timing-restore-if-empty"       = "0755"
-    "/usr/local/bin/ci-timing-deploy"                 = "0755"
-    "/usr/local/bin/ci-timing-bootstrap"              = "0755"
-    "/etc/systemd/system/ci-timing-caddy.service"     = "0644"
-    "/etc/systemd/system/ci-timing-datasette.service" = "0644"
-    "/etc/systemd/system/ci-timing-api.service"       = "0644"
-    "/etc/systemd/system/ci-timing-bootstrap.service" = "0644"
-    "/etc/systemd/system/ci-timing-ingest.service"    = "0644"
-    "/etc/systemd/system/ci-timing-ingest.timer"      = "0644"
-    "/etc/systemd/system/ci-timing-archive.service"   = "0644"
-    "/etc/systemd/system/ci-timing-archive.timer"     = "0644"
+    "/usr/local/bin/ci-timing-run-caddy"                   = "0755"
+    "/usr/local/bin/ci-timing-run-datasette"               = "0755"
+    "/usr/local/bin/ci-timing-run-api"                     = "0755"
+    "/usr/local/bin/ci-timing-ingest"                      = "0755"
+    "/usr/local/bin/ci-timing-backup"                      = "0755"
+    "/usr/local/bin/ci-timing-archive"                     = "0755"
+    "/usr/local/bin/ci-timing-restore-if-empty"            = "0755"
+    "/usr/local/bin/ci-timing-deploy"                      = "0755"
+    "/usr/local/bin/ci-timing-bootstrap"                   = "0755"
+    "/etc/systemd/system/ci-timing-caddy.service"          = "0644"
+    "/etc/systemd/system/ci-timing-datasette.service"      = "0644"
+    "/etc/systemd/system/ci-timing-api.service"            = "0644"
+    "/etc/systemd/system/ci-timing-bootstrap.service"      = "0644"
+    "/etc/systemd/system/ci-timing-ingest.service"         = "0644"
+    "/etc/systemd/system/ci-timing-ingest.timer"           = "0644"
+    "/etc/systemd/system/ci-timing-archive.service"        = "0644"
+    "/etc/systemd/system/ci-timing-archive.timer"          = "0644"
+    "/etc/systemd/journald.conf.d/ci-timing-journald.conf" = "0644"
   }
   user_data_files = merge(
     { for p, mode in local.plain_files : p => { mode = mode, content = file("${path.module}/files/${basename(p)}") } },
@@ -500,6 +504,30 @@ locals {
   )
 }
 
+# The database, export, site and clones. Its own volume so that replacing
+# the instance (every change to the files above does) keeps the data and
+# the restore from S3 only ever runs onto a brand-new volume.
+resource "aws_ebs_volume" "data" {
+  availability_zone = var.availability_zone
+  size              = var.data_volume_size_gb
+  type              = "gp3"
+  encrypted         = true
+  tags              = { Name = "${var.name_prefix}-data" }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_volume_attachment" "data" {
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.site.id
+  # A replacement detaches from the old instance first: stop it so the
+  # filesystem is unmounted cleanly rather than yanked
+  stop_instance_before_detaching = true
+}
+
 resource "aws_instance" "site" {
   ami                         = data.aws_ssm_parameter.al2023_ami.value
   instance_type               = var.instance_type
@@ -509,15 +537,18 @@ resource "aws_instance" "site" {
   iam_instance_profile        = aws_iam_instance_profile.instance.name
 
   # Every host setting lives in this user_data, so a change to it replaces
-  # the instance; on boot the new host restores the database, the export and
-  # Caddy's certificates from the latest S3 backup. Image updates do not go
-  # through here (ci-timing-deploy pulls and restarts in place).
+  # the instance; the new host mounts the data volume (restoring from the
+  # latest S3 backup only if the volume is new) and pulls the recorded
+  # image. Image updates do not go through here (ci-timing-deploy pulls
+  # and restarts in place).
   user_data_replace_on_change = true
   user_data_base64 = base64gzip(templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    files            = local.user_data_files
-    runtime_uid      = local.runtime_uid
-    runtime_gid      = local.runtime_gid
-    data_mount_path  = local.data_mount_path
+    files           = local.user_data_files
+    runtime_uid     = local.runtime_uid
+    runtime_gid     = local.runtime_gid
+    data_mount_path = local.data_mount_path
+    # On Nitro the volume shows up under its id, not the device name
+    data_volume_dev  = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
     export_dir       = local.export_dir
     site_dir         = local.site_dir
     caddy_data_dir   = local.caddy_data_dir

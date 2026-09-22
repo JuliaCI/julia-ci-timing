@@ -29,6 +29,11 @@ output "github_deploy_role_arn" {
 }
 
 output "buildkite_token_parameter" {
-  description = "SSM parameter to put the Buildkite API token in."
-  value       = aws_ssm_parameter.buildkite_token.name
+  description = "SSM parameter to put the Buildkite API token in (created outside Terraform, see README)."
+  value       = local.token_parameter
+}
+
+output "data_volume_id" {
+  description = "EBS volume holding the database; it outlives the instance."
+  value       = aws_ebs_volume.data.id
 }
