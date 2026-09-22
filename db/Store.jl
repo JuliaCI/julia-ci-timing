@@ -151,12 +151,14 @@ current_seq(db::SQLite.DB) = parse(Int, meta(db, "change_seq"))
     source_seq(db, source) -> Int
 
 The change sequence of the last commit that changed `source`'s rows: the
-ETag of that source's API routes. Falls back to the global sequence for a
-source that has not committed since the per-source counters were added.
+ETag of that source's API routes. A source that has not changed a row since
+the per-source counters were added has no entry and gets 0: any fixed value
+serves, while the global sequence would outdate its responses on every other
+source's ingest. Its first change records a real sequence, never 0.
 """
 function source_seq(db::SQLite.DB, source::AbstractString)
     r = query(db, "SELECT value FROM meta WHERE key = ?", ("change_seq:" * source,))
-    return isempty(r) ? current_seq(db) : parse(Int, r[1].value)
+    return isempty(r) ? 0 : parse(Int, r[1].value)
 end
 
 """

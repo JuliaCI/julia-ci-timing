@@ -63,6 +63,12 @@ end
 const CACHE_MAX_ENTRIES = 32
 const CACHE_MAX_BYTES = 64 * 1024 * 1024
 const POOL_SIZE = 4
+# The refresher's pass interval, how long it may go without finishing a pass
+# before stale entries are rendered inline again, and how long an entry
+# nobody asks for is kept up to date
+const REFRESH_INTERVAL_S = 20
+const REFRESH_HEALTHY_S = 120
+const REFRESH_KEEP_S = 24 * 3600
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "host" => "127.0.0.1", "port" => 8002, "site" => nothing, "data" => nothing)
@@ -88,14 +94,24 @@ end
 
 # --- database ----------------------------------------------------------------
 
+# A rendered body and what it takes to render it again
+mutable struct CacheEntry
+    seq::Int                      # the route's change sequence it was rendered at
+    body::Vector{UInt8}           # gzipped
+    segments::Vector{String}
+    params::Dict{String,String}
+    hit_at::Float64               # last served, for dropping what nobody asks for
+end
+
 mutable struct Server
     pool::Channel{SQLite.DB}
     lock::ReentrantLock                            # the cache
-    cache::Dict{String,Tuple{Int,Vector{UInt8}}}   # key => (change_seq, gzipped body)
+    cache::Dict{String,CacheEntry}
     cache_order::Vector{String}
     cache_bytes::Int
     site::Union{Nothing,String}
     data::Union{Nothing,String}
+    refreshed_at::Float64                          # the refresher's last finished pass
 end
 
 function open_readonly(path)
@@ -230,29 +246,86 @@ end
 
 # --- cache -------------------------------------------------------------------
 
-function cache_get(s::Server, key, seq)
+# The entry for a key at whatever sequence it was rendered, marking it used
+function cache_get(s::Server, key)
     lock(s.lock) do
-        hit = get(s.cache, key, nothing)
-        return hit !== nothing && hit[1] == seq ? hit[2] : nothing
+        e = get(s.cache, key, nothing)
+        e === nothing && return nothing
+        e.hit_at = time()
+        return (e.seq, e.body)
     end
 end
 
-function cache_put!(s::Server, key, seq, body)
+function cache_put!(s::Server, key, seq, body, segments, params; hit_at=time())
     lock(s.lock) do
         old = get(s.cache, key, nothing)
-        old === nothing || (s.cache_bytes -= length(old[2]); filter!(!=(key), s.cache_order))
-        s.cache[key] = (seq, body)
+        if old !== nothing
+            s.cache_bytes -= length(old.body)
+            hit_at = max(hit_at, old.hit_at)
+            filter!(!=(key), s.cache_order)
+        end
+        s.cache[key] = CacheEntry(seq, body, segments, params, hit_at)
         push!(s.cache_order, key)
         s.cache_bytes += length(body)
         while (length(s.cache_order) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) && length(s.cache_order) > 1
             evicted = popfirst!(s.cache_order)
-            s.cache_bytes -= length(s.cache[evicted][2])
+            s.cache_bytes -= length(s.cache[evicted].body)
             delete!(s.cache, evicted)
         end
     end
 end
 
+function cache_delete!(s::Server, key)
+    lock(s.lock) do
+        e = pop!(s.cache, key, nothing)
+        e === nothing && return
+        s.cache_bytes -= length(e.body)
+        filter!(!=(key), s.cache_order)
+    end
+end
+
+# An ingest moves a source's sequence and so outdates the entries that read
+# it; rendering them again here, rather than for the next visitor, means
+# nobody waits on a render the cache has already been asked for (pkgeval's
+# popular list takes seconds). Until the new body is in, the old one is
+# served with its own ETag.
+function refresh_stale!(s::Server)
+    entries = lock(s.lock) do
+        [(k, e.seq, e.segments, e.params, e.hit_at) for (k, e) in s.cache]
+    end
+    for (key, old, segments, params, hit_at) in entries
+        if time() - hit_at > REFRESH_KEEP_S
+            cache_delete!(s, key)
+            continue
+        end
+        seq = route_seq(s, segments)
+        seq == old && continue
+        value = withdb(db -> render(db, segments, params), s)
+        if value === nothing
+            cache_delete!(s, key)
+        else
+            cache_put!(s, key, seq, gzip(Vector{UInt8}(JSON3.write(value))), segments, params; hit_at)
+        end
+    end
+end
+
+function refresh_loop(s::Server)
+    while true
+        try
+            refresh_stale!(s)
+            s.refreshed_at = time()
+        catch e
+            @error "cache refresh failed" exception=(e, catch_backtrace())
+        end
+        sleep(REFRESH_INTERVAL_S)
+    end
+end
+
+refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
+
 gzip(bytes) = transcode(GzipCompressor, bytes)
+
+cache_key(segments, query) = "/api/" * join(segments, "/") * "?" * query
 
 # --- responses ---------------------------------------------------------------
 
@@ -266,21 +339,27 @@ function api(s::Server, req::HTTP.Request)
     popfirst!(segments)   # "api"
     params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
     seq = route_seq(s, segments)
-    etag = "W/\"$seq-$BUILD_ID\""
+    # Incremental refreshes are small and their cursors differ per client;
+    # the cache is for the windows and extracts everyone asks for
+    cacheable = !haskey(params, "changed_since")
+    key = cache_key(segments, uri.query)
+    hit = cacheable ? cache_get(s, key) : nothing
+    # An outdated entry is served while the refresher renders it again,
+    # unless the refresher has stopped
+    hit !== nothing && hit[1] != seq && !refresher_healthy(s) && (hit = nothing)
+    served = hit === nothing ? seq : hit[1]
+    etag = "W/\"$served-$BUILD_ID\""
     headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => etag,
                "Cache-Control" => "no-cache", "Vary" => "Accept-Encoding"]
     # A browser revalidates per URL, so the window is implied by the match
     HTTP.header(req, "If-None-Match", "") == etag && return HTTP.Response(304, headers)
-    # Incremental refreshes are small and their cursors differ per client;
-    # the cache is for the windows and extracts everyone asks for
-    cacheable = !haskey(params, "changed_since")
-    key = uri.path * "?" * uri.query
-    body = cacheable ? cache_get(s, key, seq) : nothing
-    if body === nothing
+    if hit === nothing
         value = withdb(db -> render(db, segments, params), s)
         value === nothing && return json_response(404, Dict("error" => "not found"))
         body = gzip(Vector{UInt8}(JSON3.write(value)))
-        cacheable && cache_put!(s, key, seq, body)
+        cacheable && cache_put!(s, key, seq, body, segments, params)
+    else
+        body = hit[2]
     end
     if accepts_gzip(req)
         push!(headers, "Content-Encoding" => "gzip")
@@ -337,33 +416,39 @@ function handle(s::Server, req::HTTP.Request)
     end
 end
 
-# Compile every route right after start, on another thread, so a page
-# loading during the warm-up is served slowly rather than refused
+# Right after start, on another thread, so a page loading meanwhile is
+# served slowly rather than refused: render what the Overview and the
+# Commit tab ask for on landing into the cache, under the query strings the
+# browser sends (site/assets/app.js: apiGet keeps its parameters' order,
+# windows are UTC days), and compile the other routes by rendering them once.
 function warm_up(s::Server)
     t = @elapsed begin
-        since = Dates.format(Date(now(UTC)) - Day(7), dateformat"yyyy-mm-dd")
+        day(n) = Dates.format(Date(now(UTC)) - Day(n), dateformat"yyyy-mm-dd")
+        cached = [
+            "timing/runs" => "since=$(day(30))", "timing/builds" => "since=$(day(7))",
+            "pkgeval/summary" => "", "benchmarks/summary" => "", "ttfx/summary" => "", "downloads/summary" => "",
+            "agents/latest" => "", "pkgeval/reasons" => "", "downloads/top" => "days=7&client=user",
+            "pkgeval/popular" => "days=30&client=user&limit=50", "commits" => "limit=100"]
+        for (route, query) in cached
+            segments = String.(split(route, '/'))
+            params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(query))
+            seq = route_seq(s, segments)
+            value = withdb(db -> render(db, segments, params), s)
+            value === nothing || cache_put!(s, cache_key(segments, query), seq, gzip(Vector{UInt8}(JSON3.write(value))), segments, params)
+        end
         withdb(s) do db
-            for (segments, params) in (
-                    (["status"], Dict()),
-                    (["timing", "runs"], Dict("since" => since)),
-                    (["timing", "runs"], Dict("since" => since, "changed_since" => "1")),
-                    (["benchmarks", "summary"], Dict()),
-                    (["pkgeval", "summary"], Dict()),
-                    (["ttfx", "summary"], Dict("since" => since)),
-                    (["downloads", "summary"], Dict()),
-                    (["agents", "latest"], Dict()),
-                    (["agents", "snapshots"], Dict("since" => since)),
-                    (["timing", "builds"], Dict("since" => since)),
-                    (["benchmarks", "verdicts"], Dict("since" => since)),
-                    (["pkgeval", "packages"], Dict("q" => "A")),
-                    (["pkgeval", "package", "Example"], Dict()),
-                    (["pkgeval", "reasons"], Dict()),
-                    (["pkgeval", "popular"], Dict()),
-                    (["downloads", "packages"], Dict("q" => "A")),
-                    (["downloads", "package", "Example"], Dict()),
-                    (["downloads", "top"], Dict("days" => "7")),
-                    (["commit", "0000000"], Dict()),
-                    (["commits"], Dict()))
+            since = day(7)
+            latest = Render.commit_list(db; limit=1)["commits"]
+            compile_only = Any[
+                (["timing", "runs"], Dict("since" => since, "changed_since" => "1")),
+                (["benchmarks", "verdicts"], Dict("since" => since)),
+                (["pkgeval", "packages"], Dict("q" => "A")),
+                (["pkgeval", "package", "Example"], Dict()),
+                (["downloads", "packages"], Dict("q" => "A")),
+                (["downloads", "package", "Example"], Dict()),
+                (["agents", "snapshots"], Dict("since" => since)),
+                (["commit", isempty(latest) ? "0000000" : latest[1]["commit"]], Dict())]
+            for (segments, params) in compile_only
                 gzip(Vector{UInt8}(JSON3.write(render(db, segments, Dict{String,String}(params)))))
             end
             groups = Render.bench_groups(db)
@@ -377,13 +462,16 @@ function main(args)
     opts = parse_args(args)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
-    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"])
+    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"], 0.0)
     server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
-    Threads.@spawn try
-        warm_up(s)
-    catch e
-        @error "warm-up failed" exception=(e, catch_backtrace())
+    Threads.@spawn begin
+        try
+            warm_up(s)
+        catch e
+            @error "warm-up failed" exception=(e, catch_backtrace())
+        end
+        refresh_loop(s)
     end
     wait(server)
 end
