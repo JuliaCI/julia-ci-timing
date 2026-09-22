@@ -324,30 +324,74 @@ end
 # their downloads over the last `days` days of rollups: the failures that
 # matter most. `rank` is the package's place among every package by the
 # same downloads, so a caller can say "the 12th most downloaded package".
+# Alongside: how many of the `top_n` most downloaded are not passing, the
+# share of downloads going to passing packages (with a history over the
+# reports of the past year, weighted by today's downloads), and the
+# packages that passed the previous report but not this one. The weighting
+# counts the `PKGEVAL_WEIGHT_N` most downloaded packages, which carry
+# nearly all downloads; over every package the year's history takes five
+# seconds instead of under one.
+const PKGEVAL_TOP_N = 100
+const PKGEVAL_WEIGHT_N = 2000
+
 function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
-    report = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
-                      "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 1")
-    isempty(report) && return nothing
+    reports = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
+                       "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2")
+    isempty(reports) && return nothing
     last = rows(db, "SELECT MAX(date) AS d FROM dl_packages")
     (isempty(last) || last[1].d === missing) && return nothing
     until = String(last[1].d)
     since = Dates.format(Date(until) - Day(days - 1), dateformat"yyyy-mm-dd")
     metric = client == "all" ? "total" : client
-    status_list = JSON3.write(collect(statuses))
+    report_id = Int(reports[1].id)
+    # Downloads per registry package name over the window, ranked
+    dl = "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
+         "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
+         "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
+         "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
+         "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name), " *
+         "ranked AS (SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl) "
     packages = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
                             "version" => js(r.version), "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci))
-                for r in rows(db, "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
-                                  "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
-                                  "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
-                                  "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
-                                  "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name), " *
-                                  "ranked AS (SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl) " *
-                                  "SELECT ranked.rank, k.name, p.status, p.reason, p.version, ranked.total, ranked.user, ranked.ci " *
+                for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, p.version, ranked.total, ranked.user, ranked.ci " *
                                   "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
                                   "WHERE p.report_id = ? AND p.status IN (SELECT value FROM json_each(?)) " *
-                                  "ORDER BY ranked.rank LIMIT ?", (since, until, Int(report[1].id), status_list, limit))]
-    return OrderedDict("date" => String(report[1].date), "date_path" => date_path(String(report[1].path)),
-                       "days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages)
+                                  "ORDER BY ranked.rank LIMIT ?", (since, until, report_id, JSON3.write(collect(statuses)), limit))]
+    # Of the top N by these downloads that the report tested, how many are not ok
+    top = rows(db, dl * "SELECT COUNT(*) AS tested, SUM(CASE WHEN p.status != 'ok' THEN 1 ELSE 0 END) AS not_ok " *
+                        "FROM ranked JOIN packages k ON k.name = ranked.name JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
+                        "WHERE ranked.rank <= ?", (since, until, report_id, PKGEVAL_TOP_N))[1]
+    # Downloads to tested packages, and the share of them going to passing ones
+    w = rows(db, dl * "SELECT SUM(ranked.$metric) AS total, SUM(CASE WHEN p.status = 'ok' THEN ranked.$metric ELSE 0 END) AS ok " *
+                      "FROM ranked JOIN packages k ON k.name = ranked.name JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
+                      "WHERE ranked.rank <= ?", (since, until, report_id, PKGEVAL_WEIGHT_N))[1]
+    pass_pct(x) = x.total === missing || x.total == 0 ? nothing : round(100 * Float64(x.ok) / Float64(x.total); digits=1)
+    # The same share on every report of the past year, weighted by today's downloads
+    year_ago = Dates.format(Date(String(reports[1].date)) - Year(1), dateformat"yyyy-mm-dd")
+    history = [OrderedDict("date" => String(r.date), "pass_pct" => pass_pct(r))
+               for r in rows(db, dl * "SELECT r.date, SUM(ranked.$metric) AS total, SUM(CASE WHEN p.status = 'ok' THEN ranked.$metric ELSE 0 END) AS ok " *
+                                      "FROM pkgeval_reports r JOIN pkgeval_results p ON p.report_id = r.id " *
+                                      "JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
+                                      "WHERE ranked.rank <= ? AND r.kind = 'daily' AND r.date >= ? GROUP BY r.id ORDER BY r.date",
+                                  (since, until, PKGEVAL_WEIGHT_N, year_ago))]
+    # Passed the previous report, not this one: the nightly breakage
+    newly_broken = Any[]
+    previous = nothing
+    if length(reports) == 2
+        previous = String(reports[2].date)
+        newly_broken = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
+                                    "user" => Int(r.user))
+                        for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, ranked.user " *
+                                          "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
+                                          "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
+                                          "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY ranked.rank LIMIT ?",
+                                      (since, until, Int(reports[2].id), report_id, limit))]
+    end
+    return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)),
+                       "days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages,
+                       "top_n" => PKGEVAL_TOP_N, "top_tested" => Int(top.tested), "top_not_ok" => top.not_ok === missing ? 0 : Int(top.not_ok),
+                       "weight_n" => PKGEVAL_WEIGHT_N, "weighted_pass_pct" => pass_pct(w), "history" => history,
+                       "previous_date" => previous, "newly_broken" => newly_broken)
 end
 
 function pkgeval(db)

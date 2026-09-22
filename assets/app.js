@@ -9233,9 +9233,43 @@ async function loadPkgevalPopular() {
     )
     .join("");
   const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
+  const weighted =
+    d.weighted_pass_pct != null
+      ? `${d.weighted_pass_pct.toFixed(1)}% of user downloads (among the ${d.weight_n.toLocaleString()} most downloaded packages) went to packages that passed`
+      : "";
+  const topLine =
+    d.top_tested > 0
+      ? `${d.top_not_ok} of the ${d.top_tested} most downloaded packages the report tested (of the top ${d.top_n}) did not pass`
+      : "";
+  // What passed on the previous report and does not now: the breakage to look at first
+  const broken = d.newly_broken || [];
+  const brokenRows = broken
+    .map(
+      (p) => `<tr data-name="${escapeHtml(p.name)}">
+        <td class="num">${p.rank.toLocaleString()}</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
+        <td>${escapeHtml(p.reason || "(none)")}</td>
+        <td class="num">${p.user.toLocaleString()}</td>
+      </tr>`,
+    )
+    .join("");
+  const brokenSection = d.previous_date
+    ? `<h3>Passed on ${escapeHtml(d.previous_date)}, not on ${escapeHtml(d.date)}</h3>
+    ${
+      broken.length
+        ? `<table>
+      <thead><tr><th class="num">Rank</th><th>Package</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+      <tbody>${brokenRows}</tbody>
+    </table>`
+        : `<p class="package-panel-help">No package that passed the previous report stopped passing.</p>`
+    }`
+    : "";
   panel.innerHTML = `
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
-    <p class="package-panel-help">Packages that failed, crashed or were skipped in the latest report, ranked by user downloads from the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Click a row for the package's history.</p>
+    <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Click a row for the package's history.</p>
+    ${brokenSection}
+    <h3>All packages not passing, by downloads</h3>
     <table>
       <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -10492,7 +10526,7 @@ async function loadOverviewSources() {
   // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
-  const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top] = await Promise.all([
+  const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top, popular] = await Promise.all([
     pkgevalData || quiet("pkgeval/summary"),
     benchData || quiet("benchmarks/summary"),
     ttfxData || quiet("ttfx/summary"),
@@ -10501,8 +10535,9 @@ async function loadOverviewSources() {
     quiet("timing/builds", { since: weekAgo }),
     quiet("pkgeval/reasons"),
     quiet("downloads/top", { days: 7, client: "user" }),
+    quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
   ]);
-  return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top };
+  return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top, popular };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -10813,7 +10848,7 @@ function overviewPkgevalCard(src) {
     description:
       "Nanosoldier tests every registered package against Julia master, every 2 to 3 days.",
     headline: passPct != null ? `${passPct.toFixed(1)}%` : "—",
-    headlineLabel: `of ${last.total} packages passing`,
+    headlineLabel: `of ${last.total} packages passing${overviewPkgevalWeighted()}`,
     delta,
     spark,
     donut,
@@ -10821,10 +10856,42 @@ function overviewPkgevalCard(src) {
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
       ["Change over a week", change],
+      ["Popular packages", overviewPkgevalPopular()],
+      ["Newly broken", overviewPkgevalNewlyBroken()],
       ["Why packages fail", overviewPkgevalReasons()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The share of the last 30 days' user downloads that went to passing
+// packages, next to the raw pass rate the long tail dominates
+function overviewPkgevalWeighted() {
+  const d = overviewSources && overviewSources.popular;
+  if (!d || d.weighted_pass_pct == null) return "";
+  return `; ${d.weighted_pass_pct.toFixed(1)}% of downloads`;
+}
+
+// How many of the most downloaded packages are not passing, and which
+function overviewPkgevalPopular() {
+  const d = overviewSources && overviewSources.popular;
+  if (!d || !d.top_tested) return "";
+  const names = (d.packages || [])
+    .filter((p) => p.rank <= d.top_n)
+    .slice(0, 4)
+    .map((p) => escapeHtml(p.name));
+  const tested = d.top_tested < d.top_n ? ` (${d.top_tested} tested)` : "";
+  return `${overviewTabLink("pkgeval", `${d.top_not_ok} of the ${d.top_n} most downloaded not passing`)}${tested}${names.length ? `: ${names.join(", ")}${d.top_not_ok > names.length ? ", …" : ""}` : ""}`;
+}
+
+// Passed the previous report, not the latest, most downloaded first
+function overviewPkgevalNewlyBroken() {
+  const d = overviewSources && overviewSources.popular;
+  if (!d || !d.previous_date) return "";
+  const broken = d.newly_broken || [];
+  if (!broken.length) return `None since ${escapeHtml(d.previous_date)}`;
+  const names = broken.slice(0, 4).map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.reason || p.status)})`);
+  return `${overviewTabLink("pkgeval", `${broken.length} since ${escapeHtml(d.previous_date)}`)}: ${names.join(", ")}${broken.length > 4 ? ", …" : ""}`;
 }
 
 // The commonest reasons of the latest report with package rows, from the API
@@ -11397,9 +11464,9 @@ function drawOverview() {
     overviewTtfxCard(src.ttfx),
     overviewPackagesCard(src.packages),
     overviewCICard(),
-    overviewAgentsCard(src.agents),
     overviewBenchCard(src.bench),
     overviewPkgevalCard(src.pkgeval),
+    overviewAgentsCard(src.agents),
   ];
   const grid = document.getElementById("overview-grid");
   grid.innerHTML = cards.map((c) => c.html).join("");

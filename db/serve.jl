@@ -30,9 +30,10 @@
 #
 # Every response carries an ETag from its source's change sequence (the
 # last commit that changed that source's rows; /api/status uses the global
-# one), so a browser's revalidation costs nothing until an ingest changes
-# that source. Bodies are rendered once per (request, sequence) and kept
-# gzipped in a bounded cache. Requests take a query-only connection from a small
+# one) and the build, so a browser's revalidation costs nothing until an
+# ingest changes that source or a deploy changes what a route renders.
+# Bodies are rendered once per (request, sequence) and kept gzipped in a
+# bounded cache. Requests take a query-only connection from a small
 # pool, so a slow render (all of timing, a big benchmark group) does not
 # hold up the rest.
 #
@@ -47,6 +48,14 @@ using .Store
 include(joinpath(@__DIR__, "Render.jl"))
 using .Render
 using HTTP, SQLite, JSON3, CodecZlib, Dates
+
+# Part of every ETag: the deployed commit (BUILD_COMMIT is written into the
+# image by deploy.yml), or a hash of the renderer's source on a checkout,
+# so a deploy that changes a route's shape is not answered from a browser's
+# cache with 304 until that source's data happens to change
+const BUILD_ID = let f = joinpath(dirname(@__DIR__), "BUILD_COMMIT")
+    isfile(f) ? first(strip(read(f, String)), 12) : string(hash(read(joinpath(@__DIR__, "Render.jl"))); base=16)
+end
 
 const CACHE_MAX_ENTRIES = 32
 const CACHE_MAX_BYTES = 64 * 1024 * 1024
@@ -247,7 +256,7 @@ function api(s::Server, req::HTTP.Request)
     popfirst!(segments)   # "api"
     params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
     seq = route_seq(s, segments)
-    etag = "W/\"$seq\""
+    etag = "W/\"$seq-$BUILD_ID\""
     headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => etag,
                "Cache-Control" => "no-cache", "Vary" => "Accept-Encoding"]
     # A browser revalidates per URL, so the window is implied by the match
