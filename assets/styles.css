@@ -2184,7 +2184,9 @@ body {
 .pkgeval-chart-container {
   flex: 1;
   padding: 12px;
-  min-height: 0;
+  /* The report table and the panels below it take fixed heights; the
+     chart takes the rest, but never less than this */
+  min-height: 180px;
   position: relative;
 }
 .pkgeval-chart-wrapper {
@@ -2205,6 +2207,32 @@ body {
   max-height: 80vh;
   overflow-y: auto;
   border-top: 1px solid var(--color-border-default);
+}
+/* One bounded, resizable scroll region for the panels under the report
+   table, so neither hides behind the other's scrollbar; collapsed while
+   both are still hidden */
+.pkgeval-panels {
+  flex-shrink: 0;
+  min-height: 60px;
+  max-height: 32vh;
+  overflow-y: auto;
+  resize: vertical;
+  border-top: 1px solid var(--color-border-default);
+}
+.pkgeval-panels[style*="height"] {
+  max-height: 85vh;
+}
+.pkgeval-panels:not(:has(.package-panel:not(.view-hidden))) {
+  display: none;
+}
+.pkgeval-panels .package-panel {
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  resize: none;
+}
+.pkgeval-panels .package-panel:first-child {
+  border-top: none;
 }
 .pkgeval-stats table {
   width: 100%;
