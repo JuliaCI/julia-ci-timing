@@ -19,6 +19,7 @@ on:
       - '*/index.html'
       - 'assets/**'
       - 'favicon.svg'
+      - 'site.webmanifest'
       - 'data/ttfx_annotations.json'
       - 'data/methodology_changes.json'
       - 'Project.toml'

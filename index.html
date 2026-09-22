@@ -14,14 +14,29 @@
       content="Julia language performance dashboard: Nanosoldier benchmarks and PkgEval, Buildkite CI build/test timing, TTFX, and package-server downloads."
     />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Julia Performance Tracking" />
     <meta property="og:title" content="Julia Performance Tracking" />
     <meta
       property="og:description"
       content="Benchmarks, CI build timing, TTFX and PkgEval results for the Julia language."
     />
     <meta property="og:url" content="https://perf.julialang.org/" />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Julia Performance Tracking" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Julia Performance Tracking" />
+    <meta
+      name="twitter:description"
+      content="Benchmarks, CI build timing, TTFX and PkgEval results for the Julia language."
+    />
+    <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="apple-mobile-web-app-title" content="Julia Perf" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
+    <link rel="manifest" href="site.webmanifest" />
     <script>
       // Apply saved theme as early as possible to avoid FOUC
       (function () {
@@ -33,7 +48,9 @@
         } catch (e) {}
       })();
     </script>
-    <link rel="apple-touch-icon" href="favicon.svg" />
+    <!-- iOS ignores SVG here and would show a screenshot; a 180px PNG with
+         its own background (the home screen rounds the corners) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
     <script>
       // Google Analytics 4, for aggregate visit counts. Not loaded when the
       // browser asks not to be tracked (Do Not Track or Global Privacy
@@ -433,7 +450,7 @@
           rel="noopener noreferrer"
           class="updated link-no-underline"
           id="overview-updated"
-          title="The update workflow fetches every source every 2 hours"
+          title="Every source is fetched every hour"
         ></a>
       </div>
       <div class="overview-body">
@@ -1007,6 +1024,7 @@
               </tr>
             </tbody>
           </table>
+          <div class="package-panel view-hidden" id="pkgeval-popular"></div>
           <div class="package-panel view-hidden" id="pkgeval-reasons"></div>
         </div>
       </div>

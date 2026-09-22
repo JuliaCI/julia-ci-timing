@@ -320,6 +320,36 @@ function pkgeval_reasons(db, path="")
     return OrderedDict("date" => String(r[1].date), "date_path" => date_path(String(r[1].path)), "reasons" => reasons)
 end
 
+# Packages that did not pass the newest report with package rows, ranked by
+# their downloads over the last `days` days of rollups: the failures that
+# matter most. `rank` is the package's place among every package by the
+# same downloads, so a caller can say "the 12th most downloaded package".
+function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
+    report = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
+                      "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 1")
+    isempty(report) && return nothing
+    last = rows(db, "SELECT MAX(date) AS d FROM dl_packages")
+    (isempty(last) || last[1].d === missing) && return nothing
+    until = String(last[1].d)
+    since = Dates.format(Date(until) - Day(days - 1), dateformat"yyyy-mm-dd")
+    metric = client == "all" ? "total" : client
+    status_list = JSON3.write(collect(statuses))
+    packages = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
+                            "version" => js(r.version), "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci))
+                for r in rows(db, "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
+                                  "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
+                                  "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
+                                  "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
+                                  "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name), " *
+                                  "ranked AS (SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl) " *
+                                  "SELECT ranked.rank, k.name, p.status, p.reason, p.version, ranked.total, ranked.user, ranked.ci " *
+                                  "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
+                                  "WHERE p.report_id = ? AND p.status IN (SELECT value FROM json_each(?)) " *
+                                  "ORDER BY ranked.rank LIMIT ?", (since, until, Int(report[1].id), status_list, limit))]
+    return OrderedDict("date" => String(report[1].date), "date_path" => date_path(String(report[1].path)),
+                       "days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages)
+end
+
 function pkgeval(db)
     reports = Any[]
     for r in rows(db, "SELECT date, path, commit_sha, julia_version, total, ok, fail, crash, skip, kill " *

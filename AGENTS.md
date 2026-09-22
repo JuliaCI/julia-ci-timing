@@ -9,7 +9,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 The source of truth is a SQLite database on the site's host
 (`docs/database-migration.md`); the six `fetch_*.jl` scripts write to it
-every two hours and the site reads it through a small API. Three ways to get
+every hour and the site reads it through a small API. Three ways to get
 at it, depending on what you need:
 
 - **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/`, public

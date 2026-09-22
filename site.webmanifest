@@ -1,0 +1,15 @@
+{
+  "name": "Julia Performance Tracking",
+  "short_name": "Julia Perf",
+  "description": "Benchmarks, CI build timing, TTFX, PkgEval and package downloads for the Julia language.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

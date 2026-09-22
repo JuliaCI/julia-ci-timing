@@ -19,6 +19,7 @@
 #   /api/pkgeval/packages?q=                    package names starting with q
 #   /api/pkgeval/package/<name>                 one package's status on every report
 #   /api/pkgeval/reasons?path=                  status and reason counts of a report (latest by default)
+#   /api/pkgeval/popular?days=&client=&limit=   the most downloaded packages not passing the latest report
 #   /api/ttfx/summary?since=                    ttfx_summary.json.gz, windowed
 #   /api/downloads/summary                      packages_downloads_summary.json.gz
 #   /api/downloads/packages?q=                  registry names starting with q
@@ -181,6 +182,12 @@ function render(db, segments, params)
         path = get(params, "path", "")
         (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
         return Render.pkgeval_reasons(db, path)
+    elseif segments == ["pkgeval", "popular"]
+        days = cursor(params, "days")
+        limit = cursor(params, "limit")
+        client = get(params, "client", "user")
+        client in ("user", "ci", "all") || throw(BadRequest("client must be user, ci or all"))
+        return Render.pkgeval_popular(db; days=days == 0 ? 30 : min(days, 366), limit=limit == 0 ? 50 : min(limit, 500), client)
     elseif segments == ["ttfx", "summary"]
         return Render.ttfx(db; since=instant(params, "since"))
     elseif segments == ["downloads", "summary"]
@@ -266,14 +273,15 @@ end
 const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text/javascript; charset=utf-8",
                            ".css" => "text/css; charset=utf-8", ".json" => "application/json; charset=utf-8",
                            ".gz" => "application/gzip", ".svg" => "image/svg+xml", ".ndjson" => "application/x-ndjson",
-                           ".png" => "image/png", ".ico" => "image/x-icon", ".txt" => "text/plain; charset=utf-8")
+                           ".png" => "image/png", ".ico" => "image/x-icon", ".txt" => "text/plain; charset=utf-8",
+                           ".webmanifest" => "application/manifest+json")
 
 # Development only: what Caddy serves on the host, and nothing else of a
 # checkout (--site is usually the repository, which also holds .git and
 # Terraform state): index.html, favicon.svg, assets/, the tab directories
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
-const SITE_PATHS = Set(["index.html", "favicon.svg", "assets", "data",
+const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "assets", "data",
                         "overview", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "downloads", "pkgeval"])
 
 function static(root, path; allowed=SITE_PATHS)
@@ -331,6 +339,7 @@ function warm_up(s::Server)
                     (["pkgeval", "packages"], Dict("q" => "A")),
                     (["pkgeval", "package", "Example"], Dict()),
                     (["pkgeval", "reasons"], Dict()),
+                    (["pkgeval", "popular"], Dict()),
                     (["downloads", "packages"], Dict("q" => "A")),
                     (["downloads", "package", "Example"], Dict()),
                     (["downloads", "top"], Dict("days" => "7")))

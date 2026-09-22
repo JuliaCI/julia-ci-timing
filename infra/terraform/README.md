@@ -27,7 +27,7 @@ On the host (all from cloud-init, files under `files/`):
 - `ci-timing-api`: the site's API (`db/serve.jl`) from the same image, proxied
   at `/api/`; the browser reads the database through it with a time window.
   The `/data/` files are for scripts.
-- `ci-timing-ingest.timer`: every two hours, runs the image (`fetch_*.jl`,
+- `ci-timing-ingest.timer`: every hour, runs the image (`fetch_*.jl`,
   then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`, then
   `ci-timing-backup` uploads `runtime/latest.tar.gz` and publishes
   `/data/ci-timing.sqlite.gz`.

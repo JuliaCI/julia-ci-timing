@@ -6,7 +6,8 @@ are folded in below and in `db/schema.sql`.
 Status (2026-09-22): done. perf.julialang.org is served from the EC2 host
 (`infra/terraform`, applied as the `ci-timing` profile in the
 julia-perf-website-prod account) over HTTPS, with the fetchers writing the
-database every two hours, the API (`db/serve.jl` at `/api/`) behind the site,
+database every hour (two hours until 2026-09-22; a run takes about two minutes
+and only a changed row moves the change sequence), the API (`db/serve.jl` at `/api/`) behind the site,
 Datasette at `/db/`, the extracts and the database snapshot at `/data/*`, and
 `/healthz`. `deploy.yml` builds and deploys on push to main, `health.yml`
 checks freshness, disk and backup age daily. The DNS record changed from a

@@ -44,8 +44,8 @@ case "${1:-ingest}" in
     ;;
   sync-site)
     # Everything the browser loads except data/, which the export writes
-    rm -rf /site/assets /site/*.html /site/favicon.svg
-    cp -r /app/index.html /app/favicon.svg /app/assets /site/
+    rm -rf /site/assets /site/*.html /site/favicon.svg /site/site.webmanifest
+    cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/assets /site/
     for d in overview diff history timing builds commits workers ttfx downloads pkgeval; do
       rm -rf "/site/$d"; cp -r "/app/$d" "/site/$d"
     done

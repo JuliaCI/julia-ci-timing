@@ -20,7 +20,7 @@ they resolve to keep working as before.
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Six fetchers write a SQLite database every two hours (`db/schema.sql`):
+- Six fetchers write a SQLite database every hour (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
     receiving builds in July 2026)

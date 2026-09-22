@@ -3074,6 +3074,7 @@ function updateChart() {
         } else {
           clearYAxisHighlight();
           clearStatsRowHighlight();
+          cancelHoverScroll();
         }
       },
     },
@@ -3433,6 +3434,33 @@ function clearYAxisHighlight() {
   chart.update();
 }
 
+// Chart hover scrolls the linked table only once the pointer has rested on one
+// marker for a moment; sweeping across the chart would otherwise yank the table
+// on every marker. Keyed by row identity: Chart.js fires onHover on every
+// mousemove, so repeats for the same marker neither restart the timer nor
+// scroll again after it has fired. The row highlight itself stays immediate.
+const hoverScroll = { key: null, timer: null };
+function scrollRowAfterHover(key, scroll) {
+  if (key === hoverScroll.key) return;
+  cancelHoverScroll();
+  hoverScroll.key = key;
+  hoverScroll.timer = setTimeout(() => {
+    hoverScroll.timer = null;
+    scroll();
+  }, 300);
+}
+function cancelHoverScroll() {
+  clearTimeout(hoverScroll.timer);
+  hoverScroll.key = null;
+  hoverScroll.timer = null;
+}
+// Chart.js only reports an empty hover while the pointer is inside the plot
+// area, so leaving the canvas straight from a marker at its edge would not
+// reach the onHover callbacks that cancel
+document.addEventListener("mouseout", (e) => {
+  if (e.target instanceof HTMLCanvasElement) cancelHoverScroll();
+});
+
 // Stats row highlighting (for chart hover)
 let highlightedStatsRow = null;
 let highlightedHostRow = null;
@@ -3444,18 +3472,20 @@ function highlightStatsRow(jobName, agent = null) {
     if (row.dataset.job === jobName && !row.dataset.agent) {
       row.classList.add("chart-hover-highlight");
       highlightedStatsRow = row;
-      // Scroll into view if not visible
-      const wrapper = document.getElementById("stats-wrapper");
-      if (wrapper) {
-        const rowRect = row.getBoundingClientRect();
-        const wrapperRect = wrapper.getBoundingClientRect();
-        if (
-          rowRect.top < wrapperRect.top ||
-          rowRect.bottom > wrapperRect.bottom
-        ) {
-          row.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollRowAfterHover("stats:" + jobName, () => {
+        // Scroll into view if not visible
+        const wrapper = document.getElementById("stats-wrapper");
+        if (wrapper) {
+          const rowRect = row.getBoundingClientRect();
+          const wrapperRect = wrapper.getBoundingClientRect();
+          if (
+            rowRect.top < wrapperRect.top ||
+            rowRect.bottom > wrapperRect.bottom
+          ) {
+            row.scrollIntoView({ block: "center", behavior: "smooth" });
+          }
         }
-      }
+      });
       break;
     }
   }
@@ -9146,6 +9176,45 @@ async function loadPkgevalReasons() {
   panel.classList.remove("view-hidden");
 }
 
+// The most downloaded packages that did not pass the newest report: the
+// failures that reach the most users, ranked by their downloads
+async function loadPkgevalPopular() {
+  const panel = document.getElementById("pkgeval-popular");
+  if (!panel) return;
+  let d;
+  try {
+    d = await apiGet("pkgeval/popular", { days: 30, client: "user", limit: 50 });
+  } catch (err) {
+    console.error("Failed to load the popular failing packages:", err);
+    return;
+  }
+  if (!d || !d.packages || d.packages.length === 0 || !d.date) return;
+  const rows = d.packages
+    .map(
+      (p) => `<tr data-name="${escapeHtml(p.name)}">
+        <td class="num">${p.rank.toLocaleString()}</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="col-secondary">${escapeHtml(p.version || "")}</td>
+        <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
+        <td>${escapeHtml(p.reason || "(none)")}</td>
+        <td class="num">${p.user.toLocaleString()}</td>
+      </tr>`,
+    )
+    .join("");
+  const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
+  panel.innerHTML = `
+    <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
+    <p class="package-panel-help">Packages that failed, crashed or were skipped in the latest report, ranked by user downloads from the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Click a row for the package's history.</p>
+    <table>
+      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-name]").forEach((tr) => {
+    tr.onclick = () => setPkgevalPackage(tr.dataset.name);
+  });
+  panel.classList.remove("view-hidden");
+}
+
 function getPkgevalFilteredReports() {
   if (!pkgevalData) return [];
   const reports = (pkgevalData.reports || []).filter((r) => r.date);
@@ -9167,6 +9236,7 @@ async function loadPkgevalData() {
     updatePkgevalChart();
     updatePkgevalTable();
     loadPkgevalReasons();
+    loadPkgevalPopular();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
@@ -9380,20 +9450,25 @@ function highlightPkgevalRow(date) {
   const tbody = document.getElementById("pkgeval-stats-tbody");
   const prev = tbody.querySelector("tr.highlight");
   if (prev) prev.classList.remove("highlight");
-  if (!date) return;
+  if (!date) {
+    cancelHoverScroll();
+    return;
+  }
   const row = tbody.querySelector(`tr[data-date="${CSS.escape(date)}"]`);
   if (row) {
     row.classList.add("highlight");
     const container = tbody.closest(".pkgeval-stats");
     if (container) {
-      const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
-      const rowRect = row.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const visibleTop = containerRect.top + headerHeight;
-      if (rowRect.top < visibleTop || rowRect.bottom > containerRect.bottom) {
-        const rowTop = row.offsetTop - headerHeight;
-        container.scrollTo({ top: rowTop - 4, behavior: "smooth" });
-      }
+      scrollRowAfterHover("pkgeval:" + date, () => {
+        const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
+        const rowRect = row.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const visibleTop = containerRect.top + headerHeight;
+        if (rowRect.top < visibleTop || rowRect.bottom > containerRect.bottom) {
+          const rowTop = row.offsetTop - headerHeight;
+          container.scrollTo({ top: rowTop - 4, behavior: "smooth" });
+        }
+      });
     }
   }
 }
@@ -9915,17 +9990,22 @@ function highlightTtfxRow(build) {
   const tbody = document.getElementById("ttfx-stats-tbody");
   const prev = tbody.querySelector("tr.highlight");
   if (prev) prev.classList.remove("highlight");
-  if (build == null) return;
+  if (build == null) {
+    cancelHoverScroll();
+    return;
+  }
   const row = tbody.querySelector(`tr[data-build="${build}"]`);
   if (!row) return;
   row.classList.add("highlight");
   const container = tbody.closest(".ttfx-stats");
-  const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
-  const rowRect = row.getBoundingClientRect();
-  const containerRect = container.getBoundingClientRect();
-  if (rowRect.top < containerRect.top + headerHeight || rowRect.bottom > containerRect.bottom) {
-    container.scrollTo({ top: row.offsetTop - headerHeight - 4, behavior: "smooth" });
-  }
+  scrollRowAfterHover("ttfx:" + build, () => {
+    const headerHeight = container.querySelector("thead")?.offsetHeight || 0;
+    const rowRect = row.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (rowRect.top < containerRect.top + headerHeight || rowRect.bottom > containerRect.bottom) {
+      container.scrollTo({ top: row.offsetTop - headerHeight - 4, behavior: "smooth" });
+    }
+  });
 }
 
 // Chart options shared by the per-task chart and the summary panels.
@@ -11411,7 +11491,7 @@ function drawOverview() {
   if (stamps.length) {
     const newest = new Date(Math.max(...stamps)).toISOString();
     updatedEl.textContent = `Update workflow last wrote data ${timeAgo(newest)}`;
-    updatedEl.title = `${newest}. Every source is fetched every 2 hours; a file is only rewritten when its data changed.`;
+    updatedEl.title = `${newest}. Every source is fetched every hour; a file is only rewritten when its data changed.`;
   } else {
     updatedEl.textContent = "";
   }
