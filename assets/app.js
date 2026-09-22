@@ -33,6 +33,72 @@ const TREND_METHOD_NOTE =
 // registry is loaded asynchronously from data/methodology_changes.json; use
 // BenchCore.getMethodologyChanges() at call time to read the current value.
 
+// === Chart hover modes ===
+// Chart.js's `nearest` and `index` modes with `intersect: false` activate the
+// closest element from anywhere on the plot, so every pointer position
+// highlighted some marker and its linked table row. These two only activate
+// within HOVER_THRESHOLD_PX (or `options.threshold`) and return [] otherwise,
+// which is what lets the onHover else-branches clear highlights.
+const HOVER_THRESHOLD_PX = 12;
+
+// A point that neither draws, grows on hover, nor was given a hit target is
+// not a marker (the smoothed and regression lines carry invisible points)
+function isHoverMarker(element) {
+  const o = element.options;
+  return o.hitRadius !== 0 && (o.radius > 0 || o.hoverRadius > 0);
+}
+
+// The nearest marker (by xy distance, or along `options.axis`), ties
+// included as with `nearest`, when it is within the threshold
+Chart.Interaction.modes.near = function (chart, e, options, useFinalPosition) {
+  const pos = Chart.helpers.getRelativePosition(e, chart);
+  if (!chart.isPointInArea(pos)) return [];
+  const axis = options.axis || "xy";
+  const distance = (c) =>
+    axis === "x"
+      ? Math.abs(pos.x - c.x)
+      : axis === "y"
+        ? Math.abs(pos.y - c.y)
+        : Math.hypot(pos.x - c.x, pos.y - c.y);
+  let best = options.threshold ?? HOVER_THRESHOLD_PX;
+  let items = [];
+  for (const meta of chart.getSortedVisibleDatasetMetas()) {
+    meta.data.forEach((element, index) => {
+      if (element.skip || !isHoverMarker(element)) return;
+      const center = element.getCenterPoint(useFinalPosition);
+      if (
+        !chart.isPointInArea(center) &&
+        !element.inRange(pos.x, pos.y, useFinalPosition)
+      ) {
+        return;
+      }
+      const d = distance(center);
+      if (d < best) {
+        best = d;
+        items = [{ element, datasetIndex: meta.index, index }];
+      } else if (d === best && items.length) {
+        items.push({ element, datasetIndex: meta.index, index });
+      }
+    });
+  }
+  return items;
+};
+
+// Every series at the nearest x (as `index`), when that x is within the
+// threshold of the pointer or the pointer is over the element (bars)
+Chart.Interaction.modes.nearIndex = function (chart, e, options, useFinalPosition) {
+  const items = Chart.Interaction.modes.index(chart, e, options, useFinalPosition);
+  if (!items.length) return [];
+  const pos = Chart.helpers.getRelativePosition(e, chart);
+  const threshold = options.threshold ?? HOVER_THRESHOLD_PX;
+  const near = items.some(
+    (it) =>
+      Math.abs(it.element.getCenterPoint(useFinalPosition).x - pos.x) <= threshold ||
+      it.element.inXRange(pos.x, useFinalPosition),
+  );
+  return near ? items : [];
+};
+
 // === State ===
 let chart = null;
 let data = null;
@@ -297,7 +363,7 @@ function drawBuildsView() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "nearest", intersect: false },
+      interaction: { mode: "near", intersect: false },
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
         tooltip: {
@@ -665,7 +731,7 @@ function renderAgentsChart(snapshots, queueOf) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "nearest", axis: "x", intersect: false },
+      interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
         legend: { position: "right", labels: { color: textColor, boxWidth: 12 } },
         tooltip: {
@@ -2898,8 +2964,8 @@ function updateChart() {
       maintainAspectRatio: false,
       animation: false,
       interaction: {
-        mode: "nearest",
-        intersect: true,
+        mode: "near",
+        intersect: false,
       },
       plugins: {
         legend: {
@@ -6883,7 +6949,7 @@ function updateBenchChart() {
         y: { duration: 0 },
       },
       interaction: {
-        mode: "nearest",
+        mode: "near",
         intersect: false,
       },
       scales: {
@@ -8240,7 +8306,7 @@ function renderPackagesPackage(d) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
         title: { display: true, text: `${d.name}: successful package requests per day`, color: textColor },
@@ -8631,7 +8697,7 @@ function updatePackagesDownloadsChart() {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        interaction: { mode: "index", intersect: false },
+        interaction: { mode: "nearIndex", intersect: false },
         plugins: {
           legend: {
             display: true,
@@ -8910,7 +8976,7 @@ function updatePackagesDownloadsChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: {
           display: true,
@@ -9141,41 +9207,6 @@ function renderPkgevalPackage() {
   });
 }
 
-// Status and reason counts of the newest report with package rows
-async function loadPkgevalReasons() {
-  const panel = document.getElementById("pkgeval-reasons");
-  if (!panel) return;
-  let d;
-  try {
-    d = await apiGet("pkgeval/reasons");
-  } catch (err) {
-    console.error("Failed to load the failure reasons:", err);
-    return;
-  }
-  if (!d || !d.reasons || d.reasons.length === 0 || !d.date) return;
-  const total = d.reasons.reduce((n, r) => n + r.count, 0);
-  const rows = d.reasons
-    .filter((r) => r.status !== "ok")
-    .map(
-      (r) => `<tr>
-        <td class="pe-${escapeHtml(r.status)}">${escapeHtml(r.status)}</td>
-        <td>${escapeHtml(r.reason || "(none)")}</td>
-        <td class="num">${r.count.toLocaleString()}</td>
-        <td class="num">${((r.count / total) * 100).toFixed(1)}%</td>
-      </tr>`,
-    )
-    .join("");
-  const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
-  panel.innerHTML = `
-    <h3>Why packages did not pass on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
-    <p class="package-panel-help">Nanosoldier's reason for every package that was not ok in the latest report, out of ${total.toLocaleString()} packages. Type a package name above for its own history.</p>
-    <table>
-      <thead><tr><th>Status</th><th>Reason</th><th class="num">Packages</th><th class="num">Share</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  panel.classList.remove("view-hidden");
-}
-
 // The most downloaded packages that did not pass the newest report: the
 // failures that reach the most users, ranked by their downloads
 async function loadPkgevalPopular() {
@@ -9235,7 +9266,6 @@ async function loadPkgevalData() {
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
     updatePkgevalTable();
-    loadPkgevalReasons();
     loadPkgevalPopular();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
@@ -9340,7 +9370,7 @@ function updatePkgevalChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: {
           display: true,
@@ -10021,11 +10051,10 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
     animation: false,
     parsing: false,
     normalized: true,
-    // One point at a time, and only when the pointer is on it: with every
+    // One point at a time, and only when the pointer is near it: with every
     // task on the chart an index tooltip would list them all, and a nearest
     // match from anywhere on the plot highlighted a build for every position.
-    // The points are small, so `pointHitRadius` on the datasets widens the target.
-    interaction: { mode: "nearest", intersect: true },
+    interaction: { mode: "near", intersect: false },
     elements: { line: { tension: 0 } },
     plugins: {
       title: title
@@ -11375,7 +11404,7 @@ function overviewSparkChart(canvas, spark) {
       maintainAspectRatio: false,
       animation: false,
       layout: { padding: { top: 4, bottom: 2 } },
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearIndex", intersect: false },
       scales: {
         x: { type: "time", display: false },
         y: { display: false, beginAtZero: spark.zero },
@@ -11413,7 +11442,7 @@ function overviewBarsChart(canvas, bars) {
       maintainAspectRatio: false,
       animation: false,
       layout: { padding: { top: 4, bottom: 2 } },
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearIndex", intersect: false },
       scales: {
         x: { type: "time", display: false, offset: false },
         y: { display: false },
