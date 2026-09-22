@@ -58,6 +58,14 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - uses: docker/setup-buildx-action@v3
+
+      # The runner starts with no layer cache, so the Julia instantiate and
+      # precompile layer (about 110 s of a 150 s build) would be rebuilt on
+      # every push. The newest image in ECR carries its layers as inline
+      # cache metadata (--cache-to type=inline below), so a build whose
+      # Project.toml and Manifest.toml are unchanged reuses that layer. No
+      # cache found (a first build, an expired image) means a full build.
       - name: Build and push the image
         id: build
         env:
@@ -66,8 +74,17 @@ jobs:
           git rev-parse HEAD > BUILD_COMMIT
           tag="sha-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
           image="$REGISTRY/$ECR_REPOSITORY:$tag"
-          docker build --platform linux/arm64 -t "$image" .
-          docker push "$image"
+          previous=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' --output text 2>/dev/null || true)
+          cache_from=()
+          if [ -n "$previous" ] && [ "$previous" != "None" ]; then
+            cache_from=(--cache-from "type=registry,ref=$REGISTRY/$ECR_REPOSITORY:$previous")
+            echo "Layer cache from $previous"
+          fi
+          # A single image manifest (no provenance index), so the digest the
+          # host pulls is the image itself
+          docker buildx build --platform linux/arm64 -t "$image" --push \
+            "${cache_from[@]}" --cache-to type=inline --provenance=false --sbom=false .
           digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$tag" \
             --query 'imageDetails[0].imageDigest' --output text)
           echo "image_ref=$REGISTRY/$ECR_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
