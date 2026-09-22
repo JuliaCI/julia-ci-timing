@@ -3,7 +3,7 @@
 # on the host by the ci-timing-ingest timer (infra/terraform/files).
 # Pinned to the patch Manifest.toml was resolved with. Dependabot proposes
 # the bump; re-resolve the Manifest under the new version with it
-FROM julia:1.12.7
+FROM julia:1.13.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates python3 python3-venv \
