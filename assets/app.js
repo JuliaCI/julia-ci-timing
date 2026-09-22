@@ -5615,6 +5615,7 @@ let activeTab = "overview";
 
 const TAB_URL_MAP = {
   overview: "overview",
+  commit: "commit",
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
@@ -5629,6 +5630,7 @@ const TAB_URL_MAP = {
 // as the page viewed
 const TAB_SHORT_PATH = {
   overview: "/overview",
+  commit: "/commit",
   perf: "/diff",
   benchmarks: "/history",
   "ci-timing": "/timing",
@@ -5693,6 +5695,7 @@ const DASHBOARD_PARAMS = new Set([
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "wq", // workers text filter
   "tab", // active tab
+  "c", // commit lookup ref
   "bt", // bench time range
   "bs", // bench stat type
   "bv", // bench table view
@@ -5805,6 +5808,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     pkgeval: "tab-pkgeval",
     perf: "tab-perf",
     overview: "tab-overview",
+    commit: "tab-commit",
   };
   for (const [name, id] of Object.entries(tabIds)) {
     const btn = document.getElementById(id);
@@ -5848,6 +5852,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
   document
     .getElementById("overview-view")
     .classList.toggle("view-hidden", tab !== "overview");
+  document
+    .getElementById("commit-view")
+    .classList.toggle("view-hidden", tab !== "commit");
   document.body.classList.toggle("tab-perf-active", tab === "perf");
   // The embedded julia-perf site is loaded the first time the Diff tab is
   // shown, not on every landing on another tab
@@ -5858,6 +5865,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
 
   if (tab === "overview") {
     renderOverview();
+  }
+  if (tab === "commit") {
+    renderCommitView();
   }
 
   if (tab === "benchmarks" && !benchData) {
@@ -5896,7 +5906,9 @@ function tabFromLocation() {
 // Back and forward: the browser has restored the URL of the entry, show its tab
 window.addEventListener("popstate", () => {
   const tab = tabFromLocation() || "overview";
+  applyCommitURLParams();
   if (tab !== activeTab) switchTab(tab, { pushHistory: false });
+  else if (tab === "commit") renderCommitView();
 });
 
 // === Benchmarks State ===
@@ -11543,6 +11555,401 @@ function drawOverview() {
 }
 
 
+// === Commit lookup (Commit tab) ===
+// One master commit across every source, from api/commit/<ref>: its builds,
+// its jobs and TTFX against the builds before it, the first benchmark and
+// PkgEval reports that include it, and coverage. The ref is a SHA prefix or
+// a PR number; the server finds a PR by its merge commit's subject, which
+// builds keep cut at 80 characters, so a PR it cannot find is resolved to
+// its merge commit through GitHub's API instead.
+let commitRef = ""; // the URL's c=, normalized
+let commitResult = null; // { ref, data, pr } of the last lookup
+const COMMIT_REF_RE = /^(\d{1,6}|[0-9a-f]{7,40})$/;
+const COMMIT_SHOWN_ROWS = 12;
+// Job and TTFX changes beyond this are coloured and listed first
+const COMMIT_CHANGE_PCT = 10;
+// Fewer passing runs than this before the build make no baseline
+const COMMIT_MIN_BASELINE = 3;
+const COMMIT_FAILED_STATES = new Set(["failed", "timed_out", "broken"]);
+
+// Accepts "#123", a SHA, or a GitHub commit or pull request URL
+function normalizeCommitRef(value) {
+  const v = (value || "").trim().toLowerCase();
+  const m = v.match(/\/(?:commit|pull)\/([0-9a-f]+)/);
+  return (m ? m[1] : v).replace(/^#/, "");
+}
+
+function applyCommitURLParams() {
+  commitRef = normalizeCommitRef(new URLSearchParams(window.location.search).get("c"));
+}
+
+function submitCommitLookup(event) {
+  event.preventDefault();
+  lookupCommit(document.getElementById("commit-ref").value);
+}
+
+// Every lookup is its own history entry, so back returns to the last commit
+function lookupCommit(value) {
+  commitRef = normalizeCommitRef(value);
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue("commit"));
+  if (commitRef) url.searchParams.set("c", commitRef);
+  else url.searchParams.delete("c");
+  if (url.href !== window.location.href) history.pushState(null, "", url);
+  if (activeTab === "commit") renderCommitView();
+  else switchTab("commit", { pushHistory: false });
+}
+
+function commitLink(ref, text) {
+  const r = escapeHtml(ref);
+  return `<a href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="lookupCommit('${r}');return false">${text}</a>`;
+}
+
+// The merge commit of a PR, from GitHub's API (unauthenticated, 60 an hour
+// per address; only asked when the server does not know the PR)
+async function githubPullRequest(number) {
+  const resp = await fetch(`https://api.github.com/repos/JuliaLang/julia/pulls/${number}`, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!resp.ok) return null;
+  const pr = await resp.json();
+  return {
+    number,
+    title: pr.title || "",
+    url: pr.html_url,
+    merged: !!pr.merged_at,
+    sha: pr.merge_commit_sha,
+    base: pr.base?.ref || "",
+  };
+}
+
+async function renderCommitView() {
+  const body = document.getElementById("commit-body");
+  const input = document.getElementById("commit-ref");
+  if (document.activeElement !== input) input.value = commitRef;
+  if (!commitRef) {
+    body.innerHTML = commitIntroHtml();
+    return;
+  }
+  if (!COMMIT_REF_RE.test(commitRef)) {
+    body.innerHTML = `<p class="commit-message">Enter a commit SHA (at least 7 characters) or a PR number.</p>`;
+    return;
+  }
+  if (commitResult?.ref === commitRef) {
+    drawCommit(commitResult);
+    return;
+  }
+  const ref = commitRef;
+  body.innerHTML = '<div class="loading">Looking up...</div>';
+  let result;
+  try {
+    let data = await apiGet(`commit/${ref}`);
+    let pr = null;
+    if (/^\d+$/.test(ref) && !data.commit && !data.matches.length) {
+      pr = await githubPullRequest(ref).catch(() => null);
+      if (pr?.merged && pr.base === "master" && pr.sha) data = await apiGet(`commit/${pr.sha}`);
+    }
+    result = { ref, data, pr };
+  } catch (err) {
+    if (ref === commitRef && activeTab === "commit") {
+      body.innerHTML = `<p class="commit-message">Lookup failed: ${escapeHtml(err.message)}</p>`;
+    }
+    return;
+  }
+  // A later lookup has taken over
+  if (ref !== commitRef) return;
+  commitResult = result;
+  if (activeTab === "commit") drawCommit(result);
+}
+
+function commitIntroHtml() {
+  return `<div class="commit-message">
+    <p>Look up a Julia master commit by its SHA, or a pull request by its number, to see everything this site recorded for it:</p>
+    <ul>
+      <li>its CI builds, which jobs failed and whether they were already failing, and how each job's time compares with the builds before it;</li>
+      <li>its TTFX results against the median of the previous runs;</li>
+      <li>the Nanosoldier benchmark and PkgEval daily reports that first include it, with their regressions and newly broken packages;</li>
+      <li>coverage, when it was measured on this commit.</li>
+    </ul>
+    <p>A GitHub commit or pull request URL works too.</p>
+  </div>`;
+}
+
+function commitPct(now, base) {
+  if (now == null || base == null || !(base > 0)) return null;
+  return (now / base - 1) * 100;
+}
+
+// Up is worse for every time on this page
+function commitPctHtml(pct, threshold = COMMIT_CHANGE_PCT) {
+  if (pct == null || isNaN(pct)) return '<span class="text-muted">—</span>';
+  const cls = pct >= threshold ? "commit-worse" : pct <= -threshold ? "commit-better" : "";
+  return `<span class="${cls}">${overviewSigned(pct, 1)}%</span>`;
+}
+
+function commitSeconds(s) {
+  if (s == null) return '<span class="text-muted">—</span>';
+  return s < 10 ? `${s.toFixed(2)}s` : formatDuration(s);
+}
+
+function commitCard(title, bodyHtml, { links = "" } = {}) {
+  return `<section class="commit-card">
+    <div class="commit-card-header"><h3 class="commit-card-title">${title}</h3><span class="commit-card-links">${links}</span></div>
+    ${bodyHtml}
+  </section>`;
+}
+
+function commitTable(head, rows) {
+  return `<div class="commits-reg-table-wrapper"><table class="commits-reg-table"><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
+// The first rows, and the full list behind a disclosure when it is longer
+function commitRowsWithMore(head, shown, all, what) {
+  let html = shown.length ? commitTable(head, shown) : "";
+  if (all.length > shown.length) {
+    html += `<details class="commit-more"><summary>All ${all.length} ${what}</summary>${commitTable(head, all)}</details>`;
+  }
+  return html;
+}
+
+function drawCommit({ ref, data, pr }) {
+  const body = document.getElementById("commit-body");
+  if (!data.commit) {
+    body.innerHTML = commitMatchesHtml(ref, data, pr);
+    return;
+  }
+  body.innerHTML = [
+    commitHeaderHtml(data, pr),
+    commitCIHtml(data),
+    commitTtfxHtml(data),
+    commitBenchHtml(data),
+    commitPkgevalHtml(data),
+  ].join("");
+}
+
+function commitMatchesHtml(ref, data, pr) {
+  const r = escapeHtml(ref);
+  if (pr && !pr.merged) {
+    return `<p class="commit-message">${overviewExtLink(pr.url, `#${pr.number}`)} (${escapeHtml(pr.title)}) is not merged; this site only tracks master.</p>`;
+  }
+  if (pr && pr.base !== "master") {
+    return `<p class="commit-message">${overviewExtLink(pr.url, `#${pr.number}`)} was merged into <code>${escapeHtml(pr.base)}</code>; this site only tracks master.</p>`;
+  }
+  if (!data.matches.length) {
+    const what = /^\d+$/.test(ref) ? `PR #${r}` : `<code>${r}</code>`;
+    return `<p class="commit-message">Nothing recorded for ${what}. Builds reach this site within an hour of starting; benchmark and PkgEval reports every few days.</p>`;
+  }
+  const rows = data.matches.map(
+    (m) => `<tr>
+      <td>${commitLink(m.prefix, `<code>${escapeHtml(m.prefix)}</code>`)}</td>
+      <td class="commits-reg-msg">${escapeHtml(m.message || "")}</td>
+      <td>${escapeHtml(m.author || "")}</td>
+      <td>${escapeHtml((m.created_at || "").replace("T", " ").slice(0, 16))}</td>
+    </tr>`,
+  );
+  return `<p class="commit-message">${data.matches.length} commits match ${/^\d+$/.test(ref) ? `PR #${r}` : `<code>${r}</code>`}:</p>
+    ${commitTable("<th>Commit</th><th>Subject</th><th>Author</th><th>First build</th>", rows)}`;
+}
+
+function commitHeaderHtml(data, pr) {
+  const c = data.commit;
+  const id = c.sha || c.prefix;
+  const prNumber = c.pr ?? pr?.number;
+  const meta = [
+    overviewExtLink(`https://github.com/JuliaLang/julia/commit/${id}`, id),
+    c.author ? escapeHtml(c.author) : "",
+    prNumber ? overviewExtLink(`https://github.com/JuliaLang/julia/pull/${prNumber}`, `#${prNumber}`) : "",
+    c.created_at ? `first built ${escapeHtml(c.created_at.replace("T", " ").slice(0, 16))} UTC (${escapeHtml(timeAgo(c.created_at))})` : "",
+  ].filter(Boolean);
+  const older = data.previous
+    ? commitLink(data.previous.commit, `← older <code>${escapeHtml(data.previous.commit)}</code>`)
+    : "";
+  const newer = data.next ? commitLink(data.next.commit, `newer <code>${escapeHtml(data.next.commit)}</code> →`) : "";
+  return `<section class="commit-card commit-head">
+    <div class="commit-nav"><span title="${escapeHtml(data.previous?.message || "")}">${older}</span><span title="${escapeHtml(data.next?.message || "")}">${newer}</span></div>
+    <h2 class="commit-title">${escapeHtml(c.message || pr?.title || "")}</h2>
+    <div class="commit-meta">${meta.join(" · ")}</div>
+  </section>`;
+}
+
+function commitCIHtml(data) {
+  const parts = [];
+  if (data.builds.length) {
+    const rows = data.builds.map((b) => {
+      // A failed or cancelled build stops early, so only two passing builds compare
+      const prevWall = b.state === "passed" && b.previous?.state === "passed" ? b.previous.wall_s : null;
+      const wallTitle = b.previous ? `Previous build #${b.previous.build} (${b.previous.state || "unknown"}): ${b.previous.wall_s != null ? formatDuration(b.previous.wall_s) : "no wall time"}` : "";
+      return `<tr>
+        <td>${escapeHtml(b.pipeline)}</td>
+        <td>${b.url ? overviewExtLink(b.url, `#${b.build}`) : `#${b.build}`}</td>
+        <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
+        <td>${escapeHtml(b.state || "")}</td>
+        <td class="num" title="${escapeHtml(wallTitle)}">${formatDuration(b.wall_s)}</td>
+        <td class="num" title="${escapeHtml(wallTitle)}">${commitPctHtml(commitPct(b.wall_s, prevWall))}</td>
+        <td class="num">${formatDuration(b.queue_median_s)}</td>
+      </tr>`;
+    });
+    parts.push(
+      commitTable(
+        '<th>Pipeline</th><th>Build</th><th>Created</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num" title="Against the previous build on the pipeline">vs previous</th><th class="num" title="Median wait from runnable to started">Queue (median)</th>',
+        rows,
+      ),
+    );
+  }
+  if (data.coverage) {
+    const cur = data.coverage.current;
+    const prev = data.coverage.previous;
+    const fmt = (v, p) =>
+      v == null ? "—" : `${v.toFixed(2)}%${p != null ? ` (${overviewSigned(v - p, 2)} pp)` : ""}`;
+    parts.push(
+      `<p class="commit-line">Coverage: Codecov ${fmt(cur.codecov, prev?.codecov)}, Coveralls ${fmt(cur.coveralls, prev?.coveralls)}${prev ? `, against <code>${escapeHtml(prev.commit.slice(0, 8))}</code>` : ""}.</p>`,
+    );
+  }
+  const j = data.jobs;
+  if (j && j.jobs.length) parts.push(commitJobsHtml(j));
+  if (!parts.length) parts.push('<p class="commit-line text-muted">No CI builds recorded for this commit.</p>');
+  const links = `${overviewTabLink("ci-builds", "Builds")} · ${overviewTabLink("ci-timing", "Timing")}`;
+  return commitCard("CI", parts.join(""), { links });
+}
+
+function commitJobsHtml(j) {
+  const jobs = j.jobs.map((x) => ({
+    ...x,
+    failed: COMMIT_FAILED_STATES.has(x.state) && !x.soft_failed,
+    pct: x.baseline_n >= COMMIT_MIN_BASELINE && x.state === "passed" ? commitPct(x.duration_s, x.baseline_s) : null,
+  }));
+  const failed = jobs.filter((x) => x.failed);
+  const newly = failed.filter((x) => x.previous_state === "passed");
+  const running = jobs.filter((x) => ["running", "scheduled", "assigned", "waiting"].includes(x.state));
+  const slower = jobs.filter((x) => x.pct != null && x.pct >= COMMIT_CHANGE_PCT);
+  const faster = jobs.filter((x) => x.pct != null && x.pct <= -COMMIT_CHANGE_PCT);
+  let summary = `Build #${j.build}: ${jobs.length} jobs`;
+  if (failed.length) summary += `, <span class="commit-worse">${failed.length} failed</span> (${newly.length} passed on the previous build)`;
+  if (running.length) summary += `, ${running.length} still running`;
+  summary += `; ${slower.length} more than ${COMMIT_CHANGE_PCT}% slower and ${faster.length} faster than the median of their passing runs on the ${j.baseline_builds} builds before.`;
+  const row = (x) => `<tr>
+    <td>${x.url ? `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${convertEmoji(x.name)}</a>` : convertEmoji(x.name)}</td>
+    <td class="${x.failed ? "commit-worse" : ""}">${escapeHtml(x.state)}${x.soft_failed ? " (soft)" : ""}${x.failed && x.previous_state === "passed" ? " · new" : ""}</td>
+    <td class="num">${formatDuration(x.duration_s)}</td>
+    <td class="num" title="${x.baseline_n} passing runs">${formatDuration(x.baseline_s)}</td>
+    <td class="num">${commitPctHtml(x.pct)}</td>
+    <td>${escapeHtml(x.agent || "")}</td>
+  </tr>`;
+  const head =
+    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num" title="Median of the passing runs on the builds before">Baseline</th><th class="num">Change</th><th>Agent</th>';
+  // Failures first, newly failing before those that were already failing,
+  // then the biggest changes
+  const byChange = (a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0);
+  const notable = [
+    ...failed.sort((a, b) => (a.previous_state === "passed" ? 0 : 1) - (b.previous_state === "passed" ? 0 : 1)),
+    ...[...slower, ...faster].sort(byChange),
+  ].slice(0, COMMIT_SHOWN_ROWS);
+  return `<p class="commit-line">${summary}</p>${commitRowsWithMore(head, notable.map(row), jobs.map(row), "jobs")}`;
+}
+
+function commitTtfxHtml(data) {
+  const t = data.ttfx;
+  if (!t) return commitCard("TTFX", '<p class="commit-line text-muted">No TTFX job recorded for this commit.</p>');
+  const metrics = t.metrics;
+  const tasks = t.tasks.map((x) => ({
+    ...x,
+    pcts: metrics.map((_, i) => commitPct(x.now?.[i], x.baseline?.[i])),
+  }));
+  // Geometric mean of the ratios over the tasks with both, per metric
+  const figures = metrics.map((m, i) => {
+    const logs = tasks.map((x) => x.pcts[i]).filter((p) => p != null).map((p) => Math.log(1 + p / 100));
+    const pct = logs.length ? (Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length) - 1) * 100 : null;
+    return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(m)}</span>${commitPctHtml(pct, 2)}</div>`;
+  });
+  const failed = tasks.filter((x) => x.failed);
+  let failedHtml = "";
+  if (failed.length) {
+    const names = failed.map((x) => `${escapeHtml(x.task)}${x.failed_before ? "" : ' <span class="commit-worse">new</span>'}`);
+    failedHtml = `<p class="commit-line"><span class="commit-worse">${failed.length} failed:</span> ${names.join(", ")}</p>`;
+  }
+  const worst = (x) => Math.max(...x.pcts.map((p) => Math.abs(p ?? 0)));
+  const row = (x) => `<tr>
+    <td>${escapeHtml(x.task)}</td>
+    ${metrics.map((_, i) => `<td class="num">${commitSeconds(x.now?.[i])}</td><td class="num">${commitPctHtml(x.pcts[i])}</td>`).join("")}
+  </tr>`;
+  const head = `<th>Task</th>${metrics.map((m) => `<th class="num">${escapeHtml(m)}</th><th class="num">Δ</th>`).join("")}`;
+  const notable = tasks
+    .filter((x) => !x.failed && worst(x) >= COMMIT_CHANGE_PCT)
+    .sort((a, b) => worst(b) - worst(a))
+    .slice(0, COMMIT_SHOWN_ROWS);
+  const intro = `<p class="commit-line">Build #${t.build}${t.version ? `, ${escapeHtml(t.version)}` : ""}, ${escapeHtml(t.state)}: each time against the median of the ${t.baseline_jobs} TTFX runs before it. Geometric mean change over the tasks:</p>`;
+  const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
+  return commitCard(
+    "TTFX",
+    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}`,
+    { links },
+  );
+}
+
+// "Run on this commit" or "first included, in a range of N commits"
+function commitRelationHtml(r, what) {
+  const date = escapeHtml(r.date);
+  if (r.relation === "tested") return `The ${what} of ${date} ran on this commit.`;
+  const range = r.commits_in_range ? `, one of about ${r.commits_in_range} commits in its range` : "";
+  return `First included in the ${what} of ${date}, which ran on <code>${escapeHtml(r.commit.slice(0, 8))}</code>${range}.`;
+}
+
+function commitBenchHtml(data) {
+  const b = data.benchmarks;
+  if (!b) return commitCard("Benchmarks", '<p class="commit-line text-muted">No Nanosoldier daily report includes this commit yet.</p>');
+  const links = [overviewExtLink(nanosoldierReportUrl("benchmark", b.date_path), "Report")];
+  if (b.baseline_commit) {
+    links.push(
+      `<a href="?tab=${tabToURLValue("perf")}&start=${encodeURIComponent(b.baseline_commit)}&end=${encodeURIComponent(b.commit)}&stat=min-wall-time">Diff</a>`,
+      overviewExtLink(`https://github.com/JuliaLang/julia/compare/${b.baseline_commit}...${b.commit}`, "Commits"),
+    );
+  }
+  let text = commitRelationHtml(b, "daily report");
+  if (b.baseline_date) text += ` It compares against ${escapeHtml(b.baseline_date)}`;
+  if (b.total != null) {
+    text += `${b.baseline_date ? ":" : ""} <span class="commit-worse">${b.regressions ?? 0} regressions</span> and <span class="commit-better">${b.improvements ?? 0} improvements</span> of ${b.total} benchmarks.`;
+  } else if (b.baseline_date) {
+    text += ".";
+  }
+  const row = (v) => `<tr>
+    <td>${escapeHtml(v.group)}</td>
+    <td class="commits-reg-msg">${escapeHtml(v.name)}</td>
+    <td class="${v.verdict === "regression" ? "commit-worse" : "commit-better"}">${escapeHtml(v.verdict)}</td>
+    <td class="num">${v.time_ratio != null ? `${v.time_ratio.toFixed(2)}×` : "—"}</td>
+    <td class="num">${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
+  </tr>`;
+  const head = '<th>Group</th><th>Benchmark</th><th>Verdict</th><th class="num">Time</th><th class="num">Memory</th>';
+  const rows = b.verdicts.map(row);
+  const verdicts = rows.length
+    ? commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "largest changes")
+    : "";
+  return commitCard("Benchmarks", `<p class="commit-line">${text}</p>${verdicts}`, { links: links.join(" · ") });
+}
+
+function commitPkgevalHtml(data) {
+  const p = data.pkgeval;
+  if (!p) return commitCard("PkgEval", '<p class="commit-line text-muted">No PkgEval daily report includes this commit yet.</p>');
+  const c = p.counts;
+  const prev = p.previous?.counts;
+  const delta = (k) => (prev ? ` (${overviewSigned(c[k] - prev[k])})` : "");
+  let text = `${commitRelationHtml(p, "daily run")} ${c.ok} of ${c.total} packages passed${delta("ok")}, ${c.fail} failed${delta("fail")}`;
+  if (c.crash) text += `, ${c.crash} crashed${delta("crash")}`;
+  text += prev ? `, against ${escapeHtml(p.previous.date)}.` : ".";
+  let broken = "";
+  if (p.newly_broken_count != null) {
+    const names = p.newly_broken.map(
+      (x) =>
+        `<a href="?tab=${tabToURLValue("pkgeval")}&pkg=${encodeURIComponent(x.name)}" title="${escapeHtml(x.status + (x.reason ? ": " + x.reason : ""))}">${escapeHtml(x.name)}</a>`,
+    );
+    const more = p.newly_broken_count - names.length;
+    broken = p.newly_broken_count
+      ? `<p class="commit-line"><span class="commit-worse">${p.newly_broken_count} newly broken</span> (passed on ${escapeHtml(p.previous.date)}): ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}</p>`
+      : `<p class="commit-line">No packages newly broken since ${escapeHtml(p.previous.date)}.</p>`;
+  }
+  const links = `${overviewExtLink(nanosoldierReportUrl("pkgeval", p.date_path), "Report")} · ${overviewTabLink("pkgeval", "PkgEval")}`;
+  return commitCard("PkgEval", `<p class="commit-line">${text}</p>${broken}`, { links });
+}
+
 loadData();
 
 // Apply benchmark URL params before potential tab switch
@@ -11550,6 +11957,7 @@ applyBenchURLParams();
 applyPackagesURLParams();
 applyPkgevalURLParams();
 applyTtfxURLParams();
+applyCommitURLParams();
 const perfDeepLink = applyPerfURLParams();
 
 // Switch to correct tab if URL says so

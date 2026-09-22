@@ -440,6 +440,281 @@ function ttfx(db; since="")
                        "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds)
 end
 
+# --- commit lookup -------------------------------------------------------------
+
+# Everything recorded about one julia commit, for the Commit view: its
+# builds, its jobs' times and TTFX against the builds before it, the
+# Nanosoldier and PkgEval reports that first included it, and coverage.
+# `ref` is a lowercase hex SHA prefix of 7 to 40 characters, or a PR number
+# matched against the merge commit's subject ("... (#123)" or "Merge pull
+# request #123 ..."; subjects are cut at 80 characters, so a long one can
+# lose its number). Most builds only carry the 8-character prefix, so that
+# is a commit's identity here. A ref matching several commits gets the list
+# of them instead.
+const COMMIT_JOB_BASELINE_BUILDS = 10
+const COMMIT_TTFX_BASELINE_JOBS = 5
+const COMMIT_LIST_LIMIT = 50
+const COMMIT_PIPELINES = ("julia-ci", "julia-master", "julia-master-scheduled")
+
+pr_number(message) = (m = match(r"\(#(\d+)\)|^Merge pull request #(\d+) ", message); m === nothing ? nothing : parse(Int, something(m[1], m[2])))
+
+# (prefix, sha) pairs, sha "" when no source has the full one
+function commit_candidates(db, ref)
+    found = OrderedDict{String,String}()
+    note!(prefix, sha) = (sha = jstr(sha); get(found, prefix, "") == "" && (found[prefix] = length(sha) == 40 ? sha : ""))
+    if (m = match(r"^(\d{1,6})$", ref)) !== nothing
+        n = m[1]
+        for b in rows(db, "SELECT commit_prefix, commit_sha FROM builds WHERE message GLOB ? OR message GLOB ? ORDER BY created_at",
+                      ("*(#$n)*", "Merge pull request #$n *"))
+            note!(String(b.commit_prefix), b.commit_sha)
+        end
+        return found
+    end
+    p8 = first(ref, 8)
+    fits(sha) = sha === missing || length(sha) < length(ref) || startswith(String(sha), ref)
+    for b in rows(db, "SELECT commit_prefix, commit_sha FROM builds WHERE commit_prefix GLOB ? ORDER BY created_at", (p8 * "*",))
+        fits(b.commit_sha) && note!(String(b.commit_prefix), b.commit_sha)
+    end
+    for table in ("ttfx_jobs", "bench_reports", "pkgeval_reports")
+        for r in rows(db, "SELECT DISTINCT commit_sha FROM $table WHERE commit_sha GLOB ? OR commit_sha = ?", (ref * "*", p8))
+            sha = String(r.commit_sha)
+            length(sha) >= 8 && note!(first(sha, 8), sha)
+        end
+    end
+    return found
+end
+
+commit_glob(prefix, sha) = (isempty(sha) ? prefix : sha) * "*"
+
+# When a commit's first build was created, the closest thing to its merge time
+function commit_time(db, sha)
+    length(sha) < 8 && return nothing
+    r = rows(db, "SELECT MIN(created_at) AS t FROM builds WHERE commit_prefix = ?", (first(sha, 8),))
+    return r[1].t === missing ? nothing : String(r[1].t)
+end
+
+function commit_summary(db, prefix, sha)
+    b = rows(db, "SELECT commit_sha, author, message, created_at FROM builds WHERE commit_prefix = ? ORDER BY created_at LIMIT 1", (prefix,))
+    if isempty(b)
+        t = rows(db, "SELECT message, build_created_at FROM ttfx_jobs WHERE commit_sha GLOB ? ORDER BY build_created_at LIMIT 1", (commit_glob(prefix, sha),))
+        message = isempty(t) ? "" : String(t[1].message)
+        return OrderedDict{String,Any}("prefix" => prefix, "sha" => sha, "author" => "", "message" => message,
+                                       "pr" => pr_number(message), "created_at" => isempty(t) ? nothing : String(t[1].build_created_at))
+    end
+    message = String(b[1].message)
+    return OrderedDict{String,Any}("prefix" => prefix, "sha" => isempty(sha) ? jstr(b[1].commit_sha) : sha, "author" => String(b[1].author),
+                                   "message" => message, "pr" => pr_number(message), "created_at" => String(b[1].created_at))
+end
+
+# The last attempt of every job of a build, by name
+function last_attempts(jobs)
+    out = Dict{String,Any}()
+    for j in jobs
+        name = String(j.name)
+        (haskey(out, name) && out[name].retry >= j.retry) || (out[name] = j)
+    end
+    return out
+end
+
+function commit_builds(db, prefix, sha)
+    out = Any[]
+    for b in rows(db, "SELECT id, pipeline, number, commit_sha, state, created_at, started_at, finished_at, web_url " *
+                      "FROM builds WHERE commit_prefix = ? ORDER BY created_at", (prefix,))
+        (isempty(sha) || b.commit_sha === missing || String(b.commit_sha) == sha) || continue
+        waits = Float64[]
+        for j in rows(db, "SELECT runnable_at, started_at FROM jobs WHERE build_id = ?", (Int(b.id),))
+            w = seconds_between(j.runnable_at, j.started_at)
+            w === nothing || push!(waits, w)
+        end
+        prev = rows(db, "SELECT number, commit_prefix, state, started_at, finished_at FROM builds " *
+                        "WHERE pipeline = ? AND number < ? ORDER BY number DESC LIMIT 1", (b.pipeline, b.number))
+        push!(out, OrderedDict{String,Any}(
+            "id" => Int(b.id), "pipeline" => String(b.pipeline), "build" => Int(b.number), "state" => jstr(b.state),
+            "created_at" => String(b.created_at), "url" => js(b.web_url), "wall_s" => seconds_between(b.started_at, b.finished_at),
+            "queue_median_s" => isempty(waits) ? nothing : round(median(waits); digits=1),
+            "previous" => isempty(prev) ? nothing : OrderedDict(
+                "build" => Int(prev[1].number), "commit" => String(prev[1].commit_prefix), "state" => jstr(prev[1].state),
+                "wall_s" => seconds_between(prev[1].started_at, prev[1].finished_at))))
+    end
+    return out
+end
+
+# The build the view compares: the newest on the current pipeline, else the legacy ones
+function primary_build(builds)
+    for p in COMMIT_PIPELINES
+        i = findlast(b -> b["pipeline"] == p, builds)
+        i === nothing || return builds[i]
+    end
+    return nothing
+end
+
+function neighbour(db, pipeline, number, prefix, dir)
+    op, order = dir == :prev ? ("<", "DESC") : (">", "ASC")
+    r = rows(db, "SELECT commit_prefix, message FROM builds WHERE pipeline = ? AND number $op ? AND commit_prefix != ? " *
+                 "ORDER BY number $order LIMIT 1", (pipeline, number, prefix))
+    return isempty(r) ? nothing : OrderedDict("commit" => String(r[1].commit_prefix), "message" => String(r[1].message))
+end
+
+# Every job of the build against the passing runs of the same job on the
+# builds before it on the pipeline, and its state on the one right before
+function commit_jobs(db, build)
+    current = last_attempts(rows(db, "SELECT name, retry, state, duration_s, agent_hostname, web_url, soft_failed FROM jobs WHERE build_id = ?",
+                                 (build["id"],)))
+    before = rows(db, "SELECT id FROM builds WHERE pipeline = ? AND number < ? ORDER BY number DESC LIMIT ?",
+                  (build["pipeline"], build["build"], COMMIT_JOB_BASELINE_BUILDS))
+    ids = Int[Int(r.id) for r in before]
+    per_build = Dict{Int,Vector{Any}}()
+    for j in rows(db, "SELECT build_id, name, retry, state, duration_s FROM jobs WHERE build_id IN (SELECT value FROM json_each(?))",
+                  (JSON3.write(ids),))
+        push!(get!(per_build, Int(j.build_id), Any[]), j)
+    end
+    passed = Dict{String,Vector{Float64}}()
+    for id in ids, j in values(last_attempts(get(per_build, id, Any[])))
+        j.state == "passed" && push!(get!(passed, String(j.name), Float64[]), Float64(j.duration_s))
+    end
+    prev_state = isempty(ids) ? Dict{String,Any}() : last_attempts(get(per_build, ids[1], Any[]))
+    out = Any[]
+    for name in sort!(collect(keys(current)))
+        j = current[name]
+        base = get(passed, name, Float64[])
+        p = get(prev_state, name, nothing)
+        push!(out, OrderedDict("name" => name, "state" => String(j.state), "soft_failed" => j.soft_failed === 1,
+                               "duration_s" => round(Float64(j.duration_s); digits=1), "agent" => String(j.agent_hostname),
+                               "url" => js(j.web_url), "baseline_s" => isempty(base) ? nothing : round(median(base); digits=1),
+                               "baseline_n" => length(base), "previous_state" => p === nothing ? nothing : String(p.state)))
+    end
+    return out
+end
+
+# The TTFX job of the commit's build against the median of the jobs before it
+function commit_ttfx(db, prefix, sha)
+    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? " *
+                  "ORDER BY build_created_at DESC LIMIT 1", (commit_glob(prefix, sha),))
+    isempty(tj) && return nothing
+    j = tj[1]
+    before = rows(db, "SELECT job_uuid FROM ttfx_jobs t WHERE build_created_at < ? AND EXISTS " *
+                      "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT ?",
+                  (j.build_created_at, COMMIT_TTFX_BASELINE_JOBS))
+    metrics = TTFX_METRICS[1:4]
+    results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in metrics]
+                         for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (uuid,)))
+    now_ = results(String(j.job_uuid))
+    base = [results(String(r.job_uuid)) for r in before]
+    failed = Dict(String(r.task) => String(r.error) for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ?", (String(j.job_uuid),)))
+    failed_before = isempty(before) ? Set{String}() :
+        Set(String(r.task) for r in rows(db, "SELECT task FROM ttfx_failures WHERE job_uuid = ?", (String(before[1].job_uuid),)))
+    tasks = Any[]
+    for task in sort!(unique([collect(keys(now_)); collect(keys(failed))]))
+        medians = map(eachindex(metrics)) do i
+            v = Float64[b[task][i] for b in base if haskey(b, task) && b[task][i] !== nothing]
+            isempty(v) ? nothing : median(v)
+        end
+        push!(tasks, OrderedDict("task" => task, "now" => get(now_, task, nothing), "baseline" => medians,
+                                 "failed" => get(failed, task, nothing), "failed_before" => task in failed_before))
+    end
+    return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
+                       "url" => js(j.web_url), "metrics" => metrics, "baseline_jobs" => length(before), "tasks" => tasks)
+end
+
+# The daily report run on the commit, or failing that the first one run on a
+# later commit (by the time its first build was created), so the one whose
+# range holds it
+function first_report(db, table, prefix, sha, t)
+    r = rows(db, "SELECT * FROM $table WHERE kind = 'daily' AND (commit_sha GLOB ? OR commit_sha = ?) ORDER BY date LIMIT 1",
+             (commit_glob(prefix, sha), prefix))
+    isempty(r) || return (r[1], "tested")
+    t === nothing && return (nothing, nothing)
+    day = first(t, 10)
+    for c in rows(db, "SELECT * FROM $table WHERE kind = 'daily' AND date >= ? ORDER BY date LIMIT 5", (day,))
+        ct = commit_time(db, String(c.commit_sha))
+        (ct === nothing ? String(c.date) > day : ct >= t) && return (c, "included")
+    end
+    return (nothing, nothing)
+end
+
+function commit_benchmarks(db, prefix, sha, t)
+    r, relation = first_report(db, "bench_reports", prefix, sha, t)
+    r === nothing && return nothing
+    verdicts = Any[]
+    for v in rows(db, "SELECT n.grp, n.name, v.verdict, v.time_ratio, v.memory_ratio FROM bench_verdicts v JOIN bench_names n ON n.id = v.bench_id " *
+                      "WHERE v.report_id = ? AND v.verdict IN ('regression', 'improvement')", (Int(r.id),))
+        push!(verdicts, OrderedDict("group" => String(v.grp), "name" => String(v.name), "verdict" => String(v.verdict),
+                                    "time_ratio" => js(v.time_ratio), "memory_ratio" => js(v.memory_ratio)))
+    end
+    sort!(verdicts; by=v -> v["time_ratio"] === nothing ? 0.0 : -abs(log(v["time_ratio"])))
+    # How many commits the report's range spans, when both ends have builds
+    t0 = r.baseline_commit_sha === missing ? nothing : commit_time(db, String(r.baseline_commit_sha))
+    t1 = commit_time(db, String(r.commit_sha))
+    in_range = (t0 === nothing || t1 === nothing) ? nothing :
+        Int(rows(db, "SELECT COUNT(DISTINCT commit_prefix) AS n FROM builds WHERE pipeline IN ('julia-ci', 'julia-master') " *
+                     "AND created_at > ? AND created_at <= ?", (t0, t1))[1].n)
+    return OrderedDict("relation" => relation, "date" => String(r.date), "date_path" => date_path(String(r.path)),
+                       "commit" => String(r.commit_sha), "baseline_commit" => js(r.baseline_commit_sha), "baseline_date" => js(r.baseline_date),
+                       "julia_version" => js(r.julia_version), "total" => js(r.report_total), "regressions" => js(r.report_regressions),
+                       "improvements" => js(r.report_improvements), "commits_in_range" => in_range,
+                       "verdicts" => first(verdicts, COMMIT_LIST_LIMIT))
+end
+
+function commit_pkgeval(db, prefix, sha, t)
+    r, relation = first_report(db, "pkgeval_reports", prefix, sha, t)
+    r === nothing && return nothing
+    counts(x) = OrderedDict(k => Int(getproperty(x, Symbol(k))) for k in ("total", "ok", "fail", "crash", "skip", "kill"))
+    prev = rows(db, "SELECT * FROM pkgeval_reports WHERE kind = 'daily' AND date < ? ORDER BY date DESC LIMIT 1", (r.date,))
+    broken = nothing
+    n_broken = nothing
+    if !isempty(prev)
+        rs = rows(db, "SELECT k.name, p.status, p.reason FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
+                      "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
+                      "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY k.name", (Int(prev[1].id), Int(r.id)))
+        # Reports imported without package rows cannot say
+        has_rows = !isempty(rows(db, "SELECT 1 FROM pkgeval_results WHERE report_id = ? LIMIT 1", (Int(r.id),))) &&
+                   !isempty(rows(db, "SELECT 1 FROM pkgeval_results WHERE report_id = ? LIMIT 1", (Int(prev[1].id),)))
+        if has_rows
+            n_broken = length(rs)
+            broken = [OrderedDict("name" => String(x.name), "status" => String(x.status), "reason" => js(x.reason))
+                      for x in first(rs, COMMIT_LIST_LIMIT)]
+        end
+    end
+    return OrderedDict("relation" => relation, "date" => String(r.date), "date_path" => date_path(String(r.path)),
+                       "commit" => String(r.commit_sha), "julia_version" => String(r.julia_version), "counts" => counts(r),
+                       "previous" => isempty(prev) ? nothing : OrderedDict("date" => String(prev[1].date), "counts" => counts(prev[1])),
+                       "newly_broken_count" => n_broken, "newly_broken" => broken)
+end
+
+function commit_coverage(db, prefix, sha)
+    c = rows(db, "SELECT * FROM coverage WHERE commit_sha GLOB ? LIMIT 1", (commit_glob(prefix, sha),))
+    isempty(c) && return nothing
+    p = c[1].measured_at === missing ? [] :
+        rows(db, "SELECT * FROM coverage WHERE measured_at < ? ORDER BY measured_at DESC LIMIT 1", (c[1].measured_at,))
+    row(x) = OrderedDict("commit" => String(x.commit_sha), "measured_at" => js(x.measured_at), "codecov" => js(x.codecov), "coveralls" => js(x.coveralls))
+    return OrderedDict("current" => row(c[1]), "previous" => isempty(p) ? nothing : row(p[1]))
+end
+
+function commit(db, ref)
+    candidates = commit_candidates(db, ref)
+    if length(candidates) != 1
+        matches = [commit_summary(db, p, s) for (p, s) in Iterators.take(candidates, COMMIT_LIST_LIMIT)]
+        return OrderedDict("query" => ref, "matches" => matches)
+    end
+    prefix, sha = only(candidates)
+    info = commit_summary(db, prefix, sha)
+    sha = info["sha"]
+    builds = commit_builds(db, prefix, sha)
+    primary = primary_build(builds)
+    t = info["created_at"]
+    return OrderedDict(
+        "query" => ref, "commit" => info,
+        "previous" => primary === nothing ? nothing : neighbour(db, primary["pipeline"], primary["build"], prefix, :prev),
+        "next" => primary === nothing ? nothing : neighbour(db, primary["pipeline"], primary["build"], prefix, :next),
+        "builds" => builds,
+        "jobs" => primary === nothing ? nothing : OrderedDict("pipeline" => primary["pipeline"], "build" => primary["build"],
+                                                              "baseline_builds" => COMMIT_JOB_BASELINE_BUILDS, "jobs" => commit_jobs(db, primary)),
+        "ttfx" => commit_ttfx(db, prefix, sha),
+        "benchmarks" => commit_benchmarks(db, prefix, sha, t),
+        "pkgeval" => commit_pkgeval(db, prefix, sha, t),
+        "coverage" => commit_coverage(db, prefix, sha))
+end
+
 # --- downloads ---------------------------------------------------------------
 
 const DL_SOURCE = "https://julialang-logs.s3.amazonaws.com/public_outputs/current/resource_types_by_date.csv.gz"

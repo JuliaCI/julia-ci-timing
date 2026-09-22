@@ -2678,6 +2678,110 @@ body {
 .overview-card a:hover {
   text-decoration: underline;
 }
+/* Commit lookup view: the overview's toolbar and body, one card per source */
+/* Two columns of cards once each can be 640px wide: CI beside TTFX,
+   Benchmarks beside PkgEval; the header and messages span the row */
+#commit-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(640px, 100%), 1fr));
+  align-items: start;
+  gap: 12px;
+}
+#commit-body > :not(.commit-card),
+#commit-body > .commit-head {
+  grid-column: 1 / -1;
+}
+.commit-card {
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  background: var(--color-canvas-default);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.commit-card a,
+.commit-message a {
+  color: var(--color-accent-fg);
+  text-decoration: none;
+}
+.commit-card a:hover,
+.commit-message a:hover {
+  text-decoration: underline;
+}
+.commit-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.commit-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.commit-card-links {
+  font-size: 12px;
+}
+.commit-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.commit-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 6px 0 4px;
+  overflow-wrap: anywhere;
+}
+.commit-meta {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  overflow-wrap: anywhere;
+}
+.commit-line,
+.commit-message {
+  font-size: 13px;
+  margin: 4px 0 8px;
+}
+.commit-message {
+  max-width: 800px;
+}
+.commit-message ul {
+  padding-left: 20px;
+}
+.commit-worse {
+  color: var(--color-danger-fg);
+}
+.commit-better {
+  color: var(--color-success-fg);
+}
+.commit-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 4px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.commit-figure {
+  display: flex;
+  flex-direction: column;
+}
+.commit-figure-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-fg-muted);
+}
+.commit-more {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.commit-more summary {
+  cursor: pointer;
+  color: var(--color-accent-fg);
+}
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));

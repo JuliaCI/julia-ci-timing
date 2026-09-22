@@ -2,12 +2,14 @@
 
 Dashboard for Julia language performance: Nanosoldier benchmark reports every 2 to 3 days,
 [CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, PkgEval and
-package-server downloads. The Overview tab sums up every source; the other tabs go deep.
+package-server downloads. The Overview tab sums up every source, the Commit tab gathers
+everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), and the other tabs go deep.
 
 **Live:** <https://perf.julialang.org/>
 
 Short paths open a tab directly and forward any other query parameters:
 [/overview](https://perf.julialang.org/overview),
+[/commit](https://perf.julialang.org/commit),
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
 [/timing](https://perf.julialang.org/timing), [/builds](https://perf.julialang.org/builds),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),

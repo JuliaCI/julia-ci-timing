@@ -134,6 +134,18 @@
         >
           Overview
         </button>
+        <button
+          class="tab-btn"
+          id="tab-commit"
+          role="tab"
+          aria-selected="false"
+          aria-controls="commit-view"
+          tabindex="-1"
+          onclick="switchTab('commit')"
+          title="One commit or PR across every source: its CI jobs and TTFX against the builds before it, and the benchmark and PkgEval reports that include it"
+        >
+          Commit
+        </button>
         <div class="tab-group" role="presentation">
           <span class="tab-group-label" aria-hidden="true">Benchmarks</span>
           <div class="tab-group-buttons" role="presentation">
@@ -458,6 +470,35 @@
           <div class="loading">Loading overview...</div>
         </div>
       </div>
+    </div>
+
+    <div
+      class="overview-main view-hidden"
+      id="commit-view"
+      role="tabpanel"
+      aria-labelledby="tab-commit"
+      tabindex="0"
+    >
+      <div class="overview-toolbar">
+        <form class="package-search" onsubmit="submitCommitLookup(event)">
+          <label for="commit-ref">Commit or PR:</label>
+          <input
+            type="text"
+            id="commit-ref"
+            name="ref"
+            placeholder="SHA or #PR"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button class="btn" type="submit">Look up</button>
+        </form>
+        <span class="overview-note"
+          >Master commits only. Job and TTFX times are compared with the median
+          of the builds before this one; benchmarks and PkgEval show the first
+          daily report that includes the commit.</span
+        >
+      </div>
+      <div class="overview-body" id="commit-body"></div>
     </div>
 
     <main

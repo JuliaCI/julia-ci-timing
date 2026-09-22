@@ -46,7 +46,7 @@ case "${1:-ingest}" in
     # Everything the browser loads except data/, which the export writes
     rm -rf /site/assets /site/*.html /site/favicon.svg /site/site.webmanifest
     cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/assets /site/
-    for d in overview diff history timing builds commits workers ttfx downloads pkgeval; do
+    for d in overview commit diff history timing builds commits workers ttfx downloads pkgeval; do
       rm -rf "/site/$d"; cp -r "/app/$d" "/site/$d"
     done
     commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"
