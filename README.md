@@ -43,7 +43,11 @@ container image (`Dockerfile`):
 - `db/export.jl` renders the same shapes to files after every run, published
   at `/data/` for scripts; `analysis/fetch_data.jl` downloads them.
 - Datasette serves the database read-only at `/db/`, and `/data/ci-timing.sqlite.gz`
-  is a snapshot of the whole thing. `AGENTS.md` has the details.
+  is a snapshot of the whole thing.
+
+To use the data yourself, [`docs/querying.md`](docs/querying.md) covers the API
+(`/api/` lists its routes), SQL and the snapshot, with example queries;
+[`/llms.txt`](https://perf.julialang.org/llms.txt) is the short version for agents.
 
 Pushing to `main` builds the image and deploys it (`.github/workflows/deploy.yml`);
 `health.yml` checks the host once a day. The plan and its history:

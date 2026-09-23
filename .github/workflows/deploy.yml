@@ -20,6 +20,7 @@ on:
       - 'assets/**'
       - 'favicon.svg'
       - 'site.webmanifest'
+      - 'llms.txt'
       - 'data/ttfx_annotations.json'
       - 'data/methodology_changes.json'
       - 'Project.toml'

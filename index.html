@@ -37,6 +37,8 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
     <link rel="manifest" href="site.webmanifest" />
+    <!-- For agents and scripts: how to read the data without the JavaScript app -->
+    <link rel="alternate" type="text/plain" href="llms.txt" title="Guide to the data and API" />
     <script>
       // Apply saved theme as early as possible to avoid FOUC
       (function () {
@@ -104,6 +106,13 @@
     <link rel="stylesheet" href="assets/styles.css?v=__BUILD_COMMIT_SHORT__" />
   </head>
   <body>
+    <noscript>
+      <p>
+        This dashboard needs JavaScript. The data behind it is public: see
+        <a href="llms.txt">llms.txt</a> for the API (<a href="api/">/api/</a>),
+        read-only SQL (<a href="db/">/db/</a>) and the database snapshot.
+      </p>
+    </noscript>
     <div class="toolbar" role="toolbar" aria-label="Dashboard controls">
       <h1>
         <img src="favicon.svg" alt="" class="julia-logo" /><a
@@ -295,33 +304,9 @@
       >
     </div>
 
-    <div class="warning-banner" id="stale-data-warning" role="alert">
-      <div class="warning-banner-icon">⚠️</div>
-      <div class="warning-banner-content">
-        <div class="warning-banner-title">Data May Be Stale</div>
-        <div class="warning-banner-text">
-          This site hasn't been updated in more than 3 days. Please
-          <a
-            href="https://github.com/JuliaCI/julia-ci-timing/issues/new"
-            target="_blank"
-            rel="noopener noreferrer"
-            >report an issue</a
-          >
-          to let us know.
-        </div>
-      </div>
-      <button
-        class="warning-banner-close"
-        onclick="
-          document
-            .getElementById('stale-data-warning')
-            .classList.remove('visible')
-        "
-        aria-label="Close warning"
-      >
-        ×
-      </button>
-    </div>
+    <!-- Filled only when the data is stale, so its text is not in the page
+         a script or agent reads otherwise -->
+    <div class="warning-banner" id="stale-data-warning" role="alert"></div>
 
     <div
       class="popup-overlay"

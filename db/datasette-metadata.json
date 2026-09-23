@@ -1,0 +1,247 @@
+{
+  "title": "Julia Performance Tracking: database",
+  "description_html": "Read-only SQL over the database behind <a href=\"https://perf.julialang.org/\">perf.julialang.org</a>: Julia CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, refreshed every hour. Queries are limited to 2 seconds and 5000 rows; for more, download the <a href=\"https://perf.julialang.org/data/ci-timing.sqlite.gz\">whole database</a>. The <a href=\"https://perf.julialang.org/api/\">API</a> serves what the site's pages show; <a href=\"https://perf.julialang.org/llms.txt\">llms.txt</a> explains both. Times are UTC, durations seconds, benchmark times nanoseconds.",
+  "source": "JuliaCI/julia-ci-timing",
+  "source_url": "https://github.com/JuliaCI/julia-ci-timing",
+  "databases": {
+    "ci-timing": {
+      "tables": {
+        "meta": {
+          "description": "Key-value settings: the schema version and the change sequences (change_seq, change_seq:<source>) the API uses as ETags."
+        },
+        "source_runs": {
+          "description": "One row per fetcher run: when each source (timing, benchmarks, pkgeval, ttfx, packages, agents) ran and whether it succeeded. The freshness signal.",
+          "columns": {
+            "ok": "1 when the run succeeded, 0 when it failed, NULL while running",
+            "rows_written": "rows the run stored",
+            "error": "the error message of a failed run"
+          }
+        },
+        "commits": {
+          "description": "Reserved for commit metadata from a clone of JuliaLang/julia; not filled yet. Use builds for commit subjects and authors."
+        },
+        "builds": {
+          "description": "Buildkite builds of Julia master. Pipelines: julia-ci (current), julia-master and julia-master-scheduled (stopped receiving builds in July 2026).",
+          "columns": {
+            "commit_prefix": "the first 8 characters of the commit SHA; every build has it",
+            "commit_sha": "the full SHA, on builds fetched from the Buildkite API (most older rows are NULL)",
+            "message": "the commit subject, cut at 80 characters",
+            "created_at": "when the build was created, UTC",
+            "started_at": "first job started; NULL on builds imported from before September 2026",
+            "finished_at": "last job finished; NULL like started_at"
+          }
+        },
+        "job_kinds": {
+          "description": "Classification of job names (kind, OS, triplet, flags). Reserved; not filled yet."
+        },
+        "jobs": {
+          "description": "One row per job attempt of a build.",
+          "columns": {
+            "name": "the Buildkite step name, with emoji codes such as :linux:",
+            "retry": "attempt number within the build for that name, 0 first",
+            "state": "passed, failed, canceled, broken, timed_out, ...",
+            "soft_failed": "1 when the job was allowed to fail",
+            "duration_s": "finished minus started, seconds",
+            "runnable_at": "when the job could start; runnable to started is its queue wait",
+            "agent_hostname": "the machine the job ran on"
+          }
+        },
+        "raw_builds": {
+          "description": "The Buildkite build JSON as fetched, zstd-compressed, kept because Buildkite only retains a window of builds."
+        },
+        "coverage": {
+          "description": "Test coverage of a master commit from Codecov and Coveralls, in percent."
+        },
+        "bench_reports": {
+          "description": "Nanosoldier benchmark reports. kind 'daily' reports run every few days on the master commit of that day and compare with an earlier daily report (the baseline).",
+          "columns": {
+            "path": "the report's directory under NanosoldierReports/benchmark, such as by_date/2026-09/13",
+            "commit_sha": "the commit benchmarked",
+            "baseline_commit_sha": "the commit it was compared with",
+            "report_regressions": "how many benchmarks Nanosoldier flagged as regressions",
+            "report_improvements": "and as improvements"
+          }
+        },
+        "bench_names": {
+          "description": "Every benchmark: its BaseBenchmarks group (grp) and name.",
+          "columns": {
+            "name": "the benchmark's path within the group as BaseBenchmarks writes it, e.g. index/('sumelt', '1.0:1.0:100000.0')"
+          }
+        },
+        "bench_results": {
+          "description": "One row per report, benchmark and estimate. Large (millions of rows): filter on bench_id and stat, or use the snapshot.",
+          "columns": {
+            "stat": "the BenchmarkTools estimate: minimum, median, mean or std",
+            "time_ns": "nanoseconds",
+            "gctime_ns": "nanoseconds spent in GC",
+            "memory_bytes": "bytes allocated",
+            "allocs": "allocation count"
+          }
+        },
+        "bench_verdicts": {
+          "description": "Nanosoldier's comparison of each benchmark against the baseline report.",
+          "columns": {
+            "time_ratio": "this report's time over the baseline's; above 1 is slower",
+            "verdict": "regression, improvement or invariant",
+            "time_tolerance": "the ratio change Nanosoldier tolerates for this benchmark"
+          }
+        },
+        "bench_errors": {
+          "description": "Benchmarks that errored on a report, with the error."
+        },
+        "bench_report_groups": {
+          "description": "Per report, group and estimate: the geometric mean over the group's benchmarks and how many there were, for each metric."
+        },
+        "pkgeval_reports": {
+          "description": "PkgEval daily runs of the whole package ecosystem against Julia master, with the count of each outcome.",
+          "columns": {
+            "path": "the report's directory under NanosoldierReports/pkgeval, such as by_date/2026-09/09",
+            "commit_sha": "the Julia commit tested (8 characters on old reports)"
+          }
+        },
+        "pkgeval_reasons": {
+          "description": "Per report: how many packages had each status and failure reason."
+        },
+        "packages": {
+          "description": "Package names that appear in PkgEval results. About 2.9k uuid-shaped names come from 2019-20 reports and can be ignored."
+        },
+        "pkgeval_results": {
+          "description": "One row per report and package: whether its tests passed on that Julia commit. Large: filter by package_id or report_id.",
+          "columns": {
+            "status": "ok, fail, crash, skip or kill",
+            "reason": "why it did not pass, e.g. test_failures, precompile, time_limit",
+            "duration_s": "how long the tests took"
+          }
+        },
+        "ttfx_jobs": {
+          "description": "The TTFX job of each julia-ci master build: it precompiles, loads and runs a set of package tasks (Julia-TTFX-Snippets) and records the times.",
+          "columns": {
+            "build": "the julia-ci build number",
+            "build_created_at": "when the build was created, UTC (minute precision)"
+          }
+        },
+        "ttfx_results": {
+          "description": "Per TTFX job and task: the minimum over the job's repeats, in seconds.",
+          "columns": {
+            "precompile": "Pkg.precompile() from a cleared cache",
+            "load": "the task script's load phase on its first run",
+            "run": "its run phase on the first run",
+            "warm": "the best total of the later runs",
+            "load_gcoff": "load, from repeats with the GC disabled",
+            "run_gcoff": "run, with the GC disabled",
+            "warm_gcoff": "warm, with the GC disabled"
+          }
+        },
+        "ttfx_failures": {
+          "description": "Tasks that failed in a TTFX job, with the error."
+        },
+        "ttfx_arms": {
+          "description": "The Julia builds (arms) a TTFX job compared, with their commits."
+        },
+        "ttfx_samples": {
+          "description": "Every record of a TTFX job's results file, in order, so other statistics than the minimum can be recomputed."
+        },
+        "raw_ttfx": {
+          "description": "The TTFX job's result files as fetched, zstd-compressed."
+        },
+        "dl_resource_types": {
+          "description": "Package server requests per day by resource type, status and client type, as published by julialang-logs."
+        },
+        "dl_julia_versions": {
+          "description": "Package server requests per day by the requesting Julia version."
+        },
+        "dl_julia_systems": {
+          "description": "Package server requests per day by the requesting platform."
+        },
+        "dl_client_types": {
+          "description": "Package server requests per day by client type (user, ci, ...)."
+        },
+        "dl_package_uuids": {
+          "description": "Package UUIDs seen in download rows; join registry_packages on uuid for names."
+        },
+        "registry_packages": {
+          "description": "The General registry's packages: uuid, name and path, refreshed every ingest."
+        },
+        "dl_packages": {
+          "description": "Successful requests per day, package and client type. The only history there is: upstream keeps 3 days.",
+          "columns": {
+            "request_count": "requests that day",
+            "request_addrs": "distinct addresses within this row only; never sum across rows",
+            "client_type": "user, ci or empty"
+          }
+        },
+        "dl_series": {
+          "description": "Total, user and CI package requests per day, as the Downloads page draws them."
+        },
+        "dl_mix": {
+          "description": "Requests per day by Julia minor version (kind='version', key like 1.12) or release stage (kind='stage', key stable, rc, beta, alpha, other); key '*' is the day's total."
+        },
+        "julia_tags": {
+          "description": "Julia releases from GitHub, for marking release dates on charts."
+        },
+        "agent_snapshots": {
+          "description": "When the Buildkite agents were listed (every ingest)."
+        },
+        "agent_snapshot_members": {
+          "description": "Which agents were connected at each snapshot."
+        },
+        "agents": {
+          "description": "Every Buildkite agent seen: host, queue, OS, state, first and last seen, and its current job.",
+          "columns": {
+            "fold_key": "the name without its '.N' slot suffix, to group per-job agents by host",
+            "job_json": "the running job as JSON, when connected"
+          }
+        }
+      },
+      "queries": {
+        "source_freshness": {
+          "title": "When each source last ran",
+          "sql": "SELECT source, max(finished_at) AS last_ok\nFROM source_runs WHERE ok = 1 GROUP BY source ORDER BY source"
+        },
+        "latest_build_slowest_jobs": {
+          "title": "Slowest jobs of the latest julia-ci build",
+          "sql": "SELECT j.name, round(j.duration_s / 60, 1) AS minutes, j.state, j.agent_hostname\nFROM jobs j JOIN builds b ON b.id = j.build_id\nWHERE b.pipeline = 'julia-ci' AND b.number = (SELECT max(number) FROM builds WHERE pipeline = 'julia-ci')\nORDER BY j.duration_s DESC LIMIT 20"
+        },
+        "job_duration_by_week": {
+          "title": "One job's duration by week",
+          "description": "Weekly mean and count of passing runs of a job on julia-ci over the last :days days; job is its exact name, e.g. :linux: test x86_64-linux-gnu",
+          "sql": "SELECT strftime('%Y-%W', b.created_at) AS week, count(*) AS runs, round(avg(j.duration_s) / 60, 1) AS mean_minutes\nFROM jobs j JOIN builds b ON b.id = j.build_id\nWHERE j.name = :job AND b.pipeline = 'julia-ci' AND j.state = 'passed' AND b.created_at >= date('now', '-' || :days || ' days')\nGROUP BY week ORDER BY week"
+        },
+        "queue_wait_by_build": {
+          "title": "Queue wait per julia-ci build over the last :days days",
+          "sql": "SELECT b.number, b.commit_prefix, count(*) AS jobs,\n  round(avg((julianday(j.started_at) - julianday(j.runnable_at)) * 86400)) AS mean_wait_s,\n  round(max((julianday(j.started_at) - julianday(j.runnable_at)) * 86400)) AS max_wait_s\nFROM jobs j JOIN builds b ON b.id = j.build_id\nWHERE b.pipeline = 'julia-ci' AND j.runnable_at IS NOT NULL AND b.created_at >= date('now', '-' || :days || ' days')\nGROUP BY b.id ORDER BY b.number DESC"
+        },
+        "latest_benchmark_regressions": {
+          "title": "Regressions in the latest Nanosoldier daily report",
+          "sql": "SELECT n.grp, n.name, round(v.time_ratio, 2) AS time_ratio, round(v.memory_ratio, 2) AS memory_ratio\nFROM bench_verdicts v JOIN bench_names n ON n.id = v.bench_id\nWHERE v.verdict = 'regression' AND v.report_id = (SELECT id FROM bench_reports WHERE kind = 'daily' ORDER BY date DESC LIMIT 1)\nORDER BY v.time_ratio DESC LIMIT 100"
+        },
+        "benchmark_history": {
+          "title": "One benchmark's minimum time over time",
+          "description": "grp is the group (e.g. array); name is the exact benchmark name from bench_names",
+          "sql": "SELECT r.date, r.commit_sha, res.time_ns, res.memory_bytes, res.allocs\nFROM bench_results res JOIN bench_names n ON n.id = res.bench_id JOIN bench_reports r ON r.id = res.report_id\nWHERE n.grp = :grp AND n.name = :name AND res.stat = 'minimum' AND r.kind = 'daily'\nORDER BY r.date DESC LIMIT 200"
+        },
+        "package_pkgeval_history": {
+          "title": "A package's PkgEval history",
+          "sql": "SELECT r.date, p.status, p.reason, p.version, r.julia_version\nFROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN pkgeval_reports r ON r.id = p.report_id\nWHERE k.name = :package AND r.kind = 'daily' ORDER BY r.date DESC LIMIT 100"
+        },
+        "pkgeval_newly_broken": {
+          "title": "Packages that passed the previous PkgEval report and not the latest",
+          "sql": "WITH latest AS (SELECT r.id, r.date FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS (SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2)\nSELECT k.name, new.status, new.reason\nFROM pkgeval_results new JOIN pkgeval_results old ON old.package_id = new.package_id JOIN packages k ON k.id = new.package_id\nWHERE new.report_id = (SELECT id FROM latest ORDER BY date DESC LIMIT 1)\n  AND old.report_id = (SELECT id FROM latest ORDER BY date ASC LIMIT 1)\n  AND old.status = 'ok' AND new.status != 'ok' ORDER BY k.name"
+        },
+        "ttfx_task_history": {
+          "title": "TTFX of one task per master build over the last :days days",
+          "description": "task is Package/Snippet as in ttfx_results.task, e.g. BaseDirs/Project-Path",
+          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
+        },
+        "package_downloads_by_day": {
+          "title": "One package's downloads per day, user and CI",
+          "sql": "SELECT d.date, sum(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user,\n  sum(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci\nFROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid\nWHERE g.name = :package GROUP BY d.date ORDER BY d.date"
+        },
+        "connected_agents": {
+          "title": "Buildkite agents connected at the latest listing, with their jobs",
+          "sql": "SELECT name, queue, os, arch, last_seen, json_extract(job_json, '$.name') AS job\nFROM agents WHERE state = 'connected' ORDER BY queue, name"
+        }
+      }
+    }
+  }
+}

@@ -5,31 +5,8 @@
 #
 #   julia --project db/serve.jl [--db PATH] [--host 127.0.0.1] [--port 8002] [--site DIR] [--data DIR]
 #
-# Routes (all GET, JSON):
-#   /api/status                                 change_seq, per-source generated_at
-#   /api/timing/runs?since=&until=&changed_since=  jobs -> recent runs (window on the
-#                                               build's created_at; changed_since is
-#                                               the change_seq cursor of a refresh)
-#   /api/timing/builds?since=                   builds with wall time and queue waits
-#   /api/benchmarks/summary?metric=             benchmark_summary.json.gz; metric is time
-#                                               (default), gctime, memory or allocs
-#   /api/benchmarks/groups/<group>?since=&metric=  benchmarks/<group>.json.gz, windowed
-#   /api/benchmarks/verdicts?since=             Nanosoldier's regressions and improvements
-#   /api/pkgeval/summary                        pkgeval_summary.json.gz
-#   /api/pkgeval/packages?q=                    package names starting with q
-#   /api/pkgeval/package/<name>                 one package's status on every report
-#   /api/pkgeval/reasons?path=                  status and reason counts of a report (latest by default)
-#   /api/pkgeval/popular?days=&client=&limit=   the most downloaded packages not passing the latest report
-#   /api/ttfx/summary?since=                    ttfx_summary.json.gz, windowed
-#   /api/downloads/summary                      packages_downloads_summary.json.gz
-#   /api/downloads/packages?q=                  registry names starting with q
-#   /api/downloads/package/<name>               one package's daily requests
-#   /api/downloads/top?days=&client=            most requested packages
-#   /api/agents/latest                          agents/latest.json
-#   /api/agents/snapshots?since=                the history-*.ndjson lines, as an array
-#   /api/commits?before=&limit=                 master commits newest first, one row per commit
-#   /api/commit/<ref>                           one commit across every source; ref is a SHA
-#                                               prefix (7 to 40 hex) or a PR number
+# GET /api/ lists every route with its parameters, from the route table
+# below that the router matches against.
 #
 # Every response carries an ETag from its source's change sequence (the
 # last commit that changed that source's rows; /api/status uses the global
@@ -50,7 +27,7 @@ include(joinpath(@__DIR__, "Store.jl"))
 using .Store
 include(joinpath(@__DIR__, "Render.jl"))
 using .Render
-using HTTP, SQLite, JSON3, CodecZlib, Dates
+using HTTP, SQLite, JSON3, CodecZlib, Dates, DataStructures
 
 # Part of every ETag: the deployed commit (BUILD_COMMIT is written into the
 # image by deploy.yml), or a hash of the renderer's source on a checkout,
@@ -184,63 +161,143 @@ function bench_metric(params)
     return metric
 end
 
+# An API route: its path under /api/ (`<name>` marks a path argument), the
+# query parameters it reads, what it returns, and the handler rendering it
+# from the database, the path arguments and the parameters. GET /api/ lists
+# this table, so the index is the router and cannot drift from it.
+struct Route
+    path::String
+    params::Vector{Pair{String,String}}
+    description::String
+    handler::Function
+end
+
+const SINCE = "since" => "start of the window: YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SSZ. Omitted means all history, so pass it."
+const CLIENT = "client" => "whose downloads rank the packages: user (default), ci or all"
+
+function days_param(params, default)
+    n = cursor(params, "days")
+    return n == 0 ? default : min(n, 366)
+end
+
+function client_param(params)
+    client = get(params, "client", "user")
+    client in ("user", "ci", "all") || throw(BadRequest("client must be user, ci or all"))
+    return client
+end
+
+const ROUTES = [
+    Route("status", [], "The global change sequence, the server's time and when each source's last successful ingest finished.",
+          (db, _, _) -> status(db)),
+    Route("timing/runs",
+          [SINCE, "until" => "end of the window (exclusive), same forms as since",
+           "changed_since" => "a change_seq from an earlier response: only the builds changed since then, for an incremental refresh"],
+          "CI job runs by job name, newest first, plus a map of their builds (commit, author, message, date) and coverage per commit. The window is on the build's creation time; 30 days is about 0.2 MB gzipped.",
+          (db, _, p) -> Render.timing(db; since=instant(p, "since"), until=instant(p, "until"), changed_since=cursor(p, "changed_since"))),
+    Route("timing/builds", [SINCE],
+          "Master builds newest first: state, wall time, job count and time, and the queue wait of their jobs (median, max, total). Builds before September 2026 have no timestamps and are left out.",
+          (db, _, p) -> Render.timing_builds(db; since=instant(p, "since"))),
+    Route("benchmarks/summary", ["metric" => "time (default), gctime, memory or allocs"],
+          "Geometric mean of every Nanosoldier benchmark group on every daily report, and the reports' dates and commits.",
+          (db, _, p) -> Render.bench_summary(db; metric=bench_metric(p))),
+    Route("benchmarks/groups/<group>", [SINCE, "metric" => "time (default), gctime, memory or allocs"],
+          "Every benchmark of one group on every daily report in the window, for the minimum and mean estimates. The group names are the keys of benchmarks/summary.",
+          (db, a, p) -> a[1] in Render.bench_groups(db) ? Render.bench_group(db, a[1]; since=instant(p, "since"), metric=bench_metric(p)) : nothing),
+    Route("benchmarks/verdicts", [SINCE],
+          "Nanosoldier's own regressions and improvements on each daily report: benchmark, time and memory ratios and tolerances.",
+          (db, _, p) -> Render.bench_verdicts(db; since=instant(p, "since"))),
+    Route("pkgeval/summary", [],
+          "PkgEval daily reports: date, Julia version, commit and the counts of ok, fail, crash, skip and kill.",
+          (db, _, _) -> Render.pkgeval(db)),
+    Route("pkgeval/packages", ["q" => "a name prefix, case-insensitive"],
+          "Up to 25 package names starting with q, for looking a package up.",
+          (db, _, p) -> Render.pkgeval_packages(db, get(p, "q", ""))),
+    Route("pkgeval/package/<name>", [],
+          "One package's status, reason, version and test duration on every daily report with package results.",
+          (db, a, _) -> Render.pkgeval_package(db, a[1])),
+    Route("pkgeval/reasons", ["path" => "a report as YYYY-MM/DD; the newest by default"],
+          "How many packages failed each way (status and reason) on one report.",
+          (db, _, p) -> begin
+              path = get(p, "path", "")
+              (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
+              Render.pkgeval_reasons(db, path)
+          end),
+    Route("pkgeval/popular", ["days" => "download window in days, 30 by default", CLIENT, "limit" => "packages to list, 50 by default, at most 500"],
+          "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; the packages newly broken since the report before.",
+          (db, _, p) -> begin
+              limit = cursor(p, "limit")
+              Render.pkgeval_popular(db; days=days_param(p, 30), limit=limit == 0 ? 50 : min(limit, 500), client=client_param(p))
+          end),
+    Route("ttfx/summary", [SINCE],
+          "TTFX on every master build: per task, the precompile, load, run and warm seconds (and load, run and warm with the GC off), plus failed tasks.",
+          (db, _, p) -> Render.ttfx(db; since=instant(p, "since"))),
+    Route("downloads/summary", [],
+          "Package server requests per day (total, user, CI), by Julia version and release stage, with Julia release tags.",
+          (db, _, _) -> Render.downloads(db)),
+    Route("downloads/packages", ["q" => "a name prefix, case-insensitive"],
+          "Up to 25 General registry package names starting with q.",
+          (db, _, p) -> Render.download_packages(db, get(p, "q", ""))),
+    Route("downloads/package/<name>", [],
+          "One registered package's successful requests per day, user and CI.",
+          (db, a, _) -> Render.download_package(db, a[1])),
+    Route("downloads/top", ["days" => "window in days, 7 by default", CLIENT],
+          "The 50 most requested packages over the window.",
+          (db, _, p) -> Render.download_top(db; days=days_param(p, 7), client=client_param(p))),
+    Route("agents/latest", [],
+          "Every Buildkite agent seen in the last year: host, queue, OS, state, first and last seen, and its job if it has one now.",
+          (db, _, _) -> Render.agents_latest(db)),
+    Route("agents/snapshots", [SINCE],
+          "The connected agents at every ingest, as a list of snapshots.",
+          (db, _, p) -> Render.agent_snapshots(db; since=instant(p, "since"))),
+    Route("commits", ["before" => "the first_at of the last commit already listed, to page back", "limit" => "commits per page, 100 by default, at most 500"],
+          "Master commits newest first, one row per commit: first build time, latest build state, author, subject, and whether a daily benchmark or PkgEval report ran on it.",
+          (db, _, p) -> begin
+              limit = cursor(p, "limit")
+              Render.commit_list(db; before=instant(p, "before"), limit=limit == 0 ? 100 : min(limit, 500))
+          end),
+    Route("commit/<ref>", [],
+          "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches.",
+          (db, a, _) -> begin
+              ref = lowercase(a[1])
+              occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))
+              Render.commit(db, ref)
+          end),
+]
+
+# The path arguments when `segments` match the route's path, else nothing
+function match_route(route, segments)
+    parts = split(route.path, '/')
+    length(parts) == length(segments) || return nothing
+    args = String[]
+    for (part, seg) in zip(parts, segments)
+        if startswith(part, "<")
+            push!(args, seg)
+        elseif part != seg
+            return nothing
+        end
+    end
+    return args
+end
+
+# GET /api/: what the API serves and where the rest of the data is
+function api_index()
+    routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
+    return OrderedDict(
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, from one SQLite database refreshed every hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "guide" => "https://perf.julialang.org/llms.txt",
+        "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
+        "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database after the latest ingest, about 220 MB)",
+        "schema" => "https://github.com/JuliaCI/julia-ci-timing/blob/main/db/schema.sql",
+        "health" => "https://perf.julialang.org/healthz",
+        "routes" => routes)
+end
+
 # path segments after /api/ and the query parameters -> the rendered value
 function render(db, segments, params)
-    if segments == ["status"]
-        return status(db)
-    elseif segments == ["timing", "runs"]
-        return Render.timing(db; since=instant(params, "since"), until=instant(params, "until"),
-                             changed_since=cursor(params, "changed_since"))
-    elseif segments == ["timing", "builds"]
-        return Render.timing_builds(db; since=instant(params, "since"))
-    elseif segments == ["benchmarks", "summary"]
-        return Render.bench_summary(db; metric=bench_metric(params))
-    elseif length(segments) == 3 && segments[1:2] == ["benchmarks", "groups"]
-        grp = segments[3]
-        grp in Render.bench_groups(db) || return nothing
-        return Render.bench_group(db, grp; since=instant(params, "since"), metric=bench_metric(params))
-    elseif segments == ["benchmarks", "verdicts"]
-        return Render.bench_verdicts(db; since=instant(params, "since"))
-    elseif segments == ["pkgeval", "summary"]
-        return Render.pkgeval(db)
-    elseif segments == ["pkgeval", "packages"]
-        return Render.pkgeval_packages(db, get(params, "q", ""))
-    elseif length(segments) == 3 && segments[1:2] == ["pkgeval", "package"]
-        return Render.pkgeval_package(db, segments[3])
-    elseif segments == ["pkgeval", "reasons"]
-        path = get(params, "path", "")
-        (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
-        return Render.pkgeval_reasons(db, path)
-    elseif segments == ["pkgeval", "popular"]
-        days = cursor(params, "days")
-        limit = cursor(params, "limit")
-        client = get(params, "client", "user")
-        client in ("user", "ci", "all") || throw(BadRequest("client must be user, ci or all"))
-        return Render.pkgeval_popular(db; days=days == 0 ? 30 : min(days, 366), limit=limit == 0 ? 50 : min(limit, 500), client)
-    elseif segments == ["ttfx", "summary"]
-        return Render.ttfx(db; since=instant(params, "since"))
-    elseif segments == ["downloads", "summary"]
-        return Render.downloads(db)
-    elseif segments == ["downloads", "packages"]
-        return Render.download_packages(db, get(params, "q", ""))
-    elseif length(segments) == 3 && segments[1:2] == ["downloads", "package"]
-        return Render.download_package(db, segments[3])
-    elseif segments == ["downloads", "top"]
-        days = cursor(params, "days")
-        client = get(params, "client", "user")
-        client in ("user", "ci", "all") || throw(BadRequest("client must be user, ci or all"))
-        return Render.download_top(db; days=days == 0 ? 7 : min(days, 366), client)
-    elseif segments == ["agents", "latest"]
-        return Render.agents_latest(db)
-    elseif segments == ["agents", "snapshots"]
-        return Render.agent_snapshots(db; since=instant(params, "since"))
-    elseif segments == ["commits"]
-        limit = cursor(params, "limit")
-        return Render.commit_list(db; before=instant(params, "before"), limit=limit == 0 ? 100 : min(limit, 500))
-    elseif length(segments) == 2 && segments[1] == "commit"
-        ref = lowercase(segments[2])
-        occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))
-        return Render.commit(db, ref)
+    isempty(segments) && return api_index()
+    for route in ROUTES
+        args = match_route(route, segments)
+        args === nothing || return route.handler(db, args, params)
     end
     return nothing
 end
@@ -363,6 +420,8 @@ json_response(status, value) = HTTP.Response(status, ["Content-Type" => "applica
 
 accepts_gzip(req) = occursin("gzip", HTTP.header(req, "Accept-Encoding", ""))
 
+not_found() = json_response(404, Dict("error" => "not found", "routes" => "/api/ lists every route"))
+
 function api(s::Server, req::HTTP.Request)
     uri = HTTP.URI(req.target)
     segments = String[String(x) for x in split(uri.path, '/'; keepempty=false)]
@@ -388,12 +447,12 @@ function api(s::Server, req::HTTP.Request)
         body = hit[2]
     elseif cacheable
         r = render_cached!(s, key, segments, params, seq)
-        r === nothing && return json_response(404, Dict("error" => "not found"))
+        r === nothing && return not_found()
         # A render already under way when this request came may be older
         served, body = r
     else
         value = withdb(db -> render(db, segments, params), s)
-        value === nothing && return json_response(404, Dict("error" => "not found"))
+        value === nothing && return not_found()
         body = gzip(Vector{UInt8}(JSON3.write(value)))
     end
     if accepts_gzip(req)
@@ -413,7 +472,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # Terraform state): index.html, favicon.svg, assets/, the tab directories
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
-const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "assets", "data",
+const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
                         "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "downloads", "pkgeval"])
 
 function static(root, path; allowed=SITE_PATHS)

@@ -7,28 +7,35 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host
-(`docs/database-migration.md`); the six `fetch_*.jl` scripts write to it
-every hour and the site reads it through a small API. Three ways to get
-at it, depending on what you need:
+The source of truth is a SQLite database on the site's host; the six
+`fetch_*.jl` scripts write to it every hour. `docs/querying.md` is the
+guide to reading it (tables by topic, example queries, conventions), and
+`llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
+version for agents arriving at the site. Four ways in, cheapest first:
 
+- **The API**: `https://perf.julialang.org/api/` lists every route with its
+  parameters, generated from the route table in `db/serve.jl` that the
+  router uses. It serves what the site's pages show, with a time window
+  (`since`), gzipped and with ETags. `api/commit/<sha or PR number>` gathers
+  one commit across every source. The shapes are the site's own and can
+  change with it.
 - **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/`, public
-  and read-only.
-  The schema is `db/schema.sql`. One request per query:
-  `curl "https://perf.julialang.org/db/ci-timing.json?sql=SELECT+...&_shape=array"`.
-  Bounded by the row limit and the query time limit; for anything heavy,
-  take the snapshot instead.
+  and read-only, limited to 2 s and 5000 rows per query. Table and column
+  descriptions and a set of saved queries come from
+  `db/datasette-metadata.json` (passed by `infra/docker/entrypoint.sh`).
 - **The whole database**: `https://perf.julialang.org/data/ci-timing.sqlite.gz`,
-  a copy taken after every ingest (about 80 MB). Download once and run any
-  SQL locally with `sqlite3`, no limits and no load on the host.
+  taken after every ingest (about 220 MB, 700 MB unpacked). Download once
+  and run any SQL locally with `sqlite3`, no limits and no load on the host.
 - **The extracts**: the gzipped JSON files described below, at
   `https://perf.julialang.org/data/<file>`, rendered from the database
   after every ingest. `julia --project analysis/fetch_data.jl` downloads
   them all into `data/` (revalidating by ETag), which is what the analysis
   scripts and `tools/inspect-bench.mjs` read.
 
-The site's own API (`db/serve.jl`, `api/...` routes listed in its header)
-serves the same shapes with a time window; it is not a stable interface.
+When you add or change an API route, give it a description and parameter
+docs in the route table, and update `llms.txt` and `docs/querying.md` if
+it is one an agent would reach for. When you add a table or column,
+describe it in `db/datasette-metadata.json`.
 
 Per-group BaseBenchmarks history is the extract
 `data/benchmarks/<group>.json.gz`. Each file has the shape:
@@ -209,7 +216,7 @@ browser stay in sync; do not duplicate that math elsewhere.
    stable and to spot the commit where a regression entered.
 4. Reproduce locally with `BenchmarkTools.@btime` against the same
    commit (or `julia +nightly`) before writing a fix.
-5. Track findings in `docs/codegen-opportunities.md`.
+5. Record findings in the JuliaLang/julia issue or PR that acts on them.
 
 ## These scripts are not finished
 
@@ -221,10 +228,10 @@ agents include:
 - Cross-version comparison (only the 1.13 manifest is wired up; an
   `--branch` flag would let us compare nightly vs release on the
   same benchmark).
-- Group-level summaries (e.g. geomean over time) so we can plot a
-  single "is the suite getting faster or slower" line.
-- Correlating regressions with `julia/` commit metadata (the `commits`
-  table, once a clone feeds it).
+- Correlating regressions with the commits in each report's range.
+  `api/commit/<ref>` and `bench_reports.baseline_commit_sha` give the
+  range; the `commits` table (subjects, authors, PR numbers from a clone
+  of JuliaLang/julia) is still empty.
 - Filtering by inferred noise floor (`noise_pct`) so we don't chase
   benchmarks that bounce ±20% run to run.
 

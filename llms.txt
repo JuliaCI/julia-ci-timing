@@ -1,0 +1,76 @@
+# Julia Performance Tracking (perf.julialang.org)
+
+> Performance and health data for the Julia language, refreshed every hour: CI job and
+> build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
+> PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
+> tasks on every master build, package-server downloads, and the Buildkite agents.
+> Everything lives in one SQLite database. The web pages are a JavaScript app; read the
+> data through one of the three routes below instead of scraping them.
+
+Pick by the size of the answer. All three are public, read-only and need no key.
+
+## 1. The API: what a page of the site shows
+
+`https://perf.julialang.org/api/` lists every route with its parameters and a
+description. All routes are GET and return JSON; use `curl --compressed`. Routes with a
+`since` parameter return all history without it, so pass it (`YYYY-MM-DD`).
+
+- `/api/status`: when each source last ingested successfully
+- `/api/commit/<sha or PR number>`: everything recorded for one master commit: its CI
+  jobs and TTFX against the previous commit, and the first benchmark and PkgEval reports
+  that include it
+- `/api/commits?limit=100`: master commits, newest first
+- `/api/timing/builds?since=`: wall time and queue wait per master build
+- `/api/timing/runs?since=`: every CI job run in the window (30 days is about 0.2 MB)
+- `/api/benchmarks/verdicts?since=`: Nanosoldier's regressions and improvements
+- `/api/pkgeval/package/<Name>`: one package's PkgEval status on every report
+- `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
+- `/api/ttfx/summary?since=`: TTFX per task on every master build
+- `/api/downloads/package/<Name>`: one package's daily downloads
+
+The response shapes are the site's own and can change; the database schema is stable.
+
+## 2. SQL: Datasette at /db/
+
+`https://perf.julialang.org/db/ci-timing` answers read-only SQL. Each query is limited to
+2 seconds and 5000 rows, so aggregate in SQL rather than paging through rows.
+
+- Every table and its main columns are described in
+  `https://perf.julialang.org/db/-/metadata.json`.
+- Saved queries for common questions (a job's duration by week, a package's PkgEval
+  history, one TTFX task over time, ...) are listed under `queries` in
+  `https://perf.julialang.org/db/ci-timing.json`. Run one as
+  `/db/ci-timing/<name>.json?_shape=array&<parameter>=<value>`, e.g.
+  `/db/ci-timing/package_pkgeval_history.json?_shape=array&package=DataFrames`.
+
+```
+curl -s -G https://perf.julialang.org/db/ci-timing.json \
+  --data-urlencode "_shape=array" \
+  --data-urlencode "sql=SELECT source, max(finished_at) FROM source_runs WHERE ok = 1 GROUP BY source"
+```
+
+## 3. The whole database
+
+`https://perf.julialang.org/data/ci-timing.sqlite.gz` is the complete database after the
+latest ingest (about 220 MB, 700 MB unpacked). Download it once and query it with
+`sqlite3` for anything that needs many queries or scans large tables such as
+`bench_results` or `pkgeval_results`.
+
+## Reference
+
+- [Schema](https://github.com/JuliaCI/julia-ci-timing/blob/main/db/schema.sql): every table and column, with comments
+- [Querying guide](https://github.com/JuliaCI/julia-ci-timing/blob/main/docs/querying.md): tables by topic and example queries
+- [Repository](https://github.com/JuliaCI/julia-ci-timing): the fetchers, the API server and the site
+- [Health](https://perf.julialang.org/healthz): per-source freshness and disk use
+
+## Conventions
+
+- Times are UTC ISO 8601 (`2026-09-22T13:41:50Z`). Durations are seconds, benchmark
+  times nanoseconds, memory bytes.
+- A commit is identified by its full SHA where known; many older builds only have the
+  8-character prefix (`builds.commit_prefix`).
+- Benchmark and PkgEval reports run every few days, not per commit; a commit's results
+  are in the first report after it.
+- Queue waits and build wall times exist only for builds since September 2026.
+- To show a result, link the site with its view in the URL, for example
+  `https://perf.julialang.org/commit?c=<sha>`, `/pkgeval?pkg=<Name>` or `/builds?t=30`.

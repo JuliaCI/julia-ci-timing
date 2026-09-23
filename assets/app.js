@@ -5611,11 +5611,18 @@ function checkStaleData(generatedAt) {
   const age = now - dataTime;
 
   const warningBanner = document.getElementById("stale-data-warning");
-  if (age > STALE_DATA_THRESHOLD_MS) {
-    warningBanner.classList.add("visible");
-  } else {
-    warningBanner.classList.remove("visible");
-  }
+  const stale = age > STALE_DATA_THRESHOLD_MS;
+  warningBanner.innerHTML = stale
+    ? `<div class="warning-banner-icon">⚠️</div>
+      <div class="warning-banner-content">
+        <div class="warning-banner-title">Data May Be Stale</div>
+        <div class="warning-banner-text">This site hasn't been updated in more than ${STALE_DATA_THRESHOLD_DAYS} days. Please
+          <a href="https://github.com/JuliaCI/julia-ci-timing/issues/new" target="_blank" rel="noopener noreferrer">report an issue</a>
+          to let us know.</div>
+      </div>
+      <button class="warning-banner-close" onclick="document.getElementById('stale-data-warning').classList.remove('visible')" aria-label="Close warning">×</button>`
+    : "";
+  warningBanner.classList.toggle("visible", stale);
 }
 
 let refreshController = null;
