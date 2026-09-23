@@ -370,7 +370,7 @@ function drawBuildsView() {
           callbacks: {
             title: (items) => {
               const b = items.length && items[0].raw.build;
-              return b ? `#${b.build} ${b.commit} — ${b.message || ""}` : "";
+              return b ? [`#${b.build} ${b.commit}`, ...wrapTooltipText(b.message || "")] : "";
             },
             label: (ctx) => {
               const b = ctx.raw.build;
@@ -989,6 +989,26 @@ function convertEmojiText(text) {
     result = result.replaceAll(code, emoji);
   }
   return result;
+}
+
+// Chart.js draws tooltips on the canvas and never wraps them, so free text
+// in one (commit messages, notes) is split at spaces into lines of at most
+// `width` characters; a longer word keeps its own line
+const TOOLTIP_WRAP_CHARS = 60;
+function wrapTooltipText(text, width = TOOLTIP_WRAP_CHARS) {
+  const lines = [];
+  let line = "";
+  for (const word of String(text).split(/\s+/)) {
+    if (!word) continue;
+    if (line && line.length + 1 + word.length > width) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 // Escape HTML special characters for safe insertion into attributes
@@ -3043,7 +3063,7 @@ function updateChart() {
               lines.push(
                 `${getStateDisplay(meta.state)} · ${formatDuration(ctx.parsed.y)}`,
               );
-              if (meta.message) lines.push(meta.message);
+              if (meta.message) lines.push(...wrapTooltipText(meta.message));
               if (meta?.agent) lines.push(`🖥️ ${meta.agent}`);
               return lines;
             },
@@ -5714,7 +5734,7 @@ const DASHBOARD_PARAMS = new Set([
   "tm", // ttfx metric
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
-  "tg", // ttfx GC-off repeats toggle
+  "tg", // ttfx GC-off repeats toggle (retired; stripped from the URL)
   "tk", // ttfx selected tasks
   "tx", // ttfx excluded tasks (when most are selected)
   "tv", // ttfx table view
@@ -9538,8 +9558,10 @@ let ttfxMode = "summary"; // "summary" | "tasks"
 let ttfxMetric = "precompile";
 let ttfxTimeRangeDays = 90;
 let ttfxNormalized = false;
-let ttfxGcOff = false; // load, run and warm from the GC-off repeats
-let ttfxHasGcOff = false; // any build in the data has them
+// Load, run and warm also come from repeats with the GC disabled, drawn as
+// a thin twin of each line (the gap is what the GC cost); whether any
+// build in the data has them
+let ttfxHasGcOff = false;
 let ttfxSelectedTasks = new Set();
 let ttfxTaskColors = {};
 let ttfxTableView = "builds"; // "builds" | "tasks"
@@ -9562,6 +9584,9 @@ const TTFX_METRICS = {
 };
 const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
 const TTFX_SUITE_LABEL = "Suite geomean";
+// Up to this many tasks, the per-task chart's legend lists each one; above
+// it, one entry for all the tasks' lines and one for their GC-off twins
+const TTFX_LEGEND_TASKS_MAX = 10;
 // Floor on the y span so a flat series is not stretched to fill the panel:
 // +-10% of the midpoint in seconds mode, +-10 points in % mode
 const TTFX_MIN_Y_SPAN_REL = 0.2;
@@ -9671,17 +9696,23 @@ function ttfxBuildTime(b) {
   return new Date(b.date.replace(" ", "T") + ":00Z").getTime();
 }
 
-function ttfxValue(b, task, metric = ttfxMetric) {
+// `gcoff`: the value from the GC-off repeats, null for precompile
+function ttfxValue(b, task, metric = ttfxMetric, gcoff = false) {
   const v = b.tasks && b.tasks[task];
   if (!v) return null;
   const m = TTFX_METRICS[metric];
-  const x = v[ttfxGcOff && m.gcoffIndex != null ? m.gcoffIndex : m.index];
+  if (gcoff && m.gcoffIndex == null) return null;
+  const x = v[gcoff ? m.gcoffIndex : m.index];
   return x == null || !(x > 0) ? null : x;
 }
 
 function ttfxMetricLabel(metric = ttfxMetric) {
-  const m = TTFX_METRICS[metric];
-  return ttfxGcOff && m.gcoffIndex != null ? `${m.label}, GC off` : m.label;
+  return TTFX_METRICS[metric].label;
+}
+
+// Whether `metric`'s GC-off twin is drawn
+function ttfxShowsGcOff(metric = ttfxMetric) {
+  return ttfxHasGcOff && TTFX_METRICS[metric].gcoffIndex != null;
 }
 
 function ttfxAllTasks() {
@@ -9696,14 +9727,7 @@ function ttfxHasGcOffValues(b) {
 
 function getTtfxFilteredBuilds() {
   if (!ttfxData) return [];
-  let builds = ttfxData.builds || [];
-  // With the GC-off repeats shown, everything covers the builds from the
-  // first one that has them, so the precompile chart, which has no GC-off
-  // run, spans the same time as the other charts and the tables agree
-  if (ttfxGcOff) {
-    const first = builds.findIndex(ttfxHasGcOffValues);
-    builds = first < 0 ? [] : builds.slice(first);
-  }
+  const builds = ttfxData.builds || [];
   if (ttfxTimeRangeDays === 0) return builds;
   const cutoff = Date.now() - ttfxTimeRangeDays * 86400 * 1000;
   return builds.filter((b) => ttfxBuildTime(b) >= cutoff);
@@ -9715,11 +9739,11 @@ function ttfxSelectedList() {
 
 // Geometric mean of `metric` over `tasks` in one build; null unless every
 // task has a value, so the number always describes the same set of tasks.
-function ttfxGeomean(b, tasks, metric = ttfxMetric) {
+function ttfxGeomean(b, tasks, metric = ttfxMetric, gcoff = false) {
   if (!tasks.length) return null;
   let s = 0;
   for (const t of tasks) {
-    const v = ttfxValue(b, t, metric);
+    const v = ttfxValue(b, t, metric, gcoff);
     if (v == null) return null;
     s += Math.log(v);
   }
@@ -9730,12 +9754,23 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric) {
 // that measured anything at all: the suite line's composition must not move
 // over time. Per metric, since a task's run can round to 0 while its
 // precompile is fine.
-function ttfxCommonTasks(builds, tasks, metric = ttfxMetric) {
+function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, gcoff = false) {
   const measured = builds.filter(
-    (b) => b.tasks && Object.keys(b.tasks).some((t) => ttfxValue(b, t, metric) != null),
+    (b) => b.tasks && Object.keys(b.tasks).some((t) => ttfxValue(b, t, metric, gcoff) != null),
   );
   if (!measured.length) return [];
-  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric) != null));
+  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric, gcoff) != null));
+}
+
+// The tasks the suite lines of `metric` average: with a GC-off twin, those
+// common to both (over the builds that have GC-off repeats, for the twin),
+// so the gap between the lines compares the same tasks
+function ttfxSuiteTasks(builds, tasks, metric = ttfxMetric) {
+  const on = ttfxCommonTasks(builds, tasks, metric);
+  if (!ttfxShowsGcOff(metric)) return on;
+  const off = new Set(ttfxCommonTasks(builds, tasks, metric, true));
+  const both = on.filter((t) => off.has(t));
+  return both.length ? both : on;
 }
 
 function formatTtfxSeconds(s) {
@@ -9767,24 +9802,6 @@ function setTtfxMetric(val) {
 
 function setTtfxTimeRange(val) {
   ttfxTimeRangeDays = parseInt(val, 10);
-  updateTtfxChart();
-  updateTtfxTable();
-  updateTtfxURL();
-}
-
-function ttfxUpdateGcOffButton() {
-  const btn = document.getElementById("ttfx-btn-gcoff");
-  btn.classList.toggle("btn-primary", ttfxGcOff);
-  btn.setAttribute("aria-pressed", ttfxGcOff ? "true" : "false");
-  btn.disabled = !ttfxHasGcOff;
-  if (!ttfxHasGcOff) btn.title = "No build in the data has GC-off runs yet";
-}
-
-function toggleTtfxGcOff() {
-  if (!ttfxHasGcOff) return;
-  ttfxGcOff = !ttfxGcOff;
-  ttfxUpdateGcOffButton();
-  populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
   updateTtfxURL();
@@ -9845,7 +9862,8 @@ function updateTtfxURL() {
   setOrDelete("tm", ttfxMetric, ttfxMetric === "precompile");
   setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
   setOrDelete("tn", "1", !ttfxNormalized);
-  setOrDelete("tg", "1", !ttfxGcOff);
+  // The GC-off toggle's parameter, from before both were drawn together
+  url.searchParams.delete("tg");
   setOrDelete("tv", ttfxTableView, ttfxTableView === "builds");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
   // Whichever of the selected or the excluded tasks is the shorter list
@@ -9881,7 +9899,6 @@ function applyTtfxURLParams() {
     ttfxNormalized = true;
     document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
   }
-  if (params.get("tg") === "1") ttfxGcOff = true;
   if (params.get("ts") === "tasks") {
     ttfxMode = "tasks";
     document.getElementById("ttfx-mode-summary").classList.remove("btn-primary");
@@ -9917,8 +9934,6 @@ async function loadTtfxData() {
 
     const tasks = ttfxAllTasks();
     ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
-    if (!ttfxHasGcOff) ttfxGcOff = false;
-    ttfxUpdateGcOffButton();
     const colors = generateColors(tasks.length);
     ttfxTaskColors = {};
     tasks.forEach((t, i) => (ttfxTaskColors[t] = colors[i]));
@@ -9990,8 +10005,10 @@ function populateTtfxTaskList() {
 function highlightTtfxDataset(label) {
   if (!ttfxChart) return;
   for (const ds of ttfxChart.data.datasets) {
-    const on = label === null || ds.label === label;
-    ds.borderColor = on ? ds._color : fadeColor(ds._color, 0.12);
+    // A task's GC-off twin goes with the task
+    const own = ds._twinOf != null && ds._common == null ? ds._twinOf : ds.label;
+    const on = label === null || own === label;
+    ds.borderColor = on ? (ds._alpha ? fadeColor(ds._color, ds._alpha) : ds._color) : fadeColor(ds._color, 0.12);
     ds.backgroundColor = ds.borderColor;
   }
   ttfxChart.update("none");
@@ -10021,7 +10038,8 @@ function highlightTtfxRow(build) {
 
 // Chart options shared by the per-task chart and the summary panels.
 // `normalized` series are % change from the first build in range.
-function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, builds = [] }) {
+// `legendSummary`: group the tasks' lines in the legend (see TTFX_LEGEND_TASKS_MAX)
+function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
   const textColor = isDark ? "#8b949e" : "#656d76";
@@ -10043,10 +10061,59 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
         : { display: false },
       legend: {
         display: legendDisplay,
+        // A task's entry hides and shows its GC-off twin with it; a group's
+        // entry every line in the group
+        onClick: (e, item, legend) => {
+          const chart = legend.chart;
+          const members = item._group
+            ? ttfxLegendGroup(chart, item._group)
+            : chart.data.datasets
+                .map((d, k) => k)
+                .filter((k) => k === item.datasetIndex || ttfxIsTaskTwinOf(chart.data.datasets[k], chart.data.datasets[item.datasetIndex]));
+          const show = item.hidden;
+          for (const k of members) chart.setDatasetVisibility(k, show);
+          chart.update();
+        },
         labels: {
+          // A task's GC-off twin shares its colour and entry
+          filter: (item, data) => {
+            if (item._group) return true;
+            const ds = data.datasets[item.datasetIndex];
+            return ds._twinOf == null || ds._common != null;
+          },
+          // A sample of each line, dashed or solid, with its marker; with
+          // many tasks, the suite lines and a sample for each group
+          generateLabels: (chart) => {
+            const items = Chart.defaults.plugins.legend.labels.generateLabels(chart).map((item) => ({
+              ...item,
+              pointStyle: ttfxLegendIcon(chart, chart.data.datasets[item.datasetIndex]),
+            }));
+            if (!legendSummary) return items;
+            const neutral = isDark ? "#8b949e" : "#6e7781";
+            const group = (key, text, sample) => {
+              const members = ttfxLegendGroup(chart, key);
+              return members.length
+                ? [{
+                    text: `${text} (${members.length})`,
+                    fontColor: textColor,
+                    hidden: members.every((k) => !chart.isDatasetVisible(k)),
+                    pointStyle: ttfxLegendIcon(chart, sample),
+                    lineWidth: 0,
+                    _group: key,
+                  }]
+                : [];
+            };
+            return [
+              ...items.filter((item) => chart.data.datasets[item.datasetIndex]._common != null),
+              ...group("tasks", "Tasks", { borderColor: neutral, borderWidth: 1, pointRadius: 1.5 }),
+              ...group("twins", "Tasks, GC off", ttfxTwinStyle(neutral, TTFX_TASK_TWIN_WIDTH)),
+            ];
+          },
           color: textColor,
           usePointStyle: true,
           pointStyle: "circle",
+          // The room the line samples take before the text
+          pointStyleWidth: TTFX_LEGEND_ICON_W,
           boxWidth: 8,
           boxHeight: 8,
           padding: 12,
@@ -10064,7 +10131,14 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
           label: (item) => {
             const ds = item.dataset;
             const label = ds._common ? `${ds.label} (${ds._common} tasks)` : ds.label;
-            return ` ${label}: ${fmt(item.raw.y)}`;
+            let gc = "";
+            if (ds._twinOf != null) {
+              // The GC's share of the normal repeats' time at this build
+              const on = item.chart.data.datasets.find((d) => d._twinOf == null && d.label === ds._twinOf);
+              const p = on && on.data.find((q) => q.build === item.raw.build);
+              if (p && p.s > 0) gc = ` (GC ${Math.round((1 - item.raw.s / p.s) * 100)}%)`;
+            }
+            return ` ${label}: ${fmt(item.raw.y)}${gc}`;
           },
           footer: (items) => {
             if (!items.length) return "";
@@ -10072,14 +10146,14 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
             const failed = b.failed ? Object.keys(b.failed).length : 0;
             const lines = [];
             const chart = items[0].chart;
-            const suite = chart.data.datasets.find((d) => d._common);
+            const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
             if (suite && !items[0].dataset._common) {
               const p = suite.data.find((q) => q.build === b);
               if (p) lines.push(`${TTFX_SUITE_LABEL} (${suite._common} tasks): ${fmt(p.y)}`);
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
-            if (b.message) lines.push(b.message);
-            for (const a of ttfxAnnotationsFor(b)) lines.push(`Note: ${a.description}`);
+            if (b.message) lines.push(...wrapTooltipText(b.message));
+            for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
             lines.push("Click to open the Buildkite job");
             return lines;
           },
@@ -10136,6 +10210,64 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, onZoomChange, bui
   };
 }
 
+// Whether `ds` is the GC-off twin of the task line `of`
+function ttfxIsTaskTwinOf(ds, of) {
+  return of._common == null && ds._common == null && ds._twinOf != null && ds._twinOf === of.label;
+}
+
+// The dataset indices a grouped legend entry stands for: every task line,
+// or every task's GC-off twin
+function ttfxLegendGroup(chart, key) {
+  const out = [];
+  chart.data.datasets.forEach((d, k) => {
+    if (d._common != null) return;
+    if ((key === "twins") === (d._twinOf != null)) out.push(k);
+  });
+  return out;
+}
+
+// A legend sample of a dataset's line: its colour, width and dash, with a
+// marker in the middle when its points are drawn. An image at twice the
+// size, drawn at 1x, so the sample is sharp on high-density screens; the
+// chart redraws once a new one has decoded.
+const TTFX_LEGEND_ICON_W = 26;
+const TTFX_LEGEND_ICON_H = 10;
+const ttfxLegendIcons = new Map();
+function ttfxLegendIcon(chart, ds) {
+  const width = Math.min(ds.borderWidth || 1, 2.5);
+  const dash = ds.borderDash || [];
+  const marker = (ds.pointRadius || 0) > 0 ? Math.min(ds.pointRadius + 1, 3.5) : 0;
+  const key = [ds.borderColor, width, dash.join("-"), marker].join("|");
+  let img = ttfxLegendIcons.get(key);
+  if (img) return img;
+  const scale = 2;
+  const c = document.createElement("canvas");
+  c.width = TTFX_LEGEND_ICON_W * scale;
+  c.height = TTFX_LEGEND_ICON_H * scale;
+  const ctx = c.getContext("2d");
+  ctx.scale(scale, scale);
+  ctx.strokeStyle = ds.borderColor;
+  ctx.fillStyle = ds.borderColor;
+  ctx.lineWidth = width;
+  ctx.setLineDash(dash.map((d) => d * 0.8));
+  ctx.beginPath();
+  ctx.moveTo(1, TTFX_LEGEND_ICON_H / 2);
+  ctx.lineTo(TTFX_LEGEND_ICON_W - 1, TTFX_LEGEND_ICON_H / 2);
+  ctx.stroke();
+  if (marker) {
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(TTFX_LEGEND_ICON_W / 2, TTFX_LEGEND_ICON_H / 2, marker, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  img = new Image(TTFX_LEGEND_ICON_W, TTFX_LEGEND_ICON_H);
+  // `chart` is null for a sample shown outside a chart (the summary legend)
+  img.onload = () => chart && chart.ctx && chart.draw();
+  img.src = c.toDataURL();
+  ttfxLegendIcons.set(key, img);
+  return img;
+}
+
 // Runs after Chart.js has found the data extent (and again on every x zoom,
 // which refits y), so widen symmetrically about the midpoint when the
 // visible span is below the floor
@@ -10148,11 +10280,31 @@ function ttfxEnforceMinYSpan(axis) {
   axis.max = mid + minSpan / 2;
 }
 
-// In % mode every series is rebased to its first point in range
-function ttfxRebase(pts) {
-  if (!ttfxNormalized || !pts.length) return pts;
-  const base = pts[0].y;
-  return pts.map((p) => ({ ...p, y: (p.y / base - 1) * 100 }));
+// In % mode every series is rebased to its first point in range; a GC-off
+// twin to its line's `base`, so the gap between them stays visible. `s`
+// keeps the seconds for the tooltip's GC share.
+function ttfxRebase(pts, base = null) {
+  const withSeconds = pts.map((p) => ({ ...p, s: p.y }));
+  if (!ttfxNormalized || !pts.length) return withSeconds;
+  const b = base ?? pts[0].y;
+  return withSeconds.map((p) => ({ ...p, y: (p.y / b - 1) * 100 }));
+}
+
+// Thin, unmarked and a little fainter: the same series from the GC-off
+// repeats. `_alpha` is the fade at rest, so highlighting can fade `_color`
+// further.
+const TTFX_TWIN_ALPHA = 0.75;
+const TTFX_SUITE_TWIN_WIDTH = 1;
+const TTFX_TASK_TWIN_WIDTH = 0.75;
+function ttfxTwinStyle(color, width) {
+  return {
+    borderColor: fadeColor(color, TTFX_TWIN_ALPHA),
+    backgroundColor: fadeColor(color, TTFX_TWIN_ALPHA),
+    _color: color,
+    _alpha: TTFX_TWIN_ALPHA,
+    borderWidth: width,
+    pointRadius: 0,
+  };
 }
 
 // Hover styling shared by every TTFX series: the points are tiny, so a
@@ -10169,17 +10321,20 @@ function ttfxHoverPointStyle() {
   };
 }
 
-function ttfxSuiteDataset(builds, common, metric) {
-  const isDark = isDarkMode();
-  const suiteColor = isDark ? "#e6edf3" : "#1f2328";
+// The suite line, and with `gcoff` its twin from the GC-off repeats,
+// rebased in % mode to the normal line's first point `base`
+const ttfxSuiteColor = () => (isDarkMode() ? "#e6edf3" : "#1f2328");
+
+function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null } = {}) {
+  const suiteColor = ttfxSuiteColor();
   const pts = [];
   for (const b of builds) {
-    const y = ttfxGeomean(b, common, metric);
+    const y = ttfxGeomean(b, common, metric, gcoff);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
-  return {
+  const ds = {
     label: TTFX_SUITE_LABEL,
-    data: ttfxRebase(pts),
+    data: ttfxRebase(pts, base),
     _color: suiteColor,
     _common: common.length,
     borderColor: suiteColor,
@@ -10189,6 +10344,16 @@ function ttfxSuiteDataset(builds, common, metric) {
     ...ttfxHoverPointStyle(),
     order: 0,
   };
+  if (!gcoff) return ds;
+  return { ...ds, ...ttfxTwinStyle(suiteColor, TTFX_SUITE_TWIN_WIDTH), label: `${TTFX_SUITE_LABEL}, GC off`, _twinOf: TTFX_SUITE_LABEL };
+}
+
+// A series' normal line and, when `metric` has them, its GC-off twin
+function ttfxSuiteDatasets(builds, common, metric) {
+  const on = ttfxSuiteDataset(builds, common, metric);
+  if (!ttfxShowsGcOff(metric) || !on.data.length) return [on];
+  const off = ttfxSuiteDataset(builds, common, metric, { gcoff: true, base: on.data[0].s });
+  return off.data.length ? [on, off] : [on];
 }
 
 function destroyTtfxCharts() {
@@ -10225,6 +10390,38 @@ function updateTtfxChart() {
   else updateTtfxTaskChart();
 }
 
+// The summary panels' shared legend: the suite line and, when any panel
+// draws it, its GC-off twin, each drawn as the sample its lines use.
+// `ttfxSummaryHidden` holds the series switched off from it.
+const ttfxSummaryHidden = new Set();
+function renderTtfxSummaryLegend() {
+  const el = document.getElementById("ttfx-summary-legend");
+  const color = ttfxSuiteColor();
+  const hasTwin = Object.values(ttfxSummaryCharts).some((c) => c.data.datasets.some((d) => d._twinOf != null));
+  const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
+  if (hasTwin) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
+  el.innerHTML = entries
+    .map(([key, text, sample]) => {
+      const off = ttfxSummaryHidden.has(key);
+      const icon = ttfxLegendIcon(null, sample);
+      return `<button type="button" class="ttfx-legend-item${off ? " off" : ""}" aria-pressed="${!off}" onclick="toggleTtfxSummarySeries('${key}')"><img src="${icon.src}" width="${TTFX_LEGEND_ICON_W}" height="${TTFX_LEGEND_ICON_H}" alt="">${escapeHtml(text)}</button>`;
+    })
+    .join("");
+}
+
+function toggleTtfxSummarySeries(key) {
+  if (ttfxSummaryHidden.has(key)) ttfxSummaryHidden.delete(key);
+  else ttfxSummaryHidden.add(key);
+  const show = !ttfxSummaryHidden.has(key);
+  for (const chart of Object.values(ttfxSummaryCharts)) {
+    chart.data.datasets.forEach((d, k) => {
+      if ((d._twinOf != null ? "gcoff" : "suite") === key) chart.setDatasetVisibility(k, show);
+    });
+    chart.update();
+  }
+  renderTtfxSummaryLegend();
+}
+
 // One panel per metric: the geometric mean over the selected tasks that
 // every build in range measured. Zoom and pan are mirrored across panels.
 function updateTtfxSummaryCharts() {
@@ -10232,6 +10429,7 @@ function updateTtfxSummaryCharts() {
   const tasks = ttfxSelectedList();
   if (!builds.length || !tasks.length) {
     destroyTtfxCharts();
+    document.getElementById("ttfx-summary-legend").innerHTML = "";
     return;
   }
   let syncing = false;
@@ -10247,8 +10445,9 @@ function updateTtfxSummaryCharts() {
   };
   for (const metric of Object.keys(TTFX_METRICS)) {
     const canvas = document.getElementById("ttfx-chart-" + metric);
-    const common = ttfxCommonTasks(builds, tasks, metric);
+    const common = ttfxSuiteTasks(builds, tasks, metric);
     const label = ttfxMetricLabel(metric);
+    const datasets = ttfxSuiteDatasets(builds, common, metric);
     const options = ttfxChartOptions({
       metricLabel: label,
       title: `${label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
@@ -10257,13 +10456,11 @@ function updateTtfxSummaryCharts() {
       builds,
     });
     options.scales.y.title.display = false;
+    for (const ds of datasets) ds.hidden = ttfxSummaryHidden.has(ds._twinOf != null ? "gcoff" : "suite");
     if (ttfxSummaryCharts[metric]) ttfxSummaryCharts[metric].destroy();
-    ttfxSummaryCharts[metric] = new Chart(canvas, {
-      type: "line",
-      data: { datasets: [ttfxSuiteDataset(builds, common, metric)] },
-      options,
-    });
+    ttfxSummaryCharts[metric] = new Chart(canvas, { type: "line", data: { datasets }, options });
   }
+  renderTtfxSummaryLegend();
 }
 
 function updateTtfxTaskChart() {
@@ -10276,17 +10473,21 @@ function updateTtfxTaskChart() {
   }
 
   const datasets = [];
-  const common = ttfxCommonTasks(builds, tasks);
-  if (common.length >= 2) datasets.push(ttfxSuiteDataset(builds, common, ttfxMetric));
-  for (const t of tasks) {
+  const common = ttfxSuiteTasks(builds, tasks);
+  if (common.length >= 2) datasets.push(...ttfxSuiteDatasets(builds, common, ttfxMetric));
+  const series = (t, gcoff) => {
     const pts = [];
     for (const b of builds) {
-      const y = ttfxValue(b, t);
+      const y = ttfxValue(b, t, ttfxMetric, gcoff);
       if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
     }
+    return pts;
+  };
+  for (const t of tasks) {
+    const pts = series(t, false);
     if (!pts.length) continue;
     const color = ttfxTaskColors[t] || "#888";
-    datasets.push({
+    const on = {
       label: t,
       data: ttfxRebase(pts),
       _color: color,
@@ -10296,13 +10497,25 @@ function updateTtfxTaskChart() {
       pointRadius: 1.5,
       ...ttfxHoverPointStyle(),
       order: 1,
+    };
+    datasets.push(on);
+    if (!ttfxShowsGcOff()) continue;
+    const off = series(t, true);
+    if (!off.length) continue;
+    datasets.push({
+      ...on,
+      ...ttfxTwinStyle(color, TTFX_TASK_TWIN_WIDTH),
+      label: `${t}, GC off`,
+      data: ttfxRebase(off, on.data[0].s),
+      _twinOf: t,
     });
   }
 
   const options = ttfxChartOptions({
     metricLabel: ttfxMetricLabel(),
     title: null,
-    legendDisplay: datasets.length <= 12,
+    legendDisplay: true,
+    legendSummary: tasks.length > TTFX_LEGEND_TASKS_MAX,
     onZoomChange: () => {
       document.getElementById("ttfx-btn-reset-zoom").style.display = "";
     },
@@ -10322,7 +10535,7 @@ function renderTtfxBuildsTable() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
   const common = {};
-  for (const metric of Object.keys(TTFX_METRICS)) common[metric] = ttfxCommonTasks(builds, tasks, metric);
+  for (const metric of Object.keys(TTFX_METRICS)) common[metric] = ttfxSuiteTasks(builds, tasks, metric);
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metricCols = Object.keys(TTFX_METRICS);
@@ -10331,7 +10544,7 @@ function renderTtfxBuildsTable() {
     metricCols
       .map(
         (key) =>
-          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range">${ttfxMetricLabel(key)}</th>`,
+          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsGcOff(key) ? "; after it, muted, the same from the repeats with the GC off" : ""}">${ttfxMetricLabel(key)}</th>`,
       )
       .join("") +
     '<th class="col-secondary">Message</th></tr>';
@@ -10354,7 +10567,8 @@ function renderTtfxBuildsTable() {
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const key of metricCols) {
-      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}</td>`;
+      const off = ttfxShowsGcOff(key) ? ttfxGeomean(b, common[key], key, true) : null;
+      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}${off != null ? ` <span class="col-secondary" title="GC off">${formatTtfxSeconds(off)}</span>` : ""}</td>`;
     }
     const notes = ttfxAnnotationsFor(b);
     const noteBadge = notes.length
@@ -10398,6 +10612,7 @@ function renderTtfxTasksTable() {
   const cols = [
     ["task", "Task", ""],
     ["latest", "Latest", "num"],
+    ...(ttfxShowsGcOff() ? [["gcoff", "GC off", "num col-secondary"]] : []),
     ["median", "Median", "num col-secondary"],
     ["min", "Min", "num col-secondary"],
     ["max", "Max", "num col-secondary"],
@@ -10412,7 +10627,9 @@ function renderTtfxTasksTable() {
         const title =
           key === "change"
             ? "Latest vs first build in range"
-            : key === "task" ? "" : `${metricLabel} over the builds in range`;
+            : key === "gcoff"
+              ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
+              : key === "task" ? "" : `${metricLabel} over the builds in range`;
         return `<th class="sortable ${cls}" data-col="${key}" title="${title}">${label}${arrow}</th>`;
       })
       .join("") +
@@ -10431,10 +10648,13 @@ function renderTtfxTasksTable() {
     }
     const failedMsg = latestBuild && latestBuild.failed && latestBuild.failed[t];
     if (!vals.length && !failedMsg) continue;
+    let gcoff = null;
+    for (let i = builds.length - 1; i >= 0 && gcoff == null; i--) gcoff = ttfxValue(builds[i], t, ttfxMetric, true);
     const sorted = vals.slice().sort((a, b) => a - b);
     rows.push({
       task: t,
       latest: vals.length ? vals[vals.length - 1] : null,
+      gcoff,
       median: vals.length ? sorted[Math.floor(sorted.length / 2)] : null,
       min: vals.length ? sorted[0] : null,
       max: vals.length ? sorted[sorted.length - 1] : null,
@@ -10444,9 +10664,11 @@ function renderTtfxTasksTable() {
     });
   }
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7">No data</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${cols.length}">No data</td></tr>`;
     return;
   }
+  // Sorted by GC off, then switched to precompile, which has no such column
+  if (!cols.some(([k]) => k === ttfxTaskSortCol)) ttfxTaskSortCol = "latest";
   const col = ttfxTaskSortCol;
   rows.sort((a, b) => {
     let r;
@@ -10468,7 +10690,7 @@ function renderTtfxTasksTable() {
     html += `<td><span class="color-dot" style="background:${ttfxTaskColors[r.task] || "#888"};margin-right:6px"></span>${escapeHtml(r.task)}`;
     if (r.failedMsg) html += ` <span class="ttfx-failed" title="${escapeHtml(r.failedMsg)}">fails on latest</span>`;
     html += `</td>`;
-    for (const k of ["latest", "median", "min", "max"]) {
+    for (const k of ["latest", ...(ttfxShowsGcOff() ? ["gcoff"] : []), "median", "min", "max"]) {
       html += `<td class="num ${k === "latest" ? "" : "col-secondary"}">${formatTtfxSeconds(r[k])}</td>`;
     }
     html += `<td class="num ${ttfxPctClass(r.change)}">${formatTtfxPct(r.change)}</td>`;

@@ -2492,10 +2492,41 @@ body {
 .ttfx-summary-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: auto 1fr 1fr;
   gap: 8px;
   width: 100%;
   height: 100%;
+}
+/* One legend for the four summary panels; an entry hides or shows its
+   series in all of them */
+.ttfx-summary-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.ttfx-summary-legend:empty {
+  display: none;
+}
+.ttfx-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+.ttfx-legend-item:hover {
+  color: var(--color-fg-default);
+}
+.ttfx-legend-item.off {
+  text-decoration: line-through;
+  opacity: 0.55;
 }
 .ttfx-panel {
   position: relative;
