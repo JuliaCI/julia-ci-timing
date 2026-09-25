@@ -10653,7 +10653,7 @@ function renderTtfxPrsTable() {
       (p.outdated
         ? `<span class="ttfx-pr-badge" title="Measured on ${escapeHtml(p.head.commit.slice(0, 10))}; the pull request has newer commits">older commit</span> `
         : "");
-    html += `<td class="msg" title="${escapeHtml(p.title)}"><a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}${escapeHtml(p.title)}</td>`;
+    html += `<td class="msg"><a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     html += `<td class="num"><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
     for (const m of metrics) {
@@ -11948,6 +11948,15 @@ async function githubPullRequest(number) {
     merged: !!pr.merged_at,
     sha: pr.merge_commit_sha,
     base: pr.base?.ref || "",
+    author: pr.user?.login || "",
+    state: pr.state,
+    draft: !!pr.draft,
+    created_at: pr.created_at,
+    merged_at: pr.merged_at,
+    closed_at: pr.closed_at,
+    additions: pr.additions,
+    deletions: pr.deletions,
+    changed_files: pr.changed_files,
   };
 }
 
@@ -12505,3 +12514,134 @@ function cycleTheme() {
   applyTheme();
 }
 applyTheme();
+
+// === Pull request hover cards ===
+// Hovering any link to a julia pull request shows a card: its latest TTFX
+// comparison when it is on the ranked list, else what GitHub says about it.
+const PR_CARD_LINK = /^https:\/\/github\.com\/JuliaLang\/julia\/pull\/(\d+)\/?$/;
+const PR_CARD_DELAY_MS = 150;
+// GitHub's answer per number, kept for the page's life: anonymous requests
+// are limited to 60 an hour per address
+const prCardGithub = new Map();
+let prCardEl = null;
+let prCardLink = null;
+let prCardTimer = null;
+
+function prCardMetricsTable(p) {
+  const pct = (g) => formatTtfxPct((g - 1) * 100);
+  const cls = (...vs) => (vs.includes("regression") ? "pr-card-up" : vs.includes("improvement") ? "pr-card-down" : "");
+  const blocks = Math.max(...Object.values(p.suite).map((s) => s.geomeans.length), 0);
+  let html = "<table><thead><tr><th></th>";
+  for (let i = 1; i <= blocks; i++) html += `<th>Block ${i}</th>`;
+  html += "<th>GC off</th></tr></thead><tbody>";
+  for (const m of p.metrics || ["precompile", "load", "run", "warm"]) {
+    const on = p.suite[m];
+    if (!on) continue;
+    const off = p.suite[m + "_gcoff"];
+    html += `<tr><th>${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    html += on.geomeans.map((g) => `<td class="${cls(on.verdict)}">${pct(g)}</td>`).join("");
+    html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(pct).join(", ") : "–"}</td></tr>`;
+  }
+  return html + "</tbody></table>";
+}
+
+function prCardTtfxHtml(p, rank, total) {
+  const better = p.tasks.filter((t) => t.improvements.length).length;
+  const worse = p.tasks.filter((t) => t.regressions.length).length;
+  const verdict = { improvement: "pr-card-down", regression: "pr-card-up" }[p.verdict] || "";
+  const tags = [p.draft ? "draft" : "", p.outdated ? "older commit" : ""]
+    .filter(Boolean)
+    .map((t) => `<span class="ttfx-pr-badge">${t}</span>`)
+    .join(" ");
+  return `<div class="pr-card-head"><b>#${p.pr}</b> <span class="pr-card-muted">${escapeHtml(p.author)}</span> ${tags}</div>
+    <div class="pr-card-title">${escapeHtml(p.title)}</div>
+    <div class="pr-card-score">
+      <span>TTFX rank <b>${rank}</b> of ${total}</span>
+      <span>score <b>${p.score == null ? "–" : formatTtfxPct((p.score - 1) * 100)}</b></span>
+      <span class="${verdict}">${escapeHtml(p.verdict)}</span>
+    </div>
+    ${prCardMetricsTable(p)}
+    <div class="pr-card-muted">Robust task changes: <span class="${better ? "pr-card-down" : ""}">${better} better</span>, <span class="${worse ? "pr-card-up" : ""}">${worse} worse</span></div>
+    <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>`;
+}
+
+function prCardGithubHtml(number, gh) {
+  if (!gh) {
+    return `<div class="pr-card-head"><b>#${number}</b></div>
+      <div class="pr-card-muted">GitHub did not answer; its hourly limit for anonymous requests may be used up.</div>`;
+  }
+  const state = gh.merged ? "merged" : gh.draft ? "draft" : gh.state;
+  const when = gh.merged
+    ? `merged ${timeAgo(gh.merged_at)}`
+    : gh.state === "closed"
+      ? `closed ${timeAgo(gh.closed_at)}`
+      : `opened ${timeAgo(gh.created_at)}`;
+  const size =
+    gh.additions != null
+      ? ` · <span class="pr-card-down">+${gh.additions}</span> <span class="pr-card-up">−${gh.deletions}</span> in ${gh.changed_files} file${gh.changed_files === 1 ? "" : "s"}`
+      : "";
+  return `<div class="pr-card-head"><b>#${number}</b> <span class="pr-card-muted">${escapeHtml(gh.author)}</span> <span class="ttfx-pr-badge">${escapeHtml(state)}</span></div>
+    <div class="pr-card-title">${escapeHtml(gh.title)}</div>
+    <div class="pr-card-muted">${escapeHtml(when)}${size}${gh.base && gh.base !== "master" ? ` · into ${escapeHtml(gh.base)}` : ""}</div>
+    ${gh.state === "open" ? '<div class="pr-card-muted">No TTFX comparison recorded.</div>' : ""}`;
+}
+
+function placePrCard(link) {
+  const r = link.getBoundingClientRect();
+  const el = prCardEl;
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+async function showPrCard(link, number) {
+  if (!prCardEl) {
+    prCardEl = document.createElement("div");
+    prCardEl.className = "pr-card";
+    prCardEl.setAttribute("role", "tooltip");
+    document.body.appendChild(prCardEl);
+  }
+  prCardEl.innerHTML = `<div class="pr-card-head"><b>#${number}</b></div><div class="pr-card-muted">Loading...</div>`;
+  prCardEl.hidden = false;
+  placePrCard(link);
+  await loadTtfxPrs();
+  const prs = (ttfxPrs && ttfxPrs.prs) || [];
+  const i = prs.findIndex((p) => p.pr === number);
+  let html;
+  if (i >= 0) html = prCardTtfxHtml(prs[i], i + 1, prs.length);
+  else {
+    if (!prCardGithub.has(number)) prCardGithub.set(number, githubPullRequest(number).catch(() => null));
+    html = prCardGithubHtml(number, await prCardGithub.get(number));
+  }
+  if (prCardLink !== link) return;
+  prCardEl.innerHTML = html;
+  placePrCard(link);
+}
+
+function hidePrCard() {
+  clearTimeout(prCardTimer);
+  prCardLink = null;
+  if (prCardEl) prCardEl.hidden = true;
+}
+
+document.addEventListener("mouseover", (e) => {
+  const link = e.target.closest?.("a[href]");
+  if (!link || link === prCardLink) return;
+  const m = PR_CARD_LINK.exec(link.href);
+  if (!m) return;
+  hidePrCard();
+  prCardLink = link;
+  prCardTimer = setTimeout(() => showPrCard(link, Number(m[1])), PR_CARD_DELAY_MS);
+});
+
+document.addEventListener("mouseout", (e) => {
+  if (!prCardLink) return;
+  if (e.relatedTarget && prCardLink.contains(e.relatedTarget)) return;
+  if (e.target.closest?.("a[href]") === prCardLink) hidePrCard();
+});
+
+window.addEventListener("scroll", hidePrCard, true);

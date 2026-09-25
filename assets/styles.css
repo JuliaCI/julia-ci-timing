@@ -3175,3 +3175,65 @@ a {
     flex-direction: column;
   }
 }
+
+/* Hover card for links to julia pull requests */
+.pr-card {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 16px));
+  padding: 10px 12px;
+  background: var(--color-canvas-overlay, var(--color-canvas-default));
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  color: var(--color-fg-default);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.pr-card[hidden] {
+  display: none;
+}
+.pr-card > * + * {
+  margin-top: 6px;
+}
+.pr-card-title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: normal;
+}
+.pr-card-muted {
+  color: var(--color-fg-muted);
+}
+.pr-card-score {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.pr-card table {
+  border-collapse: collapse;
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.pr-card th,
+.pr-card td {
+  padding: 2px 8px 2px 0;
+  text-align: right;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.pr-card thead th {
+  color: var(--color-fg-muted);
+}
+.pr-card tbody th {
+  text-align: left;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.pr-card-up {
+  color: var(--color-danger-fg);
+}
+.pr-card-down {
+  color: var(--color-success-fg);
+}
