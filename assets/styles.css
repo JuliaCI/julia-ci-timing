@@ -3316,11 +3316,27 @@ a {
 /* Phone toolbars: selects two to a row, buttons sharing a row evenly, and
    each segmented control and search box on a full row */
 @media (max-width: 480px) {
-  .tab-nav {
+  /* The desktop rule's right margin comes later in the file */
+  .toolbar .tab-nav {
     width: 100%;
+    margin-right: 0;
   }
   .tab-group-buttons > .tab-btn {
     flex: 1 1 0;
+  }
+  .toolbar {
+    align-items: center;
+  }
+  .toolbar h1 {
+    font-size: 16px;
+  }
+  .toolbar .julia-logo {
+    height: 20px;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .updated {
+    font-size: 12px;
+    color: var(--color-fg-muted);
+    text-align: right;
   }
   :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) {
     gap: 6px;
@@ -3356,12 +3372,28 @@ a {
   }
 }
 
-/* iOS zooms the page into any field under 16px when it gains focus */
+/* Touchscreens: every control at one size. Fields must be 16px or iOS zooms
+   the page in when one gains focus, so the buttons match them. */
 @media (hover: none) and (pointer: coarse) {
   input,
   select,
-  textarea {
+  textarea,
+  .btn,
+  .time-select,
+  .checkbox-dropdown-btn,
+  .tab-btn {
     font-size: 16px !important;
+  }
+  .toolbar .btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    line-height: 1;
   }
 }
 
