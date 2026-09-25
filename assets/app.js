@@ -10878,10 +10878,11 @@ async function loadOverviewSources() {
   // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
-  const [pkgeval, bench, ttfx, packages, agents, builds, reasons, top, popular] = await Promise.all([
+  const [pkgeval, bench, ttfx, ttfxPrsList, packages, agents, builds, reasons, top, popular] = await Promise.all([
     pkgevalData || quiet("pkgeval/summary"),
     benchData || quiet("benchmarks/summary"),
     ttfxData || quiet("ttfx/summary"),
+    ttfxPrs || quiet("ttfx/prs"),
     packagesDownloadsData || quiet("downloads/summary"),
     quiet("agents/latest"),
     quiet("timing/builds", { since: weekAgo }),
@@ -10889,7 +10890,7 @@ async function loadOverviewSources() {
     quiet("downloads/top", { days: 7, client: "user" }),
     quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
   ]);
-  return { pkgeval, bench, ttfx, packages, agents, builds, reasons, top, popular };
+  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, packages, agents, builds, reasons, top, popular };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -11446,7 +11447,7 @@ function overviewCICard() {
   });
 }
 
-function overviewTtfxCard(src) {
+function overviewTtfxCard(src, prs) {
   const builds = (src && src.builds) || [];
   const latest = builds[builds.length - 1];
   if (!latest) return overviewMissingCard("ci-ttfx", "TTFX", "The TTFX summary");
@@ -11511,10 +11512,19 @@ function overviewTtfxCard(src) {
       ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
+      ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The five best-ranked open pull requests that come out faster, with their score
+function overviewTtfxPrs(prs) {
+  const best = ((prs && prs.prs) || []).filter((p) => p.score != null && p.score < 1).slice(0, 5);
+  return best
+    .map((p) => `${overviewExtLink(`https://github.com/JuliaLang/julia/pull/${p.pr}`, `#${p.pr}`)} ${formatTtfxPct((p.score - 1) * 100)}`)
+    .join(", ");
 }
 
 function overviewDateAdd(dateStr, days) {
@@ -11813,7 +11823,7 @@ function drawOverview() {
   for (const c of overviewCharts) c.destroy();
   overviewCharts = [];
   const cards = [
-    overviewTtfxCard(src.ttfx),
+    overviewTtfxCard(src.ttfx, src.ttfxPrs),
     overviewPackagesCard(src.packages),
     overviewPkgevalCard(src.pkgeval),
     overviewCICard(),
