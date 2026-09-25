@@ -99,6 +99,27 @@ Chart.Interaction.modes.nearIndex = function (chart, e, options, useFinalPositio
   return near ? items : [];
 };
 
+// A touchscreen with no hovering pointer: taps stand in for hovers, and
+// drags belong to scrolling
+const IS_TOUCH = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+
+// On a touchscreen the first tap on a chart point shows its tooltip and a
+// second tap on the same point opens it, so looking at a point does not
+// leave the page
+function tapAgainToOpen(open) {
+  if (!IS_TOUCH) return open;
+  let last = null;
+  return (evt, elements, chart) => {
+    const key = elements.length ? `${elements[0].datasetIndex}:${elements[0].index}` : null;
+    if (key && key === last) {
+      last = null;
+      return open(evt, elements, chart);
+    }
+    last = key;
+  };
+}
+const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap again to open" : "");
+
 // === State ===
 let chart = null;
 let data = null;
@@ -368,6 +389,7 @@ function drawBuildsView() {
         legend: { labels: { color: textColor, usePointStyle: true } },
         tooltip: {
           callbacks: {
+            footer: TAP_AGAIN_FOOTER,
             title: (items) => {
               const b = items.length && items[0].raw.build;
               return b ? [`#${b.build} ${b.commit}`, ...wrapTooltipText(b.message || "")] : "";
@@ -386,11 +408,11 @@ function drawBuildsView() {
           },
         },
       },
-      onClick: (evt, elements) => {
+      onClick: tapAgainToOpen((evt, elements) => {
         if (!elements.length) return;
         const b = buildsChart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
         window.open(buildkiteBuildUrl(b), "_blank", "noopener");
-      },
+      }),
       scales: {
         x: timeAxis({ textColor, gridColor }),
         y: {
@@ -3004,7 +3026,7 @@ function updateChart() {
               modifierKey: null,
             },
             drag: {
-              enabled: true,
+              enabled: !IS_TOUCH,
               backgroundColor: "rgba(9, 105, 218, 0.2)",
               borderColor: "rgba(9, 105, 218, 0.8)",
               borderWidth: 1,
@@ -7021,6 +7043,7 @@ function updateBenchChart() {
         },
         tooltip: {
           callbacks: {
+            footer: TAP_AGAIN_FOOTER,
             title: (items) => {
               if (!items.length) return "";
               const d = items[0].raw.x;
@@ -7061,7 +7084,7 @@ function updateBenchChart() {
             : {},
         },
       },
-      onClick: (evt, elements) => {
+      onClick: tapAgainToOpen((evt, elements) => {
         if (elements.length > 0) {
           const raw = elements[0].element.$context.raw;
           if (raw) {
@@ -7071,7 +7094,7 @@ function updateBenchChart() {
             );
           }
         }
-      },
+      }),
       onHover: (evt, elements) => {
         evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
       },
@@ -9468,6 +9491,7 @@ function updatePkgevalChart() {
           usePointStyle: true,
           boxPadding: 4,
           callbacks: {
+            footer: TAP_AGAIN_FOOTER,
             title: (items) => {
               if (!items.length) return "";
               const idx = items[0].dataIndex;
@@ -9497,7 +9521,7 @@ function updatePkgevalChart() {
             wheel: { enabled: true },
             pinch: { enabled: true },
             drag: {
-              enabled: true,
+              enabled: !IS_TOUCH,
               backgroundColor: isDark
                 ? "rgba(56,139,253,0.15)"
                 : "rgba(31,111,235,0.1)",
@@ -9510,7 +9534,7 @@ function updatePkgevalChart() {
           },
         },
       },
-      onClick: (evt, elements) => {
+      onClick: tapAgainToOpen((evt, elements) => {
         if (elements.length > 0) {
           const idx = elements[0].index;
           const r = reports[idx];
@@ -9521,7 +9545,7 @@ function updatePkgevalChart() {
             );
           }
         }
-      },
+      }),
       onHover: (evt, elements) => {
         evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
       },
@@ -10161,7 +10185,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(...wrapTooltipText(b.message));
             for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-            lines.push("Click to open the Buildkite job");
+            lines.push(IS_TOUCH ? "Tap again to open the Buildkite job" : "Click to open the Buildkite job");
             return lines;
           },
         },
@@ -10172,7 +10196,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
           wheel: { enabled: true },
           pinch: { enabled: true },
           drag: {
-            enabled: true,
+            enabled: !IS_TOUCH,
             backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
           },
           mode: "x",
@@ -10185,11 +10209,11 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
         annotations: buildTtfxAnnotations(builds, isDark),
       },
     },
-    onClick: (evt, elements, chart) => {
+    onClick: tapAgainToOpen((evt, elements, chart) => {
       if (!elements.length) return;
       const b = chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
       if (b) window.open(ttfxJobUrl(b), "_blank", "noopener");
-    },
+    }),
     onHover: (evt, elements, chart) => {
       evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
       if (ttfxTableView !== "builds") return;
@@ -10347,7 +10371,8 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
     borderColor: suiteColor,
     backgroundColor: suiteColor,
     borderWidth: 2.5,
-    pointRadius: 2.5,
+    // On a phone a build is a pixel or two apart; full-size markers merge
+    pointRadius: window.innerWidth <= 600 ? 1 : 2.5,
     ...ttfxHoverPointStyle(),
     order: 0,
   };
@@ -10647,7 +10672,7 @@ function renderTtfxPrsTable() {
   let html = "";
   ttfxPrs.prs.forEach((p, i) => {
     html += `<tr data-job-url="${escapeHtml(p.web_url || "")}">`;
-    html += `<td class="num col-secondary">${i + 1}</td>`;
+    html += `<td class="num">${i + 1}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
       (p.outdated
@@ -11833,8 +11858,9 @@ function drawOverview() {
   const grid = document.getElementById("overview-grid");
   grid.innerHTML = cards.map((c) => c.html).join("");
   // The whole card opens its tab; links inside it, and a click that ends a
-  // text selection, keep their own meaning
-  grid.querySelectorAll(".overview-card[data-tab]").forEach((el) => {
+  // text selection, keep their own meaning. Not on a touchscreen, where a
+  // tap is how a card's details are read; its title links to the tab.
+  if (!IS_TOUCH) grid.querySelectorAll(".overview-card[data-tab]").forEach((el) => {
     el.addEventListener("click", (e) => {
       if (e.target.closest("a")) return;
       const sel = window.getSelection();
@@ -12545,6 +12571,14 @@ function prCardMetricsTable(p) {
   return html + "</tbody></table>";
 }
 
+// On a touchscreen the card is shown by a tap, so it carries the link the tap
+// did not follow
+function prCardOpenLink(number) {
+  return IS_TOUCH
+    ? `<div><a href="https://github.com/JuliaLang/julia/pull/${number}" target="_blank" rel="noopener">Open #${number} on GitHub</a></div>`
+    : "";
+}
+
 function prCardTtfxHtml(p, rank, total) {
   const better = p.tasks.filter((t) => t.improvements.length).length;
   const worse = p.tasks.filter((t) => t.regressions.length).length;
@@ -12562,13 +12596,15 @@ function prCardTtfxHtml(p, rank, total) {
     </div>
     ${prCardMetricsTable(p)}
     <div class="pr-card-muted">Robust task changes: <span class="${better ? "pr-card-down" : ""}">${better} better</span>, <span class="${worse ? "pr-card-up" : ""}">${worse} worse</span></div>
-    <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>`;
+    <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>
+    ${prCardOpenLink(p.pr)}`;
 }
 
 function prCardGithubHtml(number, gh) {
   if (!gh) {
     return `<div class="pr-card-head"><b>#${number}</b></div>
-      <div class="pr-card-muted">GitHub did not answer; its hourly limit for anonymous requests may be used up.</div>`;
+      <div class="pr-card-muted">GitHub did not answer; its hourly limit for anonymous requests may be used up.</div>
+      ${prCardOpenLink(number)}`;
   }
   const state = gh.merged ? "merged" : gh.draft ? "draft" : gh.state;
   const when = gh.merged
@@ -12583,7 +12619,8 @@ function prCardGithubHtml(number, gh) {
   return `<div class="pr-card-head"><b>#${number}</b> <span class="pr-card-muted">${escapeHtml(gh.author)}</span> <span class="ttfx-pr-badge">${escapeHtml(state)}</span></div>
     <div class="pr-card-title">${escapeHtml(gh.title)}</div>
     <div class="pr-card-muted">${escapeHtml(when)}${size}${gh.base && gh.base !== "master" ? ` · into ${escapeHtml(gh.base)}` : ""}</div>
-    ${gh.state === "open" ? '<div class="pr-card-muted">No TTFX comparison recorded.</div>' : ""}`;
+    ${gh.state === "open" ? '<div class="pr-card-muted">No TTFX comparison recorded.</div>' : ""}
+    ${prCardOpenLink(number)}`;
 }
 
 function placePrCard(link) {
@@ -12601,7 +12638,7 @@ function placePrCard(link) {
 async function showPrCard(link, number) {
   if (!prCardEl) {
     prCardEl = document.createElement("div");
-    prCardEl.className = "pr-card";
+    prCardEl.className = IS_TOUCH ? "pr-card pr-card-touch" : "pr-card";
     prCardEl.setAttribute("role", "tooltip");
     document.body.appendChild(prCardEl);
   }
@@ -12629,6 +12666,7 @@ function hidePrCard() {
 }
 
 document.addEventListener("mouseover", (e) => {
+  if (IS_TOUCH) return;
   const link = e.target.closest?.("a[href]");
   if (!link || link === prCardLink) return;
   const m = PR_CARD_LINK.exec(link.href);
@@ -12639,9 +12677,80 @@ document.addEventListener("mouseover", (e) => {
 });
 
 document.addEventListener("mouseout", (e) => {
-  if (!prCardLink) return;
+  if (IS_TOUCH || !prCardLink) return;
   if (e.relatedTarget && prCardLink.contains(e.relatedTarget)) return;
   if (e.target.closest?.("a[href]") === prCardLink) hidePrCard();
 });
 
 window.addEventListener("scroll", hidePrCard, true);
+
+// Touch: a tap on a pull request link shows its card instead of leaving the
+// page, and a tap anywhere else closes it. Captured, so a row the link sits
+// in does not open as well.
+if (IS_TOUCH) {
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (prCardEl && prCardEl.contains(e.target)) return;
+      const link = e.target.closest?.("a[href]");
+      const m = link && PR_CARD_LINK.exec(link.href);
+      if (!m) {
+        hidePrCard();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (link === prCardLink) return hidePrCard();
+      hidePrCard();
+      prCardLink = link;
+      showPrCard(link, Number(m[1]));
+    },
+    true,
+  );
+}
+
+// === Tap tips ===
+// Touchscreens never show `title` text. A tap on something that explains
+// itself that way, and does nothing else when tapped, shows the text
+// instead; the next tap anywhere closes it.
+let tapTipEl = null;
+
+function interactiveAncestor(el) {
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    if (n.matches("a, button, select, input, textarea, label, summary, canvas, [onclick], .group-item") || n.onclick) return n;
+  }
+  return null;
+}
+
+if (IS_TOUCH) {
+  document.addEventListener("click", (e) => {
+    const shown = tapTipEl && !tapTipEl.hidden;
+    if (shown) tapTipEl.hidden = true;
+    const el = e.target.closest?.("[title]");
+    if (!el || !el.title.trim() || interactiveAncestor(e.target)) return;
+    if (shown && tapTipEl.dataset.for === el.title) return;
+    if (!tapTipEl) {
+      tapTipEl = document.createElement("div");
+      tapTipEl.className = "pr-card tap-tip";
+      tapTipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tapTipEl);
+    }
+    tapTipEl.textContent = el.title;
+    tapTipEl.dataset.for = el.title;
+    tapTipEl.hidden = false;
+    const r = el.getBoundingClientRect();
+    const w = tapTipEl.offsetWidth;
+    const h = tapTipEl.offsetHeight;
+    tapTipEl.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    tapTipEl.style.top = `${r.bottom + 6 + h <= window.innerHeight - 8 ? r.bottom + 6 : Math.max(8, r.top - h - 6)}px`;
+  });
+  window.addEventListener("scroll", () => tapTipEl && (tapTipEl.hidden = true), true);
+}
+
+// On phones the TTFX task list and the benchmark group list fold under
+// their headers, so the page below them is one scroll away
+for (const id of ["ttfx-task-list", "bench-group-list"]) {
+  document.getElementById(id)?.addEventListener("click", (e) => {
+    if (e.target.closest(".group-header")) e.currentTarget.classList.toggle("open");
+  });
+}

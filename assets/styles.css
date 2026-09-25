@@ -3237,3 +3237,139 @@ a {
 .pr-card-down {
   color: var(--color-success-fg);
 }
+
+/* Phones and small windows: the page is the only thing that scrolls
+   vertically. Tables and panels drop the fixed heights they have on desktop
+   and scroll sideways only; the pick lists fold under their headers. */
+@media (max-width: 768px), (max-height: 500px) {
+  .resize-handle {
+    display: none;
+  }
+  .stats-wrapper,
+  .stats-bar,
+  .benchmarks-stats,
+  .pkgeval-panels,
+  .package-panel,
+  #packages-top,
+  .commits-regressions,
+  .agents-section,
+  .agents-table-wrapper,
+  .ttfx-stats {
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible;
+  }
+  .commits-reg-table td.commits-reg-msg {
+    min-width: 14em;
+  }
+  .ttfx-stats td.msg {
+    max-width: 45vw;
+  }
+
+  .ttfx-sidebar,
+  .benchmarks-sidebar {
+    max-height: none;
+    overflow: visible;
+  }
+  .ttfx-sidebar > .group-header,
+  .benchmarks-sidebar > .group-header {
+    cursor: pointer;
+    padding: 10px 12px;
+  }
+  .ttfx-sidebar > .group-header::after,
+  .benchmarks-sidebar > .group-header::after {
+    content: " ▸";
+  }
+  .ttfx-sidebar.open > .group-header::after,
+  .benchmarks-sidebar.open > .group-header::after {
+    content: " ▾";
+  }
+  .ttfx-sidebar:not(.open) > :not(.group-header),
+  .benchmarks-sidebar:not(.open) > :not(.group-header) {
+    display: none;
+  }
+
+  /* The TTFX charts in the page's flow, one fixed-height panel each */
+  .ttfx-chart-container,
+  .ttfx-chart-container:has(.ttfx-summary-grid:not([hidden])) {
+    min-height: 0;
+    padding: 8px;
+  }
+  .ttfx-chart-wrapper {
+    position: static;
+  }
+  .ttfx-summary-grid {
+    grid-template-rows: none;
+    height: auto;
+  }
+  .ttfx-summary-legend {
+    padding: 2px 0;
+  }
+  .ttfx-panel {
+    height: 210px;
+  }
+  .ttfx-single {
+    height: 320px;
+  }
+}
+
+/* Phone toolbars: selects two to a row, buttons sharing a row evenly, and
+   each segmented control and search box on a full row */
+@media (max-width: 480px) {
+  .tab-nav {
+    width: 100%;
+  }
+  .tab-group-buttons > .tab-btn {
+    flex: 1 1 0;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) {
+    gap: 6px;
+    padding: 8px;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > :is(.time-select, .checkbox-dropdown) {
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .checkbox-dropdown > .checkbox-dropdown-btn {
+    width: 100%;
+    justify-content: space-between;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .btn {
+    flex: 1 1 0;
+    white-space: nowrap;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .bench-table-view-toggle {
+    display: flex;
+    flex: 1 1 100%;
+  }
+  .bench-table-view-toggle > .btn {
+    flex: 1 1 0;
+  }
+  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > :is(.package-search, .updated, .bench-noisy-min-ns-label) {
+    flex: 1 1 100%;
+    margin: 0;
+  }
+  .package-search input {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+/* iOS zooms the page into any field under 16px when it gains focus */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* A card shown by a tap takes taps itself: its link must be reachable */
+.pr-card-touch {
+  pointer-events: auto;
+}
+.tap-tip {
+  max-width: min(320px, calc(100vw - 16px));
+  white-space: pre-line;
+}
