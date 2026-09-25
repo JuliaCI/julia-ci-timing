@@ -12766,7 +12766,11 @@ if (IS_TOUCH && IS_STANDALONE) {
   const indicator = document.createElement("div");
   indicator.className = "pull-refresh";
   indicator.setAttribute("aria-hidden", "true");
-  indicator.textContent = "↓";
+  // The arrow turns inside a circle that only moves down, so turning and
+  // spinning keep it centred
+  const icon = document.createElement("span");
+  icon.textContent = "↓";
+  indicator.appendChild(icon);
   document.body.appendChild(indicator);
   let start = null;
   let pull = 0;
@@ -12780,6 +12784,7 @@ if (IS_TOUCH && IS_STANDALONE) {
     pull = 0;
     indicator.style.transform = "";
     indicator.style.opacity = "";
+    icon.style.transform = "";
   };
   document.addEventListener(
     "touchstart",
@@ -12803,14 +12808,16 @@ if (IS_TOUCH && IS_STANDALONE) {
       pull = Math.max(0, dy);
       const ready = pull >= PULL_REFRESH_PX;
       indicator.style.opacity = String(Math.min(1, pull / PULL_REFRESH_PX));
-      indicator.style.transform = `translate(-50%, ${Math.min(pull, PULL_REFRESH_PX * 1.4) * 0.6}px) rotate(${ready ? 180 : 0}deg)`;
+      indicator.style.transform = `translateY(${Math.min(pull, PULL_REFRESH_PX * 1.4) * 0.6}px)`;
+      icon.style.transform = `rotate(${ready ? 180 : 0}deg)`;
     },
     { passive: true },
   );
   document.addEventListener("touchend", () => {
     if (!start) return;
     if (pull >= PULL_REFRESH_PX) {
-      indicator.textContent = "↻";
+      icon.textContent = "↻";
+      icon.style.transform = "";
       indicator.classList.add("refreshing");
       location.reload();
       return;

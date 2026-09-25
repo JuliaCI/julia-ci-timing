@@ -3379,6 +3379,7 @@ a {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 8px);
   left: 50%;
+  margin-left: -18px;
   z-index: 1001;
   width: 36px;
   height: 36px;
@@ -3392,12 +3393,18 @@ a {
   color: var(--color-fg-default);
   font-size: 18px;
   opacity: 0;
-  transform: translate(-50%, 0);
   transition: transform 0.15s ease-out;
   pointer-events: none;
 }
+.pull-refresh > span {
+  display: block;
+  line-height: 1;
+  transition: transform 0.15s ease-out;
+}
 .pull-refresh.refreshing {
   opacity: 1 !important;
+}
+.pull-refresh.refreshing > span {
   animation: pull-refresh-spin 0.8s linear infinite;
 }
 @keyframes pull-refresh-spin {
