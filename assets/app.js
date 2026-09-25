@@ -12754,3 +12754,68 @@ for (const id of ["ttfx-task-list", "bench-group-list"]) {
     if (e.target.closest(".group-header")) e.currentTarget.classList.toggle("open");
   });
 }
+
+// === Pull to refresh ===
+// A home-screen web app has no reload button and iOS gives it no pull to
+// refresh of its own, so a pull down from the top of the page reloads it.
+// In a browser tab the browser's own gesture does this.
+const IS_STANDALONE = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const PULL_REFRESH_PX = 80;
+
+if (IS_TOUCH && IS_STANDALONE) {
+  const indicator = document.createElement("div");
+  indicator.className = "pull-refresh";
+  indicator.setAttribute("aria-hidden", "true");
+  indicator.textContent = "↓";
+  document.body.appendChild(indicator);
+  let start = null;
+  let pull = 0;
+  // A pull that starts inside a list scrolled away from its top scrolls it
+  const scrolledAway = (n) => {
+    for (; n && n !== document.body; n = n.parentElement) if (n.scrollTop > 0) return true;
+    return false;
+  };
+  const reset = () => {
+    start = null;
+    pull = 0;
+    indicator.style.transform = "";
+    indicator.style.opacity = "";
+  };
+  document.addEventListener(
+    "touchstart",
+    (e) => {
+      const atTop = document.scrollingElement.scrollTop <= 0;
+      start = e.touches.length === 1 && atTop && !scrolledAway(e.target) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+      pull = 0;
+    },
+    { passive: true },
+  );
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!start) return;
+      const dx = e.touches[0].clientX - start.x;
+      const dy = e.touches[0].clientY - start.y;
+      // Sideways swipes scroll tables, and a page that moved is a scroll
+      if (Math.abs(dx) > dy || document.scrollingElement.scrollTop > 0) {
+        if (pull === 0) return reset();
+      }
+      pull = Math.max(0, dy);
+      const ready = pull >= PULL_REFRESH_PX;
+      indicator.style.opacity = String(Math.min(1, pull / PULL_REFRESH_PX));
+      indicator.style.transform = `translate(-50%, ${Math.min(pull, PULL_REFRESH_PX * 1.4) * 0.6}px) rotate(${ready ? 180 : 0}deg)`;
+    },
+    { passive: true },
+  );
+  document.addEventListener("touchend", () => {
+    if (!start) return;
+    if (pull >= PULL_REFRESH_PX) {
+      indicator.textContent = "↻";
+      indicator.classList.add("refreshing");
+      location.reload();
+      return;
+    }
+    reset();
+  });
+  document.addEventListener("touchcancel", reset);
+}
