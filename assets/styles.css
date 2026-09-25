@@ -132,6 +132,11 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* Links a component does not style would take the browser's dark blue,
+   unreadable on the dark theme */
+a {
+  color: var(--color-accent-fg);
+}
 
 /* Top toolbar */
 .toolbar {
