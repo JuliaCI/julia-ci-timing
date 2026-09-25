@@ -75,6 +75,14 @@ Times are seconds, the minimum over the job's ABBA blocks; `load` and
 of the later runs. `builds` is sorted by date. A build whose job failed
 before uploading has an empty `tasks`.
 
+The TTFX job also runs on julia-pr builds of pull requests that touch the
+paths it watches, comparing the head with the master build of the merge-base
+and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
+comparison of each open pull request, in `ttfx_prs` (no history: a closed
+pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
+tab's "Open PRs" table. It lists the open pull requests from GitHub
+anonymously (about a dozen requests an hour; `GITHUB_TOKEN` is used if set).
+
 Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
 (not touched by `fetch_ttfx.jl`): each entry names a `job_id` from the summary
 plus a short `label` and a fuller `description`. The site draws a dashed line

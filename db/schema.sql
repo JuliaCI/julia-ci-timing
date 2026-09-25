@@ -343,6 +343,36 @@ CREATE TABLE IF NOT EXISTS ttfx_samples (
     PRIMARY KEY (job_uuid, seq)
 ) WITHOUT ROWID;
 
+-- The latest finished TTFX comparison (head against the master build of the
+-- merge-base) of every open julia pull request that has one. Current state
+-- only: a run replaces a pull request's row when a newer job finishes and
+-- deletes it once the pull request is closed.
+CREATE TABLE IF NOT EXISTS ttfx_prs (
+    pr_number        INTEGER PRIMARY KEY,
+    title            TEXT NOT NULL DEFAULT '',
+    author           TEXT NOT NULL DEFAULT '',
+    draft            INTEGER NOT NULL DEFAULT 0,
+    pr_head_sha      TEXT NOT NULL DEFAULT '',   -- the pull request's head now; the job may be older
+    build            INTEGER NOT NULL,           -- julia-pr build number
+    job_uuid         TEXT NOT NULL,
+    job_state        TEXT NOT NULL,
+    build_created_at TEXT NOT NULL,
+    finished_at      TEXT,
+    web_url          TEXT,
+    head_commit      TEXT NOT NULL DEFAULT '',
+    head_version     TEXT NOT NULL DEFAULT '',
+    base_commit      TEXT NOT NULL DEFAULT '',
+    base_version     TEXT NOT NULL DEFAULT '',
+    blocks           INTEGER,
+    n_tasks          INTEGER,
+    verdict          TEXT NOT NULL,              -- improvement, regression or same, as the job judged it
+    n_improvements   INTEGER NOT NULL,
+    n_regressions    INTEGER NOT NULL,
+    suite            TEXT NOT NULL,              -- JSON: metric => {geomeans (head/base per block), verdict, n_tasks}
+    tasks            TEXT NOT NULL,              -- JSON: the tasks with an improvement or regression, and their notes
+    change_seq       INTEGER NOT NULL
+);
+
 -- Buildkite artifacts expire; keep the pair we parsed.
 CREATE TABLE IF NOT EXISTS raw_ttfx (
     job_uuid    TEXT PRIMARY KEY REFERENCES ttfx_jobs (job_uuid),

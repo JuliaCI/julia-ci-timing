@@ -9571,7 +9571,7 @@ let ttfxNormalized = false;
 let ttfxHasGcOff = false;
 let ttfxSelectedTasks = new Set();
 let ttfxTaskColors = {};
-let ttfxTableView = "builds"; // "builds" | "tasks"
+let ttfxTableView = "prs"; // "prs" | "builds" | "tasks"
 let ttfxTaskSortCol = "latest";
 let ttfxTaskSortAsc = false;
 // Hand-written notes on individual jobs (data/ttfx_annotations.json), drawn
@@ -9824,8 +9824,8 @@ function toggleTtfxNormalized() {
 }
 
 function setTtfxTableView(view) {
-  ttfxTableView = view === "tasks" ? "tasks" : "builds";
-  for (const v of ["builds", "tasks"]) {
+  ttfxTableView = view === "tasks" || view === "builds" ? view : "prs";
+  for (const v of ["prs", "builds", "tasks"]) {
     document
       .getElementById("ttfx-view-" + v)
       .classList.toggle("btn-primary", v === ttfxTableView);
@@ -9871,7 +9871,7 @@ function updateTtfxURL() {
   setOrDelete("tn", "1", !ttfxNormalized);
   // The GC-off toggle's parameter, from before both were drawn together
   url.searchParams.delete("tg");
-  setOrDelete("tv", ttfxTableView, ttfxTableView === "builds");
+  setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
   // Whichever of the selected or the excluded tasks is the shorter list
   const all = ttfxAllTasks();
@@ -9914,10 +9914,10 @@ function applyTtfxURLParams() {
     document.getElementById("ttfx-single").hidden = false;
   }
   const tv = params.get("tv");
-  if (tv === "tasks") {
-    ttfxTableView = "tasks";
-    document.getElementById("ttfx-view-builds").classList.remove("btn-primary");
-    document.getElementById("ttfx-view-tasks").classList.add("btn-primary");
+  if (tv === "tasks" || tv === "builds") {
+    ttfxTableView = tv;
+    document.getElementById("ttfx-view-prs").classList.remove("btn-primary");
+    document.getElementById("ttfx-view-" + tv).classList.add("btn-primary");
   }
   const tk = params.get("tk");
   if (tk !== null) ttfxURLTasks = tk.split(",").filter(Boolean);
@@ -10533,6 +10533,8 @@ function updateTtfxTaskChart() {
 }
 
 function updateTtfxTable() {
+  document.getElementById("ttfx-stats-caption").hidden = ttfxTableView !== "prs";
+  if (ttfxTableView === "prs") return renderTtfxPrsTable();
   if (!ttfxData) return;
   if (ttfxTableView === "tasks") renderTtfxTasksTable();
   else renderTtfxBuildsTable();
@@ -10589,6 +10591,105 @@ function renderTtfxBuildsTable() {
     tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
     tr.addEventListener("mouseenter", () => highlightTtfxBuild(Number(tr.dataset.build)));
     tr.addEventListener("mouseleave", () => highlightTtfxBuild(null));
+  });
+}
+
+// api/ttfx/prs: the latest TTFX comparison of every open julia pull request
+// that has one (head against the master build of the merge-base), ranked
+// best first by the server. Loaded when the view is first shown.
+let ttfxPrs = null;
+let ttfxPrsLoading = null;
+
+function loadTtfxPrs() {
+  if (!ttfxPrsLoading)
+    ttfxPrsLoading = apiGet("ttfx/prs")
+      .then((d) => (ttfxPrs = d))
+      .catch((err) => {
+        console.error("Failed to load TTFX pull requests:", err);
+        ttfxPrs = { prs: [], failed: true };
+      });
+  return ttfxPrsLoading;
+}
+
+function renderTtfxPrsTable() {
+  const thead = document.getElementById("ttfx-stats-thead");
+  const tbody = document.getElementById("ttfx-stats-tbody");
+  const metrics = ["precompile", "load", "run", "warm"];
+  thead.innerHTML =
+    '<tr><th class="num">#</th><th>Pull request</th><th class="col-secondary">Author</th>' +
+    '<th class="num" title="Change over precompile, load, run and warm combined, taking the less favourable block of each. Rows are ranked by it.">Score</th>' +
+    metrics
+      .map(
+        (m) =>
+          `<th class="num" title="Suite geometric mean of head against base, per ABBA block, over every task. Coloured when the job judged the change robust${TTFX_METRICS[m].gcoffIndex != null ? " (with the GC on or off; the GC-off numbers are in the tooltip)" : ""}.">${ttfxMetricLabel(m)}</th>`,
+      )
+      .join("") +
+    '<th class="num" title="Tasks with a robust improvement / regression; the list is in the tooltip">Tasks</th>' +
+    '<th class="col-secondary">Measured</th></tr>';
+  const cols = 5 + metrics.length + 1;
+  if (!ttfxPrs) {
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
+    loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
+    return;
+  }
+  if (ttfxPrs.failed) {
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="error">Failed to load data</td></tr>`;
+    return;
+  }
+  if (!ttfxPrs.prs.length) {
+    tbody.innerHTML = `<tr><td colspan="${cols}">No open pull request has a TTFX comparison</td></tr>`;
+    return;
+  }
+  document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
+  const pct = (g) => formatTtfxPct((g - 1) * 100);
+  const verdictClass = (...vs) =>
+    vs.includes("regression") ? "ttfx-up" : vs.includes("improvement") ? "ttfx-down" : "";
+  let html = "";
+  ttfxPrs.prs.forEach((p, i) => {
+    html += `<tr data-job-url="${escapeHtml(p.web_url || "")}">`;
+    html += `<td class="num col-secondary">${i + 1}</td>`;
+    const badges =
+      (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
+      (p.outdated
+        ? `<span class="ttfx-pr-badge" title="Measured on ${escapeHtml(p.head.commit.slice(0, 10))}; the pull request has newer commits">older commit</span> `
+        : "");
+    html += `<td class="msg" title="${escapeHtml(p.title)}"><a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}${escapeHtml(p.title)}</td>`;
+    html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
+    html += `<td class="num"><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
+    for (const m of metrics) {
+      const on = p.suite[m];
+      const off = p.suite[m + "_gcoff"];
+      if (!on) {
+        html += '<td class="num">–</td>';
+        continue;
+      }
+      const title = off
+        ? `GC off: ${off.geomeans.map(pct).join(", ")} (${off.verdict})`
+        : `${on.n_tasks} tasks`;
+      html += `<td class="num ${verdictClass(on.verdict, off && off.verdict)}" title="${escapeHtml(title)}">${on.geomeans.map(pct).join(", ")}</td>`;
+    }
+    const better = p.tasks.filter((t) => t.improvements.length);
+    const worse = p.tasks.filter((t) => t.regressions.length);
+    const describe = (t, kinds) =>
+      `${t.name}: ` +
+      kinds
+        .map((k) => {
+          const m = t.metrics[k];
+          const r = m && (m.ratios || m.gcoff_ratios);
+          return r ? `${k} ${r.map(pct).join(", ")}` : k;
+        })
+        .join("; ");
+    const tasksTitle = [
+      ...better.map((t) => "+ " + describe(t, t.improvements)),
+      ...worse.map((t) => "- " + describe(t, t.regressions)),
+    ].join("\n");
+    html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
+    html += `<td class="col-secondary" title="${escapeHtml(`${p.date}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
+    html += "</tr>";
+  });
+  tbody.innerHTML = html;
+  tbody.querySelectorAll("tr[data-job-url]").forEach((tr) => {
+    if (tr.dataset.jobUrl) tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
   });
 }
 

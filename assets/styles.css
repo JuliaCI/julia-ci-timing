@@ -2636,6 +2636,28 @@ body {
   color: var(--color-fg-muted);
   font-size: 11px;
 }
+.ttfx-stats-caption {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--color-canvas-subtle);
+  border-bottom: 1px solid var(--color-border-muted);
+}
+.ttfx-stats-caption[hidden] {
+  display: none;
+}
+#ttfx-prs-count {
+  margin-right: 4px;
+}
+.ttfx-pr-badge {
+  display: inline-block;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  padding: 0 6px;
+  color: var(--color-fg-muted);
+  font-size: 10px;
+  line-height: 15px;
+}
 .ttfx-stats .ttfx-failed {
   color: var(--color-danger-fg);
 }

@@ -464,6 +464,33 @@ function ttfx(db; since="")
                        "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds)
 end
 
+# Open pull requests by how their latest TTFX comparison looks, best first.
+# The score multiplies, over precompile, load, run and warm, the suite geomean
+# ratio (head/base) of the least favourable block: below 1 is faster, and
+# one noisy block cannot carry a pull request up the list.
+const TTFX_PR_METRICS = ["precompile", "load", "run", "warm"]
+
+function ttfx_prs(db)
+    prs = Any[]
+    for r in rows(db, "SELECT * FROM ttfx_prs")
+        suite = JSON3.read(String(r.suite))
+        worst = [maximum(suite[m].geomeans) for m in TTFX_PR_METRICS if haskey(suite, m) && !isempty(suite[m].geomeans)]
+        push!(prs, OrderedDict(
+            "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+            "score" => isempty(worst) ? nothing : prod(worst), "verdict" => String(r.verdict),
+            "n_improvements" => Int(r.n_improvements), "n_regressions" => Int(r.n_regressions),
+            "suite" => suite, "tasks" => JSON3.read(String(r.tasks)),
+            "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state), "web_url" => js(r.web_url),
+            "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
+            "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
+            "base" => OrderedDict("commit" => String(r.base_commit), "version" => String(r.base_version)),
+            "outdated" => String(r.pr_head_sha) != String(r.head_commit),
+            "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks)))
+    end
+    sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"]))
+    return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => "julia-pr", "metrics" => TTFX_PR_METRICS, "prs" => prs)
+end
+
 # --- commit lookup -------------------------------------------------------------
 
 # Everything recorded about one julia commit, for the Commit view: its

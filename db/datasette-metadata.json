@@ -141,6 +141,17 @@
         "ttfx_samples": {
           "description": "Every record of a TTFX job's results file, in order, so other statistics than the minimum can be recomputed."
         },
+        "ttfx_prs": {
+          "description": "The latest finished TTFX comparison of every open julia pull request that has one: the head against the master build of the merge-base, as the julia-pr TTFX job judged it. Current state only; a closed pull request's row is deleted.",
+          "columns": {
+            "pr_head_sha": "the pull request's head now; differs from head_commit when it has moved on since the job",
+            "verdict": "improvement, regression or same",
+            "n_improvements": "robust improvements, per task and metric plus suite metrics",
+            "n_regressions": "robust regressions, counted the same way",
+            "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count",
+            "tasks": "JSON: the tasks with a robust improvement or regression, their ratios and notes"
+          }
+        },
         "raw_ttfx": {
           "description": "The TTFX job's result files as fetched, zstd-compressed."
         },

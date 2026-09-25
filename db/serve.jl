@@ -231,6 +231,9 @@ const ROUTES = [
     Route("ttfx/summary", [SINCE],
           "TTFX on every master build: per task, the precompile, load, run and warm seconds (and load, run and warm with the GC off), plus failed tasks.",
           (db, _, p) -> Render.ttfx(db; since=instant(p, "since"))),
+    Route("ttfx/prs", [],
+          "Open julia pull requests ranked by their latest TTFX comparison (head against the master build of the merge-base), best first: the job's verdict and robust improvements and regressions, the suite geomean ratio per metric and block, and the flagged tasks. score multiplies, over precompile, load, run and warm, the least favourable block's ratio; below 1 is faster. outdated means the pull request has moved on since the job's commit.",
+          (db, _, _) -> Render.ttfx_prs(db)),
     Route("downloads/summary", [],
           "Package server requests per day (total, user, CI), by Julia version and release stage, with Julia release tags.",
           (db, _, _) -> Render.downloads(db)),
@@ -519,7 +522,7 @@ function warm_up(s::Server)
         day(n) = Dates.format(Date(now(UTC)) - Day(n), dateformat"yyyy-mm-dd")
         cached = [
             "timing/runs" => "since=$(day(30))", "timing/builds" => "since=$(day(7))",
-            "pkgeval/summary" => "", "benchmarks/summary" => "", "ttfx/summary" => "", "downloads/summary" => "",
+            "pkgeval/summary" => "", "benchmarks/summary" => "", "ttfx/summary" => "", "ttfx/prs" => "", "downloads/summary" => "",
             "agents/latest" => "", "pkgeval/reasons" => "", "downloads/top" => "days=7&client=user",
             "pkgeval/popular" => "days=30&client=user&limit=50", "commits" => "limit=100"]
         for (route, query) in cached

@@ -1135,6 +1135,14 @@
         >
           <button
             class="btn btn-primary"
+            id="ttfx-view-prs"
+            onclick="setTtfxTableView('prs')"
+            title="Open pull requests ranked by their latest TTFX comparison against master, best first"
+          >
+            Open PRs
+          </button>
+          <button
+            class="btn"
             id="ttfx-view-builds"
             onclick="setTtfxTableView('builds')"
             title="One row per master build: suite geometric means over the selected tasks"
@@ -1199,6 +1207,14 @@
             aria-label="Resize TTFX table"
           ></div>
           <div class="ttfx-stats" id="ttfx-stats" style="height: 280px">
+            <div class="ttfx-stats-caption" id="ttfx-stats-caption">
+              <b>Open pull requests ranked by TTFX result, best first</b>
+              <span id="ttfx-prs-count"></span>
+              <span class="col-secondary">
+                Each one's latest TTFX CI job, head against master. Negative is faster; colour
+                marks a robust change.
+              </span>
+            </div>
             <table>
               <thead id="ttfx-stats-thead"></thead>
               <tbody id="ttfx-stats-tbody">

@@ -11,6 +11,7 @@
 # task; db/export.jl renders data/ttfx_summary.json.gz from them. The
 # job repeats each task script with the GC disabled as well; those give the load, run
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
+# It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
 using JSON3
@@ -183,11 +184,12 @@ function build_row(build, job, results, meta)
     )
 end
 
-# (results, meta) for a job, each nothing when the job uploaded no such
-# artifact; nothing altogether when the listing or a download failed, so the
-# caller leaves the job for the next run instead of recording an empty row.
-function fetch_job_artifacts(build, job)
-    artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds/$(build.number)/jobs/$(job.id)/artifacts")
+# The parsed artifacts at `paths` for a job (by default results and meta), each nothing
+# when the job uploaded no such artifact; nothing altogether when the listing or a
+# download failed, so the caller leaves the job for the next run instead of recording
+# an empty row.
+function fetch_job_artifacts(build, job; pipeline=CI_PIPELINE, paths=("ttfx/results.json", "ttfx/results-meta.json"))
+    artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$(build.number)/jobs/$(job.id)/artifacts")
     artifacts === nothing && return nothing
     function get_json(path)
         i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
@@ -196,11 +198,13 @@ function fetch_job_artifacts(build, job)
         body === nothing && return nothing
         return JSON3.read(body)
     end
-    results = get_json("ttfx/results.json")
-    results === nothing && return nothing
-    meta = get_json("ttfx/results-meta.json")
-    meta === nothing && return nothing
-    return (results === missing ? nothing : results, meta === missing ? nothing : meta)
+    out = Any[]
+    for path in paths
+        v = get_json(path)
+        v === nothing && return nothing
+        push!(out, v === missing ? nothing : v)
+    end
+    return Tuple(out)
 end
 
 # New rows for finished TTFX jobs not in `known`. Builds are listed newest first; stop
@@ -334,6 +338,149 @@ function write_rows!(db, rows)
     return length(rows)
 end
 
+# --- pull requests -----------------------------------------------------------
+#
+# On julia-pr the TTFX job runs when a pull request touches the paths it watches (or has
+# its label), measuring the head against the master build of the merge-base, and uploads
+# its verdict as ttfx/compare.json. ttfx_prs keeps the latest one of each open pull
+# request, for ranking them; nothing older is kept.
+
+const PR_PIPELINE = "julia-pr"
+const GITHUB_PULLS = "https://api.github.com/repos/JuliaLang/julia/pulls"
+# Builds listed per run: the first fill reaches back a month, later runs only need the
+# builds since the last one, with a margin for jobs still running then
+const PR_BACKFILL_DAYS = 30
+const PR_LOOKBACK_DAYS = 3
+const PR_COLS = ["title", "author", "draft", "pr_head_sha", "build", "job_uuid", "job_state", "build_created_at", "finished_at",
+                 "web_url", "head_commit", "head_version", "base_commit", "base_version", "blocks", "n_tasks", "verdict",
+                 "n_improvements", "n_regressions", "suite", "tasks"]
+
+# The host passes no token: anonymous, the pull request list costs about a dozen of the
+# 60 requests an hour GitHub allows an address
+function github_headers()
+    headers = ["User-Agent" => "julia-ci-timing-fetcher"]
+    token = get(ENV, "GITHUB_TOKEN", "")
+    isempty(token) || push!(headers, "Authorization" => "Bearer $token")
+    return headers
+end
+
+# Every open pull request of julia, by number. Throws rather than return part of the
+# list, which would delete the rows of the pull requests left out.
+function open_pulls()
+    pulls = Dict{Int,Any}()
+    for page in 1:50
+        resp = http_get_retry("$GITHUB_PULLS?state=open&per_page=100&page=$page", github_headers())
+        resp.status == 200 || error("listing open pull requests failed: HTTP $(resp.status)")
+        list = JSON3.read(resp.body)
+        isempty(list) && return pulls
+        for p in list
+            pulls[Int(p.number)] = p
+        end
+    end
+    error("more than 5000 open pull requests")
+end
+
+# Finished TTFX jobs of julia-pr builds created since `since`, by pull request number,
+# newest first.
+function pr_ttfx_jobs(since::DateTime)
+    jobs = Dict{Int,Vector{Any}}()
+    for page in 1:50
+        params = Dict("created_from" => Store.iso(since), "per_page" => 100, "page" => page)
+        builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params)
+        builds === nothing && error("listing $PR_PIPELINE builds failed (page $page)")
+        isempty(builds) && break
+        for build in builds
+            pr = get(build, :pull_request, nothing)
+            n = pr === nothing ? nothing : tryparse(Int, string(get(pr, :id, "")))
+            n === nothing && continue
+            for job in get(build, :jobs, [])
+                get(job, :type, nothing) == "script" || continue
+                name = get(job, :name, nothing)
+                (name === nothing || match(TTFX_JOB, String(name)) === nothing) && continue
+                String(get(job, :state, "")) in FINISHED_STATES || continue
+                push!(get!(jobs, n, Any[]), (build, job))
+            end
+        end
+    end
+    return jobs
+end
+
+function pr_row(pull, build, job, compare, meta)
+    arms = meta === nothing ? nothing : get(meta, :arms, nothing)
+    arm(label) = arms === nothing ? nothing : get(arms, Symbol(String(get(compare, label, String(label)))), nothing)
+    field(a, key) = a === nothing ? "" : String(something(get(a, key, ""), ""))
+    head, base = arm(:head), arm(:base)
+    # Only what the verdict rests on; the notes quote whole error messages
+    flagged = Any[]
+    for (name, t) in pairs(something(get(compare, :tasks, nothing), Dict()))
+        imps, regs = get(t, :improvements, []), get(t, :regressions, [])
+        isempty(imps) && isempty(regs) && continue
+        metrics = Dict(String(m) => Dict(k => v[k] for k in (:ratios, :gcoff_ratios) if haskey(v, k))
+                       for (m, v) in pairs(get(t, :metrics, Dict())) if String(m) in String.(vcat(imps, regs)))
+        note = get(t, :note, nothing)
+        push!(flagged, Dict("name" => String(name), "improvements" => imps, "regressions" => regs, "metrics" => metrics,
+                            "note" => note === nothing ? nothing : first(String(note), 300)))
+    end
+    sort!(flagged; by=t -> t["name"])
+    settings = meta === nothing ? nothing : get(meta, :settings, nothing)
+    user = get(pull, :user, nothing)
+    return (Int(pull.number), String(something(get(pull, :title, ""), "")), user === nothing ? "" : String(user.login),
+            get(pull, :draft, false) === true ? 1 : 0, String(pull.head.sha),
+            Int(build.number), String(job.id), String(job.state), Store.iso(Store.parse_upstream(String(build.created_at))),
+            at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
+            isempty(field(head, :commit)) ? String(build.commit) : field(head, :commit), field(head, :version),
+            field(base, :commit), field(base, :version),
+            something(get(compare, :blocks, nothing), missing),
+            settings === nothing ? missing : something(get(settings, :n_tasks, nothing), missing),
+            String(compare.verdict), Int(compare.n_improvements), Int(compare.n_regressions),
+            JSON3.write(something(get(compare, :suite, nothing), Dict())), JSON3.write(flagged))
+end
+
+# Bring ttfx_prs up to date: a row for every open pull request whose latest finished
+# TTFX job produced a comparison, none for closed ones.
+function refresh_prs!(db)
+    pulls = open_pulls()
+    existing = Dict(Int(r.pr_number) => r for r in query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs"))
+    since = now(Dates.UTC) - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
+    rows = Any[]
+    for (n, list) in pr_ttfx_jobs(since)
+        pull = get(pulls, n, nothing)
+        pull === nothing && continue
+        known = get(existing, n, nothing)
+        for (build, job) in list
+            known !== nothing && (String(job.id) == known.job_uuid || build.number < known.build) && break
+            fetched = fetch_job_artifacts(build, job; pipeline=PR_PIPELINE, paths=("ttfx/compare.json", "ttfx/results-meta.json"))
+            if fetched === nothing
+                @warn "Could not fetch the artifacts; the job is retried next run" pr=n build=build.number
+                break
+            end
+            compare, meta = fetched
+            # The job stopped before comparing; an older one may have
+            compare === nothing && continue
+            push!(rows, pr_row(pull, build, job, compare, meta))
+            break
+        end
+    end
+    transaction(db) do
+        seq = next_seq!(db)
+        stmt = upsert_stmt(db, "ttfx_prs", ["pr_number"], PR_COLS)
+        for r in rows
+            upsert!(stmt, (r..., seq))
+        end
+        DBInterface.execute(db, "DELETE FROM ttfx_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
+        meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, change_seq = ?5 WHERE pr_number = ?6 " *
+                                       "AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4)")
+        for r in query(db, "SELECT pr_number FROM ttfx_prs")
+            p = pulls[Int(r.pr_number)]
+            user = get(p, :user, nothing)
+            DBInterface.execute(meta, (String(something(get(p, :title, ""), "")), user === nothing ? "" : String(user.login),
+                                       get(p, :draft, false) === true ? 1 : 0, String(p.head.sha), seq, Int(r.pr_number)))
+        end
+    end
+    @info "Open pull requests with a TTFX comparison" updated=length(rows) total=query(db, "SELECT count(*) AS n FROM ttfx_prs")[1].n
+    return length(rows)
+end
+
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
     source_run(db, "ttfx") do
@@ -369,6 +516,13 @@ function run!(db)
                                                     "WHERE job_uuid IN (SELECT value FROM json_each(?))",
                                                 (length(METRICS), seq, JSON3.write(expired)))
         write_rows!(db, new_rows)
+    end
+    # GitHub's anonymous quota or a julia-pr listing failing leaves the rows as they
+    # were rather than failing the master results with it
+    try
+        refresh_prs!(db)
+    catch e
+        @error "Updating the pull request comparisons failed" exception=(e, catch_backtrace())
     end
 end
 
