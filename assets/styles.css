@@ -1376,6 +1376,9 @@ a {
 /* Tab navigation */
 .tab-nav {
   display: inline-flex;
+  /* Groups that do not fit wrap onto a second row rather than being cut */
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 0;
   margin-right: 12px;
   border: 1px solid var(--color-btn-border);
@@ -3372,16 +3375,13 @@ a {
   }
 }
 
-/* Touchscreens: every control at one size. Fields must be 16px or iOS zooms
-   the page in when one gains focus, so the buttons match them. */
+/* Touchscreens: fields must be 16px or iOS zooms the page in when one gains
+   focus. On a phone the buttons match them; on a tablet's desktop layout
+   16px tabs would not fit the header. */
 @media (hover: none) and (pointer: coarse) {
   input,
   select,
-  textarea,
-  .btn,
-  .time-select,
-  .checkbox-dropdown-btn,
-  .tab-btn {
+  textarea {
     font-size: 16px !important;
   }
   .toolbar .btn-icon {
@@ -3394,6 +3394,14 @@ a {
     padding: 0;
     border-radius: 50%;
     line-height: 1;
+  }
+}
+@media (hover: none) and (pointer: coarse) and (max-width: 600px) {
+  .btn,
+  .time-select,
+  .checkbox-dropdown-btn,
+  .tab-btn {
+    font-size: 16px !important;
   }
 }
 
