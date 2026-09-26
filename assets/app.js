@@ -102,6 +102,25 @@ Chart.Interaction.modes.nearIndex = function (chart, e, options, useFinalPositio
 // A touchscreen with no hovering pointer: taps stand in for hovers, and
 // drags belong to scrolling
 const IS_TOUCH = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+// Phone width, where some views switch to a phone layout of their own
+const PHONE_WIDTH = window.matchMedia("(max-width: 600px)");
+
+// The phone layout of a table, rendered beside it (the stylesheet shows one
+// or the other): one item per row with a title, a line of detail and the key
+// number on the right. `attrs` repeats the row's data attributes, so the
+// table's click handlers can be bound to the items too.
+function phoneListHtml(items) {
+  const item = (it) =>
+    `<li ${it.attrs || ""}>` +
+    (it.lead != null ? `<span class="m-item-rank">${it.lead}</span>` : "") +
+    `<div class="m-item-main"><div class="m-item-title">${it.title}</div>` +
+    (it.meta ? `<div class="m-item-meta">${it.meta}</div>` : "") +
+    "</div>" +
+    (it.value != null ? `<span class="m-item-value ${it.valueClass || ""}">${it.value}</span>` : "") +
+    "</li>";
+  return `<ul class="m-list m-phone-only">${items.map(item).join("")}</ul>`;
+}
+const compactNumber = (n) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
 // On a touchscreen the first tap on a chart point shows its tooltip and a
 // second tap on the same point opens it, so looking at a point does not
@@ -449,13 +468,23 @@ function drawBuildsView() {
       </tr>`;
     })
     .join("");
+  const list = phoneListHtml(
+    recent.map((b) => ({
+      attrs: `data-url="${escapeHtml(buildkiteBuildUrl(b))}"`,
+      title: escapeHtml(b.message || b.commit),
+      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${escapeHtml(timeAgo(b.created_at))} · ${b.jobs} jobs${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
+      value: b.wall_s != null ? formatDuration(b.wall_s) : escapeHtml(b.state),
+      valueClass: b.state === "failed" ? "m-bad" : b.state === "passed" ? "" : "m-muted",
+    })),
+  );
   tableEl.innerHTML = `
     <h3 class="commits-reg-title">Builds (newest first${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
-    <table class="commits-reg-table">
+    ${list}
+    <table class="commits-reg-table m-desktop-only">
       <thead><tr><th>Created</th><th>Build</th><th>Commit</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num">Jobs</th><th class="num" title="Sum of the jobs' durations">Job time</th><th class="num" title="Median wait from runnable to started across the build's jobs">Queue (median)</th><th class="num">Queue (max)</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
-  tableEl.querySelectorAll("tr[data-url]").forEach((tr) => {
+  tableEl.querySelectorAll("[data-url]").forEach((tr) => {
     tr.onclick = (e) => {
       if (e.target.closest("a")) return;
       window.open(tr.dataset.url, "_blank", "noopener");
@@ -5932,6 +5961,8 @@ function switchTab(tab, { pushHistory = true } = {}) {
     loadPackagesDownloadsData();
   }
 
+  updatePhoneShell(tab);
+
   // Update tab in URL
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(tab));
@@ -8431,11 +8462,20 @@ async function loadPackagesTop() {
   panel.innerHTML = `
     <h3>Most requested packages, ${escapeHtml(d.since)} to ${escapeHtml(d.until)} <span class="updated">by ${d.client === "all" ? "all" : d.client} clients</span></h3>
     <p class="package-panel-help">Successful package requests to the package server, per package, over the last 7 days of data. Click a row for its daily history.</p>
-    <table>
+    ${phoneListHtml(
+      d.packages.map((p, i) => ({
+        attrs: `data-name="${escapeHtml(p.name || "")}"`,
+        lead: i + 1,
+        title: p.name ? escapeHtml(p.name) : `<code>${escapeHtml(p.uuid)}</code>`,
+        meta: `${compactNumber(p.user)} user · ${compactNumber(p.ci)} CI`,
+        value: compactNumber(p.all),
+      })),
+    )}
+    <table class="m-desktop-only">
       <thead><tr><th class="num">#</th><th>Package</th><th class="num">User</th><th class="num">CI</th><th class="num">All</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
-  panel.querySelectorAll("tr[data-name]").forEach((tr) => {
+  panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => tr.dataset.name && setPackagesPackage(tr.dataset.name);
   });
   panel.classList.remove("view-hidden");
@@ -9095,10 +9135,13 @@ function updatePackagesDownloadsChart() {
             callback: (v) =>
               packagesProportional
                 ? `${Number(v).toFixed(0)}%`
-                : Number(v).toLocaleString(),
+                : PHONE_WIDTH.matches
+                  ? compactNumber(v)
+                  : Number(v).toLocaleString(),
           },
           title: {
-            display: true,
+            // A phone needs the width for the plot; the page says what it is
+            display: !PHONE_WIDTH.matches,
             text: packagesProportional
               ? "Daily package downloads (%)"
               : "Daily package downloads",
@@ -9342,11 +9385,25 @@ async function loadPkgevalPopular() {
   panel.innerHTML = `
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
     <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
-    <table>
+    ${phoneListHtml(
+      d.packages.map((p) => {
+        const days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
+        const isNew = p.failing_since === d.date;
+        return {
+          attrs: `data-name="${escapeHtml(p.name)}"`,
+          lead: p.rank.toLocaleString(),
+          title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
+          meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> · ${escapeHtml(p.reason || "(none)")} · ${compactNumber(p.user)} downloads`,
+          value: isNew ? "new" : days == null ? "" : `${p.last_passed ? "" : "≥"}${days}d`,
+          valueClass: isNew || (days != null && days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
+        };
+      }),
+    )}
+    <table class="m-desktop-only">
       <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th class="num" title="Days from the first failing report after the last pass to this report">Days failing</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
-  panel.querySelectorAll("tr[data-name]").forEach((tr) => {
+  panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });
   panel.classList.remove("view-hidden");
@@ -9697,7 +9754,8 @@ function buildTtfxAnnotations(builds, isDark) {
         borderWidth: 1,
         borderDash: [4, 4],
         label: {
-          display: true,
+          // A phone has no room for them; the tooltip still carries the note
+          display: () => !PHONE_WIDTH.matches,
           content: a.label || a.description,
           position: "end",
           yAdjust: ({ chart }) => {
@@ -10417,7 +10475,20 @@ function setTtfxMode(mode) {
   updateTtfxURL();
 }
 
+// Phones show one chart at a time: pills pick the metric, and in summary
+// mode only that metric's panel is shown
+const TTFX_PILL_LABELS = { precompile: "Precompile", load: "Load", run: "Run", warm: "Warm" };
+function updateTtfxMetricPills() {
+  const el = document.getElementById("ttfx-metric-pills");
+  if (!el) return;
+  el.innerHTML = Object.keys(TTFX_METRICS)
+    .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')">${TTFX_PILL_LABELS[m]}</button>`)
+    .join("");
+  document.getElementById("ttfx-summary-grid").dataset.metric = ttfxMetric;
+}
+
 function updateTtfxChart() {
+  updateTtfxMetricPills();
   if (ttfxMode === "summary") updateTtfxSummaryCharts();
   else updateTtfxTaskChart();
 }
@@ -10636,7 +10707,56 @@ function loadTtfxPrs() {
   return ttfxPrsLoading;
 }
 
+// The phone layout of the ranked pull requests: two lines each, the title
+// and the score, then who, what state and when. A tap opens the card.
+function renderTtfxPrsList() {
+  const thead = document.getElementById("ttfx-stats-thead");
+  const tbody = document.getElementById("ttfx-stats-tbody");
+  thead.innerHTML = "";
+  if (!ttfxPrs) {
+    tbody.innerHTML = '<tr><td class="loading">Loading...</td></tr>';
+    loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
+    return;
+  }
+  if (ttfxPrs.failed || !ttfxPrs.prs.length) {
+    tbody.innerHTML = `<tr><td>${ttfxPrs.failed ? "Failed to load data" : "No open pull request has a TTFX comparison"}</td></tr>`;
+    return;
+  }
+  document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
+  tbody.innerHTML = ttfxPrs.prs
+    .map((p, i) => {
+      const change = p.score == null ? null : (p.score - 1) * 100;
+      const cls = change == null ? "" : change <= -2 ? "m-good" : change >= 2 ? "m-bad" : "";
+      const better = p.tasks.filter((t) => t.improvements.length).length;
+      const worse = p.tasks.filter((t) => t.regressions.length).length;
+      const meta = [
+        escapeHtml(p.author),
+        p.draft ? "draft" : "",
+        p.outdated ? "older commit" : "",
+        better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
+        escapeHtml(timeAgo(p.date)),
+      ].filter(Boolean);
+      return `<tr class="m-list-row" data-pr="${p.pr}"><td><div class="m-item">
+        <span class="m-item-rank">${i + 1}</span>
+        <div class="m-item-main">
+          <div class="m-item-title"><b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
+          <div class="m-item-meta">${meta.join(" · ")}</div>
+        </div>
+        <span class="m-item-value ${cls}">${change == null ? "–" : formatTtfxPct(change)}</span>
+      </div></td></tr>`;
+    })
+    .join("");
+  tbody.querySelectorAll("tr[data-pr]").forEach((tr) => {
+    tr.onclick = () => {
+      hidePrCard();
+      prCardLink = tr;
+      showPrCard(tr, Number(tr.dataset.pr));
+    };
+  });
+}
+
 function renderTtfxPrsTable() {
+  if (PHONE_WIDTH.matches) return renderTtfxPrsList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metrics = ["precompile", "load", "run", "warm"];
@@ -12411,6 +12531,243 @@ function commitPkgevalHtml(data) {
   return commitCard("PkgEval", `<p class="commit-line">${text}</p>${broken}`, { links });
 }
 
+PHONE_WIDTH.addEventListener("change", () => {
+  if (activeTab === "ci-ttfx") updateTtfxTable();
+});
+
+// Charts drawn at phone width: smaller legend and axis text, and roomier
+// tooltips for a finger. Desktop keeps Chart.js's own defaults.
+if (PHONE_WIDTH.matches) {
+  Chart.defaults.font.size = 11;
+  Object.assign(Chart.defaults.plugins.legend.labels, { boxWidth: 10, boxHeight: 10, padding: 8 });
+  Object.assign(Chart.defaults.plugins.tooltip, { padding: 10, cornerRadius: 10 });
+}
+
+// On a phone the long explanations above tables are cut to two lines; a tap
+// opens one in full
+document.addEventListener("click", (e) => {
+  if (!PHONE_WIDTH.matches) return;
+  const help = e.target.closest?.(".package-panel-help, .commits-reg-help, .agents-help, .workers-note, .overview-note");
+  if (help && !e.target.closest("a")) help.classList.toggle("m-expanded");
+});
+
+// === Phone shell ===
+// On a phone the page gets an app's frame: a bottom bar of the five
+// sections, the open section's pages as pills under the header, and each
+// page's toolbar folded into one chip that opens its controls in a sheet.
+// Built on every screen; the stylesheet shows it only on narrow ones.
+const PHONE_SECTIONS = [
+  { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
+  { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
+  { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
+];
+// The view holding each tab's toolbar; the three CI pages share one
+const PHONE_TOOLBAR_VIEWS = {
+  "ci-timing": "ci-timing-view",
+  "ci-builds": "ci-timing-view",
+  "ci-workers": "ci-timing-view",
+  "ci-ttfx": "ttfx-view",
+  benchmarks: "benchmarks-view",
+  packages: "packages-view",
+  pkgeval: "pkgeval-view",
+};
+const PHONE_TOOLBARS = ".ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar";
+const phoneLastTab = {};
+let phoneBar = null;
+let phoneSubnav = null;
+
+function buildPhoneShell() {
+  phoneBar = document.createElement("nav");
+  phoneBar.className = "m-tabbar";
+  phoneBar.setAttribute("aria-label", "Sections");
+  phoneBar.innerHTML = PHONE_SECTIONS.map(
+    (s) =>
+      `<button type="button" data-section="${s.key}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${s.icon}"/></svg><span>${s.label}</span></button>`,
+  ).join("");
+  phoneBar.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-section]");
+    if (!b) return;
+    const section = PHONE_SECTIONS.find((s) => s.key === b.dataset.section);
+    const tab = phoneLastTab[section.key] || section.tabs[0];
+    if (tab !== activeTab) switchTab(tab);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  document.body.appendChild(phoneBar);
+
+  phoneSubnav = document.createElement("div");
+  phoneSubnav.className = "m-subnav";
+  phoneSubnav.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-tab]");
+    if (b && b.dataset.tab !== activeTab) switchTab(b.dataset.tab);
+  });
+  document.querySelector(".toolbar").appendChild(phoneSubnav);
+
+  // A control changed in a sheet or anywhere else: the chips say so
+  for (const type of ["change", "click"]) {
+    document.addEventListener(type, (e) => {
+      if (e.target.closest?.(PHONE_TOOLBARS)) requestAnimationFrame(updatePhoneChips);
+    });
+  }
+}
+
+function updatePhoneShell(tab) {
+  if (!phoneBar) buildPhoneShell();
+  const section = PHONE_SECTIONS.find((s) => s.tabs.includes(tab));
+  if (!section) return;
+  phoneLastTab[section.key] = tab;
+  for (const b of phoneBar.querySelectorAll("button")) b.classList.toggle("active", b.dataset.section === section.key);
+  phoneSubnav.hidden = section.tabs.length < 2;
+  phoneSubnav.innerHTML = section.tabs
+    .map((t) => {
+      const label = document.getElementById("tab-" + t)?.textContent.trim() || t;
+      return `<button type="button" data-tab="${t}" class="${t === tab ? "active" : ""}">${escapeHtml(label)}</button>`;
+    })
+    .join("");
+  const view = PHONE_TOOLBAR_VIEWS[tab] && document.getElementById(PHONE_TOOLBAR_VIEWS[tab]);
+  const toolbar = view && view.querySelector(PHONE_TOOLBARS);
+  if (toolbar && !toolbar.previousElementSibling?.classList.contains("m-filter-chip")) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "m-filter-chip";
+    chip.innerHTML =
+      '<span class="m-filter-summary"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4"/></svg>';
+    chip.addEventListener("click", () => openPhoneSheet(toolbar));
+    toolbar.before(chip);
+  }
+  updatePhoneChips();
+}
+
+// What a toolbar is set to, in words: its selects, its segmented controls'
+// chosen buttons, its dropdowns and its search box
+function phoneToolbarSummary(toolbar) {
+  const parts = [];
+  for (const el of toolbar.children) {
+    if (el.classList.contains("view-hidden") || el.style.display === "none") continue;
+    if (el.matches("select")) parts.push(el.selectedOptions[0]?.textContent);
+    else if (el.matches(".bench-table-view-toggle")) parts.push(el.querySelector(".btn-primary")?.textContent);
+    else if (el.matches(".checkbox-dropdown")) parts.push(el.querySelector(".checkbox-dropdown-btn")?.textContent.replace(/[▾▼]/g, ""));
+    else if (el.matches(".package-search")) parts.push(el.querySelector("input")?.value);
+  }
+  return parts.map((p) => (p || "").trim()).filter(Boolean).join(" · ");
+}
+
+function updatePhoneChips() {
+  for (const chip of document.querySelectorAll(".m-filter-chip")) {
+    const toolbar = chip.nextElementSibling;
+    if (toolbar) chip.querySelector(".m-filter-summary").textContent = phoneToolbarSummary(toolbar) || "Options";
+  }
+}
+
+// Swiping sideways on a phone moves to the next or previous section, to
+// the page last open there. The page follows the finger and the new one
+// slides in from the side the swipe came from. A swipe that starts on
+// something that uses sideways drags itself (a chart, a table that scrolls
+// sideways, the pill rows, a field) or at the screen's edge, where iOS
+// swipes back and forward, is left alone.
+const SWIPE_MIN_PX = 70;
+const SWIPE_EDGE_PX = 24;
+let phoneSwipe = null;
+
+function phoneSwipeBlocked(target) {
+  for (let n = target; n && n !== document.body; n = n.parentElement) {
+    if (n.matches("canvas, input, select, textarea, .m-subnav, .m-pills, .m-sheet-backdrop, .pr-card")) return true;
+    if (n.scrollWidth > n.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(n).overflowX)) return true;
+  }
+  return false;
+}
+
+const phoneActiveView = () => document.querySelector('[role="tabpanel"]:not(.view-hidden)');
+const phoneSectionIndex = (tab) => PHONE_SECTIONS.findIndex((s) => s.tabs.includes(tab));
+
+function resetPhoneSwipe(view) {
+  if (!view) return;
+  view.style.transition = "";
+  view.style.transform = "";
+  view.style.opacity = "";
+}
+
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    phoneSwipe = null;
+    if (!PHONE_WIDTH.matches || e.touches.length !== 1 || document.body.classList.contains("m-sheet-open")) return;
+    const t = e.touches[0];
+    if (t.clientX < SWIPE_EDGE_PX || t.clientX > window.innerWidth - SWIPE_EDGE_PX) return;
+    if (phoneSwipeBlocked(e.target)) return;
+    phoneSwipe = { x: t.clientX, y: t.clientY, dx: 0, axis: null, view: phoneActiveView() };
+  },
+  { passive: true },
+);
+
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    const sw = phoneSwipe;
+    if (!sw || !sw.view) return;
+    const dx = e.touches[0].clientX - sw.x;
+    const dy = e.touches[0].clientY - sw.y;
+    // The first clear movement decides: sideways is a swipe, anything else
+    // is a scroll and the swipe is off until the next touch
+    if (!sw.axis) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      sw.axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? "x" : "y";
+    }
+    if (sw.axis !== "x") return;
+    const i = phoneSectionIndex(activeTab);
+    const atEnd = (dx > 0 && i === 0) || (dx < 0 && i === PHONE_SECTIONS.length - 1);
+    sw.dx = dx;
+    sw.view.style.transition = "none";
+    sw.view.style.transform = `translateX(${dx * (atEnd ? 0.15 : 0.6)}px)`;
+    sw.view.style.opacity = String(1 - Math.min(0.4, Math.abs(dx) / 600));
+  },
+  { passive: true },
+);
+
+document.addEventListener("touchend", () => {
+  const sw = phoneSwipe;
+  phoneSwipe = null;
+  if (!sw || sw.axis !== "x") return;
+  resetPhoneSwipe(sw.view);
+  const next = phoneSectionIndex(activeTab) + (sw.dx < 0 ? 1 : -1);
+  if (Math.abs(sw.dx) < SWIPE_MIN_PX || next < 0 || next >= PHONE_SECTIONS.length) return;
+  const section = PHONE_SECTIONS[next];
+  switchTab(phoneLastTab[section.key] || section.tabs[0]);
+  window.scrollTo(0, 0);
+  const view = phoneActiveView();
+  if (!view) return;
+  view.classList.remove("m-enter-left", "m-enter-right");
+  void view.offsetWidth; // restart the animation
+  view.classList.add(sw.dx < 0 ? "m-enter-right" : "m-enter-left");
+});
+
+document.addEventListener("touchcancel", () => {
+  if (phoneSwipe) resetPhoneSwipe(phoneSwipe.view);
+  phoneSwipe = null;
+});
+
+// The toolbar itself moves into the sheet, so every control keeps its
+// handlers, and back in place when the sheet closes
+function openPhoneSheet(toolbar) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "m-sheet-backdrop";
+  backdrop.innerHTML =
+    '<div class="m-sheet" role="dialog" aria-modal="true" aria-label="Options"><div class="m-sheet-head"><span>Options</span><button type="button" class="m-sheet-done">Done</button></div><div class="m-sheet-body"></div></div>';
+  const placeholder = document.createComment("toolbar");
+  toolbar.before(placeholder);
+  backdrop.querySelector(".m-sheet-body").appendChild(toolbar);
+  document.body.appendChild(backdrop);
+  document.body.classList.add("m-sheet-open");
+  backdrop.addEventListener("click", (e) => {
+    if (e.target !== backdrop && !e.target.closest(".m-sheet-done")) return;
+    placeholder.replaceWith(toolbar);
+    backdrop.remove();
+    document.body.classList.remove("m-sheet-open");
+    updatePhoneChips();
+  });
+}
+
 loadData();
 
 // Apply benchmark URL params before potential tab switch
@@ -12597,7 +12954,8 @@ function prCardTtfxHtml(p, rank, total) {
     ${prCardMetricsTable(p)}
     <div class="pr-card-muted">Robust task changes: <span class="${better ? "pr-card-down" : ""}">${better} better</span>, <span class="${worse ? "pr-card-up" : ""}">${worse} worse</span></div>
     <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>
-    ${prCardOpenLink(p.pr)}`;
+    ${prCardOpenLink(p.pr)}
+    ${IS_TOUCH && p.web_url ? `<div><a href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Open the TTFX job on Buildkite</a></div>` : ""}`;
 }
 
 function prCardGithubHtml(number, gh) {

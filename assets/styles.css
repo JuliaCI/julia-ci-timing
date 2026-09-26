@@ -3455,3 +3455,392 @@ a {
     rotate: 360deg;
   }
 }
+
+/* A table's phone layout is rendered beside it; wide screens show the table */
+.m-phone-only {
+  display: none;
+}
+@media (max-width: 600px) {
+  .m-phone-only {
+    display: block;
+  }
+  .m-desktop-only {
+    display: none !important;
+  }
+  .m-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .m-list > li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 4px;
+    border-bottom: 1px solid var(--color-border-muted);
+    cursor: pointer;
+  }
+  .m-list > li:last-child {
+    border-bottom: 0;
+  }
+  .m-list > li:active {
+    background: var(--color-neutral-muted);
+  }
+  .m-list code {
+    font-size: 11px;
+  }
+
+  /* Surfaces: translucent bars over the content, sections as rounded
+     cards on the page background, and long explanations cut to two lines
+     until tapped */
+  .toolbar {
+    background: color-mix(in srgb, var(--color-canvas-subtle) 82%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6);
+    backdrop-filter: blur(18px) saturate(1.6);
+  }
+  .m-tabbar {
+    background: color-mix(in srgb, var(--color-canvas-overlay) 62%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8);
+    backdrop-filter: blur(24px) saturate(1.8);
+  }
+  .ttfx-chart-container,
+  .ttfx-stats,
+  .package-panel,
+  .commits-regressions,
+  .agents-section,
+  .benchmarks-stats,
+  .stats-wrapper {
+    margin: 8px;
+    border: 1px solid var(--color-border-muted);
+    border-radius: 14px;
+    background: var(--color-canvas-subtle);
+    /* Wide tables still scroll sideways inside the card */
+    overflow-x: auto;
+  }
+  .package-panel,
+  .commits-regressions {
+    padding: 4px 12px 8px;
+  }
+  .ttfx-stats table,
+  .ttfx-stats-caption {
+    background: transparent;
+  }
+  .workers-note {
+    margin: 8px 8px 0;
+    border-radius: 12px;
+  }
+  .package-panel-help,
+  .commits-reg-help,
+  .agents-help,
+  .workers-note,
+  .overview-note {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  :is(.package-panel-help, .commits-reg-help, .agents-help, .workers-note, .overview-note).m-expanded {
+    -webkit-line-clamp: unset;
+  }
+}
+.m-muted {
+  color: var(--color-fg-muted);
+}
+
+/* Phone shell: a bottom bar of sections, the section's pages as pills
+   under a sticky header, and each toolbar folded into a chip that opens a
+   sheet (the script builds these; only phones show them) */
+.m-tabbar,
+.m-subnav,
+.m-filter-chip,
+.m-pills {
+  display: none;
+}
+@media (max-width: 600px) {
+  body {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+  body.m-sheet-open {
+    overflow: hidden;
+  }
+  .toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 6px);
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .toolbar .tab-nav {
+    display: none;
+  }
+
+  /* A floating glass capsule above the home indicator; the open section
+     sits in a soft pill of its own */
+  .m-tabbar {
+    display: flex;
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    z-index: 60;
+    padding: 5px;
+    gap: 2px;
+    border: 1px solid color-mix(in srgb, var(--color-fg-default) 12%, transparent);
+    border-radius: 32px;
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.28),
+      inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent);
+  }
+  .m-tabbar button {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 6px 0 5px;
+    border: 0;
+    border-radius: 26px;
+    background: none;
+    color: var(--color-fg-default);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-tabbar svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .m-tabbar button.active {
+    background: color-mix(in srgb, var(--color-accent-fg) 18%, transparent);
+    color: var(--color-accent-fg);
+  }
+  .m-tabbar button.active svg {
+    stroke-width: 2.1;
+  }
+  .m-tabbar button:active {
+    transform: scale(0.94);
+  }
+
+  .m-subnav:not([hidden]),
+  .m-pills {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .m-subnav:not([hidden]) {
+    order: 20;
+    flex: 1 1 100%;
+    padding: 4px 0 2px;
+  }
+  .m-pills {
+    padding: 10px 8px 0;
+  }
+  .m-subnav button,
+  .m-pills button {
+    flex: 0 0 auto;
+    padding: 6px 14px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 999px;
+    background: var(--color-btn-bg);
+    color: var(--color-fg-default);
+    font: inherit;
+    font-size: 14px;
+  }
+  .m-subnav button.active,
+  .m-pills button.active {
+    background: var(--color-accent-emphasis);
+    border-color: var(--color-accent-emphasis);
+    color: #fff;
+  }
+
+  :is(.ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar) {
+    display: none;
+  }
+  .m-sheet :is(.ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar) {
+    display: flex;
+    border: 0;
+    background: none;
+    padding: 12px 16px 16px;
+  }
+  .m-filter-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: calc(100% - 16px);
+    margin: 8px 8px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 12px;
+    background: var(--color-canvas-subtle);
+    color: var(--color-fg-default);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+  }
+  .m-filter-summary {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-filter-chip svg {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: var(--color-fg-muted);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+
+  .m-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: flex-end;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .m-sheet {
+    width: 100%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--color-canvas-default);
+    border-radius: 16px 16px 0 0;
+    animation: m-sheet-in 0.2s ease-out;
+  }
+  .m-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border-default);
+    font-weight: 600;
+  }
+  .m-sheet-done {
+    border: 0;
+    background: none;
+    color: var(--color-accent-fg);
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .m-sheet-body {
+    overflow-y: auto;
+  }
+
+  /* A swipe lets go: the page slides back, or the next one slides in */
+  [role="tabpanel"] {
+    transition:
+      transform 0.2s ease-out,
+      opacity 0.2s ease-out;
+  }
+  .m-enter-right {
+    animation: m-enter-right 0.22s ease-out;
+  }
+  .m-enter-left {
+    animation: m-enter-left 0.22s ease-out;
+  }
+
+  /* The downloads chart stacks many bands; it gets most of the screen */
+  #packages-view .pkgeval-chart-container {
+    flex: none;
+    height: 62vh;
+    min-height: 340px;
+  }
+
+  /* TTFX: one chart at a time, picked by the pills */
+  .ttfx-summary-grid[data-metric] > .ttfx-panel {
+    display: none;
+    height: 300px;
+  }
+  .ttfx-summary-grid[data-metric="precompile"] > .ttfx-panel[data-metric="precompile"],
+  .ttfx-summary-grid[data-metric="load"] > .ttfx-panel[data-metric="load"],
+  .ttfx-summary-grid[data-metric="run"] > .ttfx-panel[data-metric="run"],
+  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"] {
+    display: block;
+  }
+
+  /* Lists in place of tables */
+  /* A fixed layout, or the cell grows to fit a title that should be cut */
+  .ttfx-stats table:has(.m-list-row) {
+    table-layout: fixed;
+  }
+  .ttfx-stats tr.m-list-row td {
+    padding: 10px 12px;
+    white-space: normal;
+    font-family: inherit;
+  }
+  .m-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .m-item-rank {
+    width: 1.6em;
+    color: var(--color-fg-muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .m-item-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .m-item-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+  .m-item-meta {
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-fg-muted);
+    font-size: 12px;
+  }
+  .m-item-value {
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+}
+@keyframes m-enter-right {
+  from {
+    transform: translateX(48px);
+    opacity: 0;
+  }
+}
+@keyframes m-enter-left {
+  from {
+    transform: translateX(-48px);
+    opacity: 0;
+  }
+}
+@keyframes m-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+.m-good {
+  color: var(--color-success-fg);
+}
+.m-bad {
+  color: var(--color-danger-fg);
+}

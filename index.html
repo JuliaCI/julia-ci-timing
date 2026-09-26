@@ -1182,6 +1182,7 @@
           <div class="loading">Loading...</div>
         </div>
         <div class="ttfx-chart-area">
+          <div class="m-pills" id="ttfx-metric-pills" role="group" aria-label="Metric"></div>
           <div class="ttfx-chart-container">
             <div class="ttfx-chart-wrapper">
               <div class="loading-overlay" id="ttfx-chart-loading">
@@ -1189,10 +1190,10 @@
               </div>
               <div class="ttfx-summary-grid" id="ttfx-summary-grid">
                 <div class="ttfx-summary-legend" id="ttfx-summary-legend" role="group" aria-label="Series"></div>
-                <div class="ttfx-panel"><canvas id="ttfx-chart-precompile"></canvas></div>
-                <div class="ttfx-panel"><canvas id="ttfx-chart-load"></canvas></div>
-                <div class="ttfx-panel"><canvas id="ttfx-chart-run"></canvas></div>
-                <div class="ttfx-panel"><canvas id="ttfx-chart-warm"></canvas></div>
+                <div class="ttfx-panel" data-metric="precompile"><canvas id="ttfx-chart-precompile"></canvas></div>
+                <div class="ttfx-panel" data-metric="load"><canvas id="ttfx-chart-load"></canvas></div>
+                <div class="ttfx-panel" data-metric="run"><canvas id="ttfx-chart-run"></canvas></div>
+                <div class="ttfx-panel" data-metric="warm"><canvas id="ttfx-chart-warm"></canvas></div>
               </div>
               <div class="ttfx-single" id="ttfx-single" hidden>
                 <canvas id="ttfx-chart"></canvas>
