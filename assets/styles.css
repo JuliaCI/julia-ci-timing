@@ -2821,6 +2821,14 @@ a {
 .commit-dot-failing {
   background: var(--color-attention-emphasis);
 }
+.ttfx-pr-ci .commit-dot {
+  display: inline-block;
+  vertical-align: middle;
+}
+td.ttfx-pr-ci,
+th.ttfx-pr-ci {
+  text-align: center;
+}
 .commit-list-more {
   display: block;
   margin: 8px auto 12px;
