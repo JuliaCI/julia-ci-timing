@@ -10778,7 +10778,6 @@ function renderTtfxPrsTable() {
   const metrics = ["precompile", "load", "run", "warm"];
   thead.innerHTML =
     '<tr><th class="num">#</th><th>Pull request</th><th class="col-secondary">Author</th>' +
-    '<th class="ttfx-pr-ci" title="Whether CI passes on the pull request\'s current head, which may be newer than the measured commit: the state of its newest julia-pr build on Buildkite">CI</th>' +
     '<th class="num" title="Change over precompile, load, run and warm combined, taking the less favourable block of each. Rows are ranked by it.">Score</th>' +
     metrics
       .map(
@@ -10788,7 +10787,7 @@ function renderTtfxPrsTable() {
       .join("") +
     '<th class="num" title="Tasks with a robust improvement / regression; the list is in the tooltip">Tasks</th>' +
     '<th class="col-secondary">Measured</th></tr>';
-  const cols = 7 + metrics.length;
+  const cols = 6 + metrics.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
@@ -10815,13 +10814,12 @@ function renderTtfxPrsTable() {
       (p.outdated
         ? `<span class="ttfx-pr-badge" title="Measured on ${escapeHtml(p.head.commit.slice(0, 10))}; the pull request has newer commits">older commit</span> `
         : "");
-    html += `<td class="msg"><a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
-    html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     const ci = ttfxPrCi(p);
     const ciDot = ci.url
-      ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${ci.dot}</a>`
-      : ci.dot;
-    html += `<td class="ttfx-pr-ci">${ciDot}</td>`;
+      ? `<a class="ttfx-pr-ci" href="${escapeHtml(ci.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${ci.dot}</a>`
+      : `<span class="ttfx-pr-ci">${ci.dot}</span>`;
+    html += `<td class="msg">${ciDot} <a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
+    html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     html += `<td class="num"><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
     for (const m of metrics) {
       const on = p.suite[m];

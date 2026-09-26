@@ -2825,10 +2825,6 @@ a {
   display: inline-block;
   vertical-align: middle;
 }
-td.ttfx-pr-ci,
-th.ttfx-pr-ci {
-  text-align: center;
-}
 .commit-list-more {
   display: block;
   margin: 8px auto 12px;
