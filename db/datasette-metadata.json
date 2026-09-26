@@ -149,7 +149,11 @@
             "n_improvements": "robust improvements, per task and metric plus suite metrics",
             "n_regressions": "robust regressions, counted the same way",
             "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count",
-            "tasks": "JSON: the tasks with a robust improvement or regression, their ratios and notes"
+            "tasks": "JSON: the tasks with a robust improvement or regression, their ratios and notes",
+            "ci_commit": "the pull request head the CI columns were looked up for",
+            "ci_build": "the newest julia-pr build of ci_commit, NULL when it has none",
+            "ci_state": "that build's Buildkite state (passed, failed, failing, running, ...), or none when the commit has no build",
+            "ci_url": "that build on Buildkite"
           }
         },
         "raw_ttfx": {

@@ -10707,6 +10707,21 @@ function loadTtfxPrs() {
   return ttfxPrsLoading;
 }
 
+// CI on a pull request's current head, from the state of its newest julia-pr build.
+// `tone` is good, bad or empty.
+function ttfxPrCi(p) {
+  const s = p.ci && p.ci.state;
+  if (!s) return { text: "–", tone: "", title: "No CI state recorded for the current head yet" };
+  if (s === "none") return { text: "no build", tone: "", title: "The current head has no julia-pr build" };
+  const bad = s === "failed" || s === "failing";
+  return {
+    text: s === "passed" ? "passing" : bad ? "failing" : s.replace(/_/g, " "),
+    tone: s === "passed" ? "good" : bad ? "bad" : "",
+    title: `Buildkite julia-pr build ${p.ci.build} of the current head: ${s}`,
+    url: p.ci.url,
+  };
+}
+
 // The phone layout of the ranked pull requests: two lines each, the title
 // and the score, then who, what state and when. A tap opens the card.
 function renderTtfxPrsList() {
@@ -10733,6 +10748,10 @@ function renderTtfxPrsList() {
         escapeHtml(p.author),
         p.draft ? "draft" : "",
         p.outdated ? "older commit" : "",
+        (() => {
+          const ci = ttfxPrCi(p);
+          return ci.text === "–" ? "" : `CI <span class="${ci.tone ? "m-" + ci.tone : ""}">${escapeHtml(ci.text)}</span>`;
+        })(),
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
         escapeHtml(timeAgo(p.date)),
       ].filter(Boolean);
@@ -10762,6 +10781,7 @@ function renderTtfxPrsTable() {
   const metrics = ["precompile", "load", "run", "warm"];
   thead.innerHTML =
     '<tr><th class="num">#</th><th>Pull request</th><th class="col-secondary">Author</th>' +
+    '<th title="Whether CI passes on the pull request\'s current head, which may be newer than the measured commit: the state of its newest julia-pr build on Buildkite">CI</th>' +
     '<th class="num" title="Change over precompile, load, run and warm combined, taking the less favourable block of each. Rows are ranked by it.">Score</th>' +
     metrics
       .map(
@@ -10771,7 +10791,7 @@ function renderTtfxPrsTable() {
       .join("") +
     '<th class="num" title="Tasks with a robust improvement / regression; the list is in the tooltip">Tasks</th>' +
     '<th class="col-secondary">Measured</th></tr>';
-  const cols = 5 + metrics.length + 1;
+  const cols = 7 + metrics.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
@@ -10800,6 +10820,11 @@ function renderTtfxPrsTable() {
         : "");
     html += `<td class="msg"><a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
+    const ci = ttfxPrCi(p);
+    const ciText = ci.url
+      ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(ci.text)}</a>`
+      : escapeHtml(ci.text);
+    html += `<td class="${{ good: "ttfx-down", bad: "ttfx-up" }[ci.tone] || ""}" title="${escapeHtml(ci.title)}">${ciText}</td>`;
     html += `<td class="num"><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
     for (const m of metrics) {
       const on = p.suite[m];
@@ -12940,9 +12965,11 @@ function prCardTtfxHtml(p, rank, total) {
   const better = p.tasks.filter((t) => t.improvements.length).length;
   const worse = p.tasks.filter((t) => t.regressions.length).length;
   const verdict = { improvement: "pr-card-down", regression: "pr-card-up" }[p.verdict] || "";
+  const ci = ttfxPrCi(p);
   const tags = [p.draft ? "draft" : "", p.outdated ? "older commit" : ""]
     .filter(Boolean)
     .map((t) => `<span class="ttfx-pr-badge">${t}</span>`)
+    .concat(ci.text === "–" ? [] : [`<span class="ttfx-pr-badge ${{ good: "pr-card-down", bad: "pr-card-up" }[ci.tone] || ""}" title="${escapeHtml(ci.title)}">CI ${escapeHtml(ci.text)}</span>`])
     .join(" ");
   return `<div class="pr-card-head"><b>#${p.pr}</b> <span class="pr-card-muted">${escapeHtml(p.author)}</span> ${tags}</div>
     <div class="pr-card-title">${escapeHtml(p.title)}</div>

@@ -77,6 +77,10 @@ const COLUMN_MIGRATIONS = [
     ("bench_report_groups", "memory_count", "INTEGER"),
     ("bench_report_groups", "allocs_geomean", "REAL"),
     ("bench_report_groups", "allocs_count", "INTEGER"),
+    ("ttfx_prs", "ci_commit", "TEXT"),
+    ("ttfx_prs", "ci_build", "INTEGER"),
+    ("ttfx_prs", "ci_state", "TEXT"),
+    ("ttfx_prs", "ci_url", "TEXT"),
 ]
 
 function apply_schema!(db::SQLite.DB)

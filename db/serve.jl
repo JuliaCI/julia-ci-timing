@@ -232,7 +232,7 @@ const ROUTES = [
           "TTFX on every master build: per task, the precompile, load, run and warm seconds (and load, run and warm with the GC off), plus failed tasks.",
           (db, _, p) -> Render.ttfx(db; since=instant(p, "since"))),
     Route("ttfx/prs", [],
-          "Open julia pull requests ranked by their latest TTFX comparison (head against the master build of the merge-base), best first: the job's verdict and robust improvements and regressions, the suite geomean ratio per metric and block, and the flagged tasks. score multiplies, over precompile, load, run and warm, the least favourable block's ratio; below 1 is faster. outdated means the pull request has moved on since the job's commit.",
+          "Open julia pull requests ranked by their latest TTFX comparison (head against the master build of the merge-base), best first: the job's verdict and robust improvements and regressions, the suite geomean ratio per metric and block, and the flagged tasks. score multiplies, over precompile, load, run and warm, the least favourable block's ratio; below 1 is faster. outdated means the pull request has moved on since the job's commit. ci is the state of the newest julia-pr build of the pull request's current head (null until looked up, state none when it has no build).",
           (db, _, _) -> Render.ttfx_prs(db)),
     Route("downloads/summary", [],
           "Package server requests per day (total, user, CI), by Julia version and release stage, with Julia release tags.",

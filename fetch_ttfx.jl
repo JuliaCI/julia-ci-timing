@@ -477,8 +477,47 @@ function refresh_prs!(db)
                                        get(p, :draft, false) === true ? 1 : 0, String(p.head.sha), seq, Int(r.pr_number)))
         end
     end
+    refresh_ci!(db)
     @info "Open pull requests with a TTFX comparison" updated=length(rows) total=query(db, "SELECT count(*) AS n FROM ttfx_prs")[1].n
     return length(rows)
+end
+
+# Build states that no longer change; any other state is looked up again next run
+const CI_FINAL_STATES = ("passed", "failed", "canceled", "skipped", "not_run")
+
+# The newest julia-pr build of a commit as (number, state, web_url), nothing when the
+# commit has none, missing when the request failed.
+function pr_ci_build(sha::String)
+    builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params=Dict("commit" => sha, "per_page" => 1))
+    builds === nothing && return missing
+    isempty(builds) && return nothing
+    b = builds[1]
+    return (Int(b.number), String(b.state), str_or_missing(get(b, :web_url, nothing)))
+end
+
+# Whether CI passes on each pull request's current head: the state of the newest
+# julia-pr build of that commit. One request per pull request whose head moved or whose
+# build had not finished at the last look, so a quiet hour costs a few requests.
+function refresh_ci!(db)
+    stale = query(db, "SELECT pr_number, pr_head_sha FROM ttfx_prs WHERE ci_commit IS NOT pr_head_sha " *
+                      "OR ci_state IS NULL OR ci_state NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(CI_FINAL_STATES)),))
+    updates = Any[]
+    for r in stale
+        sha = String(r.pr_head_sha)
+        b = pr_ci_build(sha)
+        b === missing && continue
+        number, state, url = b === nothing ? (missing, "none", missing) : b
+        push!(updates, (number, state, url, sha, Int(r.pr_number)))
+    end
+    isempty(updates) && return
+    transaction(db) do
+        seq = next_seq!(db)
+        stmt = DBInterface.prepare(db, "UPDATE ttfx_prs SET ci_build = ?1, ci_state = ?2, ci_url = ?3, ci_commit = ?4, change_seq = ?5 " *
+                                       "WHERE pr_number = ?6 AND (ci_build IS NOT ?1 OR ci_state IS NOT ?2 OR ci_url IS NOT ?3 OR ci_commit IS NOT ?4)")
+        for (number, state, url, sha, pr) in updates
+            DBInterface.execute(stmt, (number, state, url, sha, seq, pr))
+        end
+    end
 end
 
 function main(args=ARGS)

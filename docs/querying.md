@@ -72,7 +72,8 @@ It is taken after every ingest. No row or time limits, and no load on the host.
   precompile, load, run, warm, and load, run and warm with the GC off, in seconds),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
-  flagged tasks), current state only.
+  flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
+  current state only.
 - **Downloads.** `dl_series` (requests per day), `dl_mix` (by Julia version and release
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.

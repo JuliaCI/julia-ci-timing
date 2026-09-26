@@ -370,7 +370,11 @@ CREATE TABLE IF NOT EXISTS ttfx_prs (
     n_regressions    INTEGER NOT NULL,
     suite            TEXT NOT NULL,              -- JSON: metric => {geomeans (head/base per block), verdict, n_tasks}
     tasks            TEXT NOT NULL,              -- JSON: the tasks with an improvement or regression, and their notes
-    change_seq       INTEGER NOT NULL
+    change_seq       INTEGER NOT NULL,
+    ci_commit        TEXT,                       -- the head the CI columns were looked up for
+    ci_build         INTEGER,                    -- newest julia-pr build of ci_commit, NULL if none
+    ci_state         TEXT,                       -- its Buildkite state, or 'none' when the commit has no build
+    ci_url           TEXT
 );
 
 -- Buildkite artifacts expire; keep the pair we parsed.

@@ -485,6 +485,9 @@ function ttfx_prs(db)
             "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
             "base" => OrderedDict("commit" => String(r.base_commit), "version" => String(r.base_version)),
             "outdated" => String(r.pr_head_sha) != String(r.head_commit),
+            # CI on the pull request's current head, which may be newer than the measured commit
+            "ci" => r.ci_state === missing || !isequal(r.ci_commit, r.pr_head_sha) ? nothing :
+                    OrderedDict("state" => String(r.ci_state), "build" => js(r.ci_build), "url" => js(r.ci_url)),
             "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks)))
     end
     sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"]))

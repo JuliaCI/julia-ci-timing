@@ -26,7 +26,7 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 - `/api/pkgeval/package/<Name>`: one package's PkgEval status on every report
 - `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
 - `/api/ttfx/summary?since=`: TTFX per task on every master build
-- `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master
+- `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master, with whether CI passes on their head
 - `/api/downloads/package/<Name>`: one package's daily downloads
 
 The response shapes are the site's own and can change; the database schema is stable.
