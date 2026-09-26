@@ -13116,20 +13116,44 @@ for (const id of ["ttfx-task-list", "bench-group-list"]) {
 // === Pull to refresh ===
 // A home-screen web app has no reload button and iOS gives it no pull to
 // refresh of its own, so a pull down from the top of the page reloads it.
-// In a browser tab the browser's own gesture does this.
+// In a browser tab the browser's own gesture does this. A ring fills as the
+// pull goes; on release it spins for a moment before the reload, and after
+// the reload it picks up spinning and fades, so the refresh reads as one
+// motion even when the reload is instant.
 const IS_STANDALONE = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const PULL_REFRESH_PX = 80;
+const PULL_REFRESH_HOLD_MS = 550;
+const PULL_REFRESH_KEY = "pull-refresh";
+const PULL_REFRESH_RING = 2 * Math.PI * 14;
+
+function pullRefreshIndicator() {
+  const el = document.createElement("div");
+  el.className = "pull-refresh";
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML =
+    '<svg viewBox="0 0 36 36"><circle class="pull-refresh-track" cx="18" cy="18" r="14"/>' +
+    `<circle class="pull-refresh-ring" cx="18" cy="18" r="14" stroke-dasharray="${PULL_REFRESH_RING}" stroke-dashoffset="${PULL_REFRESH_RING}"/>` +
+    '<path class="pull-refresh-arrow" d="M18 11.5v12M13.5 19l4.5 4.5 4.5-4.5"/></svg>';
+  document.body.appendChild(el);
+  return el;
+}
 
 if (IS_TOUCH && IS_STANDALONE) {
-  const indicator = document.createElement("div");
-  indicator.className = "pull-refresh";
-  indicator.setAttribute("aria-hidden", "true");
-  // The arrow turns inside a circle that only moves down, so turning and
-  // spinning keep it centred
-  const icon = document.createElement("span");
-  icon.textContent = "↓";
-  indicator.appendChild(icon);
-  document.body.appendChild(indicator);
+  // Arriving from a pull: the spinner the reload cut off, then away
+  let refreshed = false;
+  try {
+    refreshed = sessionStorage.getItem(PULL_REFRESH_KEY) === "1";
+    sessionStorage.removeItem(PULL_REFRESH_KEY);
+  } catch {}
+  if (refreshed) {
+    const el = pullRefreshIndicator();
+    el.classList.add("refreshing", "settled");
+    setTimeout(() => el.classList.add("done"), 450);
+    setTimeout(() => el.remove(), 800);
+  }
+
+  const indicator = pullRefreshIndicator();
+  const ring = indicator.querySelector(".pull-refresh-ring");
   let start = null;
   let pull = 0;
   // A pull that starts inside a list scrolled away from its top scrolls it
@@ -13140,13 +13164,15 @@ if (IS_TOUCH && IS_STANDALONE) {
   const reset = () => {
     start = null;
     pull = 0;
+    indicator.classList.remove("ready");
     indicator.style.transform = "";
     indicator.style.opacity = "";
-    icon.style.transform = "";
+    ring.setAttribute("stroke-dashoffset", PULL_REFRESH_RING);
   };
   document.addEventListener(
     "touchstart",
     (e) => {
+      if (indicator.classList.contains("refreshing")) return;
       const atTop = document.scrollingElement.scrollTop <= 0;
       start = e.touches.length === 1 && atTop && !scrolledAway(e.target) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
       pull = 0;
@@ -13164,23 +13190,25 @@ if (IS_TOUCH && IS_STANDALONE) {
         if (pull === 0) return reset();
       }
       pull = Math.max(0, dy);
-      const ready = pull >= PULL_REFRESH_PX;
-      indicator.style.opacity = String(Math.min(1, pull / PULL_REFRESH_PX));
-      indicator.style.transform = `translateY(${Math.min(pull, PULL_REFRESH_PX * 1.4) * 0.6}px)`;
-      icon.style.transform = `rotate(${ready ? 180 : 0}deg)`;
+      const progress = Math.min(1, pull / PULL_REFRESH_PX);
+      indicator.classList.toggle("ready", progress >= 1);
+      indicator.style.opacity = String(Math.min(1, progress * 1.4));
+      indicator.style.transform = `translateY(${Math.min(pull, PULL_REFRESH_PX * 1.4) * 0.6}px) scale(${0.7 + 0.3 * progress})`;
+      ring.setAttribute("stroke-dashoffset", PULL_REFRESH_RING * (1 - progress));
     },
     { passive: true },
   );
   document.addEventListener("touchend", () => {
     if (!start) return;
-    if (pull >= PULL_REFRESH_PX) {
-      icon.textContent = "↻";
-      icon.style.transform = "";
-      indicator.classList.add("refreshing");
-      location.reload();
-      return;
-    }
-    reset();
+    if (pull < PULL_REFRESH_PX) return reset();
+    start = null;
+    indicator.style.transform = "";
+    indicator.style.opacity = "";
+    indicator.classList.add("refreshing");
+    try {
+      sessionStorage.setItem(PULL_REFRESH_KEY, "1");
+    } catch {}
+    setTimeout(() => location.reload(), PULL_REFRESH_HOLD_MS);
   });
   document.addEventListener("touchcancel", reset);
 }
