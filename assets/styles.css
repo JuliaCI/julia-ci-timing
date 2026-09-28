@@ -2675,6 +2675,10 @@ a {
 .ttfx-stats .ttfx-down {
   color: var(--color-success-fg);
 }
+.ttfx-pr-score {
+  padding: 1px 6px;
+  border-radius: 4px;
+}
 @media (max-width: 768px), (max-height: 500px) {
   .ttfx-summary-grid {
     grid-template-columns: 1fr;

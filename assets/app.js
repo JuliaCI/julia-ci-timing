@@ -9874,6 +9874,15 @@ function formatTtfxPct(p) {
   return (p > 0 ? "+" : "") + p.toFixed(1) + "%";
 }
 
+// A pull request's score as a background tint, green for faster and red for
+// slower, full strength at 3% since few scores go beyond that
+function ttfxScoreStyle(change) {
+  if (change == null || !isFinite(change) || Math.abs(change) < 0.05) return "";
+  const tint = Math.round(Math.min(Math.abs(change) / 3, 1) * 45);
+  const color = change < 0 ? "--color-success-fg" : "--color-danger-fg";
+  return ` style="background: color-mix(in srgb, var(${color}) ${tint}%, transparent)"`;
+}
+
 function ttfxPctClass(p) {
   if (p == null || !isFinite(p) || Math.abs(p) < 5) return "";
   return p > 0 ? "ttfx-up" : "ttfx-down";
@@ -10742,7 +10751,6 @@ function renderTtfxPrsList() {
   tbody.innerHTML = ttfxPrs.prs
     .map((p, i) => {
       const change = p.score == null ? null : (p.score - 1) * 100;
-      const cls = change == null ? "" : change <= -2 ? "m-good" : change >= 2 ? "m-bad" : "";
       const better = p.tasks.filter((t) => t.improvements.length).length;
       const worse = p.tasks.filter((t) => t.regressions.length).length;
       const meta = [
@@ -10758,7 +10766,7 @@ function renderTtfxPrsList() {
           <div class="m-item-title"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
           <div class="m-item-meta">${meta.join(" · ")}</div>
         </div>
-        <span class="m-item-value ${cls}">${change == null ? "–" : formatTtfxPct(change)}</span>
+        <span class="m-item-value ttfx-pr-score"${ttfxScoreStyle(change)}>${change == null ? "–" : formatTtfxPct(change)}</span>
       </div></td></tr>`;
     })
     .join("");
@@ -10820,7 +10828,7 @@ function renderTtfxPrsTable() {
       : `<span class="ttfx-pr-ci">${ci.dot}</span>`;
     html += `<td class="msg">${ciDot} <a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
-    html += `<td class="num"><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
+    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
     for (const m of metrics) {
       const on = p.suite[m];
       const off = p.suite[m + "_gcoff"];
