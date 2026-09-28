@@ -10778,7 +10778,7 @@ function renderTtfxPrsTable() {
   const metrics = ["precompile", "load", "run", "warm"];
   thead.innerHTML =
     '<tr><th class="num">#</th><th>Pull request</th><th class="col-secondary">Author</th>' +
-    '<th class="num" title="Change over precompile, load, run and warm combined, taking the less favourable block of each. Rows are ranked by it.">Score</th>' +
+    '<th class="num" title="Estimated change in the total of precompile, load, run and warm, each weighted by its time on master (so precompile counts most), taking the block nearer no change. Rows are ranked by it.">Score</th>' +
     metrics
       .map(
         (m) =>

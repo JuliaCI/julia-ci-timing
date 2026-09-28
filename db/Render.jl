@@ -465,19 +465,47 @@ function ttfx(db; since="")
 end
 
 # Open pull requests by how their latest TTFX comparison looks, best first.
-# The score multiplies, over precompile, load, run and warm, the suite geomean
-# ratio (head/base) of the least favourable block: below 1 is faster, and
-# one noisy block cannot carry a pull request up the list.
+# The score is the estimated head/base ratio of the suite's total time over
+# precompile, load, run and warm: each metric's ratio weighted by how long it
+# takes on master, so precompile counts the most. Below 1 is faster.
 const TTFX_PR_METRICS = ["precompile", "load", "run", "warm"]
+
+# A metric's ratio is the block nearest no change, and no change when the blocks
+# disagree on the direction, so one noisy block moves the score neither way.
+function ttfx_pr_ratio(geomeans)
+    all(>(1), geomeans) && return minimum(geomeans)
+    all(<(1), geomeans) && return maximum(geomeans)
+    return 1.0
+end
+
+function ttfx_pr_score(suite, weights)
+    total = ratio = 0.0
+    for m in TTFX_PR_METRICS
+        (haskey(suite, m) && !isempty(suite[m].geomeans)) || continue
+        w = get(weights, m, 0.0)
+        total += w
+        ratio += w * ttfx_pr_ratio(suite[m].geomeans)
+    end
+    return total > 0 ? ratio / total : nothing
+end
+
+# Each metric's summed time over the suite in the newest master TTFX job
+function ttfx_pr_weights(db)
+    sql = "SELECT sum(precompile) AS precompile, sum(load) AS load, sum(run) AS run, sum(warm) AS warm FROM ttfx_results " *
+          "WHERE job_uuid = (SELECT j.job_uuid FROM ttfx_jobs j WHERE EXISTS (SELECT 1 FROM ttfx_results r WHERE r.job_uuid = j.job_uuid) " *
+          "ORDER BY j.build_created_at DESC LIMIT 1)"
+    r = only(rows(db, sql))
+    return Dict(m => Float64(something(coalesce(getproperty(r, Symbol(m)), 0.0), 0.0)) for m in TTFX_PR_METRICS)
+end
 
 function ttfx_prs(db)
     prs = Any[]
+    weights = ttfx_pr_weights(db)
     for r in rows(db, "SELECT * FROM ttfx_prs")
         suite = JSON3.read(String(r.suite))
-        worst = [maximum(suite[m].geomeans) for m in TTFX_PR_METRICS if haskey(suite, m) && !isempty(suite[m].geomeans)]
         push!(prs, OrderedDict(
             "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
-            "score" => isempty(worst) ? nothing : prod(worst), "verdict" => String(r.verdict),
+            "score" => ttfx_pr_score(suite, weights), "verdict" => String(r.verdict),
             "n_improvements" => Int(r.n_improvements), "n_regressions" => Int(r.n_regressions),
             "suite" => suite, "tasks" => JSON3.read(String(r.tasks)),
             "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state), "web_url" => js(r.web_url),
