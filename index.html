@@ -769,6 +769,34 @@
           </div>
         </div>
         <div class="workers-view view-hidden" id="workers-view">
+          <div class="backlog-section" id="backlog-section">
+            <div class="agents-header">
+              <span class="agents-title">Queue backlog</span>
+              <select
+                class="time-select"
+                id="backlog-metric"
+                onchange="setBacklogMetric(this.value)"
+                aria-label="Backlog measure"
+              >
+                <option value="oldest" selected>Longest wait</option>
+                <option value="waiting">Jobs waiting</option>
+                <option value="per-slot">Jobs waiting per slot</option>
+              </select>
+              <span class="agents-summary" id="backlog-summary"></span>
+              <span class="agents-help"
+                >Jobs of julia-pr and julia-ci builds that are ready to run but
+                have no agent yet, per pool (queue, OS and architecture), from
+                the jobs' Buildkite timestamps. Longest wait is how long the
+                oldest of them has been waiting; jobs waiting per slot divides
+                the count by the agent slots seen for the pool in the last 30
+                days. The tooltip adds the jobs running. Jobs are kept for 60
+                days.</span
+              >
+            </div>
+            <div class="agents-chart-wrapper backlog-chart-wrapper">
+              <canvas id="backlog-chart"></canvas>
+            </div>
+          </div>
           <div class="agents-section" id="agents-section">
             <div class="agents-header">
               <span class="agents-title">Connected agents</span>

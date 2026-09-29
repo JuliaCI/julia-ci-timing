@@ -1496,6 +1496,16 @@ a {
 .agents-section-empty .agents-chart-wrapper {
   display: none;
 }
+.backlog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.backlog-chart-wrapper {
+  height: 180px;
+}
 .agents-header {
   display: flex;
   flex-wrap: wrap;

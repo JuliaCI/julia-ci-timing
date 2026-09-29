@@ -252,6 +252,9 @@ const ROUTES = [
     Route("agents/snapshots", [SINCE],
           "The connected agents at every ingest, as a list of snapshots.",
           (db, _, p) -> Render.agent_snapshots(db; since=instant(p, "since"))),
+    Route("agents/backlog", [SINCE],
+          "Per agent pool (queue, os, arch): how many julia-pr and julia-ci jobs were waiting for an agent and how many were running, sampled every step_s seconds from start (the jobs are kept for 60 days), with the longest current wait in seconds at each sample and the agent slots seen for the pool in the last 30 days.",
+          (db, _, p) -> Render.pool_backlog(db; since=instant(p, "since"))),
     Route("commits", ["before" => "the first_at of the last commit already listed, to page back", "limit" => "commits per page, 100 by default, at most 500"],
           "Master commits newest first, one row per commit: first build time, latest build state, author, subject, and whether a daily benchmark or PkgEval report ran on it.",
           (db, _, p) -> begin
@@ -541,6 +544,7 @@ function warm_up(s::Server)
                 (["downloads", "packages"], Dict("q" => "A")),
                 (["downloads", "package", "Example"], Dict()),
                 (["agents", "snapshots"], Dict("since" => since)),
+                (["agents", "backlog"], Dict("since" => since)),
                 (["commit", isempty(latest) ? "0000000" : latest[1]["commit"]], Dict())]
             for (segments, params) in compile_only
                 gzip(Vector{UInt8}(JSON3.write(render(db, segments, Dict{String,String}(params)))))

@@ -122,6 +122,13 @@ disconnects when the job ends. A snapshot only lists the slots mid-job, so
 an absent `tester-amdci4.3` means an idle slot, not a down host; the site
 folds those names per host and flags a host only after days without a job.
 
+`fetch_agents.jl` also records every runnable job of julia-pr and julia-ci
+builds in `pool_jobs` (kept 60 days, backfilled 30 on the first run), with the
+pool it asked for (the queue, os and arch of its agent query rules) and when it
+became runnable, started and finished. `api/agents/backlog` samples from it how
+many jobs wait for each pool and for how long, which the Workers tab charts as
+the queue backlog.
+
 ## Analysis helpers (`analysis/`)
 
 All scripts activate the repo's `Project.toml` automatically. Run

@@ -37,7 +37,8 @@ container image (`Dockerfile`):
   - `fetch_packages.jl`: package-server download rollups, per package too,
     with names from the General registry
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every
-    run (the token needs the `read_agents` scope)
+    run, and the queue and run times of every julia-pr and julia-ci job for the
+    queue backlog (the token needs the `read_agents` and `read_builds` scopes)
 - `db/serve.jl` is the site's API (`/api/`): the shapes in `db/Render.jl`,
   served with a time window so the browser loads what it shows.
 - `db/export.jl` renders the same shapes to files after every run, published

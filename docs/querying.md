@@ -78,7 +78,10 @@ It is taken after every ingest. No row or time limits, and no load on the host.
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.
 - **Agents.** `agents` (every Buildkite agent seen), `agent_snapshots` and
-  `agent_snapshot_members` (who was connected at each ingest).
+  `agent_snapshot_members` (who was connected at each ingest). `pool_jobs` holds every
+  runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
+  for (queue, os, arch) and when it became runnable, started and finished: the queue
+  backlog behind `api/agents/backlog`.
 - **Freshness.** `source_runs`: when each fetcher ran and whether it succeeded.
 
 ## Example queries

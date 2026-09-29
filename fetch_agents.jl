@@ -14,13 +14,19 @@
 #                           window (host, queue, state, current job), with sorted
 #                           keys so the rewrite each run diffs cleanly.
 #
+# It also keeps the jobs of the julia-pr and julia-ci builds in `pool_jobs`: when each
+# became runnable, started and finished, and the agent pool (queue, os, arch) it asked
+# for, so the Workers tab can draw how many jobs wait for each pool. A run fetches the
+# builds still going and those finished since the last successful run; the first run
+# backfills POOL_BACKFILL_DAYS.
+#
 # The site draws connected agents per queue over time from the history and flags
 # agents that were connected recently but are not now. The build, test, launch and
 # default queues are the exception: their hosts start one agent per job (see
 # JuliaCI/sandboxed-buildkite-agent), so a listing only shows the slots mid-job
 # and the site judges those per host, by the last snapshot any slot appeared in.
 #
-# Needs a token with the read_agents scope. Without it the run fails and says so in
+# Needs a token with the read_agents and read_builds scopes. Without it the run fails and says so in
 # source_runs, where /healthz and the daily check pick it up.
 
 using HTTP
@@ -175,14 +181,102 @@ function record_snapshot!(db, agents, now_time::DateTime)
     return connected
 end
 
+# --- pool jobs ------------------------------------------------------------------
+
+const POOL_PIPELINES = ["julia-pr", "julia-ci"]
+const ACTIVE_BUILD_STATES = ["scheduled", "running", "failing", "canceling"]
+const POOL_BACKFILL_DAYS = 30
+const POOL_JOB_RETAIN_DAYS = 60
+# Builds that finish while a run is listing them are caught by the next run
+const POOL_OVERLAP = Hour(2)
+
+# Every build of `pipeline` matching `params` (pairs, repeated keys allowed), across pages
+function fetch_builds(pipeline, params; token=get_token(), per_page=100, max_pages=200)
+    builds = Any[]
+    for page in 1:max_pages
+        q = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in [params; "per_page" => string(per_page); "page" => string(page)]], "&")
+        url = "$API_BASE/organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds?$q"
+        resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
+        if resp.status in (401, 403)
+            error("The token cannot list builds (HTTP $(resp.status); it needs the read_builds scope)")
+        end
+        resp.status == 200 || error("Builds request failed with HTTP $(resp.status): $(String(resp.body))")
+        batch = JSON3.read(resp.body)
+        append!(builds, batch)
+        length(batch) < per_page && break
+    end
+    return builds
+end
+
+at(x) = x === nothing ? missing : Store.iso(Store.parse_upstream(String(x)))
+
+function rule_value(rules, key)
+    prefix = key * "="
+    for r in rules
+        s = String(r)
+        startswith(s, prefix) && return s[length(prefix)+1:end]
+    end
+    return ""
+end
+
+const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "state", "runnable_at", "started_at", "finished_at"]
+
+# Upsert the runnable script jobs of `builds`; returns how many were written
+function record_pool_jobs!(db, pipeline, builds)
+    stmt = upsert_stmt(db, "pool_jobs", ["job_uuid"], POOL_JOB_COLS)
+    seq = next_seq!(db)
+    n = 0
+    for build in builds, job in something(get(build, :jobs, nothing), [])
+        get(job, :type, nothing) == "script" || continue
+        runnable = get(job, :runnable_at, nothing)
+        runnable === nothing && continue
+        rules = something(get(job, :agent_query_rules, nothing), [])
+        upsert!(stmt, (String(job.id), pipeline, Int(build.number), str(get(job, :name, nothing)),
+                       rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"),
+                       str(get(job, :state, nothing)), at(runnable), at(get(job, :started_at, nothing)),
+                       at(get(job, :finished_at, nothing)), seq))
+        n += 1
+    end
+    return n
+end
+
+# Start of the window of finished builds to fetch: shortly before the last
+# successful run, or the backfill window when there are no jobs yet
+function pool_window_start(db, now_time)
+    isempty(query(db, "SELECT 1 FROM pool_jobs LIMIT 1")) && return ("created_from", now_time - Day(POOL_BACKFILL_DAYS))
+    r = query(db, "SELECT started_at FROM source_runs WHERE source = 'agents' AND ok = 1 ORDER BY id DESC LIMIT 1")
+    last_ok = isempty(r) ? now_time - Day(1) : DateTime(String(r[1].started_at), Store.ISO_SECONDS)
+    return ("finished_from", max(last_ok - POOL_OVERLAP, now_time - Day(POOL_BACKFILL_DAYS)))
+end
+
+function update_pool_jobs!(db, now_time::DateTime)
+    key, from = pool_window_start(db, now_time)
+    fetched = Dict{String,Vector{Any}}()
+    for pipeline in POOL_PIPELINES
+        active = fetch_builds(pipeline, ["state[]" => s for s in ACTIVE_BUILD_STATES])
+        recent = fetch_builds(pipeline, [key => Dates.format(from, Store.ISO_SECONDS)])
+        fetched[pipeline] = vcat(active, recent)
+    end
+    return transaction(db) do
+        n = sum(record_pool_jobs!(db, p, b) for (p, b) in fetched)
+        cutoff = Store.iso(now_time - Day(POOL_JOB_RETAIN_DAYS))
+        DBInterface.execute(db, "DELETE FROM pool_jobs WHERE runnable_at < ?", (cutoff,))
+        @info "Pool jobs recorded" window=key from builds=sum(length, values(fetched)) jobs=n
+        n
+    end
+end
+
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
     source_run(db, "agents") do
+        now_time = now(UTC)
         agents = fetch_agents()
         connected = transaction(db) do
-            record_snapshot!(db, agents, now(UTC))
+            record_snapshot!(db, agents, now_time)
         end
         @info "Agents listed" total=length(agents) connected=length(connected)
+        # After the snapshot is stored, so a builds failure does not lose it
+        update_pool_jobs!(db, now_time)
     end
     close(db)
     return 0

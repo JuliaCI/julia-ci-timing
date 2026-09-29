@@ -940,6 +940,92 @@ function agent_snapshots(db; since="")
             for r in rows(db, "SELECT time FROM agent_snapshots WHERE time >= ? ORDER BY time", (since,))]
 end
 
+# Buildkite states of a job that is still waiting for an agent
+const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited", "limiting")
+
+"""
+    pool_backlog(db; since="")
+
+For each agent pool (queue, os and arch) the julia-pr and julia-ci jobs asked
+for, how many were waiting for an agent and how many were running, sampled
+every `step_s` seconds from `since` (all retained jobs by default) to now, with the longest wait among the waiting jobs at each
+sample and the agent slots seen for the pool in the last 30 days.
+"""
+function pool_backlog(db; since="")
+    now_t = floor(now(UTC), Minute(10))
+    first_r = rows(db, "SELECT MIN(runnable_at) AS t FROM pool_jobs")[1].t
+    start = isempty(since) ? DateTime(0) : DateTime(since[1:min(end, 19)], length(since) <= 10 ? dateformat"yyyy-mm-dd" : dateformat"yyyy-mm-ddTHH:MM:SS")
+    start = max(start, first_r === missing ? now_t - Day(7) : floor(DateTime(String(first_r), Store.ISO_SECONDS), Minute(10)))
+    start = min(start, now_t)
+    span = Dates.value(now_t - start) ÷ 1000
+    # At most about 1000 samples, on 10-minute multiples
+    step = max(600, cld(span, 1000 * 600) * 600)
+    n = span ÷ step + 1
+    t0 = datetime2unix(start)
+    secs(x) = datetime2unix(DateTime(String(x), Store.ISO_SECONDS))
+    now_s = datetime2unix(now(UTC))
+    # Sample i (0-based) is at t0 + i*step; an interval [a, b) covers samples first_at(a) .. first_at(b)-1
+    first_at(x) = clamp(ceil(Int, (x - t0) / step), 0, n)
+    pools = OrderedDict{Tuple{String,String,String},Any}()
+    pool(q, o, a) = get!(pools, (q, o, a)) do
+        (waiting=zeros(Int, n + 1), running=zeros(Int, n + 1), waits=Tuple{Float64,Float64}[])
+    end
+    for r in rows(db, "SELECT queue, os, arch, state, runnable_at, started_at, finished_at FROM pool_jobs " *
+                      "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
+                  (Store.iso(now_t + Minute(10)), Store.iso(start)))
+        p = pool(String(r.queue), String(r.os), String(r.arch))
+        a = secs(r.runnable_at)
+        # Waiting ends when the job starts, or when it is canceled before starting.
+        # A job skipped with its build has neither time and never waited for an agent.
+        b = r.started_at !== missing ? secs(r.started_at) :
+            r.finished_at !== missing ? secs(r.finished_at) :
+            String(r.state) in QUEUED_STATES ? now_s : a
+        if b > a
+            p.waiting[first_at(a)+1] += 1
+            p.waiting[first_at(b)+1] -= 1
+            push!(p.waits, (a, b))
+        end
+        if r.started_at !== missing
+            s0 = secs(r.started_at)
+            s1 = r.finished_at === missing ? now_s : secs(r.finished_at)
+            p.running[first_at(s0)+1] += 1
+            p.running[first_at(s1)+1] -= 1
+        end
+    end
+    slots = Dict{Tuple{String,String,String},Int}()
+    gen = agents_generated_at(db)
+    slot_cutoff = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30))
+    for r in rows(db, "SELECT queue, os, arch, COUNT(*) AS n FROM agents WHERE last_seen >= ? GROUP BY queue, os, arch", (slot_cutoff,))
+        slots[(String(r.queue), String(r.os), String(r.arch))] = Int(r.n)
+    end
+    out = Any[]
+    for ((q, o, a), p) in pools
+        waiting = cumsum(p.waiting)[1:n]
+        running = cumsum(p.running)[1:n]
+        # Longest wait at each sample: the earliest start among the jobs still waiting
+        sort!(p.waits)
+        heap = BinaryMinHeap{Tuple{Float64,Float64}}()
+        oldest = zeros(Int, n)
+        k = 1
+        for i in 1:n
+            t = t0 + (i - 1) * step
+            while k <= length(p.waits) && p.waits[k][1] <= t
+                push!(heap, p.waits[k])
+                k += 1
+            end
+            while !isempty(heap) && first(heap)[2] <= t
+                pop!(heap)
+            end
+            oldest[i] = isempty(heap) ? 0 : round(Int, t - first(heap)[1])
+        end
+        push!(out, OrderedDict{String,Any}("queue" => q, "os" => o, "arch" => a, "slots" => get(slots, (q, o, a), nothing),
+                                           "waiting" => waiting, "running" => running, "oldest_wait_s" => oldest))
+    end
+    sort!(out; by=p -> -maximum(p["waiting"]; init=0))
+    return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,
+                                   "pipelines" => ["julia-pr", "julia-ci"], "pools" => out)
+end
+
 # --- health --------------------------------------------------------------------
 
 # Percent of the volume holding the database in use (df), or nothing

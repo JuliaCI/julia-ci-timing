@@ -807,9 +807,152 @@ function renderAgentsChart(snapshots, queueOf) {
   });
 }
 
+// === Queue backlog (Workers tab) ===
+// api/agents/backlog samples, per agent pool, the julia-pr and julia-ci jobs
+// waiting for an agent and running, from pool_jobs (fetch_agents.jl).
+let backlogData = null;
+let backlogSince = null;
+let backlogPromise = null;
+let backlogChart = null;
+let backlogMetric = "oldest";
+// Pools drawn at most, the busiest first; one colour each
+const BACKLOG_MAX_POOLS = 8;
+const BACKLOG_COLORS = {
+  light: ["#bc4c00", "#0969da", "#8250df", "#1a7f37", "#bf3989", "#9a6700", "#0550ae", "#656d76"],
+  dark: ["#db6d28", "#388bfd", "#a371f7", "#3fb950", "#db61a2", "#d29922", "#79c0ff", "#8b949e"],
+};
+
+const backlogPoolLabel = (p) => `${p.queue || "(no queue)"} ${[p.os, p.arch].filter(Boolean).join("/")}`.trim();
+
+function formatWait(seconds) {
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(1)} h`;
+}
+
+function setBacklogMetric(value) {
+  backlogMetric = ["oldest", "waiting", "per-slot"].includes(value) ? value : "oldest";
+  if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
+}
+
+async function renderBacklogSection() {
+  const summaryEl = document.getElementById("backlog-summary");
+  if (!summaryEl) return;
+  const since = apiSince(getTimeRangeCutoff());
+  if (backlogSince !== since || !backlogPromise) {
+    backlogSince = since;
+    backlogPromise = apiGet("agents/backlog", { since }).catch((err) => {
+        console.error("Failed to load the queue backlog:", err);
+        return { error: true };
+      });
+  }
+  const d = await backlogPromise;
+  // A newer time range was asked for while this one loaded
+  if (backlogSince !== since) return;
+  backlogData = d;
+  if (d.error || !d.pools || d.pools.length === 0) {
+    summaryEl.textContent = d.error ? "Could not load the backlog." : "No jobs recorded yet.";
+    if (backlogChart) {
+      backlogChart.destroy();
+      backlogChart = null;
+    }
+    return;
+  }
+  const now = d.pools
+    .map((p) => ({ p, n: p.waiting[p.waiting.length - 1], w: p.oldest_wait_s[p.oldest_wait_s.length - 1] }))
+    .filter((x) => x.n > 0);
+  summaryEl.innerHTML = now.length
+    ? "Now: " +
+      now
+        .map((x) => `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (longest ${formatWait(x.w)})`)
+        .join(", ")
+    : "Now: no jobs waiting";
+  renderBacklogChart(d);
+}
+
+function renderBacklogChart(d) {
+  const canvas = document.getElementById("backlog-chart");
+  if (!canvas || typeof Chart === "undefined") return;
+  const isDark = isDarkMode();
+  const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const t0 = Date.parse(d.start);
+  const stepMs = d.step_s * 1000;
+  const metric = backlogMetric;
+  // Pools that never queued more than a few jobs in the window add nothing but legend
+  const pools = d.pools
+    .filter((p) => Math.max(...p.waiting) >= 5 && (metric !== "per-slot" || p.slots))
+    .slice(0, BACKLOG_MAX_POOLS);
+  const datasets = pools.map((p, i) => {
+    const color = palette[i % palette.length];
+    const values =
+      metric === "oldest"
+        ? p.oldest_wait_s.map((s) => s / 3600)
+        : metric === "per-slot"
+          ? p.waiting.map((n) => n / p.slots)
+          : p.waiting;
+    return {
+      label: backlogPoolLabel(p),
+      data: values.map((y, j) => ({ x: t0 + j * stepMs, y })),
+      _pool: p,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 1.5,
+      pointRadius: 0,
+      pointHitRadius: 6,
+    };
+  });
+  if (backlogChart) {
+    backlogChart.destroy();
+    backlogChart = null;
+  }
+  backlogChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "near", axis: "x", intersect: false },
+      plugins: {
+        legend: { position: "right", labels: { color: textColor, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            title: (items) =>
+              items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
+            label: (item) => {
+              const p = item.dataset._pool;
+              const j = item.dataIndex;
+              const slots = p.slots ? ` of ${p.slots} slots` : "";
+              return (
+                `${item.dataset.label}: ${p.waiting[j]} waiting, longest ${formatWait(p.oldest_wait_s[j])}; ` +
+                `${p.running[j]} running${slots}`
+              );
+            },
+          },
+        },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor }),
+        y: {
+          beginAtZero: true,
+          ticks: { color: textColor, precision: metric === "waiting" ? 0 : undefined },
+          grid: { color: gridColor },
+          title: {
+            display: true,
+            text: { oldest: "longest wait (h)", waiting: "jobs waiting", "per-slot": "jobs waiting per slot" }[metric],
+            color: textColor,
+          },
+        },
+      },
+    },
+  });
+}
+
 function renderWorkerPresence() {
   const container = document.getElementById("workers-grid");
   if (!container) return;
+  renderBacklogSection();
   renderAgentsSection();
   if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
     container.innerHTML = '<div class="workers-empty">No data loaded yet.</div>';
@@ -8130,6 +8273,7 @@ function setPackagesViewMode(val) {
   updatePackagesURL();
 }
 window.setPackagesViewMode = setPackagesViewMode;
+window.setBacklogMetric = setBacklogMetric;
 
 function togglePackagesProportional() {
   packagesProportional = !packagesProportional;
@@ -11051,7 +11195,8 @@ async function loadOverviewSources() {
   // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
-  const [pkgeval, bench, ttfx, ttfxPrsList, packages, agents, builds, reasons, top, popular] = await Promise.all([
+  const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
+  const [pkgeval, bench, ttfx, ttfxPrsList, packages, agents, builds, reasons, top, popular, backlog] = await Promise.all([
     pkgevalData || quiet("pkgeval/summary"),
     benchData || quiet("benchmarks/summary"),
     ttfxData || quiet("ttfx/summary"),
@@ -11062,8 +11207,9 @@ async function loadOverviewSources() {
     quiet("pkgeval/reasons"),
     quiet("downloads/top", { days: 7, client: "user" }),
     quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
+    quiet("agents/backlog", { since: twoWeeksAgo }),
   ]);
-  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, packages, agents, builds, reasons, top, popular };
+  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, packages, agents, builds, reasons, top, popular, backlog };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -11215,6 +11361,15 @@ function overviewSpark(points, { color, label, format = (v) => String(v), zero =
   if (kept.length < 2) return null;
   kept.sort((a, b) => a.x - b.x);
   return { points: kept, color, label, format, zero };
+}
+
+// Sparkline spec with several series: [{ label, color, points }], one line each
+function overviewSparkLines(series, { label, format = (v) => String(v), zero = false }) {
+  const kept = series
+    .map((s) => ({ ...s, points: s.points.filter((p) => !isNaN(p.x) && p.y != null && !isNaN(p.y)).sort((a, b) => a.x - b.x) }))
+    .filter((s) => s.points.length >= 2);
+  if (!kept.length) return null;
+  return { series: kept, points: kept[0].points, color: kept[0].color, label, format, zero };
 }
 
 // Diverging bar spec: points [{ x: ms, up, down }], `up` drawn above the
@@ -11827,7 +11982,7 @@ function overviewTopPackages() {
   return `${overviewTabLink("packages", "by users this week")}: ${names.join(", ")}`;
 }
 
-function overviewAgentsCard(src) {
+function overviewAgentsCard(src, backlog) {
   const agents = src && src.agents;
   if (!agents || !src.generated_at) return overviewMissingCard("ci-workers", "CI workers", "The agent snapshot");
   const colors = overviewColors();
@@ -11836,17 +11991,24 @@ function overviewAgentsCard(src) {
   const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs);
   const running = rows.filter((r) => r.status === "running").reduce((acc, r) => acc + r.running, 0)
     + rows.filter((r) => r.status === "connected" && r.rec.job).length;
-  let status;
+  const queue = overviewQueueSummary(backlog);
+  // The worse of the agents' presence and the queue, naming both when both are off
+  const rank = { ok: 0, warn: 1, bad: 2 };
+  let level = "ok";
+  const problems = [];
   if (Date.now() - latestMs > OVERVIEW_AGENTS_STALE_MS) {
-    status = overviewStatus("bad", `Snapshot ${overviewAgo(src.generated_at)}`);
+    level = "bad";
+    problems.push(`Snapshot ${overviewAgo(src.generated_at)}`);
   } else if (missing.length || quiet.length) {
-    const parts = [];
-    if (missing.length) parts.push(`${missing.length} missing`);
-    if (quiet.length) parts.push(`${quiet.length} quiet`);
-    status = overviewStatus("warn", parts.join(", "));
-  } else {
-    status = overviewStatus("ok", "All present");
+    level = "warn";
+    if (missing.length) problems.push(`${missing.length} missing`);
+    if (quiet.length) problems.push(`${quiet.length} quiet`);
   }
+  if (queue && queue.level !== "ok") {
+    if (rank[queue.level] > rank[level]) level = queue.level;
+    problems.push(queue.text);
+  }
+  const status = overviewStatus(level, problems.length ? problems.join(", ") : "All present, no long waits");
   const donut = overviewDonut([
     { label: "build queue", value: perQueue.build, color: colors.categorical[0] },
     { label: "test queue", value: perQueue.test, color: colors.categorical[1] },
@@ -11858,17 +12020,100 @@ function overviewAgentsCard(src) {
     title: "CI workers",
     status,
     description:
-      "The machines running Julia's CI, and which of them have gone quiet.",
-    headline: `${connected.size}`,
-    headlineLabel: "agents connected in the latest snapshot",
+      "The machines running Julia's CI, how long jobs wait for one, and which of them have gone quiet.",
+    headline: queue ? queue.headline : `${connected.size}`,
+    headlineLabel: queue ? queue.headlineLabel : "agents connected in the latest snapshot",
+    delta: queue ? queue.delta : null,
+    spark: queue ? queue.spark : null,
     donut,
     rows: [
+      ...(queue ? [["Connected agents", String(connected.size)], ...queue.rows] : []),
       ["Running jobs", String(running)],
       ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
       ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
       ["Snapshot", `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
     ],
   });
+}
+
+// A pool whose oldest waiting job has waited this long is flagged
+const OVERVIEW_QUEUE_WARN_S = 60 * 60;
+const OVERVIEW_QUEUE_BAD_S = 6 * 60 * 60;
+const OVERVIEW_QUEUE_ROWS = 4;
+const OVERVIEW_QUEUE_LINES = 5;
+
+// The queue backlog for the CI workers card: the longest current wait as the
+// headline, the mean jobs waiting this week against last, the longest wait
+// over the window, and a row per pool with jobs waiting now. Null without data.
+function overviewQueueSummary(src) {
+  if (!src || !src.pools || !src.pools.length) return null;
+  const t0 = Date.parse(src.start);
+  const stepMs = src.step_s * 1000;
+  const nowMs = t0 + (src.n - 1) * stepMs;
+  const pools = src.pools.map((p) => ({
+    p,
+    label: backlogPoolLabel(p),
+    waiting: p.waiting[src.n - 1],
+    oldest: p.oldest_wait_s[src.n - 1],
+  }));
+  const worst = pools.reduce((a, b) => (b.oldest > a.oldest ? b : a));
+  let level = "ok";
+  if (worst.oldest >= OVERVIEW_QUEUE_BAD_S) level = "bad";
+  else if (worst.oldest >= OVERVIEW_QUEUE_WARN_S) level = "warn";
+  const total = (i) => src.pools.reduce((acc, p) => acc + p.waiting[i], 0);
+  let thisWeek = 0, thisN = 0, lastWeek = 0, lastN = 0;
+  for (let i = 0; i < src.n; i++) {
+    const t = t0 + i * stepMs;
+    if (t > nowMs - OVERVIEW_WEEK_MS) {
+      thisWeek += total(i);
+      thisN++;
+    } else if (t > nowMs - 2 * OVERVIEW_WEEK_MS) {
+      lastWeek += total(i);
+      lastN++;
+    }
+  }
+  const delta =
+    thisN && lastN && lastWeek > 0
+      ? overviewDelta({
+          value: 100 * (thisWeek / thisN / (lastWeek / lastN) - 1),
+          unit: "%",
+          upIsGood: false,
+          digits: 0,
+          vs: "jobs waiting, this week vs last",
+          detail: overviewWeekWindowsDetail("Mean jobs waiting for an agent", nowMs),
+        })
+      : null;
+  // The Workers tab's backlog chart in small: longest wait per busy pool
+  const palette = BACKLOG_COLORS[isDarkMode() ? "dark" : "light"];
+  const spark = overviewSparkLines(
+    src.pools
+      .filter((p) => Math.max(...p.waiting) >= 5)
+      .slice(0, OVERVIEW_QUEUE_LINES)
+      .map((p, k) => ({
+        label: backlogPoolLabel(p),
+        color: palette[k % palette.length],
+        points: p.oldest_wait_s.map((w, i) => ({ x: t0 + i * stepMs, y: w / 3600 })),
+      })),
+    { label: "Longest wait for an agent per pool, hours", format: (v) => formatWait(v * 3600), zero: true },
+  );
+  const waitingNow = pools.filter((x) => x.waiting > 0).sort((a, b) => b.oldest - a.oldest);
+  const rows = waitingNow.slice(0, OVERVIEW_QUEUE_ROWS).map((x) => [
+    `Waiting: ${x.label}`,
+    `${x.waiting} jobs, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${x.p.slots} slots` : ""}`,
+  ]);
+  if (waitingNow.length > OVERVIEW_QUEUE_ROWS) {
+    rows.push(["Waiting elsewhere", overviewList(waitingNow.slice(OVERVIEW_QUEUE_ROWS).map((x) => `${x.label} ${x.waiting}`))]);
+  }
+  if (!waitingNow.length) rows.push(["Jobs waiting", "none"]);
+  return {
+    level,
+    text: level === "ok" ? "" : `${worst.label} waits ${formatWait(worst.oldest)}`,
+    headline: worst.oldest > 0 ? formatWait(worst.oldest) : "0",
+    headlineLabel: worst.oldest > 0 ? `longest wait for an agent now, ${escapeHtml(worst.label)}` : "jobs waiting for an agent now",
+    delta,
+    spark,
+    rows,
+  };
 }
 
 function overviewDonutChart(canvas, donut) {
@@ -11907,24 +12152,25 @@ function overviewDonutChart(canvas, donut) {
 }
 
 function overviewSparkChart(canvas, spark) {
+  // Several series are drawn as plain lines, one series filled below
+  const series = spark.series || [{ label: spark.label, color: spark.color, points: spark.points }];
+  const multi = series.length > 1;
   return new Chart(canvas, {
     type: "line",
     data: {
-      datasets: [
-        {
-          label: spark.label,
-          data: spark.points,
-          borderColor: spark.color,
-          backgroundColor: colorToRgba(spark.color, 0.12),
-          fill: true,
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHitRadius: 10,
-          pointHoverRadius: 4,
-          pointHoverBackgroundColor: spark.color,
-          tension: 0.3,
-        },
-      ],
+      datasets: series.map((s) => ({
+        label: s.label,
+        data: s.points,
+        borderColor: s.color,
+        backgroundColor: multi ? s.color : colorToRgba(s.color, 0.12),
+        fill: !multi,
+        borderWidth: multi ? 1.5 : 2,
+        pointRadius: 0,
+        pointHitRadius: 10,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: s.color,
+        tension: 0.3,
+      })),
     },
     options: {
       responsive: true,
@@ -11939,10 +12185,10 @@ function overviewSparkChart(canvas, spark) {
       plugins: {
         legend: { display: false },
         tooltip: {
-          displayColors: false,
+          displayColors: multi,
           callbacks: {
             title: (items) => new Date(items[0].parsed.x).toISOString().slice(0, 16).replace("T", " "),
-            label: (item) => `${spark.label}: ${spark.format(item.parsed.y)}`,
+            label: (item) => `${multi ? item.dataset.label : spark.label}: ${spark.format(item.parsed.y)}`,
           },
         },
       },
@@ -12001,7 +12247,7 @@ function drawOverview() {
     overviewPkgevalCard(src.pkgeval),
     overviewCICard(),
     overviewBenchCard(src.bench),
-    overviewAgentsCard(src.agents),
+    overviewAgentsCard(src.agents, src.backlog),
   ];
   const grid = document.getElementById("overview-grid");
   grid.innerHTML = cards.map((c) => c.html).join("");

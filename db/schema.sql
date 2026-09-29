@@ -532,3 +532,25 @@ CREATE TABLE IF NOT EXISTS agents (
     job_json     TEXT,                       -- {"name","pipeline","build","started_at"} or NULL
     change_seq   INTEGER NOT NULL
 );
+
+-- One row per script job of the julia-pr and julia-ci builds that could run
+-- (it has a runnable_at), from fetch_agents.jl: the agent pool it asked for
+-- (queue, os and arch of its agent query rules) and when it became runnable,
+-- started and finished. A job canceled while queued has no started_at and
+-- finishes when it was canceled. Kept for POOL_JOB_RETAIN_DAYS; the Workers
+-- tab draws each pool's backlog from it.
+CREATE TABLE IF NOT EXISTS pool_jobs (
+    job_uuid    TEXT PRIMARY KEY,
+    pipeline    TEXT NOT NULL,
+    build       INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    queue       TEXT NOT NULL DEFAULT '',
+    os          TEXT NOT NULL DEFAULT '',
+    arch        TEXT NOT NULL DEFAULT '',
+    state       TEXT NOT NULL,
+    runnable_at TEXT NOT NULL,
+    started_at  TEXT,
+    finished_at TEXT,
+    change_seq  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pool_jobs_runnable ON pool_jobs (runnable_at);

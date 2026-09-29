@@ -206,9 +206,23 @@
             "fold_key": "the name without its '.N' slot suffix, to group per-job agents by host",
             "job_json": "the running job as JSON, when connected"
           }
+        },
+        "pool_jobs": {
+          "description": "Every runnable script job of julia-pr and julia-ci builds from the last 60 days, with the agent pool it asked for. Waiting for an agent is runnable_at to started_at (or finished_at for a job canceled while queued).",
+          "columns": {
+            "build": "the build number within the pipeline",
+            "queue": "the queue of the job's agent query rules; with os and arch this is the pool",
+            "runnable_at": "when every dependency had finished and the job could take an agent",
+            "started_at": "when an agent started it; NULL while queued, or when canceled before starting",
+            "finished_at": "when it finished or was canceled; NULL while queued or running"
+          }
         }
       },
       "queries": {
+        "pool_waiting_now": {
+          "title": "Jobs waiting for an agent now, per pool",
+          "sql": "SELECT queue, os, arch, count(*) AS waiting,\n  round(max(julianday('now') - julianday(runnable_at)) * 24, 1) AS longest_wait_h\nFROM pool_jobs WHERE state = 'scheduled' AND started_at IS NULL\nGROUP BY queue, os, arch ORDER BY waiting DESC"
+        },
         "source_freshness": {
           "title": "When each source last ran",
           "sql": "SELECT source, max(finished_at) AS last_ok\nFROM source_runs WHERE ok = 1 GROUP BY source ORDER BY source"
