@@ -1503,7 +1503,8 @@ a {
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border-default);
 }
-.backlog-chart-wrapper {
+/* More specific than .agents-chart-wrapper, which comes later */
+.backlog-section > .backlog-chart-wrapper {
   height: 180px;
 }
 .agents-header {

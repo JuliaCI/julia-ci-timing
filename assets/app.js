@@ -815,6 +815,25 @@ let backlogSince = null;
 let backlogPromise = null;
 let backlogChart = null;
 let backlogMetric = "oldest";
+let backlogPipeline = "all";
+const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR" };
+
+// A pool's series for one pipeline, or for all of them
+function backlogSeries(p, pipeline = backlogPipeline) {
+  if (pipeline === "all") return p;
+  const s = p.by_pipeline && p.by_pipeline[pipeline];
+  if (s) return s;
+  const zeros = p.waiting.map(() => 0);
+  return { waiting: zeros, running: zeros, oldest_wait_s: zeros };
+}
+
+// "294 master, 634 PR" for sample j, leaving out pipelines with none
+function backlogSplit(p, j, key = "waiting", format = String) {
+  return Object.entries(p.by_pipeline || {})
+    .filter(([, s]) => s[key][j] > 0)
+    .map(([pl, s]) => `${format(s[key][j])} ${BACKLOG_PIPELINE_SHORT[pl] || pl}`)
+    .join(", ");
+}
 // Pools drawn at most, the busiest first; one colour each
 const BACKLOG_MAX_POOLS = 8;
 const BACKLOG_COLORS = {
@@ -827,6 +846,11 @@ const backlogPoolLabel = (p) => `${p.queue || "(no queue)"} ${[p.os, p.arch].fil
 function formatWait(seconds) {
   if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
+}
+
+function setBacklogPipeline(value) {
+  backlogPipeline = ["all", "julia-ci", "julia-pr"].includes(value) ? value : "all";
+  if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
 }
 
 function setBacklogMetric(value) {
@@ -863,7 +887,10 @@ async function renderBacklogSection() {
   summaryEl.innerHTML = now.length
     ? "Now: " +
       now
-        .map((x) => `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (longest ${formatWait(x.w)})`)
+        .map((x) => {
+          const split = backlogSplit(x.p, x.p.waiting.length - 1);
+          return `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (${split ? split + ", " : ""}longest ${formatWait(x.w)})`;
+        })
         .join(", ")
     : "Now: no jobs waiting";
   renderBacklogChart(d);
@@ -881,16 +908,17 @@ function renderBacklogChart(d) {
   const metric = backlogMetric;
   // Pools that never queued more than a few jobs in the window add nothing but legend
   const pools = d.pools
-    .filter((p) => Math.max(...p.waiting) >= 5 && (metric !== "per-slot" || p.slots))
+    .filter((p) => Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || p.slots))
     .slice(0, BACKLOG_MAX_POOLS);
   const datasets = pools.map((p, i) => {
     const color = palette[i % palette.length];
+    const s = backlogSeries(p);
     const values =
       metric === "oldest"
-        ? p.oldest_wait_s.map((s) => s / 3600)
+        ? s.oldest_wait_s.map((w) => w / 3600)
         : metric === "per-slot"
-          ? p.waiting.map((n) => n / p.slots)
-          : p.waiting;
+          ? s.waiting.map((n) => n / p.slots)
+          : s.waiting;
     return {
       label: backlogPoolLabel(p),
       data: values.map((y, j) => ({ x: t0 + j * stepMs, y })),
@@ -915,7 +943,8 @@ function renderBacklogChart(d) {
       animation: false,
       interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
-        legend: { position: "right", labels: { color: textColor, boxWidth: 12 } },
+        // Compact enough that all the pools fit in one column beside the chart
+        legend: { position: "right", labels: { color: textColor, boxWidth: 10, boxHeight: 10, padding: 6, font: { size: 11 } } },
         tooltip: {
           callbacks: {
             title: (items) =>
@@ -924,9 +953,13 @@ function renderBacklogChart(d) {
               const p = item.dataset._pool;
               const j = item.dataIndex;
               const slots = p.slots ? ` of ${p.slots} slots` : "";
+              const waitSplit = backlogSplit(p, j);
+              const runSplit = backlogSplit(p, j, "running");
+              const longSplit = backlogSplit(p, j, "oldest_wait_s", formatWait);
               return (
-                `${item.dataset.label}: ${p.waiting[j]} waiting, longest ${formatWait(p.oldest_wait_s[j])}; ` +
-                `${p.running[j]} running${slots}`
+                `${item.dataset.label}: ${p.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, ` +
+                `longest ${formatWait(p.oldest_wait_s[j])}${longSplit.includes(",") ? ` (${longSplit})` : ""}; ` +
+                `${p.running[j]} running${runSplit ? ` (${runSplit})` : ""}${slots}`
               );
             },
           },
@@ -8274,6 +8307,7 @@ function setPackagesViewMode(val) {
 }
 window.setPackagesViewMode = setPackagesViewMode;
 window.setBacklogMetric = setBacklogMetric;
+window.setBacklogPipeline = setBacklogPipeline;
 
 function togglePackagesProportional() {
   packagesProportional = !packagesProportional;
@@ -12097,10 +12131,13 @@ function overviewQueueSummary(src) {
     { label: "Longest wait for an agent per pool, hours", format: (v) => formatWait(v * 3600), zero: true },
   );
   const waitingNow = pools.filter((x) => x.waiting > 0).sort((a, b) => b.oldest - a.oldest);
-  const rows = waitingNow.slice(0, OVERVIEW_QUEUE_ROWS).map((x) => [
-    `Waiting: ${x.label}`,
-    `${x.waiting} jobs, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${x.p.slots} slots` : ""}`,
-  ]);
+  const rows = waitingNow.slice(0, OVERVIEW_QUEUE_ROWS).map((x) => {
+    const split = backlogSplit(x.p, src.n - 1);
+    return [
+      `Waiting: ${x.label}`,
+      `${x.waiting} jobs${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${x.p.slots} slots` : ""}`,
+    ];
+  });
   if (waitingNow.length > OVERVIEW_QUEUE_ROWS) {
     rows.push(["Waiting elsewhere", overviewList(waitingNow.slice(OVERVIEW_QUEUE_ROWS).map((x) => `${x.label} ${x.waiting}`))]);
   }

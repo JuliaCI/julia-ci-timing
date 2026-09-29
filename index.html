@@ -782,6 +782,16 @@
                 <option value="waiting">Jobs waiting</option>
                 <option value="per-slot">Jobs waiting per slot</option>
               </select>
+              <select
+                class="time-select"
+                id="backlog-pipeline"
+                onchange="setBacklogPipeline(this.value)"
+                aria-label="Builds"
+              >
+                <option value="all" selected>All builds</option>
+                <option value="julia-ci">Master (julia-ci)</option>
+                <option value="julia-pr">Pull requests (julia-pr)</option>
+              </select>
               <span class="agents-summary" id="backlog-summary"></span>
               <span class="agents-help"
                 >Jobs of julia-pr and julia-ci builds that are ready to run but
@@ -789,7 +799,9 @@
                 the jobs' Buildkite timestamps. Longest wait is how long the
                 oldest of them has been waiting; jobs waiting per slot divides
                 the count by the agent slots seen for the pool in the last 30
-                days. The tooltip adds the jobs running. Jobs are kept for 60
+                days. The second menu limits the chart to master or pull
+                request builds. The tooltip splits each pool's jobs between
+                them and adds the jobs running. Jobs are kept for 60
                 days.</span
               >
             </div>

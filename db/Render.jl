@@ -949,7 +949,9 @@ const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited
 For each agent pool (queue, os and arch) the julia-pr and julia-ci jobs asked
 for, how many were waiting for an agent and how many were running, sampled
 every `step_s` seconds from `since` (all retained jobs by default) to now, with the longest wait among the waiting jobs at each
-sample and the agent slots seen for the pool in the last 30 days.
+sample and the agent slots seen for the pool in the last 30 days. The same
+series per pipeline are under `by_pipeline`, so master (julia-ci) and pull
+request (julia-pr) jobs can be told apart.
 """
 function pool_backlog(db; since="")
     now_t = floor(now(UTC), Minute(10))
@@ -966,14 +968,15 @@ function pool_backlog(db; since="")
     now_s = datetime2unix(now(UTC))
     # Sample i (0-based) is at t0 + i*step; an interval [a, b) covers samples first_at(a) .. first_at(b)-1
     first_at(x) = clamp(ceil(Int, (x - t0) / step), 0, n)
-    pools = OrderedDict{Tuple{String,String,String},Any}()
-    pool(q, o, a) = get!(pools, (q, o, a)) do
+    # Per pool and pipeline: changes in waiting and running per sample, and the waits
+    pools = OrderedDict{Tuple{String,String,String},Dict{String,Any}}()
+    acc(q, o, a, pipeline) = get!(get!(pools, (q, o, a), Dict{String,Any}()), pipeline) do
         (waiting=zeros(Int, n + 1), running=zeros(Int, n + 1), waits=Tuple{Float64,Float64}[])
     end
-    for r in rows(db, "SELECT queue, os, arch, state, runnable_at, started_at, finished_at FROM pool_jobs " *
+    for r in rows(db, "SELECT pipeline, queue, os, arch, state, runnable_at, started_at, finished_at FROM pool_jobs " *
                       "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
                   (Store.iso(now_t + Minute(10)), Store.iso(start)))
-        p = pool(String(r.queue), String(r.os), String(r.arch))
+        p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline))
         a = secs(r.runnable_at)
         # Waiting ends when the job starts, or when it is canceled before starting.
         # A job skipped with its build has neither time and never waited for an agent.
@@ -998,10 +1001,7 @@ function pool_backlog(db; since="")
     for r in rows(db, "SELECT queue, os, arch, COUNT(*) AS n FROM agents WHERE last_seen >= ? GROUP BY queue, os, arch", (slot_cutoff,))
         slots[(String(r.queue), String(r.os), String(r.arch))] = Int(r.n)
     end
-    out = Any[]
-    for ((q, o, a), p) in pools
-        waiting = cumsum(p.waiting)[1:n]
-        running = cumsum(p.running)[1:n]
+    function series(p)
         # Longest wait at each sample: the earliest start among the jobs still waiting
         sort!(p.waits)
         heap = BinaryMinHeap{Tuple{Float64,Float64}}()
@@ -1018,8 +1018,17 @@ function pool_backlog(db; since="")
             end
             oldest[i] = isempty(heap) ? 0 : round(Int, t - first(heap)[1])
         end
+        return OrderedDict{String,Any}("waiting" => cumsum(p.waiting)[1:n], "running" => cumsum(p.running)[1:n],
+                                       "oldest_wait_s" => oldest)
+    end
+    out = Any[]
+    for ((q, o, a), per) in pools
+        by = OrderedDict{String,Any}(pl => series(per[pl]) for pl in sort!(collect(keys(per))))
+        parts = collect(values(by))
         push!(out, OrderedDict{String,Any}("queue" => q, "os" => o, "arch" => a, "slots" => get(slots, (q, o, a), nothing),
-                                           "waiting" => waiting, "running" => running, "oldest_wait_s" => oldest))
+                                           "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
+                                           "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
+                                           "by_pipeline" => by))
     end
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
     return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,
