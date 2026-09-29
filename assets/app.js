@@ -843,6 +843,14 @@ const BACKLOG_COLORS = {
 
 const backlogPoolLabel = (p) => `${p.queue || "(no queue)"} ${[p.os, p.arch].filter(Boolean).join("/")}`.trim();
 
+// "20 slots", or "5 slots shared with build macos/aarch64" when the pool's hosts
+// also run other pools' jobs, so its slots are free only while those are idle
+function backlogSlotsText(p) {
+  if (!p.slots) return "";
+  const shared = (p.shared_with || []).map(backlogPoolLabel);
+  return `${p.slots} slot${p.slots === 1 ? "" : "s"}${shared.length ? ` shared with ${shared.join(", ")}` : ""}`;
+}
+
 function formatWait(seconds) {
   if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
@@ -952,7 +960,7 @@ function renderBacklogChart(d) {
             label: (item) => {
               const p = item.dataset._pool;
               const j = item.dataIndex;
-              const slots = p.slots ? ` of ${p.slots} slots` : "";
+              const slots = p.slots ? ` of ${backlogSlotsText(p)}` : "";
               const waitSplit = backlogSplit(p, j);
               const runSplit = backlogSplit(p, j, "running");
               const longSplit = backlogSplit(p, j, "oldest_wait_s", formatWait);
@@ -12135,7 +12143,7 @@ function overviewQueueSummary(src) {
     const split = backlogSplit(x.p, src.n - 1);
     return [
       `Waiting: ${x.label}`,
-      `${x.waiting} jobs${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${x.p.slots} slots` : ""}`,
+      `${x.waiting} jobs${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${backlogSlotsText(x.p)}` : ""}`,
     ];
   });
   if (waitingNow.length > OVERVIEW_QUEUE_ROWS) {

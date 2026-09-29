@@ -944,12 +944,50 @@ end
 const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited", "limiting")
 
 """
+    pool_slots(db, cutoff)
+
+Agent slots per pool (queue, os, arch) from the agents seen since `cutoff`, and
+the other pools each one shares its hosts with. Each host's scheduler
+(JuliaCI/sandboxed-buildkite-agent) gives every agent group enough slots to
+fill the host's CPUs alone, and all the groups draw on those same CPUs. A Mac,
+for example, runs one build or one test at a time. So a pool gets at most as
+many slots on a host as the host was ever seen running at once, and two pools
+share a host when their slots there add up to more than that.
+"""
+function pool_slots(db, cutoff)
+    names = Dict{Tuple{String,String,String},Dict{String,Int}}()
+    for r in rows(db, "SELECT hostname, queue, os, arch, COUNT(*) AS n FROM agents WHERE last_seen >= ? " *
+                      "GROUP BY hostname, queue, os, arch", (cutoff,))
+        get!(Dict{String,Int}, names, (String(r.queue), String(r.os), String(r.arch)))[String(r.hostname)] = Int(r.n)
+    end
+    peak = Dict{String,Int}()
+    for r in rows(db, "SELECT hostname, MAX(n) AS n FROM (SELECT m.time, a.hostname, COUNT(*) AS n " *
+                      "FROM agent_snapshot_members m JOIN agents a ON a.name = m.agent_name " *
+                      "WHERE m.time >= ? GROUP BY m.time, a.hostname) GROUP BY hostname", (cutoff,))
+        peak[String(r.hostname)] = Int(r.n)
+    end
+    # A host never seen mid-job has no known limit
+    cap(h, n) = min(n, get(peak, h, n))
+    slots = Dict(p => sum(cap(h, n) for (h, n) in hosts) for (p, hosts) in names)
+    shared = Dict{Tuple{String,String,String},Set{Tuple{String,String,String}}}()
+    for (p, hp) in names, (q, hq) in names
+        p < q || continue
+        if any(h -> haskey(hq, h) && cap(h, hp[h]) + cap(h, hq[h]) > get(peak, h, typemax(Int)), keys(hp))
+            push!(get!(Set{Tuple{String,String,String}}, shared, p), q)
+            push!(get!(Set{Tuple{String,String,String}}, shared, q), p)
+        end
+    end
+    return slots, shared
+end
+
+"""
     pool_backlog(db; since="")
 
 For each agent pool (queue, os and arch) the julia-pr and julia-ci jobs asked
 for, how many were waiting for an agent and how many were running, sampled
 every `step_s` seconds from `since` (all retained jobs by default) to now, with the longest wait among the waiting jobs at each
-sample and the agent slots seen for the pool in the last 30 days. The same
+sample, the agent slots seen for the pool in the last 30 days and the pools
+sharing its hosts (see `pool_slots`). The same
 series per pipeline are under `by_pipeline`, so master (julia-ci) and pull
 request (julia-pr) jobs can be told apart.
 """
@@ -995,12 +1033,8 @@ function pool_backlog(db; since="")
             p.running[first_at(s1)+1] -= 1
         end
     end
-    slots = Dict{Tuple{String,String,String},Int}()
     gen = agents_generated_at(db)
-    slot_cutoff = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30))
-    for r in rows(db, "SELECT queue, os, arch, COUNT(*) AS n FROM agents WHERE last_seen >= ? GROUP BY queue, os, arch", (slot_cutoff,))
-        slots[(String(r.queue), String(r.os), String(r.arch))] = Int(r.n)
-    end
+    slots, shared = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
     function series(p)
         # Longest wait at each sample: the earliest start among the jobs still waiting
         sort!(p.waits)
@@ -1026,6 +1060,8 @@ function pool_backlog(db; since="")
         by = OrderedDict{String,Any}(pl => series(per[pl]) for pl in sort!(collect(keys(per))))
         parts = collect(values(by))
         push!(out, OrderedDict{String,Any}("queue" => q, "os" => o, "arch" => a, "slots" => get(slots, (q, o, a), nothing),
+                                           "shared_with" => [OrderedDict("queue" => sq, "os" => so, "arch" => sa)
+                                                             for (sq, so, sa) in sort!(collect(get(shared, (q, o, a), ())))],
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
                                            "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
                                            "by_pipeline" => by))

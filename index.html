@@ -799,7 +799,9 @@
                 the jobs' Buildkite timestamps. Longest wait is how long the
                 oldest of them has been waiting; jobs waiting per slot divides
                 the count by the agent slots seen for the pool in the last 30
-                days. The second menu limits the chart to master or pull
+                days. Where a pool's hosts also run another pool's jobs (the
+                Macs and the Windows and FreeBSD VM hosts), the tooltip says
+                so: those slots are only free while the other pool is idle. The second menu limits the chart to master or pull
                 request builds. The tooltip splits each pool's jobs between
                 them and adds the jobs running. Jobs are kept for 60
                 days.</span
