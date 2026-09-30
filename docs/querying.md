@@ -81,7 +81,7 @@ It is taken after every ingest. No row or time limits, and no load on the host.
   `agent_snapshot_members` (who was connected at each ingest). `pool_jobs` holds every
   runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
   for (queue, os, arch) and when it became runnable, started and finished: the queue
-  backlog behind `api/agents/backlog`.
+  backlog behind `api/agents/backlog` and the worker time shares behind `api/agents/usage`.
 - **Freshness.** `source_runs`: when each fetcher ran and whether it succeeded.
 
 ## Example queries

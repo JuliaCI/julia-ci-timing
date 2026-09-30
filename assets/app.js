@@ -240,10 +240,16 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
   "btn-reset-zoom",
 ];
 
+// The Timing tab shows job durations over time ('history') or how the
+// agents' time was shared out ('usage')
+let timingView = "history";
+
 function setCITimingSubview(name, { updateUrl = true } = {}) {
   if (name !== "jobs" && name !== "workers" && name !== "builds") name = "jobs";
   ciSubview = name;
   const isJobs = name === "jobs";
+  const isHistory = isJobs && timingView === "history";
+  const isUsage = isJobs && timingView === "usage";
   const isWorkers = name === "workers";
   const isBuilds = name === "builds";
 
@@ -252,27 +258,286 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
     const sidebar = view.querySelector(".sidebar");
     const chart = view.querySelector(".chart-container");
     const stats = view.querySelector(".stats-wrapper");
-    if (sidebar) sidebar.classList.toggle("view-hidden", !isJobs);
-    if (chart) chart.classList.toggle("view-hidden", !isJobs);
-    if (stats) stats.classList.toggle("view-hidden", !isJobs);
+    if (sidebar) sidebar.classList.toggle("view-hidden", !isHistory);
+    if (chart) chart.classList.toggle("view-hidden", !isHistory);
+    if (stats) stats.classList.toggle("view-hidden", !isHistory);
   }
   const workersView = document.getElementById("workers-view");
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
   const buildsView = document.getElementById("builds-view");
   if (buildsView) buildsView.classList.toggle("view-hidden", !isBuilds);
+  const usageView = document.getElementById("usage-view");
+  if (usageView) usageView.classList.toggle("view-hidden", !isUsage);
 
   // Hide controls that don't apply to the workers/builds views
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
     const el = document.getElementById(id);
-    if (el) el.classList.toggle("view-hidden", !isJobs);
+    if (el) el.classList.toggle("view-hidden", !isHistory);
   }
   const filterEl = document.getElementById("workers-filter");
   if (filterEl) filterEl.classList.toggle("view-hidden", !isWorkers);
+  const toggleEl = document.getElementById("timing-view-toggle");
+  if (toggleEl) toggleEl.classList.toggle("view-hidden", !isJobs);
+  // The worker time view has a fixed window
+  const rangeEl = document.getElementById("time-range");
+  if (rangeEl) rangeEl.classList.toggle("view-hidden", isUsage);
+  for (const v of ["history", "usage"]) {
+    document.getElementById(`timing-view-${v}`)?.classList.toggle("btn-primary", timingView === v);
+  }
 
   if (isWorkers) renderWorkerPresence();
   if (isBuilds) renderBuildsView();
+  if (isUsage) renderUsageView();
+  updatePhoneChips();
   if (updateUrl && typeof updateURL === "function") updateURL();
 }
+
+function setTimingView(v, { updateUrl = true } = {}) {
+  timingView = v === "usage" ? "usage" : "history";
+  if (activeTab === "ci-timing") setCITimingSubview("jobs", { updateUrl });
+  else if (updateUrl) updateURL();
+}
+
+// === Worker time (CI → Timing, Worker time view) ===
+// api/agents/usage: agent seconds of the finished julia-pr and julia-ci jobs
+// of the last 7 days, per pipeline, job name, pool and state. Each chart
+// below sums them by one property of the job.
+let usageData = null;
+let usagePromise = null;
+let usageCharts = [];
+
+const USAGE_MAX_SEGMENTS = 7;
+const USAGE_OTHER_COLOR = { light: "#afb8c1", dark: "#484f58" };
+const USAGE_PIPELINE_LABELS = { "julia-ci": "Master", "julia-pr": "Pull requests" };
+const USAGE_OS_LABELS = { linux: "Linux", macos: "macOS", windows: "Windows", freebsd: "FreeBSD" };
+const USAGE_STATE_LABELS = { passed: "Passed", failed: "Failed", timed_out: "Timed out", canceled: "Canceled" };
+
+// The flags a platform job's name appends to its triplet, as in
+// "test x86_64-linux-gnummtkconcurrent"
+const USAGE_VARIANT_LABELS = {
+  "": "Default",
+  mmtk: "MMTk",
+  mmtkconcurrent: "MMTk concurrent",
+  assert: "Assert",
+  assertrr: "Assert + rr",
+  "assertrr-net": "Assert + rr",
+  profiling: "Profiling",
+  net: "Network",
+  nogpl: "No GPL",
+  opt: "Opt",
+  optnet: "Opt",
+  srcassert: "Source build + assert",
+  srcassertrr: "Source build + assert + rr",
+  "srcassertrr-net": "Source build + assert + rr",
+};
+
+function usageVariant(name) {
+  const m = name.match(/(?:x86_64|i686|aarch64)-(?:linux-gnu|apple-darwin|w64-mingw32|unknown-freebsd)(\S*)/);
+  if (!m) return "Not a platform job";
+  return USAGE_VARIANT_LABELS[m[1]] ?? m[1];
+}
+
+const usageOS = (r) => USAGE_OS_LABELS[r.os] || r.os || "Unspecified";
+
+function usageJobType(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("ttfx") && !lower.includes("launch")) return "TTFX";
+  if (lower.includes("julialowering")) return "JuliaSyntax";
+  if (lower === "asan" || lower === "tsan") return "Sanitizers";
+  const { group, type } = classifyJob(name);
+  if (group === "pipeline") return "Launch";
+  if (group === "juliasyntax") return "JuliaSyntax";
+  if (group === "juliac") return "JuliaC";
+  if (group === "docs") return "Docs";
+  if (group === "special") return "Other checks";
+  if (type === "build") return "Build";
+  if (type === "test") return "Test";
+  if (type === "coverage") return "Coverage";
+  return "Other";
+}
+
+const USAGE_DIMENSIONS = [
+  { id: "pipeline", title: "Pipeline", key: (r) => USAGE_PIPELINE_LABELS[r.pipeline] || r.pipeline },
+  { id: "type", title: "Job type", key: (r) => usageJobType(r.name) },
+  { id: "os", title: "OS", key: (r) => usageOS(r) },
+  { id: "arch", title: "Architecture", key: (r) => r.arch || "Unspecified" },
+  { id: "queue", title: "Queue", key: (r) => r.queue || "(none)" },
+  { id: "variant", title: "Build variant", key: (r) => usageVariant(r.name) },
+  { id: "state", title: "Outcome", key: (r) => USAGE_STATE_LABELS[r.state] || r.state },
+  { id: "ostype", title: "OS and job type", key: (r) => `${usageOS(r)} ${usageJobType(r.name)}` },
+];
+
+// Slices clicked to filter on, per dimension id. A job counts when it matches
+// one chosen slice of every filtered dimension; each chart ignores its own
+// filter so it keeps showing the other slices to pick.
+const usageFilters = new Map();
+
+// URL form: "os.Linux~queue.test~queue.build"
+function encodeUsageFilters() {
+  return [...usageFilters].flatMap(([id, keys]) => [...keys].map((k) => `${id}.${k}`)).join("~");
+}
+
+function decodeUsageFilters(str) {
+  usageFilters.clear();
+  for (const part of (str || "").split("~")) {
+    const dot = part.indexOf(".");
+    if (dot < 0) continue;
+    const id = part.slice(0, dot);
+    if (!USAGE_DIMENSIONS.some((dim) => dim.id === id)) continue;
+    if (!usageFilters.has(id)) usageFilters.set(id, new Set());
+    usageFilters.get(id).add(part.slice(dot + 1));
+  }
+}
+
+function toggleUsageFilter(id, key) {
+  const keys = usageFilters.get(id) || new Set();
+  if (keys.has(key)) keys.delete(key);
+  else keys.add(key);
+  if (keys.size) usageFilters.set(id, keys);
+  else usageFilters.delete(id);
+  drawUsageView();
+  updateURL();
+}
+
+function clearUsageFilters(id) {
+  if (id) usageFilters.delete(id);
+  else usageFilters.clear();
+  drawUsageView();
+  updateURL();
+}
+
+const usageRowMatches = (r, exceptId) =>
+  USAGE_DIMENSIONS.every((dim) => dim.id === exceptId || !usageFilters.has(dim.id) || usageFilters.get(dim.id).has(dim.key(r)));
+
+async function renderUsageView() {
+  const gridEl = document.getElementById("usage-grid");
+  if (!gridEl) return;
+  if (takeStale("usage") || !usagePromise) {
+    usagePromise = apiGet("agents/usage").catch((err) => {
+      console.error("Failed to load worker time:", err);
+      return { error: true };
+    });
+  }
+  const d = await usagePromise;
+  usageData = d;
+  if (ciSubview === "jobs" && timingView === "usage") drawUsageView();
+}
+
+function drawUsageView() {
+  const gridEl = document.getElementById("usage-grid");
+  const summaryEl = document.getElementById("usage-summary");
+  const filtersEl = document.getElementById("usage-filters");
+  for (const c of usageCharts) c.destroy();
+  usageCharts = [];
+  const d = usageData;
+  if (!d || d.error || !d.rows || d.rows.length === 0) {
+    gridEl.innerHTML = `<div class="workers-empty">${d?.error ? "Could not load worker time." : "No finished jobs in the window."}</div>`;
+    summaryEl.textContent = "";
+    filtersEl.innerHTML = "";
+    return;
+  }
+  const sum = (rows, f) => rows.reduce((acc, r) => acc + f(r), 0);
+  const all = sum(d.rows, (r) => r.seconds);
+  const matching = d.rows.filter((r) => usageRowMatches(r));
+  const total = sum(matching, (r) => r.seconds);
+  const jobs = sum(matching, (r) => r.jobs);
+  const perDay = (s) => s / 3600 / d.days;
+  const hours = (s) => `${perDay(s) >= 10 ? Math.round(perDay(s)) : perDay(s).toFixed(1)} h/day`;
+  const pct = (v, of) => `${of ? ((100 * v) / of).toFixed(1) : "0.0"}%`;
+  summaryEl.innerHTML =
+    `On average <strong>${Math.round(perDay(total)).toLocaleString()}</strong> agent hours a day, ` +
+    `as if <strong>${Math.round(total / (d.days * 86400))}</strong> agents were busy all the time, ` +
+    `over ${jobs.toLocaleString()} jobs` +
+    (usageFilters.size ? `: <strong>${pct(total, all)}</strong> of all agent time.` : ".");
+  filtersEl.innerHTML = usageFilters.size
+    ? "Showing only " +
+      USAGE_DIMENSIONS.filter((dim) => usageFilters.has(dim.id))
+        .map(
+          (dim) =>
+            `<button type="button" class="usage-filter-chip" data-clear="${dim.id}" title="Remove this filter">${escapeHtml(dim.title)}: ${escapeHtml([...usageFilters.get(dim.id)].join(" or "))} ×</button>`,
+        )
+        .join(" ") +
+      ` <button type="button" class="btn btn-small" data-clear="">Clear</button>`
+    : "Click a slice or a legend entry to show only those jobs in the other charts.";
+  const dark = isDarkMode();
+  const palette = BACKLOG_COLORS[dark ? "dark" : "light"];
+  const donuts = USAGE_DIMENSIONS.map((dim) => {
+    const chosen = usageFilters.get(dim.id);
+    const rows = d.rows.filter((r) => usageRowMatches(r, dim.id));
+    const dimTotal = sum(rows, (r) => r.seconds);
+    const sums = new Map();
+    for (const r of rows) {
+      const k = dim.key(r);
+      const e = sums.get(k) || { value: 0, jobs: 0 };
+      e.value += r.seconds;
+      e.jobs += r.jobs;
+      sums.set(k, e);
+    }
+    const sorted = [...sums].sort((a, b) => b[1].value - a[1].value);
+    // Fold the tail into one grey slice so the colours stay distinct, but
+    // never fold a chosen slice away
+    const limit = sorted.length > USAGE_MAX_SEGMENTS + 1 ? USAGE_MAX_SEGMENTS : sorted.length;
+    const shown = sorted.filter(([k], i) => i < limit || chosen?.has(k));
+    const segments = shown.map(([key, e], i) => ({ key, label: key, value: e.value, jobs: e.jobs, color: palette[i % palette.length] }));
+    if (shown.length < sorted.length) {
+      const rest = sorted.filter((x) => !shown.includes(x));
+      segments.push({
+        label: `Other (${rest.length})`,
+        value: sum(rest, ([, e]) => e.value),
+        jobs: sum(rest, ([, e]) => e.jobs),
+        color: USAGE_OTHER_COLOR[dark ? "dark" : "light"],
+      });
+    }
+    for (const s of segments) {
+      s.active = !chosen || chosen.has(s.key);
+      if (!s.active) s.color = colorToRgba(s.color, 0.3);
+    }
+    const kept = segments.filter((s) => s.value > 0);
+    return {
+      dim,
+      total: dimTotal,
+      segments: kept,
+      format: hours,
+      onClick: (i) => kept[i].key !== undefined && toggleUsageFilter(dim.id, kept[i].key),
+    };
+  });
+  gridEl.innerHTML = donuts
+    .map((donut, i) => {
+      const legend = donut.segments
+        .map((s) => {
+          const label =
+            s.key === undefined
+              ? escapeHtml(s.label)
+              : `<button type="button" class="usage-legend-btn" data-dim="${donut.dim.id}" data-key="${escapeHtml(s.key)}" aria-pressed="${usageFilters.get(donut.dim.id)?.has(s.key) ? "true" : "false"}">${escapeHtml(s.label)}</button>`;
+          return (
+            `<li class="${s.active ? "" : "usage-legend-off"}" title="${escapeHtml(`${s.label}: ${hours(s.value)}, ${s.jobs.toLocaleString()} jobs`)}"><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${label}</span>` +
+            `<span class="overview-legend-value">${pct(s.value, donut.total)}</span>` +
+            `<span class="overview-legend-value overview-legend-pct usage-legend-hours">${escapeHtml(hours(s.value))}</span></li>`
+          );
+        })
+        .join("");
+      const label = donut.segments.map((s) => `${s.label} ${pct(s.value, donut.total)}`).join(", ");
+      const clear = usageFilters.has(donut.dim.id)
+        ? ` <button type="button" class="usage-card-clear" data-clear="${donut.dim.id}">All</button>`
+        : "";
+      return (
+        `<section class="usage-card"><h3 class="usage-card-title">${escapeHtml(donut.dim.title)}${clear}</h3><div class="usage-card-body">` +
+        `<div class="usage-donut-canvas"><canvas id="usage-donut-${i}" role="img" aria-label="${escapeHtml(`${donut.dim.title}: ${label}`)}"></canvas></div>` +
+        `<ul class="overview-legend usage-legend">${legend}</ul></div></section>`
+      );
+    })
+    .join("");
+  donuts.forEach((donut, i) => {
+    usageCharts.push(overviewDonutChart(document.getElementById(`usage-donut-${i}`), donut));
+  });
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("#usage-view button[data-dim], #usage-view button[data-clear]");
+  if (!btn) return;
+  if (btn.dataset.dim) toggleUsageFilter(btn.dataset.dim, btn.dataset.key);
+  else clearUsageFilters(btn.dataset.clear);
+});
 
 // Text filter on the Workers tab: every whitespace-separated term has to
 // appear, case-insensitively, in an agent row's text or a host's name
@@ -2245,6 +2510,17 @@ function updateURL() {
   }
   // cv is legacy; tab now fully identifies CI timing/workers.
   url.searchParams.delete("cv");
+  if (timingView === "usage") {
+    url.searchParams.set("jv", "usage");
+  } else {
+    url.searchParams.delete("jv");
+  }
+  const jf = timingView === "usage" ? encodeUsageFilters() : "";
+  if (jf) {
+    url.searchParams.set("jf", jf);
+  } else {
+    url.searchParams.delete("jf");
+  }
 
   if (workersFilter) {
     url.searchParams.set("wq", workersFilter);
@@ -2355,6 +2631,10 @@ function applyURLParams() {
   if (cv === "workers" || cv === "jobs") {
     setCITimingSubview(cv, { updateUrl: false });
   }
+
+  timingView = params.get("jv") === "usage" ? "usage" : "history";
+  decodeUsageFilters(params.get("jf"));
+  if (ciSubview === "jobs") setCITimingSubview("jobs", { updateUrl: false });
 
   const wq = params.get("wq");
   if (wq !== null) {
@@ -5868,7 +6148,7 @@ const SOURCE_VIEWS = {
   pkgeval: ["pkgeval"],
   ttfx: ["ttfx"],
   packages: ["packages"],
-  agents: ["agents", "backlog"],
+  agents: ["agents", "backlog", "usage"],
 };
 
 // Clears the mark as it reads it, so a change during the reload marks it again
@@ -5883,6 +6163,7 @@ function reloadStaleView(tab) {
   if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
   // The Workers view loads what is marked whenever it draws
   if (tab === "ci-workers" && (staleViews.has("agents") || staleViews.has("backlog"))) renderWorkerPresence();
+  if (tab === "ci-timing" && timingView === "usage" && staleViews.has("usage")) renderUsageView();
 }
 
 const UPDATED_LABELS = { timing: "last-updated", pkgeval: "pkgeval-last-updated", ttfx: "ttfx-last-updated" };
@@ -6015,6 +6296,8 @@ const DASHBOARD_PARAMS = new Set([
   "e", // expanded jobs in stats table
   "st", // state filter
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
+  "jv", // CI timing view (history or worker time)
+  "jf", // worker time filters
   "wq", // workers text filter
   "tab", // active tab
   "c", // commit lookup ref
@@ -12296,6 +12579,8 @@ function overviewDonutChart(canvas, donut) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      onClick: donut.onClick && ((_, els) => els.length && donut.onClick(els[0].index)),
+      onHover: donut.onClick && ((e, els) => (e.native.target.style.cursor = els.length ? "pointer" : "")),
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -13312,6 +13597,7 @@ function applyTheme() {
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
   if (buildsChart) drawBuildsView();
+  if (usageCharts.length) drawUsageView();
   if (activeTab === "overview" && overviewSources) drawOverview();
 }
 function cycleTheme() {

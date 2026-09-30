@@ -490,6 +490,24 @@
       tabindex="0"
     >
       <div class="ci-toolbar" id="ci-timing-controls">
+        <span class="bench-table-view-toggle" id="timing-view-toggle" role="group" aria-label="Timing view">
+          <button
+            class="btn btn-primary"
+            id="timing-view-history"
+            onclick="setTimingView('history')"
+            title="Job durations over time"
+          >
+            History
+          </button>
+          <button
+            class="btn"
+            id="timing-view-usage"
+            onclick="setTimingView('usage')"
+            title="How the agents' time was shared out over the last 7 days"
+          >
+            Worker time
+          </button>
+        </span>
         <select
           class="time-select"
           id="time-range"
@@ -864,6 +882,22 @@
           </div>
           <div class="workers-grid-wrapper" id="workers-grid">
             <div class="loading">Loading worker history...</div>
+          </div>
+        </div>
+        <div class="usage-view view-hidden" id="usage-view">
+          <div class="workers-note" role="note">
+            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
+            <span
+              >The share of agent time taken by each kind of job, from the
+              master (julia-ci) and pull request (julia-pr) jobs that finished
+              in the last 7 days, each counted from start to finish. Jobs still
+              running are left out.
+              <span id="usage-summary"></span
+            ></span>
+          </div>
+          <div class="usage-filters" id="usage-filters"></div>
+          <div class="usage-grid" id="usage-grid">
+            <div class="loading">Loading...</div>
           </div>
         </div>
         <div class="commits-view view-hidden" id="builds-view">

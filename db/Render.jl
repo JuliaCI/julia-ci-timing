@@ -1071,6 +1071,31 @@ function pool_backlog(db; since="")
                                    "pipelines" => ["julia-pr", "julia-ci"], "pools" => out)
 end
 
+"""
+    worker_time(db; days=7)
+
+Agent time of the julia-pr and julia-ci jobs that finished in the `days`
+before the latest agents snapshot, from start to finish, summed per pipeline,
+job name, pool (queue, os and arch) and final state. Jobs still running are
+left out, so every job counted ran to its end.
+"""
+function worker_time(db; days=7)
+    gen = agents_generated_at(db)
+    stop = DateTime(gen, Store.ISO_SECONDS)
+    start = Store.iso(stop - Day(days))
+    out = Any[]
+    for r in rows(db, "SELECT pipeline, name, queue, os, arch, state, COUNT(*) AS n, " *
+                      "SUM(strftime('%s', finished_at) - strftime('%s', started_at)) AS s FROM pool_jobs " *
+                      "WHERE started_at IS NOT NULL AND finished_at >= ? AND finished_at < ? " *
+                      "GROUP BY pipeline, name, queue, os, arch, state ORDER BY s DESC",
+                  (start, gen))
+        push!(out, OrderedDict{String,Any}("pipeline" => r.pipeline, "name" => r.name, "queue" => r.queue,
+                                           "os" => r.os, "arch" => r.arch, "state" => r.state,
+                                           "jobs" => r.n, "seconds" => max(0, r.s)))
+    end
+    return OrderedDict{String,Any}("generated_at" => gen, "start" => start, "end" => gen, "days" => days, "rows" => out)
+end
+
 # --- health --------------------------------------------------------------------
 
 # Percent of the volume holding the database in use (df), or nothing

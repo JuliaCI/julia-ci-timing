@@ -258,6 +258,9 @@ const ROUTES = [
     Route("agents/backlog", [SINCE],
           "Per agent pool (queue, os, arch): how many julia-pr and julia-ci jobs were waiting for an agent and how many were running, sampled every step_s seconds from start (the jobs are kept for 60 days), with the longest current wait in seconds at each sample, the agent slots seen for the pool in the last 30 days (capped per host at the most jobs the host was seen running at once) and shared_with, the other pools that draw on the same hosts' slots; by_pipeline has the same series for julia-ci (master) and julia-pr (pull requests) jobs separately.",
           (db, _, p) -> Render.pool_backlog(db; since=instant(p, "since"))),
+    Route("agents/usage", ["days" => "window in days before the latest agents snapshot, 7 by default, at most 60 (the jobs are kept for 60 days)"],
+          "Agent time spent on julia-pr and julia-ci jobs that finished in the window, from start to finish: seconds and job count per pipeline, job name, pool (queue, os, arch) and final state, busiest first. Jobs still running are left out.",
+          (db, _, p) -> Render.worker_time(db; days=min(days_param(p, 7), 60))),
     Route("commits", ["before" => "the first_at of the last commit already listed, to page back", "limit" => "commits per page, 100 by default, at most 500"],
           "Master commits newest first, one row per commit: first build time, latest build state, author, subject, and whether a daily benchmark or PkgEval report ran on it.",
           (db, _, p) -> begin
