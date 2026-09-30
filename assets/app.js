@@ -362,7 +362,7 @@ const USAGE_DIMENSIONS = [
   { id: "os", title: "OS", key: (r) => usageOS(r) },
   { id: "arch", title: "Architecture", key: (r) => r.arch || "Unspecified" },
   { id: "queue", title: "Queue", key: (r) => r.queue || "(none)" },
-  { id: "variant", title: "Build variant", key: (r) => usageVariant(r.name) },
+  { id: "variant", title: "Configuration", key: (r) => usageVariant(r.name) },
   { id: "state", title: "Outcome", key: (r) => USAGE_STATE_LABELS[r.state] || r.state },
   { id: "ostype", title: "OS and job type", key: (r) => `${usageOS(r)} ${usageJobType(r.name)}` },
 ];
