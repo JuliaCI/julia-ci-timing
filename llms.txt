@@ -15,7 +15,7 @@ Pick by the size of the answer. All three are public, read-only and need no key.
 description. All routes are GET and return JSON; use `curl --compressed`. Routes with a
 `since` parameter return all history without it, so pass it (`YYYY-MM-DD`).
 
-- `/api/status`: when each source last ingested successfully
+- `/api/status`: when each source last ingested successfully, and its change sequence; never cached, so poll this to see whether anything changed
 - `/api/commit/<sha or PR number>`: everything recorded for one master commit: its CI
   jobs and TTFX against the previous commit, and the first benchmark and PkgEval reports
   that include it

@@ -8,9 +8,8 @@
 # GET /api/ lists every route with its parameters, from the route table
 # below that the router matches against.
 #
-# Every response carries an ETag from its source's change sequence (the
-# last commit that changed that source's rows; /api/status uses the global
-# one) and the build, so a browser's revalidation costs nothing until an
+# Every response but /api/status carries an ETag from its source's change
+# sequence (the last commit that changed that source's rows) and the build, so a browser's revalidation costs nothing until an
 # ingest changes that source or a deploy changes what a route renders.
 # Bodies are rendered once per (request, sequence) and kept gzipped in a
 # bounded cache. Requests take a query-only connection from a small
@@ -150,9 +149,13 @@ end
 
 # --- routes ------------------------------------------------------------------
 
+const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents")
+
 function status(db)
-    sources = Dict(source => Render.generated_at(db, source) for source in ("timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents"))
-    return Dict("change_seq" => Store.current_seq(db), "generated_at" => sources, "server_time" => Store.iso_now())
+    return Dict("change_seq" => Store.current_seq(db),
+                "source_seq" => Dict(source => Store.source_seq(db, source) for source in SOURCES),
+                "generated_at" => Dict(source => Render.generated_at(db, source) for source in SOURCES),
+                "server_time" => Store.iso_now())
 end
 
 function bench_metric(params)
@@ -187,7 +190,7 @@ function client_param(params)
 end
 
 const ROUTES = [
-    Route("status", [], "The global change sequence, the server's time and when each source's last successful ingest finished.",
+    Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, and the server's time. Never cached, so it is the cheap thing to poll.",
           (db, _, _) -> status(db)),
     Route("timing/runs",
           [SINCE, "until" => "end of the window (exclusive), same forms as since",
@@ -433,6 +436,12 @@ function api(s::Server, req::HTTP.Request)
     segments = String[String(x) for x in split(uri.path, '/'; keepempty=false)]
     popfirst!(segments)   # "api"
     params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
+    # An ingest that changes no rows still moves its finish time, so no
+    # sequence can validate this one
+    if segments == ["status"]
+        return HTTP.Response(200, ["Content-Type" => "application/json; charset=utf-8", "Cache-Control" => "no-store"],
+                             JSON3.write(withdb(status, s)))
+    end
     seq = route_seq(s, segments)
     # Incremental refreshes are small and their cursors differ per client;
     # the cache is for the windows and extracts everyone asks for

@@ -585,15 +585,17 @@ function summarizeAgents(agents, connected, latestMs) {
 async function renderAgentsSection() {
   const section = document.getElementById("agents-section");
   if (!section) return;
-  if (!agentsData) {
-    if (!agentsDataPromise) {
+  const stale = takeStale("agents");
+  if (!agentsData || stale) {
+    if (!agentsDataPromise || (stale && agentsData)) {
       agentsDataPromise = loadAgentsData()
         .then((d) => {
           agentsData = d;
         })
         .catch((err) => {
           console.error("Failed to load agent snapshots:", err);
-          agentsData = { error: true };
+          // A failed refresh keeps what is shown
+          if (!agentsData) agentsData = { error: true };
         });
     }
     await agentsDataPromise;
@@ -870,7 +872,8 @@ async function renderBacklogSection() {
   const summaryEl = document.getElementById("backlog-summary");
   if (!summaryEl) return;
   const since = apiSince(getTimeRangeCutoff());
-  if (backlogSince !== since || !backlogPromise) {
+  const stale = takeStale("backlog");
+  if (backlogSince !== since || !backlogPromise || stale) {
     backlogSince = since;
     backlogPromise = apiGet("agents/backlog", { since }).catch((err) => {
         console.error("Failed to load the queue backlog:", err);
@@ -5708,12 +5711,6 @@ function initialTimingCutoff() {
   return cutoff;
 }
 
-function setTimingUpdated() {
-  const updatedEl = document.getElementById("last-updated");
-  updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-  updatedEl.title = data.generated_at;
-}
-
 function showTimingLoadError() {
   const retryBtn =
     '<button class="btn btn-retry" onclick="location.reload()">Retry</button>';
@@ -5738,8 +5735,8 @@ async function loadData() {
     data = { generated_at: payload.generated_at, jobs: payload.jobs, coverage: payload.coverage };
     timingSince = since;
     timingChangeSeq = payload.change_seq;
-    setTimingUpdated();
-    checkStaleData(data.generated_at);
+    setUpdatedLabels();
+    checkStaleData(sourceTimes.timing || data.generated_at);
     populateJobSelector();
     document.getElementById("chart-loading").style.display = "none";
     if (activeTab === "overview") renderOverview();
@@ -5795,15 +5792,12 @@ async function refreshTimingFromApi(signal) {
   }
   data.generated_at = payload.generated_at;
   timingChangeSeq = payload.change_seq;
-  checkStaleData(data.generated_at);
   if (changed) {
     // Rebuild all derived state (job matrix/index, colors, pass rates,
     // breakages, sidebar): new jobs can appear and caches go stale
     populateJobSelector();
     refreshAllUI();
-    if (activeTab === "overview") renderOverview();
   }
-  setTimingUpdated();
 }
 
 function renderMatrixSkeleton() {
@@ -5860,15 +5854,81 @@ function checkStaleData(generatedAt) {
   warningBanner.classList.toggle("visible", stale);
 }
 
+// === Live refresh ===
+// api/status is never cached and names each source's change sequence, which
+// moves when an ingest changes that source's rows. Each refresh reads it,
+// catches timing up, and reloads the other tabs whose source moved: the one
+// on screen now, the rest the next time they are shown.
+let sourceSeqs = null;
+let timingSeq = null; // moved only once timing has caught up
+let sourceTimes = {};
+const staleViews = new Set();
+const SOURCE_VIEWS = {
+  benchmarks: ["benchmarks"],
+  pkgeval: ["pkgeval"],
+  ttfx: ["ttfx"],
+  packages: ["packages"],
+  agents: ["agents", "backlog"],
+};
+
+// Clears the mark as it reads it, so a change during the reload marks it again
+const takeStale = (view) => staleViews.delete(view);
+
+// A tab loading for the first time gets the current data anyway, so its mark
+// is just dropped
+function reloadStaleView(tab) {
+  if (tab === "benchmarks" && takeStale("benchmarks") && benchData) reloadBenchData();
+  if (tab === "pkgeval" && takeStale("pkgeval") && pkgevalData) loadPkgevalData();
+  if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
+  if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
+  // The Workers view loads what is marked whenever it draws
+  if (tab === "ci-workers" && (staleViews.has("agents") || staleViews.has("backlog"))) renderWorkerPresence();
+}
+
+const UPDATED_LABELS = { timing: "last-updated", pkgeval: "pkgeval-last-updated", ttfx: "ttfx-last-updated" };
+
+// A body's own generated_at can be older than the last ingest: its ETag only
+// moves when rows change, so a 304 keeps the old body
+function setUpdatedLabels() {
+  const fallback = { timing: data?.generated_at, pkgeval: pkgevalData?.generated_at, ttfx: ttfxData?.generated_at };
+  for (const [source, id] of Object.entries(UPDATED_LABELS)) {
+    const at = sourceTimes[source] || fallback[source];
+    const el = document.getElementById(id);
+    if (!el || !at) continue;
+    el.textContent = `Updated ${timeAgo(at)}`;
+    el.title = at;
+  }
+}
+
 let refreshController = null;
 async function refreshData() {
   // Abort any in-flight refresh so we don't race with ourselves.
   if (refreshController) refreshController.abort();
   refreshController = new AbortController();
+  const { signal } = refreshController;
   try {
-    await refreshTimingFromApi(refreshController.signal);
+    const status = await apiGet("status", {}, { signal });
+    if (signal.aborted) return;
+    const seqs = status.source_seq || {};
+    const moved = (source) => sourceSeqs !== null && seqs[source] !== sourceSeqs[source];
+    const changed = Object.keys(seqs).filter(moved);
+    const timingMoved = data && timingSeq !== null && seqs.timing !== timingSeq;
+    if (timingSeq === null) timingSeq = seqs.timing;
+    sourceSeqs = seqs;
+    sourceTimes = status.generated_at || {};
+    for (const source of changed) for (const view of SOURCE_VIEWS[source] || []) staleViews.add(view);
+    if (changed.length > 0) overviewLoadedAt = 0;
+    if (sourceTimes.timing) checkStaleData(sourceTimes.timing);
+    setUpdatedLabels();
+    if (timingMoved) {
+      await refreshTimingFromApi(signal);
+      if (signal.aborted) return;
+      timingSeq = seqs.timing;
+    }
+    reloadStaleView(activeTab);
+    if (changed.length > 0 && activeTab === "overview") renderOverview();
   } catch (err) {
-    // Silently ignore refresh errors (including AbortError)
+    if (err.name !== "AbortError") console.warn("Data refresh failed:", err);
   }
 }
 
@@ -6144,6 +6204,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "packages" && !packagesDownloadsData) {
     loadPackagesDownloadsData();
   }
+  reloadStaleView(tab);
 
   updatePhoneShell(tab);
 
@@ -6694,6 +6755,34 @@ async function setBenchMetric(value) {
   updateBenchChart();
   updateBenchTable();
   updateBenchURL();
+}
+
+// After an ingest: the summary and the detail of the selected groups again,
+// keeping the selection and the old lines on screen until the new ones arrive
+async function reloadBenchData() {
+  const metric = benchMetric;
+  const generation = ++benchDetailGeneration;
+  benchGroupDetailLoading = {};
+  try {
+    const summary = await apiGet("benchmarks/summary", { metric });
+    if (generation !== benchDetailGeneration) return;
+    benchData = summary;
+    const groups = [...benchSelectedGroups];
+    const details = await Promise.all(groups.map((g) => fetchBenchGroupDetail(g).catch(() => null)));
+    if (generation !== benchDetailGeneration) return;
+    const kept = {};
+    groups.forEach((g, i) => {
+      if (details[i]) kept[g] = details[i];
+    });
+    benchGroupDetail = kept;
+  } catch (err) {
+    console.error("Failed to reload the benchmark data:", err);
+    return;
+  }
+  for (const g of benchSelectedGroups) ensureBenchGroupDetailLoaded(g);
+  populateBenchGroupList(Object.keys(benchGroupColors).sort());
+  updateBenchChart();
+  updateBenchTable();
 }
 
 async function loadBenchmarkData() {
@@ -9608,10 +9697,7 @@ function getPkgevalFilteredReports() {
 async function loadPkgevalData() {
   try {
     pkgevalData = await apiGet("pkgeval/summary");
-
-    const updatedEl = document.getElementById("pkgeval-last-updated");
-    updatedEl.textContent = `Updated ${timeAgo(pkgevalData.generated_at)}`;
-    updatedEl.title = pkgevalData.generated_at;
+    setUpdatedLabels();
 
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
@@ -10212,9 +10298,7 @@ async function loadTtfxData() {
         .catch(() => []),
     ]);
 
-    const updatedEl = document.getElementById("ttfx-last-updated");
-    updatedEl.textContent = `Updated ${timeAgo(ttfxData.generated_at)}`;
-    updatedEl.title = ttfxData.generated_at;
+    setUpdatedLabels();
 
     const tasks = ttfxAllTasks();
     ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
@@ -10244,6 +10328,34 @@ async function loadTtfxData() {
     document.getElementById("ttfx-stats-tbody").innerHTML =
       '<tr><td class="error">Failed to load data</td></tr>';
   }
+}
+
+// After an ingest: keeps the task selection, and selects tasks new to the list
+async function reloadTtfxData() {
+  let summary;
+  try {
+    summary = await apiGet("ttfx/summary");
+  } catch (err) {
+    console.error("Failed to reload the TTFX data:", err);
+    return;
+  }
+  const before = new Set(ttfxAllTasks());
+  ttfxData = summary;
+  setUpdatedLabels();
+  const tasks = ttfxAllTasks();
+  ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
+  if (tasks.some((t) => !before.has(t))) {
+    const colors = generateColors(tasks.length);
+    ttfxTaskColors = {};
+    tasks.forEach((t, i) => (ttfxTaskColors[t] = colors[i]));
+  }
+  ttfxSelectedTasks = new Set(tasks.filter((t) => ttfxSelectedTasks.has(t) || !before.has(t)));
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  // The ranked pull requests are replaced when they arrive, not blanked
+  ttfxPrsLoading = null;
+  loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
 }
 
 // Latest build in range with any measurement, for the sidebar and tables
@@ -13087,6 +13199,7 @@ function openPhoneSheet(toolbar) {
   });
 }
 
+refreshData();
 loadData();
 
 // Apply benchmark URL params before potential tab switch
@@ -13130,12 +13243,7 @@ document.querySelector(".tab-nav").addEventListener("keydown", (e) => {
 });
 
 // Update "ago" time periodically
-setInterval(() => {
-  if (data?.generated_at) {
-    const updatedEl = document.getElementById("last-updated");
-    updatedEl.textContent = `Updated ${timeAgo(data.generated_at)}`;
-  }
-}, AGO_UPDATE_INTERVAL);
+setInterval(setUpdatedLabels, AGO_UPDATE_INTERVAL);
 
 // The downloads chart decides at render time whether its release labels fit
 let packagesResizeTimer = null;
