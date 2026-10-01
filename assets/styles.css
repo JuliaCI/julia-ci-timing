@@ -4034,3 +4034,58 @@ a {
 .commits-reg-table tr.builds-running td {
   opacity: 0.5;
 }
+.balance-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.balance-card {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+.balance-chart {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 170px;
+}
+.balance-stats {
+  flex: 0 0 320px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.balance-title {
+  font-weight: 600;
+  color: var(--color-fg-default);
+  margin-bottom: 4px;
+}
+.balance-stats table {
+  border-collapse: collapse;
+}
+.balance-stats th,
+.balance-stats td {
+  padding: 2px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.balance-stats thead th {
+  font-weight: 600;
+}
+.balance-stats tbody th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--color-fg-default);
+}
+@media (max-width: 768px) {
+  .balance-card {
+    flex-direction: column;
+  }
+  .balance-stats {
+    flex-basis: auto;
+  }
+}
+.balance-stats tr.balance-all th,
+.balance-stats tr.balance-all td {
+  border-top: 1px solid var(--color-border-default);
+}

@@ -796,9 +796,9 @@
                 onchange="setBacklogMetric(this.value)"
                 aria-label="Backlog measure"
               >
-                <option value="oldest" selected>Longest wait</option>
+                <option value="per-slot" selected>Jobs waiting per slot</option>
                 <option value="waiting">Jobs waiting</option>
-                <option value="per-slot">Jobs waiting per slot</option>
+                <option value="oldest">Longest wait</option>
               </select>
               <select
                 class="time-select"
@@ -822,6 +822,19 @@
               <canvas id="backlog-chart"></canvas>
             </div>
           </div>
+          <div class="backlog-section">
+            <div class="agents-header">
+              <span class="agents-title">Machine balance</span>
+              <span class="agents-help"
+                >Pools whose agents run on the same machines, with each pool's
+                jobs running and waiting as a share of its slots. Above 100% a
+                pool has a queue; below it has idle slots.</span
+              >
+            </div>
+            <div class="balance-grid" id="balance-grid">
+              <div class="loading">Loading...</div>
+            </div>
+          </div>
           <div class="agents-section" id="agents-section">
             <div class="agents-header">
               <span class="agents-title">Connected agents</span>
@@ -834,9 +847,6 @@
                 job. Other agents are flagged when missing from the latest
                 snapshot.</span
               >
-            </div>
-            <div class="agents-chart-wrapper">
-              <canvas id="agents-chart"></canvas>
             </div>
             <div class="agents-table-wrapper" id="agents-table">
               <div class="loading">Loading agent snapshots...</div>

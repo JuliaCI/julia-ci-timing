@@ -780,7 +780,6 @@ function drawBuildsView() {
 // every queue and pipeline, PR builds included.
 let agentsData = null;
 let agentsDataPromise = null;
-let agentsChart = null;
 
 async function loadAgentsData() {
   const [latest, snapshots] = await Promise.all([apiGet("agents/latest"), apiGet("agents/snapshots")]);
@@ -918,8 +917,6 @@ async function renderAgentsSection() {
     `<strong>${connected.size}</strong> connected (${queueParts.join(", ")})` +
     (flagged.length ? ", " + flagged.join(", ") : ", none missing");
 
-  renderAgentsChart(snapshots, queueOf);
-
   // Live table, one section per queue: the Julia cluster's queues first, then
   // the rest (yggdrasil, the GPU queues, ...) by name, since a queue is what
   // ties agents to a pipeline. Flagged rows lead within a section.
@@ -1006,47 +1003,16 @@ async function renderAgentsSection() {
   parts.push("</tbody></table>");
   tableEl.innerHTML = parts.join("");
   if (filtering) summaryEl.innerHTML += `, <strong>${shown}</strong> of ${rows.length} shown`;
-  tableEl.querySelectorAll("tr[data-queue]").forEach((tr) => {
-    tr.addEventListener("mouseenter", () => highlightAgentsQueue(tr.dataset.queue));
-    tr.addEventListener("mouseleave", () => highlightAgentsQueue(null));
-  });
 }
 
-// Dim every queue line but `queue`; null restores
-function highlightAgentsQueue(queue) {
-  if (!agentsChart) return;
-  for (const ds of agentsChart.data.datasets) {
-    const on = queue === null || ds.label === queue;
-    ds.borderColor = on ? ds._color : fadeColor(ds._color, 0.15);
-    ds.borderWidth = queue !== null && on ? 2.5 : 1.5;
-  }
-  agentsChart.update("none");
-}
-
-// Connected agents per queue over the selected time range, one point per snapshot
-// The Workers tab's two charts share one time range, a legend above the plot
-// and a fixed y axis width, so their dates line up one above the other. The
-// range starts at the earlier of their first data, not before, so a range
-// longer than the history kept does not leave both mostly empty.
-const workersDataStart = { agents: null, backlog: null };
-
-function workersTimeRange() {
-  const starts = Object.values(workersDataStart).filter((t) => t != null);
+// The Workers tab's charts share one time range, a legend above the plot and
+// a fixed y axis width, so their dates line up one above the other. The range
+// starts at the first backlog sample, not before, so a range longer than the
+// jobs kept does not leave the charts mostly empty.
+function workersTimeRange(d) {
   const cutoff = getTimeRangeCutoff();
-  let min = starts.length ? Math.min(...starts) : null;
-  if (cutoff) min = min == null ? cutoff.getTime() : Math.max(min, cutoff.getTime());
-  return min == null ? {} : { min, max: Date.now() };
-}
-
-// The chart drawn first is redrawn once the other's data moves the start
-function syncWorkersTimeRange() {
-  const { min, max } = workersTimeRange();
-  for (const chart of [agentsChart, backlogChart]) {
-    if (!chart || chart.options.scales.x.min === min) continue;
-    chart.options.scales.x.min = min;
-    chart.options.scales.x.max = max;
-    chart.update("none");
-  }
+  const start = Date.parse(d.start);
+  return { min: cutoff ? Math.max(start, cutoff.getTime()) : start, max: Date.now() };
 }
 
 const workersLegend = (textColor) => ({
@@ -1059,75 +1025,6 @@ function workersYAxisFit(axis) {
   axis.width = 56;
 }
 
-function renderAgentsChart(snapshots, queueOf) {
-  const canvas = document.getElementById("agents-chart");
-  if (!canvas || typeof Chart === "undefined") return;
-  const cutoff = getTimeRangeCutoff();
-  const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
-  const series = { build: [], test: [], launch: [], other: [] };
-  for (const snap of snapshots) {
-    const t = Date.parse(snap.time);
-    if (isNaN(t) || t < cutoffMs) continue;
-    const counts = { build: 0, test: 0, launch: 0, other: 0 };
-    for (const name of snap.connected) counts[queueOf(name)]++;
-    for (const q of Object.keys(series)) series[q].push({ x: t, y: counts[q] });
-  }
-  workersDataStart.agents = series.build.length ? series.build[0].x : null;
-  const isDark = isDarkMode();
-  const colors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
-  const datasets = Object.entries(series)
-    .filter(([q, pts]) => pts.some((p) => p.y > 0))
-    .map(([q, pts]) => ({
-      label: q,
-      data: pts,
-      _color: colors[q],
-      borderColor: colors[q],
-      backgroundColor: colors[q],
-      borderWidth: 1.5,
-      pointRadius: 0,
-      pointHitRadius: 6,
-      stepped: true,
-    }));
-  if (agentsChart) {
-    agentsChart.destroy();
-    agentsChart = null;
-  }
-  agentsChart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "near", axis: "x", intersect: false },
-      plugins: {
-        legend: workersLegend(textColor),
-        tooltip: {
-          callbacks: {
-            title: (items) =>
-              items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
-            label: (item) =>
-              `${item.dataset.label}: ${item.parsed.y} ${AGENTS_PER_JOB_QUEUES.has(item.dataset.label) ? "running" : "connected"}`,
-          },
-        },
-      },
-      scales: {
-        x: timeAxis({ textColor, gridColor, ...workersTimeRange() }),
-        y: {
-          beginAtZero: true,
-          afterFit: workersYAxisFit,
-          ticks: { color: textColor, precision: 0 },
-          grid: { color: gridColor },
-          title: { display: true, text: "agents", color: textColor },
-        },
-      },
-    },
-  });
-  syncWorkersTimeRange();
-}
-
 // === Queue backlog (Workers tab) ===
 // api/agents/backlog samples, per agent pool, the julia-pr and julia-ci jobs
 // waiting for an agent and running, from pool_jobs (fetch_agents.jl).
@@ -1135,7 +1032,7 @@ let backlogData = null;
 let backlogSince = null;
 let backlogPromise = null;
 let backlogChart = null;
-let backlogMetric = "oldest";
+let backlogMetric = "per-slot";
 let backlogPipeline = "all";
 const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR" };
 
@@ -1183,7 +1080,7 @@ function setBacklogPipeline(value) {
 }
 
 function setBacklogMetric(value) {
-  backlogMetric = ["oldest", "waiting", "per-slot"].includes(value) ? value : "oldest";
+  backlogMetric = ["oldest", "waiting", "per-slot"].includes(value) ? value : "per-slot";
   if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
 }
 
@@ -1203,6 +1100,7 @@ async function renderBacklogSection() {
   // A newer time range was asked for while this one loaded
   if (backlogSince !== since) return;
   backlogData = d;
+  renderBalanceCharts(d);
   if (d.error || !d.pools || d.pools.length === 0) {
     summaryEl.textContent = d.error ? "Could not load the backlog." : "No jobs recorded yet.";
     if (backlogChart) {
@@ -1234,7 +1132,6 @@ function renderBacklogChart(d) {
   const gridColor = isDark ? "#30363d" : "#d0d7de";
   const textColor = isDark ? "#8b949e" : "#656d76";
   const t0 = Date.parse(d.start);
-  workersDataStart.backlog = isNaN(t0) ? null : t0;
   const stepMs = d.step_s * 1000;
   const metric = backlogMetric;
   // Pools that never queued more than a few jobs in the window add nothing but legend
@@ -1296,7 +1193,7 @@ function renderBacklogChart(d) {
         },
       },
       scales: {
-        x: timeAxis({ textColor, gridColor, ...workersTimeRange() }),
+        x: timeAxis({ textColor, gridColor, ...workersTimeRange(d) }),
         y: {
           beginAtZero: true,
           afterFit: workersYAxisFit,
@@ -1311,7 +1208,165 @@ function renderBacklogChart(d) {
       },
     },
   });
-  syncWorkersTimeRange();
+}
+
+// === Machine balance (Workers tab) ===
+// Pools whose agents run on the same hosts draw on the same machines. For each
+// such group, each pool's demand (jobs running plus waiting) as a share of its
+// slots: a pool above 100% has a queue, one below has idle slots, so a group
+// with one of each could move slots between them. Where pools share their
+// hosts' slots (a Mac runs one build or one test at a time), a pool's idle
+// slots are busy with the other pool's jobs; the "All pools" line compares the
+// group's demand with the most jobs its hosts were seen running at once.
+let balanceCharts = [];
+// Samples drawn per line at most; each is the mean of the samples it covers
+const BALANCE_MAX_POINTS = 300;
+// Demand below this is drawn at it, on the log scale
+const BALANCE_MIN_PCT = 10;
+
+function balanceGroups(pools) {
+  const groups = [];
+  for (const p of pools) {
+    if (!p.slots || !p.hosts?.length || p.queue === "launch") continue;
+    const joined = groups.filter((g) => p.hosts.some((h) => g.hosts.has(h)));
+    const g = { pools: [p], hosts: new Set(p.hosts) };
+    for (const o of joined) {
+      g.pools.push(...o.pools);
+      for (const h of o.hosts) g.hosts.add(h);
+      groups.splice(groups.indexOf(o), 1);
+    }
+    groups.push(g);
+  }
+  return groups.filter((g) => g.pools.length > 1);
+}
+
+// "macOS aarch64 · 5 hosts", "Windows, FreeBSD x86_64 · amdci6-vm, rhea-vm"
+function balanceGroupLabel(g) {
+  const uniq = (xs) => [...new Set(xs)];
+  const oses = uniq(g.pools.map((p) => USAGE_OS_LABELS[p.os] || p.os)).join(", ");
+  const arches = uniq(g.pools.map((p) => p.arch)).join(", ");
+  const short = [...g.hosts].map((h) => h.replace(/\.julia\.csail\.mit\.edu$/, "")).sort();
+  return `${oses} ${arches} · ${short.length <= 3 ? short.join(", ") : `${short.length} hosts`}`;
+}
+
+function renderBalanceCharts(d) {
+  const container = document.getElementById("balance-grid");
+  if (!container) return;
+  for (const c of balanceCharts) c.destroy();
+  balanceCharts = [];
+  const groups = d && !d.error ? balanceGroups(d.pools || []) : [];
+  if (!groups.length) {
+    container.innerHTML = `<div class="workers-empty">${d?.error ? "Could not load the pools." : "No pools share hosts."}</div>`;
+    return;
+  }
+  const isDark = isDarkMode();
+  const queueColors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
+  const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
+  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const t0 = Date.parse(d.start);
+  const stepMs = d.step_s * 1000;
+  const range = workersTimeRange(d);
+  const i0 = Math.max(0, Math.ceil((range.min - t0) / stepMs));
+  const n = d.n - i0;
+  const bucket = Math.max(1, Math.ceil(n / BALANCE_MAX_POINTS));
+  const pct = (x) => `${Math.round(100 * x)}%`;
+  for (const g of groups) {
+    g.shared = g.pools.some((p) => p.shared_with?.length);
+    g.capacity = [...g.hosts].reduce((acc, h) => acc + (d.host_slots?.[h] || 0), 0);
+    const sum = (key) => Array.from({ length: d.n }, (_, i) => g.pools.reduce((acc, p) => acc + p[key][i], 0));
+    g.all = { label: "All pools", slots: g.capacity, running: sum("running"), waiting: sum("waiting") };
+    g.queued = g.pools.reduce((acc, p) => acc + p.waiting.slice(i0).reduce((a, b) => a + b, 0), 0);
+  }
+  groups.sort((a, b) => b.queued - a.queued);
+  const stats = (p, idleKnown) => {
+    let queued = 0, idle = 0, busy = 0;
+    for (let i = i0; i < d.n; i++) {
+      if (p.waiting[i] > 0) queued++;
+      else if (p.running[i] <= 0.75 * p.slots) idle++;
+      busy += Math.min(1, p.running[i] / p.slots);
+    }
+    const idleCell = idleKnown
+      ? pct(idle / n)
+      : '<span title="Its slots are shared with the other pools here, so an idle slot may be running their jobs">–</span>';
+    return `<td>${p.slots}</td><td>${pct(busy / n)}</td><td>${pct(queued / n)}</td><td>${idleCell}</td>`;
+  };
+  container.innerHTML = groups
+    .map((g, k) => {
+      const rows = g.pools.map((p) => `<tr><th>${escapeHtml(backlogPoolLabel(p))}</th>${stats(p, !g.shared)}</tr>`);
+      if (g.capacity) rows.push(`<tr class="balance-all"><th>All pools</th>${stats(g.all, true)}</tr>`);
+      return (
+        `<section class="balance-card"><div class="balance-chart"><canvas id="balance-chart-${k}"></canvas></div>` +
+        `<div class="balance-stats"><div class="balance-title" title="${escapeHtml([...g.hosts].sort().join(", "))}">${escapeHtml(balanceGroupLabel(g))}</div>` +
+        `<table><thead><tr><th>Pool</th><th>Slots</th><th title="Mean share of the slots running jobs">Busy</th><th title="Share of the time with jobs waiting for an agent">Queue</th><th title="Share of the time with a quarter or more of the slots idle and no job waiting">Idle</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></section>`
+      );
+    })
+    .join("");
+  groups.forEach((g, k) => {
+    const sameQueue = new Set(g.pools.map((p) => p.queue)).size < g.pools.length;
+    const series = g.pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
+    if (g.capacity) series.push({ p: g.all, label: "All pools", color: textColor, all: true });
+    const datasets = series.map(({ p, label, color, all }) => {
+      const data = [];
+      for (let i = i0; i < d.n; i += bucket) {
+        const end = Math.min(d.n, i + bucket);
+        let running = 0, waiting = 0;
+        for (let j = i; j < end; j++) {
+          running += p.running[j];
+          waiting += p.waiting[j];
+        }
+        running /= end - i;
+        waiting /= end - i;
+        data.push({ x: t0 + i * stepMs, y: Math.max(BALANCE_MIN_PCT, (100 * (running + waiting)) / p.slots), running, waiting });
+      }
+      return { label, data, borderColor: color, backgroundColor: color, borderWidth: all ? 2 : 1.5, borderDash: all ? [5, 3] : [], pointRadius: 0, pointHitRadius: 6, tension: 0.2, _slots: p.slots };
+    });
+    balanceCharts.push(
+      new Chart(document.getElementById(`balance-chart-${k}`).getContext("2d"), {
+        type: "line",
+        data: { datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: "nearest", axis: "x", intersect: false },
+          plugins: {
+            legend: workersLegend(textColor),
+            tooltip: {
+              callbacks: {
+                title: (items) =>
+                  items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
+                label: (item) => {
+                  const { running, waiting } = item.raw;
+                  const f = (v) => (bucket > 1 ? v.toFixed(1) : String(v));
+                  return `${item.dataset.label}: ${f(running)} running, ${f(waiting)} waiting, ${item.dataset._slots} slots (${Math.round((100 * (running + waiting)) / item.dataset._slots)}%)`;
+                },
+              },
+            },
+            annotation: {
+              annotations: {
+                full: { type: "line", yMin: 100, yMax: 100, borderColor: textColor, borderWidth: 1, borderDash: [2, 4] },
+              },
+            },
+          },
+          scales: {
+            x: timeAxis({ textColor, gridColor, ...range }),
+            y: {
+              type: "logarithmic",
+              min: BALANCE_MIN_PCT,
+              afterFit: workersYAxisFit,
+              afterBuildTicks: (axis) => {
+                axis.ticks = [10, 30, 100, 300, 1000, 3000, 10000].filter((v) => v <= axis.max).map((value) => ({ value }));
+              },
+              ticks: { color: textColor, callback: (v) => `${v}%` },
+              grid: { color: gridColor },
+              title: { display: true, text: "demand / slots", color: textColor },
+            },
+          },
+        },
+      }),
+    );
+  });
 }
 
 function renderWorkerPresence() {

@@ -946,8 +946,9 @@ const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited
 """
     pool_slots(db, cutoff)
 
-Agent slots per pool (queue, os, arch) from the agents seen since `cutoff`, and
-the other pools each one shares its hosts with. Each host's scheduler
+Agent slots per pool (queue, os, arch) from the agents seen since `cutoff`,
+the other pools each one shares its hosts with, each pool's hosts, and the most
+jobs each host was seen running at once. Each host's scheduler
 (JuliaCI/sandboxed-buildkite-agent) gives every agent group enough slots to
 fill the host's CPUs alone, and all the groups draw on those same CPUs. A Mac,
 for example, runs one build or one test at a time. So a pool gets at most as
@@ -977,7 +978,8 @@ function pool_slots(db, cutoff)
             push!(get!(Set{Tuple{String,String,String}}, shared, q), p)
         end
     end
-    return slots, shared
+    hosts = Dict(p => sort!(collect(keys(hs))) for (p, hs) in names)
+    return slots, shared, hosts, peak
 end
 
 """
@@ -1034,7 +1036,7 @@ function pool_backlog(db; since="")
         end
     end
     gen = agents_generated_at(db)
-    slots, shared = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
+    slots, shared, hosts, peak = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
     function series(p)
         # Longest wait at each sample: the earliest start among the jobs still waiting
         sort!(p.waits)
@@ -1060,6 +1062,7 @@ function pool_backlog(db; since="")
         by = OrderedDict{String,Any}(pl => series(per[pl]) for pl in sort!(collect(keys(per))))
         parts = collect(values(by))
         push!(out, OrderedDict{String,Any}("queue" => q, "os" => o, "arch" => a, "slots" => get(slots, (q, o, a), nothing),
+                                           "hosts" => get(hosts, (q, o, a), String[]),
                                            "shared_with" => [OrderedDict("queue" => sq, "os" => so, "arch" => sa)
                                                              for (sq, so, sa) in sort!(collect(get(shared, (q, o, a), ())))],
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
@@ -1068,6 +1071,7 @@ function pool_backlog(db; since="")
     end
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
     return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,
+                                   "host_slots" => OrderedDict(h => peak[h] for h in sort!(unique(h for p in out for h in p["hosts"])) if haskey(peak, h)),
                                    "pipelines" => ["julia-pr", "julia-ci"], "pools" => out)
 end
 
