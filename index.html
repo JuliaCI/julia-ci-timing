@@ -818,8 +818,11 @@
                 tooltip names pools that share their hosts' slots.</span
               >
             </div>
-            <div class="agents-chart-wrapper backlog-chart-wrapper">
-              <canvas id="backlog-chart"></canvas>
+            <div class="balance-card">
+              <div class="agents-chart-wrapper backlog-chart-wrapper">
+                <canvas id="backlog-chart"></canvas>
+              </div>
+              <ul class="balance-stats backlog-legend" id="backlog-legend"></ul>
             </div>
           </div>
           <div class="backlog-section">
@@ -827,7 +830,7 @@
               <span class="agents-title">Machine balance</span>
               <span class="agents-help"
                 >Pools whose agents run on the same machines, with each pool's
-                jobs running and waiting as a share of its slots. Above 100% a
+                jobs running and waiting as a multiple of its slots. Above 1× a
                 pool has a queue; below it has idle slots.</span
               >
             </div>

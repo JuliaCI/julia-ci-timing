@@ -1506,8 +1506,37 @@ a {
   border-bottom: 1px solid var(--color-border-default);
 }
 /* More specific than .agents-chart-wrapper, which comes later */
-.backlog-section > .backlog-chart-wrapper {
+.backlog-section .backlog-chart-wrapper {
+  flex: 1 1 0;
+  min-width: 0;
   height: 240px;
+}
+/* In the column the balance charts give their tables, so the time axes line up */
+.backlog-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  align-self: center;
+}
+.backlog-legend button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+  font: inherit;
+  color: var(--color-fg-default);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.backlog-legend button[aria-pressed="false"] {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.backlog-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
 }
 .agents-header {
   display: flex;
@@ -4051,7 +4080,7 @@ a {
   height: 170px;
 }
 .balance-stats {
-  flex: 0 0 320px;
+  flex: 0 0 340px;
   font-size: 12px;
   color: var(--color-fg-muted);
 }
@@ -4061,6 +4090,7 @@ a {
   margin-bottom: 4px;
 }
 .balance-stats table {
+  width: 100%;
   border-collapse: collapse;
 }
 .balance-stats th,
@@ -4088,4 +4118,34 @@ a {
 .balance-stats tr.balance-all th,
 .balance-stats tr.balance-all td {
   border-top: 1px solid var(--color-border-default);
+}
+.balance-stats tbody th button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.balance-stats tbody th button[aria-pressed="false"] {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.balance-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--swatch);
+}
+/* The "All pools" line is dashed */
+.balance-swatch-all {
+  height: 0;
+  border-radius: 0;
+  background: none;
+  border-top: 2px dashed var(--swatch);
 }

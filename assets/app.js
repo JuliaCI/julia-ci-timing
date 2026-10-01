@@ -1005,21 +1005,15 @@ async function renderAgentsSection() {
   if (filtering) summaryEl.innerHTML += `, <strong>${shown}</strong> of ${rows.length} shown`;
 }
 
-// The Workers tab's charts share one time range, a legend above the plot and
-// a fixed y axis width, so their dates line up one above the other. The range
-// starts at the first backlog sample, not before, so a range longer than the
-// jobs kept does not leave the charts mostly empty.
+// The Workers tab's charts share one time range, a fixed y axis width and the
+// same column beside them for their legends, so their dates line up one above
+// the other. The range starts at the first backlog sample, not before, so a
+// range longer than the jobs kept does not leave the charts mostly empty.
 function workersTimeRange(d) {
   const cutoff = getTimeRangeCutoff();
   const start = Date.parse(d.start);
   return { min: cutoff ? Math.max(start, cutoff.getTime()) : start, max: Date.now() };
 }
-
-const workersLegend = (textColor) => ({
-  position: "top",
-  align: "end",
-  labels: { color: textColor, boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 11 } },
-});
 
 function workersYAxisFit(axis) {
   axis.width = 56;
@@ -1171,7 +1165,7 @@ function renderBacklogChart(d) {
       animation: false,
       interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
-        legend: workersLegend(textColor),
+        legend: { display: false },
         tooltip: {
           callbacks: {
             title: (items) =>
@@ -1208,12 +1202,30 @@ function renderBacklogChart(d) {
       },
     },
   });
+  const legendEl = document.getElementById("backlog-legend");
+  if (legendEl) {
+    legendEl.innerHTML = datasets
+      .map(
+        (ds, i) =>
+          `<li><button type="button" data-index="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${ds.borderColor}"></span>${escapeHtml(ds.label)}</button></li>`,
+      )
+      .join("");
+    legendEl.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.index);
+        const shown = !backlogChart.isDatasetVisible(i);
+        backlogChart.setDatasetVisibility(i, shown);
+        btn.setAttribute("aria-pressed", String(shown));
+        backlogChart.update("none");
+      };
+    });
+  }
 }
 
 // === Machine balance (Workers tab) ===
 // Pools whose agents run on the same hosts draw on the same machines. For each
-// such group, each pool's demand (jobs running plus waiting) as a share of its
-// slots: a pool above 100% has a queue, one below has idle slots, so a group
+// such group, each pool's demand (jobs running plus waiting) as a multiple of
+// its slots: a pool above 1× has a queue, one below has idle slots, so a group
 // with one of each could move slots between them. Where pools share their
 // hosts' slots (a Mac runs one build or one test at a time), a pool's idle
 // slots are busy with the other pool's jobs; the "All pools" line compares the
@@ -1221,8 +1233,11 @@ function renderBacklogChart(d) {
 let balanceCharts = [];
 // Samples drawn per line at most; each is the mean of the samples it covers
 const BALANCE_MAX_POINTS = 300;
-// Demand below this is drawn at it, on the log scale
-const BALANCE_MIN_PCT = 10;
+// Demand below this multiple of the slots is drawn at it, on the log scale
+const BALANCE_MIN = 0.1;
+
+// "0.4×", "2×", "35×"
+const balanceMultiple = (x) => `${x < 10 ? Number(x.toFixed(1)) : Math.round(x)}×`;
 
 function balanceGroups(pools) {
   const groups = [];
@@ -1279,6 +1294,11 @@ function renderBalanceCharts(d) {
     g.queued = g.pools.reduce((acc, p) => acc + p.waiting.slice(i0).reduce((a, b) => a + b, 0), 0);
   }
   groups.sort((a, b) => b.queued - a.queued);
+  for (const g of groups) {
+    const sameQueue = new Set(g.pools.map((p) => p.queue)).size < g.pools.length;
+    g.series = g.pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
+    if (g.capacity) g.series.push({ p: g.all, label: "All pools", color: textColor, all: true });
+  }
   const stats = (p, idleKnown) => {
     let queued = 0, idle = 0, busy = 0;
     for (let i = i0; i < d.n; i++) {
@@ -1293,8 +1313,11 @@ function renderBalanceCharts(d) {
   };
   container.innerHTML = groups
     .map((g, k) => {
-      const rows = g.pools.map((p) => `<tr><th>${escapeHtml(backlogPoolLabel(p))}</th>${stats(p, !g.shared)}</tr>`);
-      if (g.capacity) rows.push(`<tr class="balance-all"><th>All pools</th>${stats(g.all, true)}</tr>`);
+      // The table is the chart's legend: a pool's name toggles its line
+      const rows = g.series.map(
+        ({ p, label, color, all }, i) =>
+          `<tr${all ? ' class="balance-all"' : ""}><th><button type="button" data-chart="${k}" data-index="${i}" aria-pressed="true"><span class="balance-swatch${all ? " balance-swatch-all" : ""}" style="--swatch:${color}"></span>${escapeHtml(label)}</button></th>${stats(p, all || !g.shared)}</tr>`,
+      );
       return (
         `<section class="balance-card"><div class="balance-chart"><canvas id="balance-chart-${k}"></canvas></div>` +
         `<div class="balance-stats"><div class="balance-title" title="${escapeHtml([...g.hosts].sort().join(", "))}">${escapeHtml(balanceGroupLabel(g))}</div>` +
@@ -1303,10 +1326,7 @@ function renderBalanceCharts(d) {
     })
     .join("");
   groups.forEach((g, k) => {
-    const sameQueue = new Set(g.pools.map((p) => p.queue)).size < g.pools.length;
-    const series = g.pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
-    if (g.capacity) series.push({ p: g.all, label: "All pools", color: textColor, all: true });
-    const datasets = series.map(({ p, label, color, all }) => {
+    const datasets = g.series.map(({ p, label, color, all }) => {
       const data = [];
       for (let i = i0; i < d.n; i += bucket) {
         const end = Math.min(d.n, i + bucket);
@@ -1317,7 +1337,7 @@ function renderBalanceCharts(d) {
         }
         running /= end - i;
         waiting /= end - i;
-        data.push({ x: t0 + i * stepMs, y: Math.max(BALANCE_MIN_PCT, (100 * (running + waiting)) / p.slots), running, waiting });
+        data.push({ x: t0 + i * stepMs, y: Math.max(BALANCE_MIN, (running + waiting) / p.slots), running, waiting });
       }
       return { label, data, borderColor: color, backgroundColor: color, borderWidth: all ? 2 : 1.5, borderDash: all ? [5, 3] : [], pointRadius: 0, pointHitRadius: 6, tension: 0.2, _slots: p.slots };
     });
@@ -1331,7 +1351,7 @@ function renderBalanceCharts(d) {
           animation: false,
           interaction: { mode: "nearest", axis: "x", intersect: false },
           plugins: {
-            legend: workersLegend(textColor),
+            legend: { display: false },
             tooltip: {
               callbacks: {
                 title: (items) =>
@@ -1339,13 +1359,13 @@ function renderBalanceCharts(d) {
                 label: (item) => {
                   const { running, waiting } = item.raw;
                   const f = (v) => (bucket > 1 ? v.toFixed(1) : String(v));
-                  return `${item.dataset.label}: ${f(running)} running, ${f(waiting)} waiting, ${item.dataset._slots} slots (${Math.round((100 * (running + waiting)) / item.dataset._slots)}%)`;
+                  return `${item.dataset.label}: ${f(running)} running, ${f(waiting)} waiting, ${item.dataset._slots} slots (${balanceMultiple((running + waiting) / item.dataset._slots)})`;
                 },
               },
             },
             annotation: {
               annotations: {
-                full: { type: "line", yMin: 100, yMax: 100, borderColor: textColor, borderWidth: 1, borderDash: [2, 4] },
+                full: { type: "line", yMin: 1, yMax: 1, borderColor: textColor, borderWidth: 1, borderDash: [2, 4] },
               },
             },
           },
@@ -1353,12 +1373,12 @@ function renderBalanceCharts(d) {
             x: timeAxis({ textColor, gridColor, ...range }),
             y: {
               type: "logarithmic",
-              min: BALANCE_MIN_PCT,
+              min: BALANCE_MIN,
               afterFit: workersYAxisFit,
               afterBuildTicks: (axis) => {
-                axis.ticks = [10, 30, 100, 300, 1000, 3000, 10000].filter((v) => v <= axis.max).map((value) => ({ value }));
+                axis.ticks = [0.1, 0.3, 1, 3, 10, 30, 100].filter((v) => v <= axis.max).map((value) => ({ value }));
               },
-              ticks: { color: textColor, callback: (v) => `${v}%` },
+              ticks: { color: textColor, callback: (v) => `${v}×` },
               grid: { color: gridColor },
               title: { display: true, text: "demand / slots", color: textColor },
             },
@@ -1366,6 +1386,16 @@ function renderBalanceCharts(d) {
         },
       }),
     );
+  });
+  container.querySelectorAll("button[data-chart]").forEach((btn) => {
+    btn.onclick = () => {
+      const chart = balanceCharts[Number(btn.dataset.chart)];
+      const i = Number(btn.dataset.index);
+      const shown = !chart.isDatasetVisible(i);
+      chart.setDatasetVisibility(i, shown);
+      btn.setAttribute("aria-pressed", String(shown));
+      chart.update("none");
+    };
   });
 }
 
