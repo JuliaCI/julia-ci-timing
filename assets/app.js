@@ -660,6 +660,21 @@ function drawBuildsView() {
       yAxisID: "y2",
     },
   ];
+  // A build still running has partial job time and queue waits: its points
+  // are hollow and faded, and so are the lines to them
+  const running = (b) => !b.finished_at;
+  for (const ds of datasets) {
+    const color = ds.borderColor;
+    const faded = colorToRgba(color, 0.3);
+    ds.pointBackgroundColor = (ctx) => (ctx.raw && running(ctx.raw.build) ? "transparent" : color);
+    ds.pointBorderColor = (ctx) => (ctx.raw && running(ctx.raw.build) ? faded : color);
+    ds.segment = {
+      borderColor: (ctx) => {
+        const data = ctx.chart.data.datasets[ctx.datasetIndex].data;
+        return running(data[ctx.p0DataIndex].build) || running(data[ctx.p1DataIndex].build) ? faded : undefined;
+      },
+    };
+  }
   if (buildsChart) buildsChart.destroy();
   buildsChart = new Chart(canvas.getContext("2d"), {
     type: "line",
@@ -680,12 +695,13 @@ function drawBuildsView() {
             },
             label: (ctx) => {
               const b = ctx.raw.build;
-              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs`];
+              const partial = running(b) ? " so far, still running" : "";
+              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs${partial}`];
               const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
               if (ctx.datasetIndex === 0) {
                 lines.push(`${b.jobs} jobs, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
               } else {
-                lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total`);
+                lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total${partial}`);
               }
               return lines;
             },
@@ -720,7 +736,7 @@ function drawBuildsView() {
   const rows = recent
     .map((b) => {
       const url = escapeHtml(buildkiteBuildUrl(b));
-      return `<tr data-url="${url}">
+      return `<tr data-url="${url}"${running(b) ? ' class="builds-running"' : ""}>
         <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
         <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
         <td class="commits-reg-msg"><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>

@@ -4031,3 +4031,6 @@ a {
     height: 170px;
   }
 }
+.commits-reg-table tr.builds-running td {
+  opacity: 0.5;
+}
