@@ -1008,6 +1008,41 @@ function highlightAgentsQueue(queue) {
 }
 
 // Connected agents per queue over the selected time range, one point per snapshot
+// The Workers tab's two charts share one time range, a legend above the plot
+// and a fixed y axis width, so their dates line up one above the other. The
+// range starts at the earlier of their first data, not before, so a range
+// longer than the history kept does not leave both mostly empty.
+const workersDataStart = { agents: null, backlog: null };
+
+function workersTimeRange() {
+  const starts = Object.values(workersDataStart).filter((t) => t != null);
+  const cutoff = getTimeRangeCutoff();
+  let min = starts.length ? Math.min(...starts) : null;
+  if (cutoff) min = min == null ? cutoff.getTime() : Math.max(min, cutoff.getTime());
+  return min == null ? {} : { min, max: Date.now() };
+}
+
+// The chart drawn first is redrawn once the other's data moves the start
+function syncWorkersTimeRange() {
+  const { min, max } = workersTimeRange();
+  for (const chart of [agentsChart, backlogChart]) {
+    if (!chart || chart.options.scales.x.min === min) continue;
+    chart.options.scales.x.min = min;
+    chart.options.scales.x.max = max;
+    chart.update("none");
+  }
+}
+
+const workersLegend = (textColor) => ({
+  position: "top",
+  align: "end",
+  labels: { color: textColor, boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 11 } },
+});
+
+function workersYAxisFit(axis) {
+  axis.width = 56;
+}
+
 function renderAgentsChart(snapshots, queueOf) {
   const canvas = document.getElementById("agents-chart");
   if (!canvas || typeof Chart === "undefined") return;
@@ -1021,6 +1056,7 @@ function renderAgentsChart(snapshots, queueOf) {
     for (const name of snap.connected) counts[queueOf(name)]++;
     for (const q of Object.keys(series)) series[q].push({ x: t, y: counts[q] });
   }
+  workersDataStart.agents = series.build.length ? series.build[0].x : null;
   const isDark = isDarkMode();
   const colors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
   const gridColor = isDark ? "#30363d" : "#d0d7de";
@@ -1051,7 +1087,7 @@ function renderAgentsChart(snapshots, queueOf) {
       animation: false,
       interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
-        legend: { position: "right", labels: { color: textColor, boxWidth: 12 } },
+        legend: workersLegend(textColor),
         tooltip: {
           callbacks: {
             title: (items) =>
@@ -1062,9 +1098,10 @@ function renderAgentsChart(snapshots, queueOf) {
         },
       },
       scales: {
-        x: timeAxis({ textColor, gridColor }),
+        x: timeAxis({ textColor, gridColor, ...workersTimeRange() }),
         y: {
           beginAtZero: true,
+          afterFit: workersYAxisFit,
           ticks: { color: textColor, precision: 0 },
           grid: { color: gridColor },
           title: { display: true, text: "agents", color: textColor },
@@ -1072,6 +1109,7 @@ function renderAgentsChart(snapshots, queueOf) {
       },
     },
   });
+  syncWorkersTimeRange();
 }
 
 // === Queue backlog (Workers tab) ===
@@ -1180,6 +1218,7 @@ function renderBacklogChart(d) {
   const gridColor = isDark ? "#30363d" : "#d0d7de";
   const textColor = isDark ? "#8b949e" : "#656d76";
   const t0 = Date.parse(d.start);
+  workersDataStart.backlog = isNaN(t0) ? null : t0;
   const stepMs = d.step_s * 1000;
   const metric = backlogMetric;
   // Pools that never queued more than a few jobs in the window add nothing but legend
@@ -1219,8 +1258,7 @@ function renderBacklogChart(d) {
       animation: false,
       interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
-        // Compact enough that all the pools fit in one column beside the chart
-        legend: { position: "right", labels: { color: textColor, boxWidth: 10, boxHeight: 10, padding: 6, font: { size: 11 } } },
+        legend: workersLegend(textColor),
         tooltip: {
           callbacks: {
             title: (items) =>
@@ -1242,9 +1280,10 @@ function renderBacklogChart(d) {
         },
       },
       scales: {
-        x: timeAxis({ textColor, gridColor }),
+        x: timeAxis({ textColor, gridColor, ...workersTimeRange() }),
         y: {
           beginAtZero: true,
+          afterFit: workersYAxisFit,
           ticks: { color: textColor, precision: metric === "waiting" ? 0 : undefined },
           grid: { color: gridColor },
           title: {
@@ -1256,6 +1295,7 @@ function renderBacklogChart(d) {
       },
     },
   });
+  syncWorkersTimeRange();
 }
 
 function renderWorkerPresence() {
@@ -4476,14 +4516,6 @@ makeResizablePanel({
   handleId: "packages-top-handle",
   targetId: "packages-top",
   storageKey: "packages-top-height",
-});
-// The bar sits under the section, so dragging down grows it
-makeResizablePanel({
-  handleId: "agents-resize-handle",
-  targetId: "agents-section",
-  storageKey: "agents-section-height",
-  direction: "down",
-  defaultHeight: 440,
 });
 makeResizablePanel({
   handleId: "ttfx-resize-handle",

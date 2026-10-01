@@ -1475,21 +1475,23 @@ a {
   display: none !important;
 }
 
-/* Workers presence view */
+/* Workers presence view: one page that scrolls as a whole, with the
+   sections at their natural height */
 .workers-view {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.workers-view > * {
+  flex: none;
 }
 .agents-section {
   display: flex;
   flex-direction: column;
-  flex: 0 0 auto;
   gap: 6px;
-  min-height: 120px;
-  max-height: 80vh;
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border-default);
 }
@@ -1505,7 +1507,7 @@ a {
 }
 /* More specific than .agents-chart-wrapper, which comes later */
 .backlog-section > .backlog-chart-wrapper {
-  height: 180px;
+  height: 240px;
 }
 .agents-header {
   display: flex;
@@ -1531,15 +1533,12 @@ a {
 }
 .agents-chart-wrapper {
   position: relative;
-  height: 150px;
-  min-height: 80px;
+  height: 200px;
   flex: 0 0 auto;
   overflow: hidden;
 }
 .agents-table-wrapper {
-  flex: 1 1 auto;
-  min-height: 40px;
-  overflow: auto;
+  overflow-x: auto;
 }
 .agents-table {
   border-collapse: collapse;
@@ -1671,9 +1670,7 @@ a {
   background: transparent;
 }
 .workers-grid-wrapper {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+  overflow-x: auto;
   /* No padding: sticky header/label cells would otherwise leave gaps that
      reveal the scrolling content underneath. Use table cell padding plus a
      trailing spacer row/column for breathing room instead. */

@@ -812,17 +812,10 @@
               </select>
               <span class="agents-summary" id="backlog-summary"></span>
               <span class="agents-help"
-                >Jobs of julia-pr and julia-ci builds that are ready to run but
-                have no agent yet, per pool (queue, OS and architecture), from
-                the jobs' Buildkite timestamps. Longest wait is how long the
-                oldest of them has been waiting; jobs waiting per slot divides
-                the count by the agent slots seen for the pool in the last 30
-                days. Where a pool's hosts also run another pool's jobs (the
-                Macs and the Windows and FreeBSD VM hosts), the tooltip says
-                so: those slots are only free while the other pool is idle. The second menu limits the chart to master or pull
-                request builds. The tooltip splits each pool's jobs between
-                them and adds the jobs running. Jobs are kept for 60
-                days.</span
+                >Master and pull request jobs ready to run but with no agent
+                yet, per pool (queue, OS and architecture), kept for 60 days.
+                Per slot divides by the slots seen in the last 30 days; the
+                tooltip names pools that share their hosts' slots.</span
               >
             </div>
             <div class="agents-chart-wrapper backlog-chart-wrapper">
@@ -835,14 +828,11 @@
               <span class="agents-summary" id="agents-summary"></span>
               <span class="updated" id="agents-updated"></span>
               <span class="agents-help"
-                >Snapshots of the Buildkite agents API taken by every update
-                run, all queues and pipelines. The build, test, launch and
-                default queues have no resident agents: each host starts one
-                agent per job and it disconnects when the job ends, so they are
-                listed per host with the slots seen mid-job, and a host is
-                flagged once no slot of it has run a job for 3 days. Any other
-                agent seen in the last week but not in the latest snapshot is
-                flagged as missing.</span
+                >Agents connected at each update, all queues. The build, test,
+                launch and default queues start one agent per job, so they are
+                listed per host and a host is flagged after 3 days without a
+                job. Other agents are flagged when missing from the latest
+                snapshot.</span
               >
             </div>
             <div class="agents-chart-wrapper">
@@ -852,19 +842,11 @@
               <div class="loading">Loading agent snapshots...</div>
             </div>
           </div>
-          <div
-            class="resize-handle"
-            id="agents-resize-handle"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize the agents section"
-          ></div>
           <div class="workers-toolbar">
+            <span class="agents-title">Jobs per host</span>
             <span class="workers-help"
-              >Jobs run per host per day on <strong>master</strong> builds
-              (pull-request builds are not included, so an empty cell is not
-              downtime; see the snapshots above for that). Red marks a day
-              with non-passing jobs on that host.</span
+              >Per day, <strong>master</strong> builds only, so an empty cell
+              is not downtime.</span
             >
             <span class="workers-legend" aria-hidden="true">
               <span class="workers-legend-item"
