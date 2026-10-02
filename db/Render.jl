@@ -498,14 +498,62 @@ function ttfx_pr_weights(db)
     return Dict(m => Float64(something(coalesce(getproperty(r, Symbol(m)), 0.0), 0.0)) for m in TTFX_PR_METRICS)
 end
 
+# Per-block product of two layers' suite geomeans, metric by metric. Layers measured with
+# different block counts are combined through the ratio each one is scored by.
+function ttfx_chain_suite(lower, upper)
+    out = OrderedDict{String,Any}()
+    for (m, u) in pairs(upper)
+        haskey(lower, m) || continue
+        a, b = lower[m].geomeans, u.geomeans
+        (isempty(a) || isempty(b)) && continue
+        g = length(a) == length(b) ? a .* b : [ttfx_pr_ratio(a) * ttfx_pr_ratio(b)]
+        out[String(m)] = (geomeans=g,)
+    end
+    return out
+end
+
+# A pull request that targets another one's branch is measured against that branch, so
+# its own suite ratios leave out everything below it. Chaining the layers down to the
+# one based on master estimates the whole stack against master. The links are exact
+# when each layer's base is the commit the layer below was measured at; otherwise a
+# layer has moved on since and the estimate is approximate.
+function ttfx_pr_stack(r, by_ref)
+    base_ref = String(r.base_ref)
+    (isempty(base_ref) || base_ref == "master") && return nothing
+    parents, exact, child = Int[], true, r
+    suite = JSON3.read(String(r.suite))
+    while true
+        ref = String(child.base_ref)
+        (isempty(ref) || ref == "master") && break
+        parent = get(by_ref, ref, nothing)
+        if parent === nothing || Int(parent.pr_number) in parents || Int(parent.pr_number) == Int(r.pr_number)
+            return OrderedDict("base_ref" => base_ref, "parents" => parents, "complete" => false,
+                               "missing" => ref, "exact" => exact, "suite" => nothing)
+        end
+        push!(parents, Int(parent.pr_number))
+        exact &= startswith(String(parent.head_commit), first(String(child.base_commit), 10)) && !isempty(String(child.base_commit))
+        suite = ttfx_chain_suite(JSON3.read(String(parent.suite)), suite)
+        child = parent
+    end
+    return OrderedDict("base_ref" => base_ref, "parents" => parents, "complete" => true, "missing" => nothing,
+                       "exact" => exact, "suite" => suite)
+end
+
 function ttfx_prs(db)
     prs = Any[]
     weights = ttfx_pr_weights(db)
-    for r in rows(db, "SELECT * FROM ttfx_prs")
+    all_rows = collect(rows(db, "SELECT * FROM ttfx_prs"))
+    by_ref = Dict(String(r.head_ref) => r for r in all_rows if !isempty(String(r.head_ref)))
+    for r in all_rows
         suite = JSON3.read(String(r.suite))
+        own_score = ttfx_pr_score(suite, weights)
+        stack = ttfx_pr_stack(r, by_ref)
+        stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"], weights))
         push!(prs, OrderedDict(
             "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
-            "score" => ttfx_pr_score(suite, weights), "verdict" => String(r.verdict),
+            # Ranked by the estimate against master: a stacked layer's own gains may only undo a regression below it
+            "score" => stack === nothing ? own_score : stack["score"], "own_score" => own_score,
+            "stack" => stack, "verdict" => String(r.verdict),
             "n_improvements" => Int(r.n_improvements), "n_regressions" => Int(r.n_regressions),
             "suite" => suite, "tasks" => JSON3.read(String(r.tasks)),
             "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state), "web_url" => js(r.web_url),

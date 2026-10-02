@@ -81,6 +81,8 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_prs", "ci_build", "INTEGER"),
     ("ttfx_prs", "ci_state", "TEXT"),
     ("ttfx_prs", "ci_url", "TEXT"),
+    ("ttfx_prs", "head_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("ttfx_prs", "base_ref", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 function apply_schema!(db::SQLite.DB)

@@ -11446,6 +11446,131 @@ function ttfxPrCi(p) {
   };
 }
 
+function ttfxScorePct(score) {
+  return score == null ? "–" : formatTtfxPct((score - 1) * 100);
+}
+
+// A stacked pull request is measured against the branch it targets; the server
+// chains the layers below it down to master for its score
+function ttfxPrStackTitle(p) {
+  const st = p.stack;
+  if (!st.complete)
+    return `Targets ${st.base_ref}, which has no TTFX comparison here, so there is no estimate against master. On its own against ${st.base_ref}: ${ttfxScorePct(p.own_score)}`;
+  const parent = `#${st.parents[0]}`;
+  return (
+    `Targets ${st.base_ref} (${parent}) and was measured against it. The score multiplies in the suite results of ` +
+    `${st.parents.map((n) => "#" + n).join(", ")} to estimate the stack against master` +
+    `${st.exact ? "" : "; approximate, since a lower pull request has commits newer than this job's base"}. ` +
+    `On its own against ${parent}: ${ttfxScorePct(p.own_score)}`
+  );
+}
+
+function ttfxPrStackBadge(p) {
+  if (!p.stack) return "";
+  const label = p.stack.parents.length ? `stacked on #${p.stack.parents[0]}` : "stacked";
+  const parent = p.stack.parents.length ? ` data-parent-pr="${p.stack.parents[0]}"` : "";
+  return `<span class="ttfx-pr-badge ttfx-pr-stacked"${parent} title="${escapeHtml(ttfxPrStackTitle(p))}">↳ ${label}${p.stack.complete && !p.stack.exact ? " ≈" : ""}</span> `;
+}
+
+// A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
+// stacked one it adds the estimate of the whole stack against master.
+function ttfxPrMarkdown(p) {
+  const pct = (g) => formatTtfxPct((g - 1) * 100);
+  const blocks = (x) => x.geomeans.map(pct).join(", ");
+  const st = p.stack;
+  const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `\`${st.base_ref}\``) : "master";
+  const chained = st && st.complete ? st.suite : null;
+  const job = p.web_url ? `[job](${p.web_url})` : "job";
+  const lines = [
+    `**TTFX** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}).`,
+  ];
+  if (p.outdated) lines.push("", "Measured on an older commit; the pull request has newer commits.");
+  if (st)
+    lines.push(
+      "",
+      st.complete
+        ? `This PR targets \`${st.base_ref}\` (${parent}), so the job measured it against that branch. ` +
+            `The last column multiplies in the suite results of ${st.parents.map((n) => "#" + n).join(", ")} ` +
+            `to estimate the whole stack against master${st.exact ? "" : " (approximate: a lower PR has commits newer than this job's base)"}.`
+        : `This PR targets \`${st.base_ref}\`, which has no TTFX comparison recorded, so these numbers are against that branch ` +
+            "and there is no estimate against master.",
+    );
+  const head = ["suite geomean", st ? `this PR vs ${parent}` : "change per block"];
+  if (chained) head.push("stack vs master (est.)");
+  lines.push("", `| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`);
+  for (const m of ttfxPrs.metrics) {
+    const on = p.suite[m];
+    if (!on) continue;
+    const off = p.suite[m + "_gcoff"];
+    const verdicts = [on.verdict, off && off.verdict];
+    const verdict = verdicts.includes("regression") ? "regression" : verdicts.includes("improvement") ? "improvement" : null;
+    const own = verdict ? `**${blocks(on)}** (${verdict})` : blocks(on);
+    lines.push(`| ${ttfxMetricLabel(m)} | ${own} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "–"} |` : ""}`);
+  }
+  const describe = (t, kinds) =>
+    kinds
+      .map((k) => {
+        const m = t.metrics[k];
+        const r = m && (m.ratios || m.gcoff_ratios);
+        return r ? `${k} ${r.map(pct).join(", ")}` : k;
+      })
+      .join("; ");
+  const scope = st ? ` against ${parent}` : "";
+  for (const [key, label] of [
+    ["regressions", "Robust regressions"],
+    ["improvements", "Robust improvements"],
+  ]) {
+    const ts = p.tasks.filter((t) => t[key].length);
+    if (!ts.length) {
+      lines.push("", `${label}${scope}: none.`);
+      continue;
+    }
+    lines.push("", `<details><summary>${label}${scope} (${ts.length} tasks)</summary>`, "");
+    for (const t of ts) lines.push(`- ${t.name}: ${describe(t, t[key])}`);
+    lines.push("", "</details>");
+  }
+  return lines.join("\n") + "\n";
+}
+
+function copyTtfxPrSummary(button) {
+  const p = ttfxPrs && ttfxPrs.prs.find((x) => x.pr === Number(button.dataset.copyPr));
+  if (!p) return;
+  const label = button.textContent;
+  const done = (text) => {
+    button.textContent = text;
+    setTimeout(() => (button.textContent = label), 1500);
+  };
+  navigator.clipboard.writeText(ttfxPrMarkdown(p)).then(
+    () => done("Copied"),
+    () => done("Failed"),
+  );
+}
+
+// Captured so the click does not also reach the row, which opens the job
+document.addEventListener(
+  "click",
+  (e) => {
+    const button = e.target.closest && e.target.closest("[data-copy-pr]");
+    if (!button) return;
+    e.stopPropagation();
+    copyTtfxPrSummary(button);
+  },
+  true,
+);
+
+// Hovering a stacked pull request's badge lights up the row of the one below it
+for (const [type, on] of [
+  ["mouseover", true],
+  ["mouseout", false],
+]) {
+  document.addEventListener(type, (e) => {
+    const badge = e.target.closest && e.target.closest("[data-parent-pr]");
+    if (!badge) return;
+    const row = document.querySelector(`#ttfx-stats-tbody tr[data-pr="${badge.dataset.parentPr}"]`);
+    if (row) row.classList.toggle("ttfx-pr-parent-hl", on);
+  });
+}
+
 // The phone layout of the ranked pull requests: two lines each, the title
 // and the score, then who, what state and when. A tap opens the card.
 function renderTtfxPrsList() {
@@ -11471,6 +11596,7 @@ function renderTtfxPrsList() {
         escapeHtml(p.author),
         p.draft ? "draft" : "",
         p.outdated ? "older commit" : "",
+        ttfxPrStackBadge(p).trim(),
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
         escapeHtml(timeAgo(p.date)),
       ].filter(Boolean);
@@ -11508,8 +11634,8 @@ function renderTtfxPrsTable() {
       )
       .join("") +
     '<th class="num" title="Tasks with a robust improvement / regression; the list is in the tooltip">Tasks</th>' +
-    '<th class="col-secondary">Measured</th></tr>';
-  const cols = 6 + metrics.length;
+    '<th class="col-secondary">Measured</th><th></th></tr>';
+  const cols = 7 + metrics.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
@@ -11529,20 +11655,22 @@ function renderTtfxPrsTable() {
     vs.includes("regression") ? "ttfx-up" : vs.includes("improvement") ? "ttfx-down" : "";
   let html = "";
   ttfxPrs.prs.forEach((p, i) => {
-    html += `<tr data-job-url="${escapeHtml(p.web_url || "")}">`;
+    html += `<tr data-pr="${p.pr}" data-job-url="${escapeHtml(p.web_url || "")}">`;
     html += `<td class="num">${i + 1}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
       (p.outdated
         ? `<span class="ttfx-pr-badge" title="Measured on ${escapeHtml(p.head.commit.slice(0, 10))}; the pull request has newer commits">older commit</span> `
-        : "");
+        : "") +
+      ttfxPrStackBadge(p);
     const ci = ttfxPrCi(p);
     const ciDot = ci.url
       ? `<a class="ttfx-pr-ci" href="${escapeHtml(ci.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${ci.dot}</a>`
       : `<span class="ttfx-pr-ci">${ci.dot}</span>`;
     html += `<td class="msg">${ciDot} <a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
-    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}><b>${p.score == null ? "–" : pct(p.score)}</b></td>`;
+    const scoreTitle = p.stack ? ` title="${escapeHtml(ttfxPrStackTitle(p))}"` : "";
+    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "–" : pct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
     for (const m of metrics) {
       const on = p.suite[m];
       const off = p.suite[m + "_gcoff"];
@@ -11572,6 +11700,7 @@ function renderTtfxPrsTable() {
     ].join("\n");
     html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
     html += `<td class="col-secondary" title="${escapeHtml(`${p.date}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
+    html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy</button></td>`;
     html += "</tr>";
   });
   tbody.innerHTML = html;
@@ -13786,20 +13915,26 @@ function prCardTtfxHtml(p, rank, total) {
   const better = p.tasks.filter((t) => t.improvements.length).length;
   const worse = p.tasks.filter((t) => t.regressions.length).length;
   const verdict = { improvement: "pr-card-down", regression: "pr-card-up" }[p.verdict] || "";
-  const tags = [p.draft ? "draft" : "", p.outdated ? "older commit" : ""]
-    .filter(Boolean)
-    .map((t) => `<span class="ttfx-pr-badge">${t}</span>`)
-    .join(" ");
+  const tags =
+    [p.draft ? "draft" : "", p.outdated ? "older commit" : ""]
+      .filter(Boolean)
+      .map((t) => `<span class="ttfx-pr-badge">${t}</span>`)
+      .join(" ") +
+    " " +
+    ttfxPrStackBadge(p);
   return `<div class="pr-card-head"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> <span class="pr-card-muted">${escapeHtml(p.author)}</span> ${tags}</div>
     <div class="pr-card-title">${escapeHtml(p.title)}</div>
     <div class="pr-card-score">
       <span>TTFX rank <b>${rank}</b> of ${total}</span>
-      <span>score <b>${p.score == null ? "–" : formatTtfxPct((p.score - 1) * 100)}</b></span>
+      <span>score${p.stack ? " vs master" : ""} <b>${ttfxScorePct(p.score)}</b></span>
+      ${p.stack ? `<span>alone <b>${ttfxScorePct(p.own_score)}</b></span>` : ""}
       <span class="${verdict}">${escapeHtml(p.verdict)}</span>
     </div>
     ${prCardMetricsTable(p)}
     <div class="pr-card-muted">Robust task changes: <span class="${better ? "pr-card-down" : ""}">${better} better</span>, <span class="${worse ? "pr-card-up" : ""}">${worse} worse</span></div>
     <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>
+    ${p.stack ? `<div class="pr-card-muted">${escapeHtml(ttfxPrStackTitle(p))}</div>` : ""}
+    <div><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}">Copy summary for GitHub</button></div>
     ${prCardOpenLink(p.pr)}
     ${IS_TOUCH && p.web_url ? `<div><a href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Open the TTFX job on Buildkite</a></div>` : ""}`;
 }

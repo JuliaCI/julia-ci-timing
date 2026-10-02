@@ -145,6 +145,8 @@
           "description": "The latest finished TTFX comparison of every open julia pull request that has one: the head against the master build of the merge-base, as the julia-pr TTFX job judged it. Current state only; a closed pull request's row is deleted.",
           "columns": {
             "pr_head_sha": "the pull request's head now; differs from head_commit when it has moved on since the job",
+            "head_ref": "the pull request's branch, empty when it is in a fork",
+            "base_ref": "the branch it targets; not master when it is stacked on another pull request, which the job then measured it against",
             "verdict": "improvement, regression or same",
             "n_improvements": "robust improvements, per task and metric plus suite metrics",
             "n_regressions": "robust regressions, counted the same way",

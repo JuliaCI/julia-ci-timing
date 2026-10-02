@@ -436,6 +436,14 @@ function pr_row(pull, build, job, compare, meta)
             JSON3.write(something(get(compare, :suite, nothing), Dict())), JSON3.write(flagged))
 end
 
+# A pull request's branch, if it is in JuliaLang/julia, where another pull request can
+# target it; a fork's branch names can repeat ours
+function pr_head_ref(pull)
+    repo = get(pull.head, :repo, nothing)
+    repo === nothing && return ""
+    return String(get(repo, :full_name, "")) == "JuliaLang/julia" ? String(pull.head.ref) : ""
+end
+
 # Bring ttfx_prs up to date: a row for every open pull request whose latest finished
 # TTFX job produced a comparison, none for closed ones.
 function refresh_prs!(db)
@@ -468,13 +476,15 @@ function refresh_prs!(db)
             upsert!(stmt, (r..., seq))
         end
         DBInterface.execute(db, "DELETE FROM ttfx_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
-        meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, change_seq = ?5 WHERE pr_number = ?6 " *
-                                       "AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4)")
+        meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, head_ref = ?5, base_ref = ?6, change_seq = ?7 " *
+                                       "WHERE pr_number = ?8 AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4 " *
+                                       "OR head_ref IS NOT ?5 OR base_ref IS NOT ?6)")
         for r in query(db, "SELECT pr_number FROM ttfx_prs")
             p = pulls[Int(r.pr_number)]
             user = get(p, :user, nothing)
             DBInterface.execute(meta, (String(something(get(p, :title, ""), "")), user === nothing ? "" : String(user.login),
-                                       get(p, :draft, false) === true ? 1 : 0, String(p.head.sha), seq, Int(r.pr_number)))
+                                       get(p, :draft, false) === true ? 1 : 0, String(p.head.sha), pr_head_ref(p), String(p.base.ref),
+                                       seq, Int(r.pr_number)))
         end
     end
     refresh_ci!(db)

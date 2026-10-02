@@ -353,6 +353,8 @@ CREATE TABLE IF NOT EXISTS ttfx_prs (
     author           TEXT NOT NULL DEFAULT '',
     draft            INTEGER NOT NULL DEFAULT 0,
     pr_head_sha      TEXT NOT NULL DEFAULT '',   -- the pull request's head now; the job may be older
+    head_ref         TEXT NOT NULL DEFAULT '',   -- its branch, '' when it is not in JuliaLang/julia
+    base_ref         TEXT NOT NULL DEFAULT '',   -- the branch it targets; not master when it is stacked on another pull request
     build            INTEGER NOT NULL,           -- julia-pr build number
     job_uuid         TEXT NOT NULL,
     job_state        TEXT NOT NULL,
