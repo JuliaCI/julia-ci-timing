@@ -11700,7 +11700,7 @@ function renderTtfxPrsTable() {
     ].join("\n");
     html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
     html += `<td class="col-secondary" title="${escapeHtml(`${p.date}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
-    html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy</button></td>`;
+    html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button></td>`;
     html += "</tr>";
   });
   tbody.innerHTML = html;
