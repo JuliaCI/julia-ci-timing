@@ -2717,7 +2717,7 @@ a {
 }
 .ttfx-prs-flat-toggle td {
   text-align: center;
-  padding: 4px;
+  padding: 12px 4px;
 }
 .ttfx-prs-flat-toggle button {
   border: 1px dashed var(--color-border-default);
