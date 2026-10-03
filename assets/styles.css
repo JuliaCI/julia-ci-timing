@@ -2715,6 +2715,23 @@ a {
 .ttfx-stats tr.ttfx-pr-parent-hl td:first-child {
   box-shadow: inset 3px 0 0 var(--color-attention-emphasis);
 }
+.ttfx-prs-flat-toggle td {
+  text-align: center;
+  padding: 4px;
+}
+.ttfx-prs-flat-toggle button {
+  border: 1px dashed var(--color-border-default);
+  border-radius: 6px;
+  padding: 2px 12px;
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ttfx-prs-flat-toggle button:hover {
+  color: var(--color-fg-default);
+  border-color: var(--color-fg-muted);
+}
 .ttfx-pr-copy {
   border: 1px solid var(--color-border-default);
   border-radius: 6px;

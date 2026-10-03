@@ -11576,6 +11576,26 @@ for (const [type, on] of [
   });
 }
 
+// Pull requests whose score is within 0.75% of no change are folded into one row
+// in the middle of the ranking, so the table opens on the winners and losers
+const TTFX_PR_FLAT = 0.0075;
+let ttfxPrsShowFlat = false;
+const ttfxPrIsFlat = (p) => p.score != null && Math.abs(p.score - 1) < TTFX_PR_FLAT;
+
+function toggleTtfxPrsFlat() {
+  ttfxPrsShowFlat = !ttfxPrsShowFlat;
+  renderTtfxPrsTable();
+}
+
+// The row that folds or unfolds them, placed where the first of them ranks
+function ttfxPrsFlatToggleRow(cols) {
+  const n = ttfxPrs.prs.filter(ttfxPrIsFlat).length;
+  const text = ttfxPrsShowFlat
+    ? `Hide the ${n} pull requests with ~no change`
+    : `Show ${n} pull requests with ~no change (within ±${TTFX_PR_FLAT * 100}%)`;
+  return `<tr class="ttfx-prs-flat-toggle"><td colspan="${cols}"><button type="button" onclick="toggleTtfxPrsFlat()">${ttfxPrsShowFlat ? "▴" : "▾"} ${text}</button></td></tr>`;
+}
+
 // The phone layout of the ranked pull requests: two lines each, the title
 // and the score, then who, what state and when. A tap opens the card.
 function renderTtfxPrsList() {
@@ -11594,6 +11614,9 @@ function renderTtfxPrsList() {
   document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
   tbody.innerHTML = ttfxPrs.prs
     .map((p, i) => {
+      const firstFlat = ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]));
+      const toggle = firstFlat ? ttfxPrsFlatToggleRow(1) : "";
+      if (ttfxPrIsFlat(p) && !ttfxPrsShowFlat) return toggle;
       const change = p.score == null ? null : (p.score - 1) * 100;
       const better = p.tasks.filter((t) => t.improvements.length).length;
       const worse = p.tasks.filter((t) => t.regressions.length).length;
@@ -11605,7 +11628,7 @@ function renderTtfxPrsList() {
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
         escapeHtml(timeAgo(p.date)),
       ].filter(Boolean);
-      return `<tr class="m-list-row" data-pr="${p.pr}"><td><div class="m-item">
+      return `${toggle}<tr class="m-list-row" data-pr="${p.pr}"><td><div class="m-item">
         <span class="m-item-rank">${i + 1}</span>
         <div class="m-item-main">
           <div class="m-item-title"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
@@ -11660,6 +11683,8 @@ function renderTtfxPrsTable() {
     vs.includes("regression") ? "ttfx-up" : vs.includes("improvement") ? "ttfx-down" : "";
   let html = "";
   ttfxPrs.prs.forEach((p, i) => {
+    if (ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]))) html += ttfxPrsFlatToggleRow(cols);
+    if (ttfxPrIsFlat(p) && !ttfxPrsShowFlat) return;
     html += `<tr data-pr="${p.pr}" data-job-url="${escapeHtml(p.web_url || "")}">`;
     html += `<td class="num">${i + 1}</td>`;
     const badges =
