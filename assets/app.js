@@ -11576,9 +11576,9 @@ for (const [type, on] of [
   });
 }
 
-// Pull requests whose score is within 0.75% of no change are folded into one row
+// Pull requests whose score is within 0.25% of no change are folded into one row
 // in the middle of the ranking, so the table opens on the winners and losers
-const TTFX_PR_FLAT = 0.0075;
+const TTFX_PR_FLAT = 0.0025;
 let ttfxPrsShowFlat = false;
 const ttfxPrIsFlat = (p) => p.score != null && Math.abs(p.score - 1) < TTFX_PR_FLAT;
 
