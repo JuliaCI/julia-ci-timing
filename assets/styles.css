@@ -4153,6 +4153,11 @@ a {
   .balance-card {
     flex-direction: column;
   }
+  /* In a column a zero flex basis would override the charts' fixed height */
+  .balance-chart,
+  .backlog-section .backlog-chart-wrapper {
+    flex: none;
+  }
   .balance-stats {
     flex-basis: auto;
   }
