@@ -2710,7 +2710,7 @@ a {
   font-weight: 600;
 }
 .ttfx-stats tr.ttfx-pr-parent-hl td {
-  background: color-mix(in srgb, var(--color-attention-emphasis) 25%, transparent);
+  background: color-mix(in srgb, var(--color-attention-emphasis) var(--ttfx-pr-hl, 25%), transparent);
 }
 .ttfx-stats tr.ttfx-pr-parent-hl td:first-child {
   box-shadow: inset 3px 0 0 var(--color-attention-emphasis);

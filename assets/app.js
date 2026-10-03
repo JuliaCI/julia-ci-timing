@@ -11468,7 +11468,7 @@ function ttfxPrStackTitle(p) {
 function ttfxPrStackBadge(p) {
   if (!p.stack) return "";
   const label = p.stack.parents.length ? `stacked on #${p.stack.parents[0]}` : "stacked";
-  const parent = p.stack.parents.length ? ` data-parent-pr="${p.stack.parents[0]}"` : "";
+  const parent = p.stack.parents.length ? ` data-parent-prs="${p.stack.parents.join(",")}"` : "";
   return `<span class="ttfx-pr-badge ttfx-pr-stacked"${parent} title="${escapeHtml(ttfxPrStackTitle(p))}">↳ ${label}${p.stack.complete && !p.stack.exact ? " ≈" : ""}</span> `;
 }
 
@@ -11558,16 +11558,21 @@ document.addEventListener(
   true,
 );
 
-// Hovering a stacked pull request's badge lights up the row of the one below it
+// Hovering a stacked pull request's badge lights up the rows of the ones below it,
+// fainter the further down the stack
 for (const [type, on] of [
   ["mouseover", true],
   ["mouseout", false],
 ]) {
   document.addEventListener(type, (e) => {
-    const badge = e.target.closest && e.target.closest("[data-parent-pr]");
+    const badge = e.target.closest && e.target.closest("[data-parent-prs]");
     if (!badge) return;
-    const row = document.querySelector(`#ttfx-stats-tbody tr[data-pr="${badge.dataset.parentPr}"]`);
-    if (row) row.classList.toggle("ttfx-pr-parent-hl", on);
+    badge.dataset.parentPrs.split(",").forEach((pr, depth) => {
+      const row = document.querySelector(`#ttfx-stats-tbody tr[data-pr="${pr}"]`);
+      if (!row) return;
+      row.classList.toggle("ttfx-pr-parent-hl", on);
+      row.style.setProperty("--ttfx-pr-hl", on ? `${Math.max(25 / 2 ** depth, 6)}%` : "");
+    });
   });
 }
 
@@ -11706,7 +11711,87 @@ function renderTtfxPrsTable() {
   tbody.innerHTML = html;
   tbody.querySelectorAll("tr[data-job-url]").forEach((tr) => {
     if (tr.dataset.jobUrl) tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
+    const p = ttfxPrs.prs.find((x) => x.pr === Number(tr.dataset.pr));
+    tr.addEventListener("mouseenter", () => p && showTtfxPrPoint(p));
+    tr.addEventListener("mouseleave", hideTtfxPrPoint);
   });
+}
+
+// Where a pull request's result would sit on the summary panels, drawn as one
+// more point after the latest build while its row is hovered: the latest build
+// scaled by its suite ratio, or for a stacked one by the estimate of the whole
+// stack against master.
+const TTFX_PR_POINT_KEYS = ["pr-link", "pr-point", "pr-change"];
+function showTtfxPrPoint(p) {
+  if (ttfxMode !== "summary") return;
+  const chained = p.stack ? (p.stack.complete ? p.stack.suite : null) : p.suite;
+  if (!chained) return;
+  const isDark = isDarkMode();
+  const color = isDark ? "#58a6ff" : "#0969da";
+  for (const [metric, chart] of Object.entries(ttfxSummaryCharts)) {
+    const r = chained[metric];
+    const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
+    if (!r || !r.geomeans.length || !suite || !suite.data.length) continue;
+    const ratio = Math.exp(r.geomeans.reduce((a, g) => a + Math.log(g), 0) / r.geomeans.length);
+    const first = suite.data[0];
+    const last = suite.data[suite.data.length - 1];
+    const seconds = last.s * ratio;
+    const y = ttfxNormalized ? (seconds / first.s - 1) * 100 : seconds;
+    // A short step past the latest build, so it reads as the next point. The
+    // axis ends at the data, so it is widened to fit the point and its number
+    // until the row is left.
+    const step = (last.x - first.x) * 0.03;
+    const x = last.x + step;
+    // The end that leaves about 64 px right of the point once the axis is wider
+    const xs = chart.scales.x;
+    const f = 64 / xs.width;
+    const max = (x - f * xs.min) / (1 - f);
+    if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
+    if (xs.max < max) chart.options.scales.x.max = max;
+    const notes = chart.options.plugins.annotation.annotations;
+    notes["pr-link"] = {
+      type: "line",
+      xMin: last.x,
+      xMax: x,
+      yMin: last.y,
+      yMax: y,
+      borderColor: color,
+      borderWidth: 1.5,
+      borderDash: [4, 3],
+    };
+    notes["pr-point"] = {
+      type: "point",
+      xValue: x,
+      yValue: y,
+      radius: 5,
+      backgroundColor: color,
+      borderColor: isDark ? "#f0f6fc" : "#1f2328",
+      borderWidth: 1.5,
+    };
+    // Approximate: the pull request's base may be older than the latest build
+    notes["pr-change"] = {
+      type: "label",
+      xValue: x,
+      yValue: y,
+      position: { x: "start", y: "center" },
+      xAdjust: 8,
+      content: `~${formatTtfxPct((ratio - 1) * 100)}`,
+      color,
+      font: { size: 11, weight: "bold" },
+    };
+    chart.update("none");
+  }
+}
+
+function hideTtfxPrPoint() {
+  for (const chart of Object.values(ttfxSummaryCharts)) {
+    const notes = chart.options.plugins.annotation.annotations;
+    if (!notes["pr-point"]) continue;
+    for (const k of TTFX_PR_POINT_KEYS) delete notes[k];
+    chart.options.scales.x.max = chart._prMax;
+    delete chart._prMax;
+    chart.update("none");
+  }
 }
 
 // Light up build `build` on the per-task chart or on every summary panel
