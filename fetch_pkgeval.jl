@@ -1,7 +1,11 @@
 #!/usr/bin/env julia
-# Fetch PkgEval results from NanosoldierReports
-# Uses git ls-tree to enumerate dates, then fetches db.json files concurrently
-# via GitHub raw content URLs. Extracts per-date status counts (ok/fail/crash/skip/kill)
+# Fetch daily PkgEval results: Nanosoldier's from NanosoldierReports (until
+# 2026-09), and the PkgEval farm's after that.
+# Uses git ls-tree to enumerate Nanosoldier's dates, then fetches db.json files
+# concurrently via GitHub raw content URLs. The farm lists its dailies in an
+# index on its site and publishes each one's summary (daily.json, the shape of
+# Nanosoldier's db.json) next to its report; both are stored under the same
+# by_date/YYYY-MM/DD paths. Extracts per-date status counts (ok/fail/crash/skip/kill)
 # and the per-package rows. Reports imported from the legacy summary file have
 # no package rows; `--backfill-packages N` re-fetches the newest N such
 # reports (about 1.5 MB and 13k rows each).
@@ -17,6 +21,7 @@ using SQLite, DBInterface
 const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
 const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports")
 const RAW_BASE = "https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/pkgeval/by_date"
+const FARM_INDEX = get(ENV, "PKGEVAL_FARM_INDEX", "https://pkgeval-reports.julialang.org/daily/index.json")
 const CONCURRENCY = 20
 
 function ensure_clone()
@@ -75,8 +80,25 @@ function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs..
     return resp
 end
 
-function fetch_db_json(date_path::String; client=nothing)
-    url = "$RAW_BASE/$date_path/db.json"
+# The farm's dailies as date path => (summary URL, Julia version). The summaries leave
+# the version out (the index has it). Empty if the index can't be read, so a farm
+# outage doesn't stop Nanosoldier's history from being ingested.
+function farm_dailies()
+    dailies = Dict{String,Tuple{String,String}}()
+    try
+        resp = http_get_retry(FARM_INDEX; connect_timeout=15, read_idle_timeout=30)
+        resp.status == 200 || (@warn "Could not read the farm's daily index" status=resp.status; return dailies)
+        for entry in JSON3.read(String(resp.body))
+            date = Date(String(entry.date))
+            dailies[Dates.format(date, dateformat"yyyy-mm/dd")] = (String(entry.summary), String(entry.version))
+        end
+    catch e
+        @warn "Could not read the farm's daily index" error=e
+    end
+    return dailies
+end
+
+function fetch_db_json(date_path::String; client=nothing, url="$RAW_BASE/$date_path/db.json")
     try
         resp = http_get_retry(url; client, connect_timeout=15, read_idle_timeout=30)
         resp.status == 200 || return nothing
@@ -205,6 +227,11 @@ function main(args=ARGS)
     # Known by path: a db.json without a date field would otherwise be new forever
     known_paths = Set(String(r.path) for r in query(db, "SELECT path FROM pkgeval_reports"))
     new_dates = filter(d -> "by_date/" * d ∉ known_paths, all_dates)
+    # Nanosoldier's report wins if both ever cover a date
+    farm = farm_dailies()
+    nanosoldier_dates = Set(all_dates)
+    filter!(((d, _),) -> d ∉ nanosoldier_dates, farm)
+    append!(new_dates, sort!([d for d in keys(farm) if "by_date/" * d ∉ known_paths]))
     @info "New dates to process" count=length(new_dates) known=length(known_paths)
     backfill = backfill_count(args)
     if backfill > 0
@@ -222,7 +249,9 @@ function main(args=ARGS)
     # keep-alive connections would otherwise die noisily when the process exits
     client = HTTP.Client()
     results = asyncmap(new_dates; ntasks=CONCURRENCY) do date_path
-        db_json = fetch_db_json(date_path; client)
+        from_farm = haskey(farm, date_path)
+        db_json = from_farm ? fetch_db_json(date_path; client, url=farm[date_path][1]) :
+                              fetch_db_json(date_path; client)
         n = Threads.atomic_add!(done, 1) + 1
         if n % 50 == 0 || n == total
             @info "Progress: $n/$total"
@@ -230,6 +259,7 @@ function main(args=ARGS)
         db_json === nothing && return nothing
         summary = count_statuses(db_json, date_path)
         summary === nothing && return nothing
+        from_farm && isempty(summary["version"]) && (summary["version"] = farm[date_path][2])
         build = get(db_json, :build, nothing)
         sha = build === nothing ? "" : string(get(build, :sha, ""))
         pkgs, reasons = package_rows(db_json)
