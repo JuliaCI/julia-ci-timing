@@ -7456,6 +7456,25 @@ function nanosoldierReportUrl(type, dateOrPath) {
   return `https://github.com/JuliaCI/NanosoldierReports/blob/master/${type}/by_date/${yyyy}-${mm}/${dd}/report.md`;
 }
 
+// Nanosoldier's last PkgEval daily was 2026-09-09; the PkgEval farm's dailies start
+// no earlier than this date, and their reports live on the farm's site rather than
+// in NanosoldierReports.
+const PKGEVAL_FARM_FIRST = "2026-10-01";
+
+function pkgevalReportUrl(dateOrPath) {
+  let date;
+  if (typeof dateOrPath === "string" && dateOrPath.includes("/")) {
+    const [ym, dd] = dateOrPath.split("/");
+    date = `${ym}-${dd.padStart(2, "0")}`;
+  } else if (typeof dateOrPath === "string") {
+    date = dateOrPath.slice(0, 10);
+  } else {
+    date = (dateOrPath instanceof Date ? dateOrPath : new Date(dateOrPath)).toISOString().slice(0, 10);
+  }
+  if (date >= PKGEVAL_FARM_FIRST) return `https://pkgeval-reports.julialang.org/?run=daily-${date}`;
+  return nanosoldierReportUrl("pkgeval", dateOrPath);
+}
+
 // Latest methodology-change boundary (ms timestamp) among `notes`, or null.
 function benchNotesFadeTs(notes) {
   let ts = null;
@@ -9999,7 +10018,7 @@ function renderPkgevalPackage() {
   const rows = changes
     .slice(0, 200)
     .map((h) => {
-      const url = nanosoldierReportUrl("pkgeval", h.date_path || h.date);
+      const url = pkgevalReportUrl(h.date_path || h.date);
       return `<tr class="clickable" data-url="${escapeHtml(url)}">
         <td>${escapeHtml(h.date)}</td>
         <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
@@ -10064,7 +10083,7 @@ async function loadPkgevalPopular() {
       </tr>`;
     })
     .join("");
-  const url = nanosoldierReportUrl("pkgeval", d.date_path || d.date);
+  const url = pkgevalReportUrl(d.date_path || d.date);
   const weighted =
     d.weighted_pass_pct != null
       ? `${d.weighted_pass_pct.toFixed(1)}% of user downloads (among the ${d.weight_n.toLocaleString()} most downloaded packages) went to packages that passed`
@@ -10285,7 +10304,7 @@ function updatePkgevalChart() {
           const r = reports[idx];
           if (r) {
             window.open(
-              nanosoldierReportUrl("pkgeval", r.date_path || r.date),
+              pkgevalReportUrl(r.date_path || r.date),
               "_blank",
             );
           }
@@ -12336,14 +12355,14 @@ function overviewPkgevalCard(src) {
     title: "PkgEval",
     status,
     description:
-      "Nanosoldier tests every registered package against Julia master, every 2 to 3 days.",
+      "Every registered package tested against Julia master: by the PkgEval farm daily since October 2026, by Nanosoldier every 2 to 3 days before.",
     headline: passPct != null ? `${passPct.toFixed(1)}%` : "—",
     headlineLabel: `of ${last.total} packages passing${overviewPkgevalWeighted()}`,
     delta,
     spark,
     donut,
     rows: [
-      ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("pkgeval", last.date_path || last.date), last.date), last.date, cadence)],
+      ["Latest report", overviewReportRow(overviewExtLink(pkgevalReportUrl(last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
       ["Change over a week", change],
       ["Popular packages", overviewPkgevalPopular()],
@@ -13615,7 +13634,7 @@ function commitPkgevalHtml(data) {
       ? `<p class="commit-line"><span class="commit-worse">${p.newly_broken_count} newly broken</span> (passed on ${escapeHtml(p.previous.date)}): ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}</p>`
       : `<p class="commit-line">No packages newly broken since ${escapeHtml(p.previous.date)}.</p>`;
   }
-  const links = `${overviewExtLink(nanosoldierReportUrl("pkgeval", p.date_path), "Report")} · ${overviewTabLink("pkgeval", "PkgEval")}`;
+  const links = `${overviewExtLink(pkgevalReportUrl(p.date_path), "Report")} · ${overviewTabLink("pkgeval", "PkgEval")}`;
   return commitCard("PkgEval", `<p class="commit-line">${text}</p>${broken}`, { links });
 }
 

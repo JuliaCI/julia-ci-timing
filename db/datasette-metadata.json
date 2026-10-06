@@ -95,7 +95,7 @@
         "pkgeval_reports": {
           "description": "PkgEval daily runs of the whole package ecosystem against Julia master, with the count of each outcome.",
           "columns": {
-            "path": "the report's directory under NanosoldierReports/pkgeval, such as by_date/2026-09/09",
+            "path": "the report's directory, such as by_date/2026-09/09: under NanosoldierReports/pkgeval until September 2026, then the PkgEval farm's dailies under the same scheme (report at https://pkgeval-reports.julialang.org/?run=daily-YYYY-MM-DD)",
             "commit_sha": "the Julia commit tested (8 characters on old reports)"
           }
         },
