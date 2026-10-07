@@ -2685,6 +2685,69 @@ a {
   color: var(--color-fg-muted);
   font-size: 11px;
 }
+.ttfx-build-popup {
+  max-width: min(560px, calc(100vw - 32px));
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.ttfx-build-popup h3 {
+  padding-right: 24px;
+}
+.ttfx-popup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.popup-info .ttfx-popup-actions a.btn {
+  color: var(--color-fg-default);
+}
+.popup-info .ttfx-popup-actions a.btn:hover {
+  text-decoration: none;
+}
+.ttfx-popup-table {
+  width: 100%;
+  margin: 10px 0 4px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ttfx-popup-table th,
+.ttfx-popup-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--color-border-muted);
+  text-align: left;
+  font-weight: normal;
+}
+.ttfx-popup-table thead th {
+  color: var(--color-fg-muted);
+}
+.ttfx-popup-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ttfx-popup-table .ttfx-up {
+  color: var(--color-danger-fg);
+}
+.ttfx-popup-table .ttfx-down {
+  color: var(--color-success-fg);
+}
+.ttfx-popup-muted {
+  color: var(--color-fg-muted);
+}
+.popup-info .ttfx-popup-hint {
+  margin-top: 2px;
+  font-size: 11px;
+}
+.ttfx-popup-note {
+  color: var(--color-attention-fg);
+}
+.ttfx-popup-failed ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .ttfx-stats-caption {
   padding: 8px 12px;
   font-size: 12px;

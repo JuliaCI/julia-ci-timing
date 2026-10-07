@@ -4627,7 +4627,7 @@ makeResizablePanel({
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    for (const id of ["popup-overlay", "shortcuts-overlay", "bench-methodology-popup-overlay"]) {
+    for (const id of ["popup-overlay", "shortcuts-overlay", "bench-methodology-popup-overlay", "ttfx-build-popup-overlay"]) {
       const el = document.getElementById(id);
       el.classList.remove("visible");
       el.setAttribute("aria-hidden", "true");
@@ -10391,6 +10391,90 @@ function ttfxJobUrl(b) {
   return `https://buildkite.com/julialang/julia-ci/builds/${b.build}#${b.job_id}`;
 }
 
+// The pull request a master commit merged, from its subject ("... (#123)" or
+// "Merge pull request #123 from ...")
+function ttfxBuildPr(b) {
+  const m = /\(#(\d+)\)|^Merge pull request #(\d+) /.exec(b.message || "");
+  return m ? Number(m[1] || m[2]) : null;
+}
+
+// Details of the build behind a clicked chart point: its links, the suite
+// geomeans of every metric with the change from the build before, the clicked
+// task's own values, failures and notes
+function showTtfxBuildPopup(b, task) {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const i = builds.indexOf(b);
+  const pr = ttfxBuildPr(b);
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+  const failed = b.failed ? Object.keys(b.failed).sort() : [];
+  const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
+
+  let html = '<div class="ttfx-popup-actions">';
+  html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener">Buildkite job</a>`;
+  if (pr) html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${pr}" target="_blank" rel="noopener">GitHub PR #${pr}</a>`;
+  html += `<a class="btn" href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener">Commit</a>`;
+  html += "</div>";
+  html += row("Title", escapeHtml(b.message || ""));
+  html += row(
+    "Commit",
+    `<code>${escapeHtml(b.commit.slice(0, 10))}</code> (${commitLink(b.commit, "everything recorded for it")})`,
+  );
+  html += row("Date", `${escapeHtml(b.date)} UTC`);
+  html += row("Version", escapeHtml(b.version || ""));
+  html += row("Build", `#${b.build}, job ${escapeHtml(b.state)}`);
+  html += row("Agent", escapeHtml([b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")));
+  html += row("Clicked task", task ? escapeHtml(task) : "");
+  html += row("Tasks", `${nOk} measured${failed.length ? `, ${failed.length} failed` : ""}${b.blocks ? `, ${b.blocks} ABBA blocks` : ""}`);
+
+  html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
+  html += "<th class=\"num\">Suite geomean</th><th class=\"num\">vs previous</th>";
+  if (task) html += '<th class="num">Clicked task</th>';
+  html += "</tr></thead><tbody>";
+  for (const key of Object.keys(TTFX_METRICS)) {
+    const common = ttfxSuiteTasks(builds, tasks, key);
+    const g = ttfxGeomean(b, common, key);
+    const off = ttfxShowsGcOff(key) ? ttfxGeomean(b, common, key, true) : null;
+    let prev = null;
+    for (let j = i - 1; j >= 0 && prev == null; j--) prev = ttfxGeomean(builds[j], common, key);
+    const pct = g != null && prev != null ? (g / prev - 1) * 100 : null;
+    const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
+    html += `<tr><th title="Over ${common.length} tasks">${escapeHtml(ttfxMetricLabel(key))}</th>`;
+    html += `<td class="num">${formatTtfxSeconds(g)}${offHtml(off)}</td>`;
+    html += `<td class="num ${ttfxPctClass(pct)}">${formatTtfxPct(pct)}</td>`;
+    if (task) {
+      const off = ttfxShowsGcOff(key) ? ttfxValue(b, task, key, true) : null;
+      html += `<td class="num">${formatTtfxSeconds(ttfxValue(b, task, key))}${offHtml(off)}</td>`;
+    }
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  if (tasks.length && Object.keys(TTFX_METRICS).some((k) => ttfxShowsGcOff(k)))
+    html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
+
+  for (const a of ttfxAnnotationsFor(b)) html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}</div>`;
+  if (failed.length) {
+    html += `<details class="ttfx-popup-failed"><summary>${failed.length} failed task${failed.length > 1 ? "s" : ""}</summary><ul>`;
+    for (const t of failed) html += `<li><b>${escapeHtml(t)}</b>: ${escapeHtml(b.failed[t])}</li>`;
+    html += "</ul></details>";
+  }
+
+  document.getElementById("ttfx-build-popup-title").textContent = `TTFX build ${b.date}`;
+  const body = document.getElementById("ttfx-build-popup-body");
+  body.innerHTML = html;
+  // The commit page replaces the tab under the popup
+  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function closeTtfxBuildPopup() {
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.remove("visible");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
 function ttfxAnnotationsFor(b) {
   return ttfxAnnotations.filter((a) => a.job_id === b.job_id);
 }
@@ -10985,7 +11069,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(...wrapTooltipText(b.message));
             for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-            lines.push(IS_TOUCH ? "Tap again to open the Buildkite job" : "Click to open the Buildkite job");
+            lines.push(IS_TOUCH ? "Tap again for details and links" : "Click for details and links");
             return lines;
           },
         },
@@ -11011,8 +11095,12 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
     },
     onClick: tapAgainToOpen((evt, elements, chart) => {
       if (!elements.length) return;
-      const b = chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
-      if (b) window.open(ttfxJobUrl(b), "_blank", "noopener");
+      const ds = chart.data.datasets[elements[0].datasetIndex];
+      const b = ds.data[elements[0].index].build;
+      if (!b) return;
+      // A task's line (or its GC-off twin) adds that task's values
+      const task = ds._common ? null : (ds._twinOf ?? ds.label);
+      showTtfxBuildPopup(b, ttfxAllTasks().includes(task) ? task : null);
     }),
     onHover: (evt, elements, chart) => {
       evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";

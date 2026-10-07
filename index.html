@@ -393,6 +393,26 @@
     </div>
 
     <div
+      class="popup-overlay"
+      id="ttfx-build-popup-overlay"
+      onclick="if(event.target.id==='ttfx-build-popup-overlay') closeTtfxBuildPopup()"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ttfx-build-popup-title"
+      aria-hidden="true"
+    >
+      <div class="popup ttfx-build-popup" onclick="event.stopPropagation()">
+        <button
+          class="popup-close"
+          onclick="closeTtfxBuildPopup()"
+          aria-label="Close"
+        >×</button>
+        <h3 id="ttfx-build-popup-title">TTFX build</h3>
+        <div class="popup-info" id="ttfx-build-popup-body"></div>
+      </div>
+    </div>
+
+    <div
       class="shortcuts-overlay"
       id="shortcuts-overlay"
       role="dialog"
