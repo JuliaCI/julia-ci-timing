@@ -15,6 +15,12 @@
       "job_id": "01a0b7a2-b032-4f9d-bfe4-43bfbbe72d94",
       "label": "TTFX driver #635",
       "description": "The TTFX driver keeps its instrumentation out of the timed windows (julia-buildkite#635), removing the fixed cost of about a millisecond of run per task that julia-buildkite#634 had added."
+    },
+    {
+      "job_id": "01a11520-e09f-4360-902b-7ba45dd0ca5e",
+      "label": "GPUArrays 12 / JLArrays 0.4",
+      "tasks": ["JLArrays/Matrix-Multiplication-On-Gpu-Like-Arrays"],
+      "description": "The JLArrays task resolved the newly registered GPUArrays v12.0.0 and JLArrays v0.4.0. Its load went from 0.9 s to 8.4 s (1.8 GB allocated, no extra compile time) and its precompile from 17.5 s to 27.2 s. The other tasks did not change, so this is not a Julia regression."
     }
   ]
 }
