@@ -6452,6 +6452,7 @@ const DASHBOARD_PARAMS = new Set([
   "tm", // ttfx metric
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
+  "th", // ttfx hide annotated jumps toggle
   "tg", // ttfx GC-off repeats toggle (retired; stripped from the URL)
   "tk", // ttfx selected tasks
   "tx", // ttfx excluded tasks (when most are selected)
@@ -10353,6 +10354,10 @@ let ttfxMode = "summary"; // "summary" | "tasks"
 let ttfxMetric = "precompile";
 let ttfxTimeRangeDays = 90;
 let ttfxNormalized = false;
+// Whether to scale each series before an annotated job so the step at that
+// job disappears; per task, the factors that do it for each value index
+let ttfxHideJumps = false;
+let ttfxJumpScales = new Map();
 // Load, run and warm also come from repeats with the GC disabled, drawn as
 // a thin twin of each line (the gap is what the GC cost); whether any
 // build in the data has them
@@ -10582,8 +10587,54 @@ function ttfxValue(b, task, metric = ttfxMetric, gcoff = false) {
   if (!v) return null;
   const m = TTFX_METRICS[metric];
   if (gcoff && m.gcoffIndex == null) return null;
-  const x = v[gcoff ? m.gcoffIndex : m.index];
-  return x == null || !(x > 0) ? null : x;
+  const i = gcoff ? m.gcoffIndex : m.index;
+  const x = v[i];
+  if (x == null || !(x > 0)) return null;
+  const scale = ttfxHideJumps && ttfxJumpScales.get(b)?.[task];
+  return scale ? x * scale[i] : x;
+}
+
+// The builds each side of an annotated job used to measure its step
+const TTFX_JUMP_WINDOW = 5;
+
+// For every build, per task, the factor per value index that removes the
+// steps at the annotated jobs after it. The latest values stay as measured
+// and earlier ones move, so the numbers of the current master stay real.
+// An annotation with `tasks` only adjusts those tasks.
+function computeTtfxJumpScales() {
+  ttfxJumpScales = new Map();
+  const builds = (ttfxData && ttfxData.builds) || [];
+  const median = (xs) => {
+    const s = [...xs].sort((a, b) => a - b);
+    const k = s.length >> 1;
+    return s.length % 2 ? s[k] : (s[k - 1] + s[k]) / 2;
+  };
+  // Up to TTFX_JUMP_WINDOW measured values of one task and index, walking from `from` by `step`
+  const near = (from, step, task, i) => {
+    const out = [];
+    for (let j = from; j >= 0 && j < builds.length && out.length < TTFX_JUMP_WINDOW; j += step) {
+      const x = builds[j].tasks && builds[j].tasks[task] && builds[j].tasks[task][i];
+      if (x != null && x > 0) out.push(x);
+    }
+    return out;
+  };
+  const cumulative = {};
+  for (let j = builds.length - 1; j >= 0; j--) {
+    const b = builds[j];
+    const own = {};
+    for (const t in cumulative) own[t] = cumulative[t].slice();
+    ttfxJumpScales.set(b, own);
+    for (const a of ttfxAnnotationsFor(b)) {
+      for (const t of a.tasks || ttfxAllTasks()) {
+        const scale = cumulative[t] || (cumulative[t] = new Array(7).fill(1));
+        for (let i = 0; i < scale.length; i++) {
+          const after = near(j, 1, t, i);
+          const before = near(j - 1, -1, t, i);
+          if (after.length >= 2 && before.length >= 2) scale[i] *= median(after) / median(before);
+        }
+      }
+    }
+  }
 }
 
 function ttfxMetricLabel(metric = ttfxMetric) {
@@ -10696,6 +10747,15 @@ function setTtfxTimeRange(val) {
   updateTtfxURL();
 }
 
+function toggleTtfxHideJumps() {
+  ttfxHideJumps = !ttfxHideJumps;
+  document.getElementById("ttfx-btn-hide-jumps").classList.toggle("btn-primary", ttfxHideJumps);
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
 function toggleTtfxNormalized() {
   ttfxNormalized = !ttfxNormalized;
   document.getElementById("ttfx-btn-normalize").textContent = ttfxNormalized
@@ -10751,6 +10811,7 @@ function updateTtfxURL() {
   setOrDelete("tm", ttfxMetric, ttfxMetric === "precompile");
   setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
   setOrDelete("tn", "1", !ttfxNormalized);
+  setOrDelete("th", "1", !ttfxHideJumps);
   // The GC-off toggle's parameter, from before both were drawn together
   url.searchParams.delete("tg");
   setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
@@ -10788,6 +10849,10 @@ function applyTtfxURLParams() {
     ttfxNormalized = true;
     document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
   }
+  if (params.get("th") === "1") {
+    ttfxHideJumps = true;
+    document.getElementById("ttfx-btn-hide-jumps").classList.add("btn-primary");
+  }
   if (params.get("ts") === "tasks") {
     ttfxMode = "tasks";
     document.getElementById("ttfx-mode-summary").classList.remove("btn-primary");
@@ -10818,6 +10883,7 @@ async function loadTtfxData() {
     ]);
 
     setUpdatedLabels();
+    computeTtfxJumpScales();
 
     const tasks = ttfxAllTasks();
     ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
@@ -10861,6 +10927,7 @@ async function reloadTtfxData() {
   const before = new Set(ttfxAllTasks());
   ttfxData = summary;
   setUpdatedLabels();
+  computeTtfxJumpScales();
   const tasks = ttfxAllTasks();
   ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
   if (tasks.some((t) => !before.has(t))) {

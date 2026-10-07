@@ -92,6 +92,9 @@ the row in the builds table. Use it for changes to the runners or to the
 benchmark itself that shift the numbers without a Julia commit being
 responsible: a macOS update on the agents, a change to how the driver runs the
 task scripts.
+An optional `tasks` list names the tasks the change affected. The TTFX tab's
+"Hide annotated jumps" toggle (`th=1`) scales each series before an annotated
+job by the step it measures there, over all tasks or just the listed ones.
 
 Agent snapshots (the CI → Workers tab) live under `data/agents/`, written
 by `fetch_agents.jl` from the Buildkite agents API on every update run.
