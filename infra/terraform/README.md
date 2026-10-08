@@ -24,16 +24,19 @@ On the host (all from cloud-init, files under `files/`):
 - `ci-timing-datasette`: public read-only SQL over the database, run from the
   ingest image. Its `ExecStartPre` restores the database, export and Caddy's
   certificates from the latest S3 backup on a fresh host.
-- `ci-timing-api`: the site's API (`db/serve.jl`) from the same image, proxied
-  at `/api/`; the browser reads the database through it with a time window.
-  The `/data/` files are for scripts.
+- `ci-timing-api@<port>`: the site's API (`db/serve.jl`) from the same image,
+  proxied at `/api/`; the browser reads the database through it with a time
+  window. The `/data/` files are for scripts. One instance runs at a time, on
+  one of the two ports Caddy lists; a deploy starts the new image's server on
+  the other port and switches once it answers `/api/ready`.
 - `ci-timing-ingest.timer`: every hour, runs the image (`fetch_*.jl`,
   then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`, then
   `ci-timing-backup` uploads `runtime/latest.tar.gz` and publishes
   `/data/ci-timing.sqlite.gz`.
 - `ci-timing-archive.timer`: daily dated copy of the latest backup.
 - `ci-timing-deploy <image@sha256:...>`: what the workflow runs over SSM: pull,
-  refresh the site directory, restart Datasette and the API, start one ingest.
+  refresh the site directory, restart Datasette, start the new API beside the
+  old one and stop the old one once the new one is warm, start one ingest.
 
 ## Operating
 
@@ -58,7 +61,13 @@ set the repository variable `CI_TIMING_DEPLOY_ROLE_ARN` to the
 `github_deploy_role_arn` output, and run the deploy workflow.
 
 A change to anything cloud-init places on the host replaces the instance
-(`user_data_replace_on_change`). The data volume is stopped, detached and
+(`user_data_replace_on_change`). A script or unit under `files/` can also be
+put in place by hand over SSM to avoid that (write the file, `systemctl
+daemon-reload`, restart what reads it; the Caddyfile is bind-mounted into the
+Caddy container, so overwrite it in place rather than replacing the file, then
+`docker exec ci-timing-caddy caddy reload --config /etc/caddy/Caddyfile
+--adapter caddyfile`); the next `terraform apply` then replaces the instance
+with the same files. The data volume is stopped, detached and
 attached to the new host, which pulls the recorded image and carries on with
 the same database; a backup first (`aws ssm send-command ...
 --parameters 'commands=["/usr/local/bin/ci-timing-backup"]'`) is still cheap

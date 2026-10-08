@@ -36,9 +36,10 @@ RUN julia -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 COPY infra/docker/requirements.txt /opt/datasette-requirements.txt
 RUN python3 -m venv /opt/datasette && /opt/datasette/bin/pip install --no-cache-dir -r /opt/datasette-requirements.txt
 COPY . .
-# Compile the store once so its cache is in the image, then hand everything
-# to the runtime user (Julia writes compile caches and logs under the depot)
-RUN julia -e 'include("db/Store.jl")' && chown -R ci-timing:ci-timing /depot /app
+# Precompile the API package (its workload renders every route over the
+# fixture database, so a new server has nothing left to compile), then hand
+# everything to the runtime user (Julia writes logs under the depot)
+RUN julia -e 'using CITiming' && chown -R ci-timing:ci-timing /depot /app
 
 USER ci-timing
 ENTRYPOINT ["/app/infra/docker/entrypoint.sh"]

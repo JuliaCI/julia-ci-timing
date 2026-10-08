@@ -23,7 +23,7 @@ locals {
   export_dir       = "export" # under data_mount_path; Caddy serves it at /data/
   site_dir         = "site"   # under data_mount_path; the static site
   datasette_port   = 8001     # served from the ingest image, see files/ci-timing-run-datasette
-  api_port         = 8002     # db/serve.jl from the same image, see files/ci-timing-run-api
+  api_ports        = [8002, 8003] # db/serve.jl from the same image, one server at a time; a deploy warms the new one on the other port, see files/ci-timing-deploy
   caddy_image      = "caddy:2.8.4-alpine"
   caddy_data_dir   = "/var/lib/caddy/data"
   caddy_config_dir = "/var/lib/caddy/config"
@@ -459,7 +459,7 @@ locals {
     "/usr/local/bin/ci-timing-bootstrap"                   = "0755"
     "/etc/systemd/system/ci-timing-caddy.service"          = "0644"
     "/etc/systemd/system/ci-timing-datasette.service"      = "0644"
-    "/etc/systemd/system/ci-timing-api.service"            = "0644"
+    "/etc/systemd/system/ci-timing-api@.service"           = "0644"
     "/etc/systemd/system/ci-timing-bootstrap.service"      = "0644"
     "/etc/systemd/system/ci-timing-ingest.service"         = "0644"
     "/etc/systemd/system/ci-timing-ingest.timer"           = "0644"
@@ -473,7 +473,7 @@ locals {
       "/etc/ci-timing.host.env" = { mode = "0600", content = templatefile("${path.module}/files/host.env.tftpl", {
         aws_region         = var.aws_region
         datasette_port     = local.datasette_port
-        api_port           = local.api_port
+        api_ports          = join(" ", local.api_ports)
         data_mount_path    = local.data_mount_path
         db_filename        = local.db_filename
         export_dir         = local.export_dir
@@ -496,7 +496,7 @@ locals {
         public_ip       = aws_eip.site.public_ip
         public_hostname = local.site_hostname
         datasette_port  = local.datasette_port
-        api_port        = local.api_port
+        api_upstreams   = join(" ", [for p in local.api_ports : "127.0.0.1:${p}"])
         site_root       = "${local.data_mount_path}/${local.site_dir}"
         export_root     = "${local.data_mount_path}/${local.export_dir}"
       }) }
@@ -544,6 +544,7 @@ resource "aws_instance" "site" {
   user_data_replace_on_change = true
   user_data_base64 = base64gzip(templatefile("${path.module}/cloud-init.yaml.tftpl", {
     files           = local.user_data_files
+    api_port        = local.api_ports[0]
     runtime_uid     = local.runtime_uid
     runtime_gid     = local.runtime_gid
     data_mount_path = local.data_mount_path

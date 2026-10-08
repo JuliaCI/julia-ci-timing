@@ -1,18 +1,22 @@
 #!/bin/sh
+# One API server (db/serve.jl) on the port given, from the ingest image.
+# ci-timing-deploy starts the new image's server on the idle port of
+# CI_TIMING_API_PORTS beside the running one and switches once it is warm.
 set -eu
 . /etc/ci-timing.host.env
+port="${1:?usage: ci-timing-run-api <port>}"
 db="${CI_TIMING_DATA_DIR}/${CI_TIMING_DB_FILENAME}"
 if [ ! -s "$db" ]; then
   echo "Expected SQLite database at $db." >&2
   exit 1
 fi
-docker rm -f ci-timing-api >/dev/null 2>&1 || true
-# The API (db/serve.jl) runs from the ingest image. As for Datasette, the
-# data directory is mounted writable so a reader can create the WAL's -shm
-# file; the server opens the database query-only. Not --read-only: Julia
-# writes usage logs and compile caches under its depot in the image.
-exec docker run --name ci-timing-api \
-  --publish "127.0.0.1:${CI_TIMING_API_PORT}:${CI_TIMING_API_PORT}" \
+docker rm -f "ci-timing-api-$port" >/dev/null 2>&1 || true
+# As for Datasette, the data directory is mounted writable so a reader can
+# create the WAL's -shm file; the server opens the database query-only.
+# Not --read-only: Julia writes usage logs and compile caches under its
+# depot in the image.
+exec docker run --name "ci-timing-api-$port" \
+  --publish "127.0.0.1:${port}:${port}" \
   --log-opt max-size=50m --log-opt max-file=3 \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
@@ -20,4 +24,4 @@ exec docker run --name ci-timing-api \
   --cap-drop ALL \
   --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
   --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
-  "$CI_TIMING_IMAGE_REF" api --port "$CI_TIMING_API_PORT"
+  "$CI_TIMING_IMAGE_REF" api --port "$port"

@@ -39,8 +39,11 @@ container image (`Dockerfile`):
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every
     run, and the queue and run times of every julia-pr and julia-ci job for the
     queue backlog (the token needs the `read_agents` and `read_builds` scopes)
-- `db/serve.jl` is the site's API (`/api/`): the shapes in `db/Render.jl`,
-  served with a time window so the browser loads what it shows.
+- `db/serve.jl` runs the site's API (`/api/`, the `CITiming` package in
+  `src/`): the shapes in `db/Render.jl`, served with a time window so the
+  browser loads what it shows. The package is precompiled with every route
+  rendered over `db/precompile_fixture.sql`, a sample of a real database
+  that `db/make_fixture.jl` regenerates when the schema changes.
 - `db/export.jl` renders the same shapes to files after every run, published
   at `/data/` for scripts; `analysis/fetch_data.jl` downloads them.
 - Datasette serves the database read-only at `/db/`, and `/data/ci-timing.sqlite.gz`

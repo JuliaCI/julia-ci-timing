@@ -1,7 +1,8 @@
 #!/bin/bash
 # Deploy an image: record it as the host's image, pull it, refresh the static
-# site from it and start one ingest. Invoked through SSM Run Command by
-# .github/workflows/deploy.yml with the digest-pinned image reference.
+# site from it, switch the API to it once the new server is warm and start one
+# ingest. Invoked through SSM Run Command by .github/workflows/deploy.yml with
+# the digest-pinned image reference.
 set -euo pipefail
 image_ref="${1:?usage: ci-timing-deploy <repository>@sha256:<digest>}"
 case "$image_ref" in
@@ -19,7 +20,45 @@ echo "site synced from $image_ref"
 sed -i "s|^CI_TIMING_IMAGE_REF=.*|CI_TIMING_IMAGE_REF=${image_ref}|" /etc/ci-timing.host.env
 aws ssm put-parameter --region "$AWS_REGION" --name "$CI_TIMING_IMAGE_PARAMETER" --type String --overwrite --value "$image_ref" >/dev/null \
   || echo "could not record the image in $CI_TIMING_IMAGE_PARAMETER" >&2
-systemctl restart ci-timing-datasette.service ci-timing-api.service
+systemctl restart ci-timing-datasette.service
+
+# The API: the new image's server starts on a port no server uses, and the
+# old one is stopped only once the new one answers /api/ready, which it does
+# when its warm-up has rendered what the site loads on landing. Caddy lists
+# every port and sends requests to the first one that is ready, so the
+# switch costs no request. A server that never gets ready is stopped and
+# the old one keeps serving, with the deploy reported as failed.
+old=""; new=""
+for port in $CI_TIMING_API_PORTS; do
+  if systemctl is-active --quiet "ci-timing-api@$port.service"; then
+    old="$old $port"
+  else
+    new="${new:-$port}"
+  fi
+done
+if [ -z "$new" ]; then
+  # Every port has a server (a deploy interrupted between start and stop):
+  # the last one started is replaced
+  new="${old##* }"; old="${old% *}"
+fi
+# restart rather than start: the unit may be running the old image already
+systemctl restart "ci-timing-api@$new.service"
+api_ok=0
+for i in $(seq 1 120); do
+  if curl -fsS -o /dev/null "http://127.0.0.1:$new/api/ready" 2>/dev/null; then api_ok=1; break; fi
+  sleep 5
+done
+if [ "$api_ok" -eq 1 ]; then
+  systemctl enable --quiet "ci-timing-api@$new.service"
+  for port in $old; do
+    systemctl disable --now --quiet "ci-timing-api@$port.service"
+  done
+  echo "API switched to port $new"
+else
+  echo "the API on port $new did not get ready in 10 minutes; the old server keeps serving" >&2
+  systemctl disable --now --quiet "ci-timing-api@$new.service"
+fi
+
 # The ingest takes minutes and its outcome is on /healthz; the deploy
 # returns as soon as the site is synced. A start request while a run is
 # in progress would merge into it (a oneshot is "activating" for the whole
@@ -39,3 +78,4 @@ case "$(systemctl show -p ActiveState --value ci-timing-ingest.service)" in
     ;;
 esac
 docker image prune -f >/dev/null
+[ "$api_ok" -eq 1 ]

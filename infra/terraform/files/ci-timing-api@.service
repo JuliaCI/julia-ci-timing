@@ -1,5 +1,5 @@
 [Unit]
-Description=The site's API over the ci-timing database
+Description=The site's API over the ci-timing database, on port %i
 After=network-online.target docker.service ci-timing-datasette.service
 Wants=network-online.target
 Requires=docker.service
@@ -7,8 +7,8 @@ RequiresMountsFor=/var/lib/ci-timing
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/ci-timing-run-api
-ExecStop=/usr/bin/docker stop ci-timing-api
+ExecStart=/usr/local/bin/ci-timing-run-api %i
+ExecStop=/usr/bin/docker stop ci-timing-api-%i
 Restart=always
 # Fails until the first deploy has pulled the image, and until the
 # datasette unit's ExecStartPre has restored the database on a fresh host

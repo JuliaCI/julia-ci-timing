@@ -14,8 +14,8 @@ guide to reading it (tables by topic, example queries, conventions), and
 version for agents arriving at the site. Four ways in, cheapest first:
 
 - **The API**: `https://perf.julialang.org/api/` lists every route with its
-  parameters, generated from the route table in `db/serve.jl` that the
-  router uses. It serves what the site's pages show, with a time window
+  parameters, generated from the route table in `src/api.jl` that the
+  router uses (`db/serve.jl` is the command line entry point). It serves what the site's pages show, with a time window
   (`since`), gzipped and with ETags. `api/commit/<sha or PR number>` gathers
   one commit across every source. The shapes are the site's own and can
   change with it.
