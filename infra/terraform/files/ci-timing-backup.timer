@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly ci-timing backup
+
+[Timer]
+OnCalendar=Sun *-*-* 01:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

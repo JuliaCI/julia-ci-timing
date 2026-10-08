@@ -1,5 +1,5 @@
 [Unit]
-Description=ci-timing ingest: fetchers, export, backup
+Description=ci-timing ingest: fetchers and export
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service

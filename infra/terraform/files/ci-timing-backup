@@ -1,8 +1,9 @@
 #!/bin/bash
 # Consistent online snapshot of the database plus the export and Caddy's
-# certificate store, uploaded as latest.tar.gz. ci-timing-archive copies it
-# to a dated archive once a day. Also publishes the compressed database
-# snapshot in the export directory for download.
+# certificate store, uploaded as latest.tar.gz. Run by ci-timing-backup.timer
+# once a week (and by hand before anything that touches the host);
+# ci-timing-archive copies the result to a dated archive. Also publishes the
+# compressed database snapshot in the export directory for download.
 set -euo pipefail
 set -a; . /etc/ci-timing.host.env; set +a
 data_root="$CI_TIMING_DATA_DIR"

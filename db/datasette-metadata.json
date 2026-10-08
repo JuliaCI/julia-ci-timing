@@ -1,6 +1,6 @@
 {
   "title": "Julia Performance Tracking: database",
-  "description_html": "Read-only SQL over the database behind <a href=\"https://perf.julialang.org/\">perf.julialang.org</a>: Julia CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, refreshed every hour. Queries are limited to 2 seconds and 5000 rows; for more, download the <a href=\"https://perf.julialang.org/data/ci-timing.sqlite.gz\">whole database</a>. The <a href=\"https://perf.julialang.org/api/\">API</a> serves what the site's pages show; <a href=\"https://perf.julialang.org/llms.txt\">llms.txt</a> explains both. Times are UTC, durations seconds, benchmark times nanoseconds.",
+  "description_html": "Read-only SQL over the database behind <a href=\"https://perf.julialang.org/\">perf.julialang.org</a>: Julia CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, refreshed every half hour. Queries are limited to 2 seconds and 5000 rows; for more, download the <a href=\"https://perf.julialang.org/data/ci-timing.sqlite.gz\">whole database</a>. The <a href=\"https://perf.julialang.org/api/\">API</a> serves what the site's pages show; <a href=\"https://perf.julialang.org/llms.txt\">llms.txt</a> explains both. Times are UTC, durations seconds, benchmark times nanoseconds.",
   "source": "JuliaCI/julia-ci-timing",
   "source_url": "https://github.com/JuliaCI/julia-ci-timing",
   "databases": {

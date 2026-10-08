@@ -1,6 +1,6 @@
 # Julia Performance Tracking (perf.julialang.org)
 
-> Performance and health data for the Julia language, refreshed every hour: CI job and
+> Performance and health data for the Julia language, refreshed every half hour: CI job and
 > build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
 > PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
 > tasks on every master build, package-server downloads, and the Buildkite agents.
@@ -54,8 +54,8 @@ curl -s -G https://perf.julialang.org/db/ci-timing.json \
 
 ## 3. The whole database
 
-`https://perf.julialang.org/data/ci-timing.sqlite.gz` is the complete database after the
-latest ingest (about 220 MB, 700 MB unpacked). Download it once and query it with
+`https://perf.julialang.org/data/ci-timing.sqlite.gz` is the complete database, taken
+once a week (about 220 MB, 700 MB unpacked). Download it once and query it with
 `sqlite3` for anything that needs many queries or scans large tables such as
 `bench_results` or `pkgeval_results`.
 

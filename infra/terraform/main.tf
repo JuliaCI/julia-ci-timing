@@ -3,7 +3,7 @@
 # Caddy for HTTP/HTTPS, a read-only Datasette at /db/, an S3 bucket for
 # backups, ECR for the ingest image, Session Manager as the only operator
 # path. The differences: the site is static files Caddy serves from the host,
-# the ingest is a systemd timer running the image every hour, a deploy
+# the ingest is a systemd timer running the image every half hour, a deploy
 # pulls a new image and restarts (no instance replacement), and the data
 # lives on its own EBS volume that outlives the instance.
 #
@@ -193,7 +193,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "backups" {
 }
 
 # Versioning guards latest.tar.gz against an accidental overwrite or delete;
-# the noncurrent rule keeps the two-hourly overwrites from accumulating.
+# the noncurrent rule keeps the weekly overwrites from accumulating.
 resource "aws_s3_bucket_versioning" "backups" {
   bucket = aws_s3_bucket.backups.id
   versioning_configuration {
@@ -463,6 +463,8 @@ locals {
     "/etc/systemd/system/ci-timing-bootstrap.service"      = "0644"
     "/etc/systemd/system/ci-timing-ingest.service"         = "0644"
     "/etc/systemd/system/ci-timing-ingest.timer"           = "0644"
+    "/etc/systemd/system/ci-timing-backup.service"         = "0644"
+    "/etc/systemd/system/ci-timing-backup.timer"           = "0644"
     "/etc/systemd/system/ci-timing-archive.service"        = "0644"
     "/etc/systemd/system/ci-timing-archive.timer"          = "0644"
     "/etc/systemd/journald.conf.d/ci-timing-journald.conf" = "0644"

@@ -1,7 +1,7 @@
 #!/bin/bash
-# One ingest run: the fetchers and the export inside the image, then a
-# backup. Started by ci-timing-ingest.timer every two hours and by
-# ci-timing-deploy after a new image.
+# One ingest run: the fetchers and the export inside the image. Started by
+# ci-timing-ingest.timer every half hour and by ci-timing-deploy after a new
+# image. The backup is ci-timing-backup.timer's, once a week.
 set -uo pipefail
 set -a; . /etc/ci-timing.host.env; set +a
 lock_file="/var/lock/ci-timing-ingest.lock"
@@ -34,6 +34,4 @@ docker run --rm --name ci-timing-ingest --init \
   "$CI_TIMING_IMAGE_REF" ingest
 rc=$?
 unset BUILDKITE_API_TOKEN
-# Back up even after a partly failed run: whatever was written is worth keeping
-/usr/local/bin/ci-timing-backup || echo "backup failed" >&2
 exit $rc

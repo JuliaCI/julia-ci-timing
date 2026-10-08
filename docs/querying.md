@@ -50,7 +50,7 @@ curl -O $B/data/ci-timing.sqlite.gz && gunzip ci-timing.sqlite.gz   # about 220 
 sqlite3 ci-timing.sqlite
 ```
 
-It is taken after every ingest. No row or time limits, and no load on the host.
+It is taken once a week. No row or time limits, and no load on the host.
 
 ## Tables by topic
 
@@ -164,7 +164,7 @@ WHERE g.name = 'DataFrames' GROUP BY d.date ORDER BY d.date
 - Per-package PkgEval results exist for reports since 2025-09. The `packages` table also
   holds about 2.9k uuid-shaped names from 2019-20 reports; ignore them.
 - `dl_packages.request_addrs` counts distinct addresses within one row only; never sum it.
-- Data is refreshed every hour; `$B/healthz` says when each source last ran.
+- Data is refreshed every half hour; `$B/healthz` says when each source last ran.
 - To share a result, link the site with the view in its URL: `$B/commit?c=<sha>`,
   `$B/pkgeval?pkg=DataFrames`, `$B/downloads?edpkg=DataFrames`, `$B/builds?t=30`,
   `$B/history?bt=90&bm=memory&bv=verdicts`.

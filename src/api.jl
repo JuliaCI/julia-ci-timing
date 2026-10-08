@@ -291,10 +291,10 @@ end
 function api_index()
     routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
     return OrderedDict(
-        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, from one SQLite database refreshed every hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, from one SQLite database refreshed every half hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
-        "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database after the latest ingest, about 220 MB)",
+        "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 220 MB)",
         "schema" => "https://github.com/JuliaCI/julia-ci-timing/blob/main/db/schema.sql",
         "health" => "https://perf.julialang.org/healthz",
         "routes" => routes)

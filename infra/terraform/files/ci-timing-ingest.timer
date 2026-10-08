@@ -1,8 +1,8 @@
 [Unit]
-Description=Run the ci-timing ingest every hour
+Description=Run the ci-timing ingest every half hour
 
 [Timer]
-OnCalendar=*-*-* *:05:00 UTC
+OnCalendar=*-*-* *:05,35:00 UTC
 Persistent=true
 RandomizedDelaySec=5m
 

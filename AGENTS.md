@@ -8,7 +8,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 ## Where the data lives
 
 The source of truth is a SQLite database on the site's host; the six
-`fetch_*.jl` scripts write to it every hour. `docs/querying.md` is the
+`fetch_*.jl` scripts write to it every half hour. `docs/querying.md` is the
 guide to reading it (tables by topic, example queries, conventions), and
 `llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
 version for agents arriving at the site. Four ways in, cheapest first:
@@ -24,7 +24,7 @@ version for agents arriving at the site. Four ways in, cheapest first:
   descriptions and a set of saved queries come from
   `db/datasette-metadata.json` (passed by `infra/docker/entrypoint.sh`).
 - **The whole database**: `https://perf.julialang.org/data/ci-timing.sqlite.gz`,
-  taken after every ingest (about 220 MB, 700 MB unpacked). Download once
+  taken once a week (about 220 MB, 700 MB unpacked). Download once
   and run any SQL locally with `sqlite3`, no limits and no load on the host.
 - **The extracts**: the gzipped JSON files described below, at
   `https://perf.julialang.org/data/<file>`, rendered from the database

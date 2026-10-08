@@ -1,0 +1,8 @@
+[Unit]
+Description=ci-timing backup: database snapshot, export and certificates to S3
+After=docker.service
+RequiresMountsFor=/var/lib/ci-timing
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ci-timing-backup

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Daily: keep a dated, independent copy of latest.tar.gz under the archive
-# prefix, where the bucket lifecycle expires it after 30 days.
+# Weekly, after the backup: keep a dated, independent copy of latest.tar.gz
+# under the archive prefix, where the bucket lifecycle expires it after 30 days.
 set -euo pipefail
 set -a; . /etc/ci-timing.host.env; set +a
 src="s3://${CI_TIMING_BACKUP_BUCKET}/${CI_TIMING_BACKUP_PREFIX}/${CI_TIMING_BACKUP_LATEST_NAME}"

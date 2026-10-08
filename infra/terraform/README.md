@@ -29,11 +29,12 @@ On the host (all from cloud-init, files under `files/`):
   window. The `/data/` files are for scripts. One instance runs at a time, on
   one of the two ports Caddy lists; a deploy starts the new image's server on
   the other port and switches once it answers `/api/ready`.
-- `ci-timing-ingest.timer`: every hour, runs the image (`fetch_*.jl`,
-  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`, then
-  `ci-timing-backup` uploads `runtime/latest.tar.gz` and publishes
-  `/data/ci-timing.sqlite.gz`.
-- `ci-timing-archive.timer`: daily dated copy of the latest backup.
+- `ci-timing-ingest.timer`: every half hour, runs the image (`fetch_*.jl`,
+  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`.
+- `ci-timing-backup.timer`: weekly, `ci-timing-backup` uploads
+  `runtime/latest.tar.gz` and publishes `/data/ci-timing.sqlite.gz`. A fresh
+  data volume restores from it, so run it by hand before replacing the host.
+- `ci-timing-archive.timer`: weekly dated copy of the latest backup.
 - `ci-timing-deploy <image@sha256:...>`: what the workflow runs over SSM: pull,
   refresh the site directory, restart Datasette, start the new API beside the
   old one and stop the old one once the new one is warm, start one ingest.
