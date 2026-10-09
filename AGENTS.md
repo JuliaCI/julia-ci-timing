@@ -73,7 +73,11 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
 Times are seconds, the minimum over the job's ABBA blocks; `load` and
 `run` are the cold first run of the task script, `warm` the best total
 of the later runs. `builds` is sorted by date. A build whose job failed
-before uploading has an empty `tasks`.
+before uploading has an empty `tasks`. `releases` is a second array of
+the same shape for the weekly `TTFX release` job, which measures the
+newest stable release on the same tasks and machines as a reference;
+its `version` and `commit` are the release's. The site draws it as a
+separate series and computes nothing else from it.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base

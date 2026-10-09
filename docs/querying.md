@@ -68,7 +68,8 @@ It is taken once a week. No row or time limits, and no load on the host.
 - **PkgEval.** `pkgeval_reports` (one per run, with outcome counts), `packages` (names),
   `pkgeval_results` (report and package: status, reason, version, duration_s),
   `pkgeval_reasons` (counts per status and reason).
-- **TTFX.** `ttfx_jobs` (one per master build's TTFX job), `ttfx_results` (job and task:
+- **TTFX.** `ttfx_jobs` (one per master build's TTFX job; `kind` is `release` for the
+  weekly reference run of the newest stable release), `ttfx_results` (job and task:
   precompile, load, run, warm, and load, run and warm with the GC off, in seconds),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
@@ -148,7 +149,7 @@ TTFX of one task per build over 30 days:
 ```sql
 SELECT j.build, j.commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.load_gcoff, r.run_gcoff
 FROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid
-WHERE r.task = 'BaseDirs/Project-Path' AND j.build_created_at >= date('now', '-30 days')
+WHERE r.task = 'BaseDirs/Project-Path' AND j.kind = 'master' AND j.build_created_at >= date('now', '-30 days')
 ORDER BY j.build_created_at
 ```
 

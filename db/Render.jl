@@ -444,24 +444,30 @@ function ttfx(db; since="")
     for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures")
         get!(failures, String(r.job_uuid), Dict{String,String}())[String(r.task)] = String(r.error)
     end
-    builds = Any[]
     pipeline = "julia-ci"
     where, params = where_clause("build_created_at", since, "")
-    for j in rows(db, "SELECT * FROM ttfx_jobs" * where * " ORDER BY build_created_at, build", params)
-        pipeline = String(j.pipeline)
-        tasks = get(results, String(j.job_uuid), Dict{String,Any}())
-        n = Int(j.n_metrics)
-        push!(builds, Dict{String,Any}(
-            "build" => Int(j.build), "job_id" => String(j.job_uuid), "triplet" => String(j.triplet), "state" => String(j.state),
-            "date" => iso_to_legacy_minute(String(j.build_created_at)), "commit" => String(j.commit_sha),
-            "version" => String(j.version), "message" => String(j.message), "agent" => String(j.agent), "cpu" => String(j.cpu),
-            "snippets" => String(j.snippets), "blocks" => js(j.blocks), "n_tasks" => js(j.n_tasks),
-            "tasks" => Dict(k => v[1:n] for (k, v) in tasks),
-            "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
+    function jobs(kind)
+        out = Any[]
+        sql = "SELECT * FROM ttfx_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = ? ORDER BY build_created_at, build"
+        for j in rows(db, sql, (params..., kind))
+            pipeline = String(j.pipeline)
+            tasks = get(results, String(j.job_uuid), Dict{String,Any}())
+            n = Int(j.n_metrics)
+            push!(out, Dict{String,Any}(
+                "build" => Int(j.build), "job_id" => String(j.job_uuid), "triplet" => String(j.triplet), "state" => String(j.state),
+                "date" => iso_to_legacy_minute(String(j.build_created_at)), "commit" => String(j.commit_sha),
+                "version" => String(j.version), "message" => String(j.message), "agent" => String(j.agent), "cpu" => String(j.cpu),
+                "snippets" => String(j.snippets), "blocks" => js(j.blocks), "n_tasks" => js(j.n_tasks),
+                "tasks" => Dict(k => v[1:n] for (k, v) in tasks),
+                "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
+        end
+        return out
     end
+    builds = jobs("master")
+    releases = jobs("release")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
-                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds)
+                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases)
 end
 
 # Open pull requests by how their latest TTFX comparison looks, best first.
@@ -492,7 +498,7 @@ end
 # Each metric's summed time over the suite in the newest master TTFX job
 function ttfx_pr_weights(db)
     sql = "SELECT sum(precompile) AS precompile, sum(load) AS load, sum(run) AS run, sum(warm) AS warm FROM ttfx_results " *
-          "WHERE job_uuid = (SELECT j.job_uuid FROM ttfx_jobs j WHERE EXISTS (SELECT 1 FROM ttfx_results r WHERE r.job_uuid = j.job_uuid) " *
+          "WHERE job_uuid = (SELECT j.job_uuid FROM ttfx_jobs j WHERE j.kind = 'master' AND EXISTS (SELECT 1 FROM ttfx_results r WHERE r.job_uuid = j.job_uuid) " *
           "ORDER BY j.build_created_at DESC LIMIT 1)"
     r = only(rows(db, sql))
     return Dict(m => Float64(something(coalesce(getproperty(r, Symbol(m)), 0.0), 0.0)) for m in TTFX_PR_METRICS)
@@ -605,7 +611,8 @@ function commit_candidates(db, ref)
         fits(b.commit_sha) && note!(String(b.commit_prefix), b.commit_sha)
     end
     for table in ("ttfx_jobs", "bench_reports", "pkgeval_reports")
-        for r in rows(db, "SELECT DISTINCT commit_sha FROM $table WHERE commit_sha GLOB ? OR commit_sha = ?", (ref * "*", p8))
+        master = table == "ttfx_jobs" ? " AND kind = 'master'" : ""
+        for r in rows(db, "SELECT DISTINCT commit_sha FROM $table WHERE (commit_sha GLOB ? OR commit_sha = ?)" * master, (ref * "*", p8))
             sha = String(r.commit_sha)
             length(sha) >= 8 && note!(first(sha, 8), sha)
         end
@@ -626,7 +633,7 @@ function commit_summary(db, prefix, sha)
     b = rows(db, "SELECT commit_sha, author, message, created_at FROM builds WHERE commit_prefix = ? " *
                  "ORDER BY message = '$SCHEDULED_MESSAGE', created_at LIMIT 1", (prefix,))
     if isempty(b)
-        t = rows(db, "SELECT message, build_created_at FROM ttfx_jobs WHERE commit_sha GLOB ? ORDER BY build_created_at LIMIT 1", (commit_glob(prefix, sha),))
+        t = rows(db, "SELECT message, build_created_at FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' ORDER BY build_created_at LIMIT 1", (commit_glob(prefix, sha),))
         message = isempty(t) ? "" : String(t[1].message)
         return OrderedDict{String,Any}("prefix" => prefix, "sha" => sha, "author" => "", "message" => message,
                                        "pr" => pr_number(message), "created_at" => isempty(t) ? nothing : String(t[1].build_created_at))
@@ -714,11 +721,11 @@ end
 # The TTFX job of the commit's build against the latest earlier one with
 # results on another commit
 function commit_ttfx(db, prefix, sha)
-    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? " *
+    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
                   "ORDER BY build_created_at DESC LIMIT 1", (commit_glob(prefix, sha),))
     isempty(tj) && return nothing
     j = tj[1]
-    prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
+    prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1",
                 (j.build_created_at, commit_glob(prefix, sha)))
     metrics = TTFX_METRICS[1:4]

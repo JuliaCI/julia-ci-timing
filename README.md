@@ -33,7 +33,8 @@ container image (`Dockerfile`):
   - `fetch_ttfx.jl`: TTFX results (package precompile, load and run times of the
     [Julia-TTFX-Snippets](https://github.com/tecosaur/Julia-TTFX-Snippets) tasks,
     the load and run times also from repeats with the GC disabled)
-    from the `TTFX` job on every `julia-ci` master build, see
+    from the `TTFX` job on every `julia-ci` master build, and from the weekly
+    `TTFX release` job that measures the newest stable release as a reference, see
     [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
   - `fetch_sizes.jl`: the size of the binary distribution (`tools/measure_sizes.jl`)
     of every `julia-ci` master build, from the tarball in the nightlies bucket, and of

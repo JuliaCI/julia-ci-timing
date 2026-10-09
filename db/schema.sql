@@ -272,6 +272,7 @@ CREATE TABLE IF NOT EXISTS ttfx_jobs (
     pipeline         TEXT NOT NULL DEFAULT 'julia-ci',
     build            INTEGER NOT NULL,
     triplet          TEXT NOT NULL,
+    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', or 'release' for the weekly run of the newest stable release
     state            TEXT NOT NULL,
     build_created_at TEXT NOT NULL,          -- legacy "date", minute precision
     commit_sha       TEXT NOT NULL DEFAULT '',
