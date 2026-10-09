@@ -12045,29 +12045,69 @@ function showTtfxPrPoints(p) {
   for (const [metric, chart] of Object.entries(ttfxSummaryCharts)) {
     const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
     if (!suite || !suite.data.length) continue;
-    const ratios = layers.map((q) => {
-      const r = ttfxPrChainedSuite(q)[metric];
-      return r && r.geomeans.length ? Math.exp(r.geomeans.reduce((a, g) => a + Math.log(g), 0) / r.geomeans.length) : null;
-    });
+    const geomean = (key) =>
+      layers.map((q) => {
+        const r = ttfxPrChainedSuite(q)[key];
+        return r && r.geomeans.length ? Math.exp(r.geomeans.reduce((a, g) => a + Math.log(g), 0) / r.geomeans.length) : null;
+      });
+    const ratios = geomean(metric);
     if (ratios.some((r) => r == null)) continue;
     const first = suite.data[0];
     const last = suite.data[suite.data.length - 1];
+    // The GC-off twin gets its own points when it is drawn and every layer has
+    // GC-off results, in the twin's faded colour and without a label of their
+    // own: the value joins the normal point's label
+    const twinIndex = chart.data.datasets.findIndex((d) => d._common && d._twinOf != null);
+    const twin = twinIndex >= 0 && chart.isDatasetVisible(twinIndex) ? chart.data.datasets[twinIndex] : null;
+    const offRatios = twin && twin.data.length ? geomean(metric + "_gcoff") : null;
+    const offLast = offRatios && !offRatios.some((r) => r == null) ? twin.data[twin.data.length - 1] : null;
+    const offColor = (own) => (isDark ? "rgba(88, 166, 255, " : "rgba(9, 105, 218, ") + (own ? "0.6)" : "0.35)");
     // The points step past the latest build at a fixed pixel spacing. The axis
     // ends at the data, so it is widened to fit them and a margin for the last
     // label until the row is left; the spacing is in the widened axis's scale.
     const xs = chart.scales.x;
-    const used = (TTFX_PR_POINT_MARGIN + layers.length * TTFX_PR_POINT_SPACING) / xs.width;
-    const need = xs.min + (last.x - xs.min) / Math.max(1 - used, 0.3);
+    // A deep stack takes the narrower spacing rather than running off the panel
+    const wanted = offLast ? TTFX_PR_POINT_SPACING_GCOFF : TTFX_PR_POINT_SPACING;
+    const fits = (TTFX_PR_POINT_MAX_SHARE * xs.width - TTFX_PR_POINT_MARGIN) / layers.length;
+    const spacing = Math.min(wanted, Math.max(fits, TTFX_PR_POINT_SPACING));
+    const used = (TTFX_PR_POINT_MARGIN + layers.length * spacing) / xs.width;
+    const need = xs.min + (last.x - xs.min) / Math.max(1 - used, 1 - TTFX_PR_POINT_MAX_SHARE);
     if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
     if (xs.max < need) chart.options.scales.x.max = need;
-    const step = (TTFX_PR_POINT_SPACING / xs.width) * (Math.max(xs.max, need) - xs.min);
+    const step = (spacing / xs.width) * (Math.max(xs.max, need) - xs.min);
     const notes = chart.options.plugins.annotation.annotations;
+    const toY = (seconds) => (ttfxNormalized ? (seconds / first.s - 1) * 100 : seconds);
     let prev = { x: last.x, y: last.y };
+    let prevOff = offLast ? { x: offLast.x, y: offLast.y } : null;
     layers.forEach((q, i) => {
-      const seconds = last.s * ratios[i];
-      const y = ttfxNormalized ? (seconds / first.s - 1) * 100 : seconds;
+      const y = toY(last.s * ratios[i]);
       const x = last.x + (i + 1) * step;
       const own = q === p;
+      const label = [`#${q.pr}`, `~${formatTtfxPct((ratios[i] - 1) * 100)}`];
+      if (offLast) {
+        const yOff = toY(offLast.s * offRatios[i]);
+        notes[`${TTFX_PR_POINT_PREFIX}offlink-${i}`] = {
+          type: "line",
+          xMin: prevOff.x,
+          xMax: x,
+          yMin: prevOff.y,
+          yMax: yOff,
+          borderColor: offColor(own),
+          borderWidth: 1,
+          borderDash: [3, 3],
+        };
+        notes[`${TTFX_PR_POINT_PREFIX}offpoint-${i}`] = {
+          type: "point",
+          xValue: x,
+          yValue: yOff,
+          radius: own ? 3.5 : 3,
+          backgroundColor: offColor(own),
+          borderColor: isDark ? "#f0f6fc" : "#1f2328",
+          borderWidth: 0.75,
+        };
+        label.push(`GC off ${formatTtfxPct((offRatios[i] - 1) * 100)}`);
+        prevOff = { x, y: yOff };
+      }
       notes[`${TTFX_PR_POINT_PREFIX}link-${i}`] = {
         type: "line",
         xMin: prev.x,
@@ -12094,7 +12134,7 @@ function showTtfxPrPoints(p) {
         yValue: y,
         position: { x: "center", y: "end" },
         yAdjust: -8,
-        content: [`#${q.pr}`, `~${formatTtfxPct((ratios[i] - 1) * 100)}`],
+        content: label,
         textAlign: "center",
         color: own ? color : faint,
         font: { size: 11, weight: own ? "bold" : "normal" },
