@@ -4623,6 +4623,11 @@ makeResizablePanel({
   targetId: "ttfx-stats",
   storageKey: "ttfx-stats-height",
 });
+makeResizablePanel({
+  handleId: "sizes-resize-handle",
+  targetId: "sizes-stats",
+  storageKey: "sizes-stats-height",
+});
 
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
@@ -6280,6 +6285,7 @@ const SOURCE_VIEWS = {
   benchmarks: ["benchmarks"],
   pkgeval: ["pkgeval"],
   ttfx: ["ttfx"],
+  sizes: ["sizes"],
   packages: ["packages"],
   agents: ["agents", "backlog", "usage"],
 };
@@ -6293,18 +6299,29 @@ function reloadStaleView(tab) {
   if (tab === "benchmarks" && takeStale("benchmarks") && benchData) reloadBenchData();
   if (tab === "pkgeval" && takeStale("pkgeval") && pkgevalData) loadPkgevalData();
   if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
+  if (tab === "ci-sizes" && takeStale("sizes") && sizesData) reloadSizesData();
   if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
   // The Workers view loads what is marked whenever it draws
   if (tab === "ci-workers" && (staleViews.has("agents") || staleViews.has("backlog"))) renderWorkerPresence();
   if (tab === "ci-timing" && timingView === "usage" && staleViews.has("usage")) renderUsageView();
 }
 
-const UPDATED_LABELS = { timing: "last-updated", pkgeval: "pkgeval-last-updated", ttfx: "ttfx-last-updated" };
+const UPDATED_LABELS = {
+  timing: "last-updated",
+  pkgeval: "pkgeval-last-updated",
+  ttfx: "ttfx-last-updated",
+  sizes: "sizes-last-updated",
+};
 
 // A body's own generated_at can be older than the last ingest: its ETag only
 // moves when rows change, so a 304 keeps the old body
 function setUpdatedLabels() {
-  const fallback = { timing: data?.generated_at, pkgeval: pkgevalData?.generated_at, ttfx: ttfxData?.generated_at };
+  const fallback = {
+    timing: data?.generated_at,
+    pkgeval: pkgevalData?.generated_at,
+    ttfx: ttfxData?.generated_at,
+    sizes: sizesData?.generated_at,
+  };
   for (const [source, id] of Object.entries(UPDATED_LABELS)) {
     const at = sourceTimes[source] || fallback[source];
     const el = document.getElementById(id);
@@ -6358,6 +6375,7 @@ const TAB_URL_MAP = {
   "ci-builds": "ci-builds",
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
+  "ci-sizes": "ci-sizes",
   packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
 };
@@ -6373,6 +6391,7 @@ const TAB_SHORT_PATH = {
   "ci-builds": "/builds",
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
+  "ci-sizes": "/sizes",
   packages: "/downloads",
   pkgeval: "/pkgeval",
 };
@@ -6458,6 +6477,10 @@ const DASHBOARD_PARAMS = new Set([
   "tx", // ttfx excluded tasks (when most are selected)
   "tv", // ttfx table view
   "ts", // ttfx chart mode (summary or per task)
+  "zt", // sizes time range
+  "zn", // sizes normalized (% change) toggle
+  "zm", // sizes selected metrics
+  "zv", // sizes table view (open pull requests or master commits)
   "perf", // legacy: full iframe path
 ]);
 
@@ -6542,6 +6565,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     "ci-builds": "tab-ci-builds",
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
+    "ci-sizes": "tab-ci-sizes",
     packages: "tab-packages",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
@@ -6586,6 +6610,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
     .getElementById("ttfx-view")
     .classList.toggle("view-hidden", tab !== "ci-ttfx");
   document
+    .getElementById("sizes-view")
+    .classList.toggle("view-hidden", tab !== "ci-sizes");
+  document
     .getElementById("perf-view")
     .classList.toggle("view-hidden", tab !== "perf");
   document
@@ -6617,6 +6644,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
   }
   if (tab === "ci-ttfx" && !ttfxData) {
     loadTtfxData();
+  }
+  if (tab === "ci-sizes" && !sizesData) {
+    loadSizesData();
   }
   if (tab === "packages" && !packagesDownloadsData) {
     loadPackagesDownloadsData();
@@ -12276,6 +12306,851 @@ function renderTtfxTasksTable() {
   });
 }
 
+// === CI Size (the binary distribution of every master build) ===
+// One series per metric: manyjulias builds of master back to 2020, then the
+// tarball CI built from the first commit measured that way, with a marker at
+// the switch (the API merges them; see Render.sizes).
+
+const SIZES_TIME_RANGES = [30, 90, 365, 730, 0];
+// The summary metrics the API returns, in sidebar order; counts are left to
+// the commit table
+const SIZES_METRICS = {
+  total: "Total unpacked",
+  tarball: "Tarball (.tar.gz)",
+  sysimg: "sys.so",
+  "sysimg.text": "sys.so code",
+  "sysimg.image_data": "sys.so image data",
+  "sysimg.dwarf": "sys.so DWARF",
+  "pkgimg.ji": "Stdlib pkgimages (.ji)",
+  "pkgimg.so": "Stdlib pkgimages (.so)",
+  "libjulia-codegen": "libjulia-codegen",
+  "libjulia-internal": "libjulia-internal",
+  libLLVM: "libLLVM",
+  "libs.other": "Other bundled libraries",
+  "share.stdlib": "Stdlib sources",
+};
+const SIZES_DEFAULT_METRICS = ["total", "sysimg", "pkgimg.ji", "pkgimg.so"];
+const SIZES_COUNT_METRICS = new Set(["files", "pkgimg.count"]);
+
+let sizesData = null;
+let sizesChart = null;
+let sizesTimeRangeDays = 365;
+let sizesNormalized = false;
+let sizesSelected = new Set(SIZES_DEFAULT_METRICS);
+let sizesColors = {};
+// The table under the chart: "prs" (open pull requests against master) or
+// "commits" (master commits, newest first)
+let sizesTableView = "prs";
+let sizesPrs = null;
+let sizesPrsLoading = null;
+
+const sizesMetricLabel = (m) => SIZES_METRICS[m] || m;
+const githubCommitURL = (sha) => `https://github.com/JuliaLang/julia/commit/${sha}`;
+
+function formatSizeDelta(d, isCount = false) {
+  if (d == null) return "";
+  if (d === 0) return "0";
+  const sign = d > 0 ? "+" : "−";
+  return sign + (isCount ? Math.abs(d).toLocaleString() : formatBytes(Math.abs(d)));
+}
+
+// A change as a percentage of `before`, for after a byte delta; empty when it
+// rounds to nothing
+function formatSizePct(delta, before) {
+  const pct = (delta / before) * 100;
+  return Math.abs(pct) < 0.05 ? "" : ` <small>${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</small>`;
+}
+
+function formatSizeValue(v, isCount = false) {
+  if (v == null) return "—";
+  return isCount ? v.toLocaleString() : formatBytes(v);
+}
+
+// The window's start as a timestamp, or -Infinity for all time
+function sizesWindowStart() {
+  return sizesTimeRangeDays > 0 ? Date.now() - sizesTimeRangeDays * 864e5 : -Infinity;
+}
+
+// The commits in the window as indices into the series' arrays
+function sizesIndicesInRange() {
+  const start = sizesWindowStart();
+  const out = [];
+  (sizesData?.merged_at || []).forEach((t, i) => {
+    if (Date.parse(t) >= start) out.push(i);
+  });
+  return out;
+}
+
+// The index of the last commit before `i` with a value in `vals`, from the
+// same source (none across the switch: that step is the sources', not a
+// commit's), or null
+function sizesPrevious(vals, i) {
+  const src = sizesData.sources[i];
+  for (let j = i - 1; j >= 0 && sizesData.sources[j] === src; j--) if (vals[j] != null) return j;
+  return null;
+}
+
+// How many commits the step from commit index `p` to `i` covers, from the
+// build numbers in their versions (1.14.0-DEV.3551 is 3551 commits since
+// VERSION changed); null when they are not comparable
+function sizesSpan(p, i) {
+  if (p == null) return null;
+  const parse = (v) => /^(.*)\.(\d+)$/.exec(v || "");
+  const a = parse(sizesData.versions[p]);
+  const b = parse(sizesData.versions[i]);
+  if (!a || !b || a[1] !== b[1]) return null;
+  return Number(b[2]) - Number(a[2]);
+}
+
+function sizesSpanText(n) {
+  return `${n} commits since the previous measured one, not measured one by one: the change can come from any of them`;
+}
+
+const githubCompareURL = (from, to) => `https://github.com/JuliaLang/julia/compare/${from}...${to}`;
+
+function applySizesURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const zt = params.get("zt");
+  if (zt !== null) {
+    const days = parseInt(zt, 10);
+    if (SIZES_TIME_RANGES.includes(days)) {
+      sizesTimeRangeDays = days;
+      document.getElementById("sizes-time-range").value = days;
+    }
+  }
+  if (params.get("zn") === "1") {
+    sizesNormalized = true;
+    document.getElementById("sizes-btn-normalize").textContent = "Show bytes";
+  }
+  if (params.get("zv") === "commits") {
+    sizesTableView = "commits";
+    document.getElementById("sizes-view-prs").classList.remove("btn-primary");
+    document.getElementById("sizes-view-commits").classList.add("btn-primary");
+  }
+  const zm = params.get("zm");
+  if (zm !== null) sizesSelected = new Set(zm.split(",").filter((m) => m in SIZES_METRICS));
+}
+
+function updateSizesURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  const setOrDelete = (k, v, isDefault) => {
+    if (isDefault) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  };
+  setOrDelete("zt", sizesTimeRangeDays, sizesTimeRangeDays === 365);
+  setOrDelete("zn", "1", !sizesNormalized);
+  setOrDelete("zv", sizesTableView, sizesTableView === "prs");
+  const selected = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m));
+  setOrDelete("zm", selected.join(","), selected.join(",") === SIZES_DEFAULT_METRICS.join(","));
+  history.replaceState(null, "", url);
+}
+
+async function loadSizesData() {
+  try {
+    sizesData = await apiGet("sizes/summary");
+    setUpdatedLabels();
+    const colors = generateColors(Object.keys(SIZES_METRICS).length);
+    Object.keys(SIZES_METRICS).forEach((m, i) => (sizesColors[m] = colors[i]));
+    document.getElementById("sizes-chart-loading").style.display = "none";
+    populateSizesMetricList();
+    updateSizesChart();
+    updateSizesTable();
+  } catch (err) {
+    console.error("Failed to load size data:", err);
+    document.getElementById("sizes-chart-loading").innerHTML =
+      '<span class="error">No size data. It appears once <code>fetch_sizes.jl</code> has measured a master build.</span>';
+    document.getElementById("sizes-metric-list").innerHTML =
+      '<div class="group-header">Metrics</div><div class="error">Failed to load</div>';
+    document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+  }
+}
+
+async function reloadSizesData() {
+  try {
+    sizesData = await apiGet("sizes/summary");
+  } catch (err) {
+    console.error("Failed to reload the size data:", err);
+    return;
+  }
+  // Replaced when they arrive, not blanked
+  sizesPrsLoading = null;
+  setUpdatedLabels();
+  populateSizesMetricList();
+  updateSizesChart();
+  updateSizesTable();
+}
+
+// The newest value of a metric
+function sizesLatest(metric) {
+  const vals = sizesData?.values?.[metric];
+  if (!vals) return null;
+  for (let i = vals.length - 1; i >= 0; i--) if (vals[i] != null) return { value: vals[i], i };
+  return null;
+}
+
+function populateSizesMetricList() {
+  const container = document.getElementById("sizes-metric-list");
+  const metrics = Object.keys(SIZES_METRICS);
+  let html = `<div class="group-header">Metrics (${sizesSelected.size}/${metrics.length})</div>`;
+  for (const m of metrics) {
+    const latest = sizesLatest(m);
+    const title = latest
+      ? `${sizesMetricLabel(m)}: ${formatBytes(latest.value)} on ${sizesData.commits[latest.i].slice(0, 10)}`
+      : `${sizesMetricLabel(m)}: not measured`;
+    html += `<div class="group-item ${sizesSelected.has(m) ? "selected" : ""}" data-metric="${escapeHtml(m)}" title="${escapeHtml(title)}">`;
+    html += `<span class="color-dot" style="background: ${sizesColors[m] || "#888"}"></span>`;
+    html += `<span class="task-name">${escapeHtml(sizesMetricLabel(m))}</span>`;
+    html += `<span class="task-latest">${latest ? escapeHtml(formatBytes(latest.value)) : ""}</span>`;
+    html += `</div>`;
+  }
+  container.innerHTML = html;
+  for (const el of container.querySelectorAll(".group-item[data-metric]")) {
+    el.addEventListener("click", () => toggleSizesMetric(el.dataset.metric));
+    el.addEventListener("mouseenter", () => highlightSizesDataset(el.dataset.metric));
+    el.addEventListener("mouseleave", () => highlightSizesDataset(null));
+  }
+}
+
+// Dim every line but the metric's; null restores
+function highlightSizesDataset(metric) {
+  if (!sizesChart) return;
+  for (const ds of sizesChart.data.datasets) {
+    const on = metric === null || ds._metric === metric;
+    ds.borderColor = on ? sizesColors[ds._metric] : fadeColor(sizesColors[ds._metric], 0.12);
+    ds.backgroundColor = ds.pointBackgroundColor = ds.pointBorderColor = ds.borderColor;
+  }
+  // Not update("none"): that keeps the points' resolved colours
+  sizesChart.update();
+}
+
+// The rows of the steps table at a commit (index into the series); null clears
+function highlightSizesRow(i) {
+  const tbody = document.getElementById("sizes-stats-tbody");
+  for (const tr of tbody.querySelectorAll("tr.highlight")) tr.classList.remove("highlight");
+  if (i == null) return;
+  // Highlighted in place: scrolling to the row moved the table under the pointer
+  tbody.querySelectorAll(`tr[data-i="${i}"]`).forEach((tr) => tr.classList.add("highlight"));
+}
+
+function toggleSizesMetric(m) {
+  if (sizesSelected.has(m)) sizesSelected.delete(m);
+  else sizesSelected.add(m);
+  populateSizesMetricList();
+  updateSizesChart();
+  updateSizesTable();
+  updateSizesURL();
+}
+
+function setSizesTimeRange(val) {
+  sizesTimeRangeDays = parseInt(val, 10);
+  updateSizesChart();
+  updateSizesTable();
+  updateSizesURL();
+}
+
+function toggleSizesNormalized() {
+  sizesNormalized = !sizesNormalized;
+  document.getElementById("sizes-btn-normalize").textContent = sizesNormalized ? "Show bytes" : "Show %";
+  updateSizesChart();
+  updateSizesURL();
+}
+
+function resetSizesZoom() {
+  if (sizesChart) sizesChart.resetZoom();
+  document.getElementById("sizes-btn-reset-zoom").style.display = "none";
+}
+
+// One line per selected metric. A point carries its index in the series so
+// a click finds the commit.
+function updateSizesChart() {
+  if (!sizesData) return;
+  const canvas = document.getElementById("sizes-chart");
+  if (sizesChart) {
+    sizesChart.destroy();
+    sizesChart = null;
+  }
+  document.getElementById("sizes-btn-reset-zoom").style.display = "none";
+  const isDark = isDarkMode();
+  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+  const textColor = isDark ? "#8b949e" : "#656d76";
+  const idx = sizesIndicesInRange();
+  const datasets = [];
+  for (const m of Object.keys(SIZES_METRICS)) {
+    const vals = sizesData.values[m];
+    if (!sizesSelected.has(m) || !vals) continue;
+    const points = [];
+    let base = null;
+    for (const i of idx) {
+      const v = vals[i];
+      if (v == null) continue;
+      if (base == null) base = v;
+      const y = sizesNormalized ? ((v - base) / base) * 100 : v;
+      points.push({ x: Date.parse(sizesData.merged_at[i]), y, i });
+    }
+    if (!points.length) continue;
+    datasets.push({
+      label: sizesMetricLabel(m),
+      data: points,
+      borderColor: sizesColors[m],
+      backgroundColor: sizesColors[m],
+      borderWidth: 1.5,
+      pointRadius: 1.5,
+      ...ttfxHoverPointStyle(),
+      stepped: "before",
+      _metric: m,
+    });
+  }
+  const fmt = (v) => (sizesNormalized ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : formatBytes(v));
+  sizesChart = new Chart(canvas, {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      normalized: true,
+      interaction: { mode: "near", intersect: false },
+      onClick: tapAgainToOpen((evt, elements, chart) => {
+        if (!elements.length) return;
+        const ds = chart.data.datasets[elements[0].datasetIndex];
+        showSizesCommitPopup(ds.data[elements[0].index].i, ds._metric);
+      }),
+      onHover: (evt, elements, chart) => {
+        evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
+        highlightSizesRow(elements.length ? chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].i : null);
+      },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
+        annotation: {
+          interaction: { mode: "nearest", intersect: true },
+          annotations: buildSizesMarkers(isDark),
+        },
+        zoom: {
+          pan: { enabled: true, mode: "x", onPanComplete: showSizesResetZoom },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            drag: {
+              enabled: !IS_TOUCH,
+              backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
+            },
+            mode: "x",
+            onZoomComplete: showSizesResetZoom,
+          },
+        },
+        tooltip: {
+          usePointStyle: true,
+          boxPadding: 4,
+          callbacks: {
+            title: (items) => {
+              if (!items.length) return "";
+              const i = items[0].raw.i;
+              const d = sizesData;
+              return `${d.merged_at[i].slice(0, 16).replace("T", " ")}  ${d.commits[i].slice(0, 10)}${d.versions[i] ? "  " + d.versions[i] : ""}`;
+            },
+            label: (ctx) => {
+              const ds = ctx.dataset;
+              const vals = sizesData.values[ds._metric];
+              const i = ctx.raw.i;
+              const prev = sizesPrevious(vals, i);
+              const delta = prev == null ? "" : ` (${formatSizeDelta(vals[i] - vals[prev])})`;
+              return ` ${ds.label}: ${sizesNormalized ? fmt(ctx.raw.y) : formatBytes(vals[i])}${delta}`;
+            },
+            footer: (items) => {
+              if (!items.length) return "";
+              const i = items[0].raw.i;
+              const d = sizesData;
+              const lines = [d.sources[i] === "ci" ? `build ${d.builds[i]}, CI tarball` : "manyjulias build"];
+              const span = sizesSpan(sizesPrevious(d.values.total || [], i), i);
+              if (span > 1) lines.push(`${span} commits since the previous measured one`);
+              if (d.messages[i]) lines.push(...wrapTooltipText(span > 1 ? `Last: ${d.messages[i]}` : d.messages[i]));
+              lines.push(IS_TOUCH ? "Tap again for details and links" : "Click for details and links");
+              return lines;
+            },
+          },
+        },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd HH:mm" }),
+        y: {
+          ticks: { color: textColor, callback: (v) => fmt(v) },
+          grid: { color: gridColor },
+        },
+      },
+    },
+  });
+}
+
+// The switch from the manyjulias builds to the CI tarballs: a dashed line
+// like the TTFX tab's annotations, its full text while the pointer is on it
+function buildSizesMarkers(isDark) {
+  const color = isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)";
+  const out = {};
+  (sizesData.markers || []).forEach((a, k) => {
+    const x = Date.parse(a.at);
+    out[`marker-${k}`] = {
+      enter: ({ chart }, event) => showSizesMarkerNote(chart, a, event),
+      leave: ({ chart }) => hideTtfxAnnotationNote(chart),
+      type: "line",
+      xMin: x,
+      xMax: x,
+      display: ({ chart }) => {
+        const s = chart.scales.x;
+        return !!s && x >= s.min && x <= s.max;
+      },
+      borderColor: color,
+      borderWidth: 1,
+      borderDash: [4, 4],
+      label: {
+        display: () => !PHONE_WIDTH.matches,
+        content: a.label,
+        position: "start",
+        backgroundColor: isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)",
+        color: isDark ? "#8b949e" : "#656d76",
+        font: { size: 11 },
+        padding: { x: 5, y: 3 },
+      },
+    };
+  });
+  return out;
+}
+
+function showSizesMarkerNote(chart, a, event) {
+  const wrap = chart.canvas.parentElement;
+  let el = wrap.querySelector(".ttfx-note-popup");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "ttfx-note-popup";
+    wrap.appendChild(el);
+  }
+  el.textContent = `${a.label}: ${a.description}`;
+  el.style.display = "block";
+  const x = event.x + 14;
+  el.style.left = `${x + el.offsetWidth > wrap.clientWidth ? Math.max(0, event.x - 14 - el.offsetWidth) : x}px`;
+  el.style.top = `${Math.max(0, Math.min(event.y + 14, wrap.clientHeight - el.offsetHeight))}px`;
+}
+
+function showSizesResetZoom() {
+  document.getElementById("sizes-btn-reset-zoom").style.display = "";
+}
+
+function setSizesTableView(view) {
+  sizesTableView = view === "commits" ? "commits" : "prs";
+  for (const v of ["prs", "commits"]) {
+    document.getElementById("sizes-view-" + v).classList.toggle("btn-primary", v === sizesTableView);
+  }
+  updateSizesTable();
+  updateSizesURL();
+}
+
+function updateSizesTable() {
+  if (sizesTableView === "commits") {
+    renderSizesCommitsTable();
+    return;
+  }
+  if (sizesPrs && !sizesPrsLoading?.pending) renderSizesPrsTable();
+  if (!sizesPrsLoading) {
+    const job = (sizesPrsLoading = { pending: true });
+    if (!sizesPrs) document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="loading">Loading...</td></tr>';
+    apiGet("sizes/prs")
+      .then((d) => (sizesPrs = d))
+      .catch((err) => {
+        console.error("Failed to load the pull requests' sizes:", err);
+        sizesPrs = sizesPrs || { prs: [], failed: true };
+      })
+      .finally(() => {
+        job.pending = false;
+        if (sizesTableView === "prs") renderSizesPrsTable();
+      });
+  }
+}
+
+// The metric the pull requests are ranked by: the first selected one they have
+function sizesPrRankMetric() {
+  return Object.keys(SIZES_METRICS).find((m) => sizesSelected.has(m) && (sizesPrs?.metrics || []).includes(m)) || "total";
+}
+
+// Open pull requests by how much their latest build changes the selected
+// metrics against the master commit they branched from, largest first
+function renderSizesPrsTable() {
+  const caption = document.getElementById("sizes-stats-caption");
+  const thead = document.getElementById("sizes-stats-thead");
+  const tbody = document.getElementById("sizes-stats-tbody");
+  const prs = sizesPrs?.prs || [];
+  const metrics = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m) && (sizesPrs?.metrics || []).includes(m));
+  const rank = sizesPrRankMetric();
+  const delta = (p, m) => (p.base_values && p.values[m] != null && p.base_values[m] != null ? p.values[m] - p.base_values[m] : null);
+  const rows = prs.slice().sort((a, b) => Math.abs(delta(b, rank) ?? -1) - Math.abs(delta(a, rank) ?? -1));
+  caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, ranked by ${escapeHtml(
+    sizesMetricLabel(rank).toLowerCase(),
+  )}. Click a row for details.</span>`;
+  thead.innerHTML =
+    "<tr><th>PR</th><th>Title</th><th class=\"col-secondary\">Author</th>" +
+    metrics.map((m) => `<th class="num">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
+    '<th class="col-secondary" title="The pull request\'s merge-base with master, which it is compared with">Merge-base</th><th class="col-secondary">Build</th></tr>';
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${metrics.length + 5}">${sizesPrs?.failed ? "Failed to load" : "No open pull request measured yet"}</td></tr>`;
+    return;
+  }
+  let html = "";
+  for (const p of rows) {
+    html += `<tr class="clickable" data-pr="${p.number}">`;
+    html += `<td><a href="https://github.com/JuliaLang/julia/pull/${p.number}" target="_blank" rel="noopener">#${p.number}</a></td>`;
+    const draft = p.draft ? '<span class="ttfx-note-badge">draft</span> ' : "";
+    const stacked = p.base_ref && p.base_ref !== "master" ? `<span class="ttfx-note-badge" title="Targets ${escapeHtml(p.base_ref)}; compared with master, so the pull requests below it count too">on ${escapeHtml(p.base_ref)}</span> ` : "";
+    html += `<td class="msg" title="${escapeHtml(p.title)}">${draft}${stacked}${escapeHtml(p.title)}</td>`;
+    html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
+    for (const m of metrics) {
+      const d = delta(p, m);
+      if (d == null || d === 0) {
+        html += `<td class="num col-secondary">${d === 0 ? "0" : ""}</td>`;
+        continue;
+      }
+      const before = p.base_values[m];
+      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatBytes(before)} → ${formatBytes(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
+    }
+    html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
+    html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener">${p.build}</a></td>`;
+    html += "</tr>";
+  }
+  tbody.innerHTML = html;
+  for (const tr of tbody.querySelectorAll("tr[data-pr]")) {
+    const p = prs.find((q) => q.number === +tr.dataset.pr);
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return;
+      showSizesPrPopup(p.number);
+    });
+    tr.addEventListener("mouseenter", () => showSizesPrPoints(p));
+    tr.addEventListener("mouseleave", hideSizesPrPoints);
+  }
+}
+
+// Where a pull request would put each line, drawn while its row is hovered as
+// TTFX does: a point past the newest commit, at that commit's size plus the
+// pull request's change against its merge-base (approximate, as master may
+// have moved since the merge-base)
+const SIZES_PR_POINT_PREFIX = "pr-";
+const SIZES_PR_POINT_SPACING = 60; // px past the newest point
+const SIZES_PR_POINT_MARGIN = 150; // px kept right of the point for its label
+
+function showSizesPrPoints(p) {
+  const chart = sizesChart;
+  if (!chart || !p.base_values) return;
+  const isDark = isDarkMode();
+  const xs = chart.scales.x;
+  // The axis ends at the data; widened to fit the point and its label until the
+  // row is left
+  if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
+  let last = -Infinity;
+  for (const ds of chart.data.datasets) if (ds.data.length) last = Math.max(last, ds.data[ds.data.length - 1].x);
+  if (!isFinite(last)) return;
+  const share = (SIZES_PR_POINT_SPACING + SIZES_PR_POINT_MARGIN) / xs.width;
+  const need = xs.min + (last - xs.min) / (1 - share);
+  if (xs.max < need) chart.options.scales.x.max = need;
+  const x = last + (SIZES_PR_POINT_SPACING / xs.width) * (Math.max(xs.max, need) - xs.min);
+  const notes = chart.options.plugins.annotation.annotations;
+  chart.data.datasets.forEach((ds, k) => {
+    const m = ds._metric;
+    if (!chart.isDatasetVisible(k) || !ds.data.length) return;
+    if (p.values[m] == null || p.base_values[m] == null) return;
+    const delta = p.values[m] - p.base_values[m];
+    const end = ds.data[ds.data.length - 1];
+    const value = sizesData.values[m][end.i] + delta;
+    const first = ds.data[0];
+    const base = sizesData.values[m][first.i];
+    const y = sizesNormalized ? ((value - base) / base) * 100 : value;
+    const color = sizesColors[m];
+    notes[`${SIZES_PR_POINT_PREFIX}link-${k}`] = {
+      type: "line", xMin: end.x, xMax: x, yMin: end.y, yMax: y, borderColor: color, borderWidth: 1.5, borderDash: [4, 3],
+    };
+    notes[`${SIZES_PR_POINT_PREFIX}point-${k}`] = {
+      type: "point", xValue: x, yValue: y, radius: 5, backgroundColor: color,
+      borderColor: isDark ? "#f0f6fc" : "#1f2328", borderWidth: 1.5,
+    };
+    notes[`${SIZES_PR_POINT_PREFIX}label-${k}`] = {
+      type: "label", xValue: x, yValue: y, position: { x: "start", y: "center" }, xAdjust: 10,
+      content: [`#${p.number} ${delta === 0 ? "±0" : formatSizeDelta(delta)}`], color,
+      font: { size: 11, weight: "bold" },
+    };
+  });
+  chart.update("none");
+}
+
+function hideSizesPrPoints() {
+  const chart = sizesChart;
+  if (!chart || !("_prMax" in chart)) return;
+  const notes = chart.options.plugins.annotation.annotations;
+  for (const k of Object.keys(notes)) if (k.startsWith(SIZES_PR_POINT_PREFIX)) delete notes[k];
+  chart.options.scales.x.max = chart._prMax;
+  delete chart._prMax;
+  chart.update("none");
+}
+
+function sizesPrBaseText(p) {
+  return p.base
+    ? "Its merge-base with master"
+    : `Waiting for the master build of its merge-base ${p.merge_base.slice(0, 10)}: the change is shown once that is measured`;
+}
+
+function sizesPrBaseHtml(p) {
+  return p.base
+    ? `<span title="${escapeHtml(sizesPrBaseText(p))}"><code>${escapeHtml(p.base.commit.slice(0, 10))}</code></span>`
+    : `<span class="ttfx-note-badge" title="${escapeHtml(sizesPrBaseText(p))}">waiting</span>`;
+}
+
+// One pull request's head against its base: every metric and the files that
+// changed, in the TTFX tab's popup
+async function showSizesPrPopup(n) {
+  const p = (sizesPrs?.prs || []).find((q) => q.number === n);
+  if (!p) return;
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+  let html = '<div class="ttfx-popup-actions">';
+  html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${n}" target="_blank" rel="noopener">GitHub PR #${n}</a>`;
+  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Buildkite build</a>`;
+  html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener" title="The pull request's commits since its merge-base">Commits</a>`;
+  html += "</div>";
+  html += row("Title", escapeHtml(p.title));
+  html += row("Author", escapeHtml(p.author));
+  html += row("Build", `#${p.build}, ${escapeHtml(p.build_created_at.slice(0, 16).replace("T", " "))} UTC, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
+  html += row("Merge-base", `<code>${escapeHtml(p.merge_base.slice(0, 10))}</code>`);
+  html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
+  if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
+  html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading...</div>';
+  document.getElementById("ttfx-build-popup-title").textContent = `Size of #${n}`;
+  const body = document.getElementById("ttfx-build-popup-body");
+  body.parentElement.classList.remove("ttfx-pr-popup");
+  body.innerHTML = html;
+  body.dataset.commit = `pr-${n}`;
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+  let d;
+  try {
+    d = await apiGet(`sizes/pr/${n}`);
+  } catch (err) {
+    d = null;
+  }
+  const el = document.getElementById("sizes-popup-files");
+  if (!el || !sizesPopupTitleIs(`pr-${n}`)) return;
+  if (!d) {
+    el.textContent = "Could not load the measurement.";
+    return;
+  }
+  el.outerHTML = sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + (d.base ? sizesFilesHtml(d.files) : "");
+}
+
+// The metrics of a diff (metric => [value, value before]) as the popup's table
+function sizesMetricsTableHtml(metrics, label) {
+  let html = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Size</th><th class="num">${escapeHtml(label)}</th></tr></thead><tbody>`;
+  for (const m of Object.keys(SIZES_METRICS)) {
+    const v = metrics[m];
+    if (!v || v[0] == null) continue;
+    const d = v[1] == null ? null : v[0] - v[1];
+    const cls = d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "";
+    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatBytes(v[0])}</td>`;
+    html += `<td class="num ${cls}">${formatSizeDelta(d)}${d ? formatSizePct(d, v[1]) : ""}</td></tr>`;
+  }
+  return html + "</tbody></table>";
+}
+
+// The files of a diff whose size changed, largest change first
+function sizesFilesHtml(files) {
+  const changed = files.filter((f) => f.bytes !== f.previous);
+  if (!changed.length) return '<div class="ttfx-popup-muted ttfx-popup-hint">No file of at least 1 MiB changed size.</div>';
+  const rows = changed
+    .map((f) => {
+      const d = f.bytes != null && f.previous != null ? f.bytes - f.previous : null;
+      const change = d == null ? (f.bytes == null ? "removed" : "added") : formatSizeDelta(d);
+      const cls = d == null ? "" : d > 0 ? "ttfx-up" : "ttfx-down";
+      return `<tr><th class="sizes-file-path"><code>${escapeHtml(f.path)}</code></th><td class="num">${formatSizeValue(f.bytes ?? f.previous)}</td><td class="num ${cls}">${change}</td></tr>`;
+    })
+    .join("");
+  return `<details class="ttfx-popup-failed" open><summary>${changed.length} file${changed.length > 1 ? "s" : ""} of at least 1 MiB changed</summary>
+    <table class="ttfx-popup-table"><tbody>${rows}</tbody></table></details>`;
+}
+
+// Master commits in the window, newest first, like the TTFX tab's builds
+// table: each selected metric's change from the previous commit of the same
+// source (none across the switch of sources, which is theirs and not a
+// commit's)
+const SIZES_COMMITS_ROWS = 300;
+function renderSizesCommitsTable() {
+  const caption = document.getElementById("sizes-stats-caption");
+  const thead = document.getElementById("sizes-stats-thead");
+  const tbody = document.getElementById("sizes-stats-tbody");
+  if (!sizesData?.commits?.length) {
+    caption.innerHTML = "";
+    thead.innerHTML = "";
+    tbody.innerHTML = '<tr><td class="loading">No measurements</td></tr>';
+    return;
+  }
+  const d = sizesData;
+  const metrics = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m) && d.values[m]);
+  const rows = [];
+  const idx = sizesIndicesInRange();
+  for (let k = idx.length - 1; k >= 0 && rows.length < SIZES_COMMITS_ROWS; k--) {
+    const i = idx[k];
+    const deltas = {};
+    for (const m of metrics) {
+      const vals = d.values[m];
+      if (vals[i] == null) continue;
+      const p = sizesPrevious(vals, i);
+      if (p != null) deltas[m] = { before: vals[p], after: vals[i] };
+    }
+    rows.push({ i, deltas });
+  }
+  caption.innerHTML = `<b>Master commits</b> <span class="col-secondary">Newest first, each against the previous measured commit${
+    idx.length > SIZES_COMMITS_ROWS ? ` (the newest ${SIZES_COMMITS_ROWS} of the range)` : ""
+  }. Not every commit was measured, so a row can span several commits; its link then lists them. Click a row for details.</span>`;
+  thead.innerHTML =
+    "<tr><th>Date</th><th>Commit</th><th class=\"col-secondary\">Version</th>" +
+    metrics.map((m) => `<th class="num">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
+    '<th class="col-secondary">Message</th></tr>';
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${metrics.length + 4}">No changes in the range</td></tr>`;
+    return;
+  }
+  let html = "";
+  for (const r of rows) {
+    const i = r.i;
+    const sha = d.commits[i];
+    const p = sizesPrevious(d.values.total || [], i);
+    html += `<tr class="clickable" data-i="${i}">`;
+    html += `<td>${escapeHtml(d.merged_at[i].slice(0, 16).replace("T", " "))}</td>`;
+    // A step over several commits is theirs together: its link lists them
+    const span = sizesSpan(p, i);
+    const multi = span > 1 && p != null;
+    html += multi
+      ? `<td><a href="${githubCompareURL(d.commits[p], sha)}" target="_blank" rel="noopener" title="${escapeHtml(sizesSpanText(span))}">${span} commits</a></td>`
+      : `<td><a href="${githubCommitURL(sha)}" target="_blank" rel="noopener">${escapeHtml(sha.slice(0, 10))}</a></td>`;
+    html += `<td class="col-secondary">${escapeHtml(d.versions[i] || "")}</td>`;
+    for (const m of metrics) {
+      const c = r.deltas[m];
+      if (!c || c.after === c.before) {
+        html += `<td class="num col-secondary">${c ? "0" : ""}</td>`;
+        continue;
+      }
+      const delta = c.after - c.before;
+      html += `<td class="num ${delta > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatBytes(c.before)} → ${formatBytes(c.after)}`)}">${formatSizeDelta(delta)}${formatSizePct(delta, c.before)}</td>`;
+    }
+    const msg = multi
+      ? `${d.commits[p].slice(0, 10)}..${sha.slice(0, 10)}, not measured one by one`
+      : d.messages[i] || "";
+    html += `<td class="msg col-secondary" title="${escapeHtml(msg)}">${escapeHtml(msg)}</td>`;
+    html += "</tr>";
+  }
+  tbody.innerHTML = html;
+  for (const tr of tbody.querySelectorAll("tr[data-i]")) {
+    const i = +tr.dataset.i;
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return;
+      showSizesCommitPopup(i, null);
+    });
+    tr.addEventListener("mouseenter", () => highlightSizesPoint(i));
+    tr.addEventListener("mouseleave", () => highlightSizesPoint(null));
+  }
+}
+
+// Show the chart's points at a commit (index into the series), as hovering
+// them would; null clears
+function highlightSizesPoint(i) {
+  if (!sizesChart) return;
+  const points = i == null ? [] : chartPointsWhere(sizesChart, (raw) => raw.i === i);
+  setChartActivePoints(sizesChart, points);
+}
+
+// Details of the commit behind a clicked point or row, in the TTFX tab's
+// popup: its links, every summary metric against the previous commit of the
+// same source, and the files of at least 1 MiB that changed (loaded after)
+function showSizesCommitPopup(i, metric) {
+  const d = sizesData;
+  const sha = d.commits[i];
+  const ci = d.sources[i] === "ci";
+  const pr = ttfxBuildPr({ message: d.messages[i] });
+  const anyPrev = sizesPrevious(d.values.total || [], i);
+  const prevSha = anyPrev == null ? null : d.commits[anyPrev];
+  const span = sizesSpan(anyPrev, i);
+  // Over several commits the change is theirs together, so the links are to
+  // the range rather than to the last commit and its pull request
+  const multi = span > 1 && prevSha != null;
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+
+  let html = '<div class="ttfx-popup-actions">';
+  if (ci && d.builds[i]) html += `<a class="btn" href="https://buildkite.com/julialang/julia-ci/builds/${d.builds[i]}" target="_blank" rel="noopener">Buildkite build</a>`;
+  if (multi) {
+    html += `<a class="btn" href="${githubCompareURL(prevSha, sha)}" target="_blank" rel="noopener">The ${span} commits</a>`;
+  } else {
+    if (pr) html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${pr}" target="_blank" rel="noopener">GitHub PR #${pr}</a>`;
+    html += `<a class="btn" href="${githubCommitURL(sha)}" target="_blank" rel="noopener">Commit</a>`;
+  }
+  html += "</div>";
+  if (multi) {
+    html += `<div class="ttfx-popup-note">${escapeHtml(sizesSpanText(span))}.</div>`;
+    html += row("Commits", `<code>${escapeHtml(prevSha.slice(0, 10))}</code>..<code>${escapeHtml(sha.slice(0, 10))}</code>`);
+    html += row("Last", `${escapeHtml(d.messages[i] || "")} (${commitLink(sha, "everything recorded for it")})`);
+  } else {
+    html += row("Title", escapeHtml(d.messages[i] || ""));
+    html += row("Commit", `<code>${escapeHtml(sha.slice(0, 10))}</code> (${commitLink(sha, "everything recorded for it")})`);
+  }
+  html += row("Merged", `${escapeHtml(d.merged_at[i].slice(0, 16).replace("T", " "))} UTC`);
+  html += row("Version", escapeHtml(d.versions[i] || ""));
+  html += row("Measured", ci ? `the tarball of julia-ci build #${d.builds[i]}` : "a manyjulias build of the commit");
+  if (!multi) html += row("Previous", prevSha ? `<code>${escapeHtml(prevSha.slice(0, 10))}</code>, ${escapeHtml(d.merged_at[anyPrev].slice(0, 10))}` : "");
+
+  html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Size</th><th class="num">vs previous</th></tr></thead><tbody>';
+  for (const m of Object.keys(SIZES_METRICS)) {
+    const vals = d.values[m];
+    if (!vals || vals[i] == null) continue;
+    const p = sizesPrevious(vals, i);
+    const delta = p == null ? null : vals[i] - vals[p];
+    const cls = delta > 0 ? "ttfx-up" : delta < 0 ? "ttfx-down" : "";
+    const pct = delta ? formatSizePct(delta, vals[p]) : "";
+    html += `<tr${m === metric ? ' class="highlight"' : ""}><th>${escapeHtml(sizesMetricLabel(m))}</th>`;
+    html += `<td class="num">${formatBytes(vals[i])}</td><td class="num ${cls}">${formatSizeDelta(delta)}${pct}</td></tr>`;
+  }
+  html += "</tbody></table>";
+  html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading the files that changed...</div>';
+
+  document.getElementById("ttfx-build-popup-title").textContent = multi ? `Size change over ${span} commits` : `Size of ${sha.slice(0, 10)}`;
+  const body = document.getElementById("ttfx-build-popup-body");
+  body.parentElement.classList.remove("ttfx-pr-popup");
+  body.innerHTML = html;
+  body.dataset.commit = sha;
+  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+  loadSizesPopupFiles(sha, d.sources[i]);
+}
+
+function sizesPopupTitleIs(sha) {
+  return document.getElementById("ttfx-build-popup-body").dataset.commit === sha;
+}
+
+async function loadSizesPopupFiles(sha, source) {
+  let r;
+  try {
+    r = await apiGet(`sizes/commit/${sha.slice(0, 10)}`);
+  } catch (err) {
+    r = null;
+  }
+  const el = document.getElementById("sizes-popup-files");
+  // The popup was closed or shows another commit by now
+  if (!el || !sizesPopupTitleIs(sha)) return;
+  const c = r?.sources?.[source];
+  if (!c) {
+    el.textContent = "Could not load the files.";
+    return;
+  }
+  if (!c.previous) {
+    el.textContent = "The first commit measured this way: no files to compare with.";
+    return;
+  }
+  el.outerHTML = sizesFilesHtml(c.files);
+}
+
 // === Overview ===
 // One card per data source: the latest upstream result, how it compares with
 // a week earlier, how old it is against that source's usual cadence, and
@@ -13985,7 +14860,7 @@ const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx", "ci-sizes"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 // The view holding each tab's toolbar; the three CI pages share one
@@ -13994,6 +14869,7 @@ const PHONE_TOOLBAR_VIEWS = {
   "ci-builds": "ci-timing-view",
   "ci-workers": "ci-timing-view",
   "ci-ttfx": "ttfx-view",
+  "ci-sizes": "sizes-view",
   benchmarks: "benchmarks-view",
   packages: "packages-view",
   pkgeval: "pkgeval-view",
@@ -14201,6 +15077,7 @@ applyBenchURLParams();
 applyPackagesURLParams();
 applyPkgevalURLParams();
 applyTtfxURLParams();
+applySizesURLParams();
 applyCommitURLParams();
 const perfDeepLink = applyPerfURLParams();
 

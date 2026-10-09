@@ -218,6 +218,34 @@
             "started_at": "when an agent started it; NULL while queued, or when canceled before starting",
             "finished_at": "when it finished or was canceled; NULL while queued or running"
           }
+        },
+        "size_builds": {
+          "description": "One measurement of the unpacked linux-x86_64 distribution of a commit (tools/measure_sizes.jl). source ci: the tarball a julia-ci master build uploaded to the nightlies bucket (fetch_sizes.jl, from August 2026); manyjulias: a manyjulias build of the master commit, imported to seed the history back to 2020, with three CPU targets where CI has four (code and DWARF of sys.so and the pkgimages about a fifth smaller); pr: the latest julia-pr build of an open pull request (size_prs). Compare within a source.",
+          "columns": {
+            "merged_at": "ci and pr: the build's created_at; manyjulias: the committer date",
+            "version": "VERSION with the build number, e.g. 1.14.0-DEV.3551: the difference between two master commits' build numbers is the commits between them",
+            "build": "the julia-ci or julia-pr build",
+            "message": "the commit's subject, or the pull request's title for pr"
+          }
+        },
+        "size_metrics": {
+          "description": "Size measurements of a size_builds row, in bytes (files and pkgimg.count are counts): total, dir.* and share.* per directory, sysimg (sys.so) and libjulia-internal, libjulia-codegen, libLLVM, libjulia with their .text, .rodata, .data, .dwarf, .symtab, .dynsym and other section bytes (sysimg.image_data: the image's data blob), libs.other (the other bundled libraries) and its DWARF, pkgimg.ji, pkgimg.so and pkgimg.so.dwarf (the stdlib pkgimages), tarball (ci only).",
+          "columns": {}
+        },
+        "size_files": {
+          "description": "Every file of at least 1 MiB of a size_builds row. A package's pkgimages are summed as share/julia/compiled/<version>/<package>/*.ji and *.so, since their names change with every build.",
+          "columns": {}
+        },
+        "size_prs": {
+          "description": "The latest measured julia-pr build of every open julia pull request that has one (its size_builds row has source pr and commit_sha head_commit) and its merge-base with master, compared with once that is measured as a master commit. Current state only; a closed pull request's row is deleted.",
+          "columns": {
+            "merge_base": "the head's merge-base with master",
+            "base_commit": "merge_base once it is measured (source ci): NULL while its julia-ci build job has not finished"
+          }
+        },
+        "size_open_prs": {
+          "description": "Every open julia pull request as fetch_sizes.jl last listed them from GitHub (every two hours, at meta sizes:open_prs_at); only their julia-pr builds are measured.",
+          "columns": {}
         }
       },
       "queries": {
@@ -271,6 +299,15 @@
         "connected_agents": {
           "title": "Buildkite agents connected at the latest listing, with their jobs",
           "sql": "SELECT name, queue, os, arch, last_seen, json_extract(job_json, '$.name') AS job\nFROM agents WHERE state = 'connected' ORDER BY queue, name"
+        },
+        "size_history": {
+          "title": "One size metric of master commits over the last :days days",
+          "description": "metric as in size_metrics.metric, e.g. sysimg or total; source ci or manyjulias",
+          "sql": "SELECT b.merged_at, substr(b.commit_sha, 1, 10) AS commit_sha, b.version, m.value, b.message\nFROM size_metrics m JOIN size_builds b ON b.id = m.size_build_id\nWHERE m.metric = :metric AND b.source = :source AND b.merged_at >= date('now', '-' || :days || ' days')\nORDER BY b.merged_at"
+        },
+        "size_open_prs": {
+          "title": "Open pull requests by how much their latest build changes the total size",
+          "sql": "SELECT p.pr_number, p.title, p.build, h.value - b.value AS total_change\nFROM size_prs p\nJOIN size_builds hb ON hb.source = 'pr' AND hb.commit_sha = p.head_commit\nJOIN size_metrics h ON h.size_build_id = hb.id AND h.metric = 'total'\nJOIN size_builds bb ON bb.source = 'ci' AND bb.commit_sha = p.base_commit\nJOIN size_metrics b ON b.size_build_id = bb.id AND b.metric = 'total'\nORDER BY abs(total_change) DESC"
         }
       }
     }

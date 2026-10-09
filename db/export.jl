@@ -17,7 +17,7 @@ include(joinpath(@__DIR__, "Render.jl"))
 using .Render
 using JSON3, CodecZlib, DataStructures, Dates
 
-const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents"]
+const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents"]
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "out" => nothing, "only" => SOURCES)
@@ -77,6 +77,12 @@ function export_ttfx(db, out)
     @info "ttfx" jobs=length(payload["builds"])
 end
 
+function export_sizes(db, out)
+    payload = Render.sizes(db; metrics=["all"])
+    write_gz_json(joinpath(out, "sizes_summary.json.gz"), payload)
+    @info "sizes" commits=length(payload["commits"])
+end
+
 function export_packages(db, out)
     payload = Render.downloads(db)
     write_gz_json(joinpath(out, "packages_downloads_summary.json.gz"), payload)
@@ -116,7 +122,7 @@ function export_health(db, out)
 end
 
 const EXPORTERS = Dict("timing" => export_timing, "benchmarks" => export_benchmarks, "pkgeval" => export_pkgeval,
-                       "ttfx" => export_ttfx, "packages" => export_packages, "agents" => export_agents)
+                       "ttfx" => export_ttfx, "sizes" => export_sizes, "packages" => export_packages, "agents" => export_agents)
 
 function main(args)
     opts = parse_args(args)

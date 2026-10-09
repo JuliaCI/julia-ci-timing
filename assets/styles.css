@@ -2729,6 +2729,10 @@ a {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Size tab: a file's path wraps so its size and change stay in view */
+.ttfx-popup-table .sizes-file-path {
+  overflow-wrap: anywhere;
+}
 .ttfx-popup-table .ttfx-up {
   color: var(--color-danger-fg);
 }

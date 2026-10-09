@@ -387,6 +387,82 @@ CREATE TABLE IF NOT EXISTS raw_ttfx (
     meta_zst    BLOB
 );
 
+-- ----------------------------------------------------------------- sizes --
+-- Sizes of the unpacked binary distribution of master commits, as
+-- tools/measure_sizes.jl measures them. Source 'ci' is the tarball the
+-- julia-ci build uploaded to the nightlies bucket, measured by fetch_sizes.jl
+-- while the bucket still has it (about 60 days). Source 'manyjulias' is a
+-- rebuild from the manyjulias store, imported once by db/import_sizes.jl to
+-- seed the history back to 2020. Source 'pr' is the latest julia-pr build of
+-- an open pull request (size_prs). Compare within a source: those rebuilds have
+-- three CPU targets where CI has had four since March 2024 (the code and DWARF
+-- of sys.so and the pkgimages are about a fifth smaller), and lack share/doc
+-- and share/man.
+
+CREATE TABLE IF NOT EXISTS size_builds (
+    id          INTEGER PRIMARY KEY,
+    source      TEXT NOT NULL,              -- ci | manyjulias | pr
+    triplet     TEXT NOT NULL,              -- x86_64-linux-gnu
+    commit_sha  TEXT NOT NULL,
+    merged_at   TEXT NOT NULL,              -- ci: the build's created_at; manyjulias: the committer date
+    version     TEXT NOT NULL DEFAULT '',   -- the distribution's JULIA_VERSION_STRING
+    build       INTEGER,                    -- the julia-ci build (ci only)
+    message     TEXT NOT NULL DEFAULT '',   -- the commit's subject
+    measured_at TEXT NOT NULL,
+    change_seq  INTEGER NOT NULL,
+    UNIQUE (source, triplet, commit_sha)
+);
+CREATE INDEX IF NOT EXISTS size_builds_merged ON size_builds (source, triplet, merged_at);
+CREATE INDEX IF NOT EXISTS size_builds_commit ON size_builds (commit_sha);
+
+-- Bytes, except the counts `files` and `pkgimg.count`. See measure() in
+-- tools/measure_sizes.jl for what each metric covers.
+CREATE TABLE IF NOT EXISTS size_metrics (
+    size_build_id INTEGER NOT NULL REFERENCES size_builds (id),
+    metric        TEXT NOT NULL,
+    value         INTEGER NOT NULL,
+    PRIMARY KEY (size_build_id, metric)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS size_metrics_metric ON size_metrics (metric, size_build_id);
+
+-- Every file of at least 1 MiB, for telling which files a jump came from.
+CREATE TABLE IF NOT EXISTS size_files (
+    size_build_id INTEGER NOT NULL REFERENCES size_builds (id),
+    path          TEXT NOT NULL,
+    bytes         INTEGER NOT NULL,
+    PRIMARY KEY (size_build_id, path)
+) WITHOUT ROWID;
+
+-- The latest measured julia-pr build of every open pull request that has one
+-- (its measurement is the size_builds row of source 'pr' and its head_commit),
+-- and its merge-base with master, compared with once that is measured as a
+-- master commit (source 'ci'). Current state only, like ttfx_prs:
+-- a newer build replaces the row and a closed pull request's row goes.
+CREATE TABLE IF NOT EXISTS size_prs (
+    pr_number        INTEGER PRIMARY KEY,
+    title            TEXT NOT NULL DEFAULT '',
+    author           TEXT NOT NULL DEFAULT '',
+    draft            INTEGER NOT NULL DEFAULT 0,
+    base_ref         TEXT NOT NULL DEFAULT '',   -- the branch it targets
+    build            INTEGER NOT NULL,           -- julia-pr build number
+    build_created_at TEXT NOT NULL,
+    web_url          TEXT,
+    head_commit      TEXT NOT NULL,              -- the commit the build measured
+    merge_base       TEXT NOT NULL DEFAULT '',   -- with master
+    base_commit      TEXT,                       -- merge_base once it is measured (source ci), NULL until then
+    change_seq       INTEGER NOT NULL
+);
+
+-- Every open pull request, as fetch_sizes.jl last listed them from GitHub (at
+-- meta sizes:open_prs_at): only their builds are measured.
+CREATE TABLE IF NOT EXISTS size_open_prs (
+    pr_number INTEGER PRIMARY KEY,
+    title     TEXT NOT NULL DEFAULT '',
+    author    TEXT NOT NULL DEFAULT '',
+    draft     INTEGER NOT NULL DEFAULT 0,
+    base_ref  TEXT NOT NULL DEFAULT ''
+);
+
 -- ------------------------------------------------------------- downloads --
 -- Rollup rows from julialang-logs public_outputs, stored as published.
 -- request_addrs counts distinct addresses within its own row only and must

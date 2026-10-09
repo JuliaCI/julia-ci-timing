@@ -74,6 +74,13 @@ It is taken once a week. No row or time limits, and no load on the host.
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
   current state only.
+- **Sizes.** `size_builds` (one measurement of the unpacked linux-x86_64 distribution of a
+  commit: source `ci` for the tarballs of julia-ci master builds, `manyjulias` for the
+  imported history back to 2020, `pr` for open pull requests' latest julia-pr builds),
+  `size_metrics` (its sizes in bytes: total, per directory, sys.so and the runtime
+  libraries by ELF section, the stdlib pkgimages), `size_files` (every file of at least
+  1 MiB), `size_prs` (each open pull request's measured build and the master commit to
+  compare it with). Compare within a source: the manyjulias builds have fewer CPU targets.
 - **Downloads.** `dl_series` (requests per day), `dl_mix` (by Julia version and release
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.
@@ -143,6 +150,15 @@ SELECT j.build, j.commit_sha, j.build_created_at, r.precompile, r.load, r.run, r
 FROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid
 WHERE r.task = 'BaseDirs/Project-Path' AND j.build_created_at >= date('now', '-30 days')
 ORDER BY j.build_created_at
+```
+
+The sysimage size of master commits over 90 days, from the CI tarballs:
+
+```sql
+SELECT b.merged_at, b.commit_sha, b.version, m.value AS bytes
+FROM size_metrics m JOIN size_builds b ON b.id = m.size_build_id
+WHERE m.metric = 'sysimg' AND b.source = 'ci' AND b.merged_at >= date('now', '-90 days')
+ORDER BY b.merged_at
 ```
 
 One package's downloads per day, user and CI:

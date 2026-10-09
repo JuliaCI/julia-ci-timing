@@ -235,6 +235,18 @@
             >
               TTFX
             </button>
+            <button
+              class="tab-btn"
+              id="tab-ci-sizes"
+              role="tab"
+              aria-selected="false"
+              aria-controls="sizes-view"
+              tabindex="-1"
+              onclick="switchTab('ci-sizes')"
+              title="Size of the binary distribution on every master build: the sysimage, the stdlib pkgimages, the runtime libraries"
+            >
+              Size
+            </button>
           </div>
         </div>
         <div class="tab-group" role="presentation">
@@ -1322,6 +1334,108 @@
             <table>
               <thead id="ttfx-stats-thead"></thead>
               <tbody id="ttfx-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="ttfx-main view-hidden"
+      id="sizes-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-sizes"
+      tabindex="0"
+    >
+      <div class="ttfx-toolbar">
+        <select
+          class="time-select"
+          id="sizes-time-range"
+          onchange="setSizesTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365" selected>Last 365 days</option>
+          <option value="730">Last 2 years</option>
+          <option value="0">All time</option>
+        </select>
+        <button
+          class="btn"
+          id="sizes-btn-normalize"
+          onclick="toggleSizesNormalized()"
+          title="Plot every series as % change from its first commit in the range"
+        >
+          Show %
+        </button>
+        <button
+          class="btn btn-primary"
+          id="sizes-btn-reset-zoom"
+          onclick="resetSizesZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <a
+          class="btn btn-link"
+          href="https://github.com/JuliaCI/julia-ci-timing/blob/main/tools/measure_sizes.jl"
+          target="_blank"
+          rel="noopener"
+          title="What each measurement covers"
+          >Method</a
+        >
+        <span class="bench-table-view-toggle" role="group" aria-label="Table view">
+          <button
+            class="btn btn-primary"
+            id="sizes-view-prs"
+            onclick="setSizesTableView('prs')"
+            title="Open pull requests by how much their latest build changes the size against master"
+          >
+            Open PRs
+          </button>
+          <button
+            class="btn"
+            id="sizes-view-commits"
+            onclick="setSizesTableView('commits')"
+            title="One row per master commit, newest first"
+          >
+            By commit
+          </button>
+        </span>
+        <span class="updated" id="sizes-last-updated"></span>
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-sidebar" id="sizes-metric-list">
+          <div class="group-header">Metrics</div>
+          <div class="loading">Loading...</div>
+        </div>
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="sizes-chart-loading">
+                <span class="loading">Loading size data...</span>
+              </div>
+              <div class="ttfx-single">
+                <canvas id="sizes-chart"></canvas>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="sizes-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize size table"
+          ></div>
+          <div class="ttfx-stats" id="sizes-stats" style="height: 280px">
+            <div class="ttfx-stats-caption" id="sizes-stats-caption"></div>
+            <table>
+              <thead id="sizes-stats-thead"></thead>
+              <tbody id="sizes-stats-tbody">
                 <tr>
                   <td class="loading">Loading...</td>
                 </tr>

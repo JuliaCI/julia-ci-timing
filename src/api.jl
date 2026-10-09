@@ -109,7 +109,7 @@ change_seq(s::Server) = withdb(db -> Store.current_seq(db), s)
 
 # The source each route family reads, for its ETag; nothing means global
 const ROUTE_SOURCES = Dict("timing" => "timing", "benchmarks" => "benchmarks", "pkgeval" => "pkgeval",
-                           "ttfx" => "ttfx", "downloads" => "packages", "agents" => "agents")
+                           "ttfx" => "ttfx", "sizes" => "sizes", "downloads" => "packages", "agents" => "agents")
 
 function route_seq(s::Server, segments)
     source = isempty(segments) ? nothing : get(ROUTE_SOURCES, segments[1], nothing)
@@ -143,7 +143,7 @@ end
 
 # --- routes ------------------------------------------------------------------
 
-const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "packages", "agents")
+const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents")
 
 function status(db)
     return Dict("change_seq" => Store.current_seq(db),
@@ -233,6 +233,24 @@ const ROUTES = [
     Route("ttfx/prs", [],
           "Open julia pull requests ranked by their latest TTFX comparison (head against the master build of the merge-base), best first: the job's verdict and robust improvements and regressions, the suite geomean ratio per metric and block, and the flagged tasks. score is the estimated ratio of the suite's total time: the precompile, load, run and warm ratios weighted by each metric's time on master, taking per metric the block nearest no change (1 when the blocks disagree); below 1 is faster. outdated means the pull request has moved on since the job's commit. stack is null unless the pull request targets another one's branch: then the job measured it against that branch, own_score is that comparison, and score and stack.suite estimate the whole stack against master by multiplying in the suite geomeans of the pull requests below it (stack.parents, nearest first; complete false when one has no comparison, which leaves score null; exact false when a lower one has moved on since this job's base). ci is the state of the newest julia-pr build of the pull request's current head (null until looked up, state none when it has no build).",
           (db, _, _) -> Render.ttfx_prs(db)),
+    Route("sizes/summary", [SINCE, "metrics" => "comma-separated metric names (the summary set by default, all for every one)",
+                            "source" => "ci or manyjulias for that source alone"],
+          "Size of the unpacked linux-x86_64 distribution of master commits: the commits in merge order with their merge time, version, julia-ci build, subject and source, and one array per metric aligned with them, in bytes (files and pkgimg.count are counts). metrics lists every metric there is. The sizes are of the tarball CI built from the first commit measured that way (the nightlies bucket keeps them about 60 days), and of manyjulias builds of master back to 2020 before it; markers has that switch, where the series steps because the manyjulias builds have fewer CPU targets.",
+          (db, _, p) -> begin
+              metrics = String[strip(m) for m in split(get(p, "metrics", ""), ',') if !isempty(strip(m))]
+              source = get(p, "source", "")
+              source in ("", "ci", "manyjulias") || throw(BadRequest("source must be ci or manyjulias"))
+              Render.sizes(db; since=instant(p, "since"), metrics, source)
+          end),
+    Route("sizes/commit/<sha>", [],
+          "One commit's size measurement in each source next to the previous commit that source measured: every metric, and every file of at least 1 MiB in either, the files that changed most first.",
+          (db, a, _) -> Render.size_commit(db, a[1])),
+    Route("sizes/prs", [],
+          "Every open julia pull request with a measured julia-pr build, newest build first: the pull request, its build and head commit, its merge-base with master, base (the merge-base's measurement as a master commit, null until its julia-ci build job has finished and it is measured), and values and base_values, the summary metrics of the head and the base in bytes. The tarball is left out: julia-pr builds compress theirs differently.",
+          (db, _, _) -> Render.size_prs(db)),
+    Route("sizes/pr/<number>", [],
+          "One open pull request's measurement next to its merge-base's: every metric, and every file of at least 1 MiB in either, the files that changed most first.",
+          (db, a, _) -> Render.size_pr(db, a[1])),
     Route("downloads/summary", [],
           "Package server requests per day (total, user, CI), by Julia version and release stage, with Julia release tags.",
           (db, _, _) -> Render.downloads(db)),
@@ -499,7 +517,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "downloads", "pkgeval"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "downloads", "pkgeval"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
@@ -546,6 +564,16 @@ function landing_targets()
             "/api/pkgeval/popular?days=30&client=user&limit=50", "/api/commits?limit=100"]
 end
 
+function sizes_commit_example(db)
+    r = Store.query(db, "SELECT commit_sha FROM size_builds ORDER BY merged_at DESC LIMIT 1")
+    return isempty(r) ? "0000000" : first(String(r[1].commit_sha), 10)
+end
+
+function sizes_pr_example(db)
+    r = Store.query(db, "SELECT pr_number FROM size_prs ORDER BY build DESC LIMIT 1")
+    return isempty(r) ? "0" : string(r[1].pr_number)
+end
+
 # One request of every other route, with arguments the database has
 function other_targets(db)
     since = Dates.format(Date(now(UTC)) - Day(7), dateformat"yyyy-mm-dd")
@@ -554,6 +582,7 @@ function other_targets(db)
     return ["/api/timing/runs?since=$since&changed_since=1", "/api/benchmarks/verdicts?since=$since",
             "/api/pkgeval/packages?q=A", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
+            "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
             "/api/commit/$(isempty(latest) ? "0000000" : latest[1]["commit"])",
             (isempty(groups) ? String[] : ["/api/benchmarks/groups/$(groups[1])?since=$since"])...]
 end
