@@ -2690,6 +2690,9 @@ a {
   max-height: 85vh;
   overflow-y: auto;
 }
+.ttfx-build-popup.ttfx-pr-popup {
+  max-width: min(820px, calc(100vw - 32px));
+}
 .ttfx-build-popup h3 {
   padding-right: 24px;
 }
@@ -2731,6 +2734,12 @@ a {
 }
 .ttfx-popup-table .ttfx-down {
   color: var(--color-success-fg);
+}
+.ttfx-popup-table .ttfx-popup-task-note {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ttfx-popup-muted {
   color: var(--color-fg-muted);

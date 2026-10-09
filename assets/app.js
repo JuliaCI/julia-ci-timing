@@ -10466,6 +10466,7 @@ function showTtfxBuildPopup(b, task) {
 
   document.getElementById("ttfx-build-popup-title").textContent = `TTFX build ${b.date}`;
   const body = document.getElementById("ttfx-build-popup-body");
+  body.parentElement.classList.remove("ttfx-pr-popup");
   body.innerHTML = html;
   // The commit page replaces the tab under the popup
   body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
@@ -11719,7 +11720,7 @@ function copyTtfxPrSummary(button) {
   );
 }
 
-// Captured so the click does not also reach the row, which opens the job
+// Captured so the click does not also reach the row, which opens the popup
 document.addEventListener(
   "click",
   (e) => {
@@ -11730,6 +11731,105 @@ document.addEventListener(
   },
   true,
 );
+
+// Details of the pull request behind a clicked row, in the build popup's
+// overlay: its links, what the job compared and when, the suite geomeans of
+// every metric (and the stack's estimate against master), then the tasks
+// with a robust change
+function showTtfxPrPopup(p) {
+  const pct = (g) => formatTtfxPct((g - 1) * 100);
+  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(pct).join(", ") : "–");
+  const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+  const st = p.stack;
+  const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `<code>${escapeHtml(st.base_ref)}</code>`) : "master";
+  const chained = st && st.complete ? st.suite : null;
+  const ci = ttfxPrCi(p);
+  const sha = (c) => `<code>${escapeHtml(c.commit.slice(0, 10))}</code>`;
+  const ghCommit = (c, text) =>
+    `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(c.commit)}" target="_blank" rel="noopener">${text}</a>`;
+
+  let html = '<div class="ttfx-popup-actions">';
+  html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener">GitHub PR #${p.pr}</a>`;
+  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Buildkite job</a>`;
+  html += `<button type="button" class="btn" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
+  html += "</div>";
+  html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
+  html += row("Author", escapeHtml(p.author));
+  const ciText = escapeHtml(ci.title.replace(/^CI: /, ""));
+  html += row("CI", `${ci.dot} ${ci.url ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener">${ciText}</a>` : ciText}`);
+  html += row("Head", `${ghCommit(p.head, sha(p.head))} (${escapeHtml(p.head.version)})`);
+  html += row(
+    "Base",
+    `${ghCommit(p.base, sha(p.base))} (${escapeHtml(p.base.version)}${st ? `, on ${parent}` : ""}; ${commitLink(p.base.commit, "everything recorded for it")})`,
+  );
+  html += row("Measured", `${escapeHtml(p.date.replace("T", " ").replace(/Z$/, ""))} UTC (${escapeHtml(timeAgo(p.date))})`);
+  html += row("Job", `#${p.build}, ${escapeHtml(p.state)}; ${p.n_tasks} tasks${p.blocks ? `, ${p.blocks} ABBA blocks` : ""}`);
+  html += row(
+    "Score",
+    `<b>${ttfxScorePct(p.score)}</b>${st ? ` for the stack against master; on its own against ${parent}: ${ttfxScorePct(p.own_score)}` : ""}`,
+  );
+  if (p.outdated) html += '<div class="ttfx-popup-note">Note: measured on an older commit; the pull request has newer commits.</div>';
+  if (st) html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(ttfxPrStackTitle(p))}</div>`;
+
+  const verdictOf = (on, off) => {
+    const vs = [on && on.verdict, off && off.verdict];
+    return vs.includes("regression") ? "regression" : vs.includes("improvement") ? "improvement" : "same";
+  };
+  const verdictClass = (v) => (v === "regression" ? "ttfx-up" : v === "improvement" ? "ttfx-down" : "");
+  html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
+  html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
+  if (chained) html += '<th class="num">Stack vs master (est.)</th>';
+  html += "</tr></thead><tbody>";
+  for (const m of ttfxPrs.metrics) {
+    const on = p.suite[m];
+    const off = p.suite[m + "_gcoff"];
+    const v = verdictOf(on, off);
+    html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks">${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    html += `<td class="num ${verdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
+    html += `<td class="${verdictClass(v)}">${v}</td>`;
+    if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  html += '<div class="ttfx-popup-muted ttfx-popup-hint">One value per ABBA block. Muted: the same with the GC off.</div>';
+
+  const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
+  if (changed.length) {
+    html += `<table class="ttfx-popup-table"><thead><tr><th>Task with a robust change</th>`;
+    html += ttfxPrs.metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+    html += "</tr></thead><tbody>";
+    for (const t of changed) {
+      html += `<tr><th>${escapeHtml(t.name)}</th>`;
+      if (t.note) {
+        // A task that fails on one side has no ratios, only the failure
+        html += `<td class="ttfx-up ttfx-popup-task-note" colspan="${ttfxPrs.metrics.length}" title="${escapeHtml(t.note)}">${escapeHtml(t.note)}</td></tr>`;
+        continue;
+      }
+      for (const m of ttfxPrs.metrics) {
+        const r = t.metrics[m];
+        const cls = t.regressions.includes(m) ? "ttfx-up" : t.improvements.includes(m) ? "ttfx-down" : "";
+        html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(pct).join(", ") : "–"}${
+          r && r.gcoff_ratios ? ` <span class="ttfx-popup-muted" title="GC off">${r.gcoff_ratios.map(pct).join(", ")}</span>` : ""
+        }</td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+  } else {
+    html += '<div class="ttfx-popup-muted ttfx-popup-hint">No task has a robust change.</div>';
+  }
+
+  document.getElementById("ttfx-build-popup-title").textContent = `TTFX of pull request #${p.pr}`;
+  const body = document.getElementById("ttfx-build-popup-body");
+  body.parentElement.classList.add("ttfx-pr-popup");
+  body.innerHTML = html;
+  // The commit page replaces the tab under the popup
+  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+}
 
 // Hovering a stacked pull request's row lights up the rows of the ones below it,
 // fainter the further down the stack
@@ -11852,7 +11952,7 @@ function renderTtfxPrsTable() {
   ttfxPrs.prs.forEach((p, i) => {
     if (ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]))) html += ttfxPrsFlatToggleRow(cols);
     if (ttfxPrIsFlat(p) && !ttfxPrsShowFlat) return;
-    html += `<tr data-pr="${p.pr}" data-job-url="${escapeHtml(p.web_url || "")}">`;
+    html += `<tr data-pr="${p.pr}">`;
     html += `<td class="num">${i + 1}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
@@ -11901,10 +12001,10 @@ function renderTtfxPrsTable() {
     html += "</tr>";
   });
   tbody.innerHTML = html;
-  tbody.querySelectorAll("tr[data-job-url]").forEach((tr) => {
-    if (tr.dataset.jobUrl) tr.onclick = () => window.open(tr.dataset.jobUrl, "_blank", "noopener");
+  tbody.querySelectorAll("tr[data-pr]").forEach((tr) => {
     const p = ttfxPrs.prs.find((x) => x.pr === Number(tr.dataset.pr));
     if (!p) return;
+    tr.onclick = () => showTtfxPrPopup(p);
     tr.addEventListener("mouseenter", () => {
       highlightTtfxPrStack(p, true);
       showTtfxPrPoints(p);
@@ -11923,7 +12023,9 @@ function renderTtfxPrsTable() {
 // estimate of the stack so far against master.
 const TTFX_PR_POINT_PREFIX = "pr-";
 const TTFX_PR_POINT_SPACING = 60; // px between layers, room for a label
+const TTFX_PR_POINT_SPACING_GCOFF = 92; // the same when the label has a GC-off line
 const TTFX_PR_POINT_MARGIN = 64; // px kept right of the last point
+const TTFX_PR_POINT_MAX_SHARE = 0.7; // of the axis width the points and margin may take
 
 // The suite ratios of a pull request against master, chaining down a stack
 function ttfxPrChainedSuite(p) {
