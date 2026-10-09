@@ -12361,8 +12361,11 @@ function formatSizePct(delta, before) {
   return Math.abs(pct) < 0.05 ? "" : ` <small>${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</small>`;
 }
 
+// Unlike the shared byte formatter, a size of 0 reads 0: here a dash means
+// not measured
 function formatSizeValue(v, isCount = false) {
   if (v == null) return "—";
+  if (v === 0) return "0";
   return isCount ? v.toLocaleString() : formatBytes(v);
 }
 
@@ -12496,12 +12499,12 @@ function populateSizesMetricList() {
   for (const m of metrics) {
     const latest = sizesLatest(m);
     const title = latest
-      ? `${sizesMetricLabel(m)}: ${formatBytes(latest.value)} on ${sizesData.commits[latest.i].slice(0, 10)}`
+      ? `${sizesMetricLabel(m)}: ${formatSizeValue(latest.value)} on ${sizesData.commits[latest.i].slice(0, 10)}`
       : `${sizesMetricLabel(m)}: not measured`;
     html += `<div class="group-item ${sizesSelected.has(m) ? "selected" : ""}" data-metric="${escapeHtml(m)}" title="${escapeHtml(title)}">`;
     html += `<span class="color-dot" style="background: ${sizesColors[m] || "#888"}"></span>`;
     html += `<span class="task-name">${escapeHtml(sizesMetricLabel(m))}</span>`;
-    html += `<span class="task-latest">${latest ? escapeHtml(formatBytes(latest.value)) : ""}</span>`;
+    html += `<span class="task-latest">${latest ? escapeHtml(formatSizeValue(latest.value)) : ""}</span>`;
     html += `</div>`;
   }
   container.innerHTML = html;
@@ -12536,6 +12539,15 @@ function highlightSizesRow(i) {
 function toggleSizesMetric(m) {
   if (sizesSelected.has(m)) sizesSelected.delete(m);
   else sizesSelected.add(m);
+  populateSizesMetricList();
+  updateSizesChart();
+  updateSizesTable();
+  updateSizesURL();
+}
+
+// The toolbar's All metrics, None and Default buttons
+function selectSizesMetrics(which) {
+  sizesSelected = new Set(which === "all" ? Object.keys(SIZES_METRICS) : which === "default" ? SIZES_DEFAULT_METRICS : []);
   populateSizesMetricList();
   updateSizesChart();
   updateSizesTable();
@@ -12601,7 +12613,7 @@ function updateSizesChart() {
       _metric: m,
     });
   }
-  const fmt = (v) => (sizesNormalized ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : formatBytes(v));
+  const fmt = (v) => (sizesNormalized ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : formatSizeValue(v));
   sizesChart = new Chart(canvas, {
     type: "line",
     data: { datasets },
@@ -12656,7 +12668,7 @@ function updateSizesChart() {
               const i = ctx.raw.i;
               const prev = sizesPrevious(vals, i);
               const delta = prev == null ? "" : ` (${formatSizeDelta(vals[i] - vals[prev])})`;
-              return ` ${ds.label}: ${sizesNormalized ? fmt(ctx.raw.y) : formatBytes(vals[i])}${delta}`;
+              return ` ${ds.label}: ${sizesNormalized ? fmt(ctx.raw.y) : formatSizeValue(vals[i])}${delta}`;
             },
             footer: (items) => {
               if (!items.length) return "";
@@ -12676,8 +12688,7 @@ function updateSizesChart() {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd HH:mm" }),
         y: {
           beginAtZero: true,
-          // The shared byte formatter shows a dash for 0, which means missing elsewhere
-          ticks: { color: textColor, callback: (v) => (v === 0 && !sizesNormalized ? "0" : fmt(v)) },
+          ticks: { color: textColor, callback: fmt },
           grid: { color: gridColor },
         },
       },
@@ -12811,7 +12822,7 @@ function renderSizesPrsTable() {
         continue;
       }
       const before = p.base_values[m];
-      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatBytes(before)} → ${formatBytes(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
+      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
     }
     html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
     html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener">${p.build}</a></td>`;
@@ -12951,7 +12962,7 @@ function sizesMetricsTableHtml(metrics, label) {
     if (!v || v[0] == null) continue;
     const d = v[1] == null ? null : v[0] - v[1];
     const cls = d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "";
-    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatBytes(v[0])}</td>`;
+    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatSizeValue(v[0])}</td>`;
     html += `<td class="num ${cls}">${formatSizeDelta(d)}${d ? formatSizePct(d, v[1]) : ""}</td></tr>`;
   }
   return html + "</tbody></table>";
@@ -13035,7 +13046,7 @@ function renderSizesCommitsTable() {
         continue;
       }
       const delta = c.after - c.before;
-      html += `<td class="num ${delta > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatBytes(c.before)} → ${formatBytes(c.after)}`)}">${formatSizeDelta(delta)}${formatSizePct(delta, c.before)}</td>`;
+      html += `<td class="num ${delta > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatSizeValue(c.before)} → ${formatSizeValue(c.after)}`)}">${formatSizeDelta(delta)}${formatSizePct(delta, c.before)}</td>`;
     }
     const msg = multi
       ? `${d.commits[p].slice(0, 10)}..${sha.slice(0, 10)}, not measured one by one`
@@ -13110,7 +13121,7 @@ function showSizesCommitPopup(i, metric) {
     const cls = delta > 0 ? "ttfx-up" : delta < 0 ? "ttfx-down" : "";
     const pct = delta ? formatSizePct(delta, vals[p]) : "";
     html += `<tr${m === metric ? ' class="highlight"' : ""}><th>${escapeHtml(sizesMetricLabel(m))}</th>`;
-    html += `<td class="num">${formatBytes(vals[i])}</td><td class="num ${cls}">${formatSizeDelta(delta)}${pct}</td></tr>`;
+    html += `<td class="num">${formatSizeValue(vals[i])}</td><td class="num ${cls}">${formatSizeDelta(delta)}${pct}</td></tr>`;
   }
   html += "</tbody></table>";
   html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading the files that changed...</div>';
@@ -13161,7 +13172,7 @@ async function loadSizesPopupFiles(sha, source) {
 // part-to-whole split and a sparkline for a series. The summary files are
 // fetched here rather than through the tabs' loaders, which also build their
 // charts.
-let overviewSources = null; // { pkgeval, bench, ttfx, packages, agents }
+let overviewSources = null; // { pkgeval, bench, ttfx, sizes, packages, agents }
 let overviewLoadedAt = 0;
 let overviewLoading = null;
 let overviewCharts = [];
@@ -13173,6 +13184,9 @@ const OVERVIEW_CADENCE_GAPS = 10;
 // TTFX runs on every master build, so a quiet couple of days means the job
 // is not producing results
 const OVERVIEW_TTFX_STALE_MS = 2 * OVERVIEW_DAY_MS;
+// Sizes are measured from every master build's tarball, so a few quiet days
+// mean the measurement is not keeping up
+const OVERVIEW_SIZES_STALE_MS = 3 * OVERVIEW_DAY_MS;
 // The package-server rollups for a day appear the next day
 const OVERVIEW_DOWNLOADS_LAG_DAYS = 3;
 // Agents are snapshotted on every update run
@@ -13219,11 +13233,14 @@ async function loadOverviewSources() {
   // reasons of the latest PkgEval report, the week's most requested packages
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
-  const [pkgeval, bench, ttfx, ttfxPrsList, packages, agents, builds, reasons, top, popular, backlog] = await Promise.all([
+  const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
+  const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog] = await Promise.all([
     pkgevalData || quiet("pkgeval/summary"),
     benchData || quiet("benchmarks/summary"),
     ttfxData || quiet("ttfx/summary"),
     ttfxPrs || quiet("ttfx/prs"),
+    sizesData || quiet("sizes/summary", { since: sparkStart }),
+    sizesPrs || quiet("sizes/prs"),
     packagesDownloadsData || quiet("downloads/summary"),
     quiet("agents/latest"),
     quiet("timing/builds", { since: weekAgo }),
@@ -13232,7 +13249,7 @@ async function loadOverviewSources() {
     quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
     quiet("agents/backlog", { since: twoWeeksAgo }),
   ]);
-  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, packages, agents, builds, reasons, top, popular, backlog };
+  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, sizes, sizesPrs: sizesPrsList, packages, agents, builds, reasons, top, popular, backlog };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -13878,6 +13895,92 @@ function overviewTtfxPrs(prs) {
     .join(", ");
 }
 
+// The size of the distribution at the latest measured master commit, split
+// into its big parts, with the month's trend of the total and the open pull
+// requests that change it most
+function overviewSizesCard(src, prs) {
+  const totals = (src && src.values && src.values.total) || [];
+  let i = totals.length - 1;
+  while (i >= 0 && totals[i] == null) i--;
+  if (i < 0) return overviewMissingCard("ci-sizes", "Size", "The size summary");
+  const colors = overviewColors();
+  const at = (m) => (src.values[m] ? src.values[m][i] : null);
+  const timeOf = (k) => Date.parse(src.merged_at[k]);
+  const latestMs = timeOf(i);
+  const ageMs = Date.now() - latestMs;
+  const sha = src.commits[i];
+  const measured = [];
+  for (let k = 0; k < totals.length; k++) if (totals[k] != null) measured.push(k);
+  const sparkStart = Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS;
+  const spark = overviewSpark(
+    measured.filter((k) => timeOf(k) >= sparkStart).map((k) => ({ x: timeOf(k), y: totals[k] })),
+    { color: colors.accent, label: "Total unpacked size per master commit", format: formatBytes },
+  );
+  // Against the last measured commit at least a week older, unless the
+  // measurement switched source in between: that step is not a change
+  const weekAgo = overviewWeekBefore(measured, latestMs, timeOf);
+  const crossed = weekAgo != null && (src.markers || []).some((m) => Date.parse(m.at) > timeOf(weekAgo) && Date.parse(m.at) <= latestMs);
+  const delta =
+    weekAgo != null && !crossed
+      ? overviewDelta({
+          value: (100 * (totals[i] - totals[weekAgo])) / totals[weekAgo],
+          unit: "%",
+          upIsGood: false,
+          ...overviewReportDelta(overviewDateOnly(latestMs), overviewDateOnly(timeOf(weekAgo)), "commit"),
+          detail: `Latest measured commit ${sha.slice(0, 10)} (${src.merged_at[i]}) against the last measured one at least a week older, ${src.commits[weekAgo].slice(0, 10)} (${src.merged_at[weekAgo]})`,
+        })
+      : null;
+  const sum = (...ms) => ms.reduce((acc, m) => acc + (at(m) || 0), 0);
+  const parts = [
+    { label: "sys.so", value: sum("sysimg") },
+    { label: "Pkgimages", value: sum("pkgimg.ji", "pkgimg.so") },
+    { label: "libLLVM", value: sum("libLLVM") },
+    { label: "Other libraries", value: sum("libs.other", "libjulia-codegen", "libjulia-internal") },
+  ];
+  parts.push({ label: "Other", value: totals[i] - parts.reduce((acc, p) => acc + p.value, 0) });
+  const donut = overviewDonut(
+    parts.map((p, k) => ({ ...p, color: colors.categorical[k] })),
+    { format: formatBytes },
+  );
+  const lastWeek = measured.filter((k) => timeOf(k) >= Date.now() - OVERVIEW_WEEK_MS);
+  const status =
+    ageMs > OVERVIEW_SIZES_STALE_MS
+      ? overviewStatus("warn", `No measurement for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`)
+      : overviewStatus("ok", "Current");
+  const ci = src.sources[i] === "ci";
+  return overviewCard({
+    tab: "ci-sizes",
+    title: "Size",
+    status,
+    description: `Size of the unpacked ${escapeHtml(src.triplet || "linux-x86_64")} distribution, measured from the tarball of every master build.`,
+    headline: formatBytes(totals[i]),
+    headlineLabel: "unpacked, at the latest measured master commit",
+    delta,
+    spark,
+    donut,
+    rows: [
+      ["Latest commit", `${overviewExtLink(githubCommitURL(sha), sha.slice(0, 10))} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
+      ["Tarball", formatSizeValue(at("tarball"))],
+      ["Files", at("files") != null ? at("files").toLocaleString() : ""],
+      ["Biggest open PRs", overviewSizesPrs(prs)],
+      ["Commits in last 7 days", String(lastWeek.length)],
+      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
+}
+
+// The five open pull requests that change the total most, with the change
+function overviewSizesPrs(prs) {
+  const delta = (p) => (p.base_values && p.values.total != null && p.base_values.total != null ? p.values.total - p.base_values.total : null);
+  return ((prs && prs.prs) || [])
+    .map((p) => ({ p, d: delta(p) }))
+    .filter(({ d }) => d)
+    .sort((a, b) => Math.abs(b.d) - Math.abs(a.d))
+    .slice(0, 5)
+    .map(({ p, d }) => `${overviewExtLink(`https://github.com/JuliaLang/julia/pull/${p.number}`, `#${p.number}`)} <span class="${d > 0 ? "ttfx-up" : "ttfx-down"}">${formatSizeDelta(d)}</span>`)
+    .join(", ");
+}
+
 function overviewDateAdd(dateStr, days) {
   return new Date(Date.parse(dateStr) + days * OVERVIEW_DAY_MS).toISOString().slice(0, 10);
 }
@@ -14271,6 +14374,7 @@ function drawOverview() {
   overviewCharts = [];
   const cards = [
     overviewTtfxCard(src.ttfx, src.ttfxPrs),
+    overviewSizesCard(src.sizes, src.sizesPrs),
     overviewPackagesCard(src.packages),
     overviewPkgevalCard(src.pkgeval),
     overviewCICard(),
@@ -14313,6 +14417,7 @@ function drawOverview() {
     src.pkgeval && src.pkgeval.generated_at,
     src.bench && src.bench.generated_at,
     src.ttfx && src.ttfx.generated_at,
+    src.sizes && src.sizes.generated_at,
     src.packages && src.packages.generated_at,
     src.agents && src.agents.generated_at,
   ]
