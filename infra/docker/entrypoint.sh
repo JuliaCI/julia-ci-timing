@@ -16,7 +16,7 @@ fetch_all() {
   # One failing source must not stop the others; the export then renders
   # that source as it was (the same rule the Actions workflow had).
   local failed=0
-  for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_agents.jl; do
+  for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl; do
     echo "==> $f"
     if ! julia --color=no --project "/app/$f"; then
       echo "!! $f failed" >&2
@@ -46,7 +46,7 @@ case "${1:-ingest}" in
     # Everything the browser loads except data/, which the export writes
     rm -rf /site/assets /site/*.html /site/favicon.svg /site/site.webmanifest /site/llms.txt
     cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/assets /site/
-    for d in overview commit diff history timing builds commits workers ttfx downloads pkgeval; do
+    for d in overview commit diff history timing builds commits workers ttfx sizes downloads pkgeval; do
       rm -rf "/site/$d"; cp -r "/app/$d" "/site/$d"
     done
     commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"

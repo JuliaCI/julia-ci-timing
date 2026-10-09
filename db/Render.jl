@@ -866,6 +866,164 @@ function commit(db, ref)
         "coverage" => commit_coverage(db, prefix, sha))
 end
 
+# --- sizes -------------------------------------------------------------------
+
+const SIZE_TRIPLET = "x86_64-linux-gnu"
+# What sizes/summary returns unless asked for other metrics: the whole and its
+# largest parts
+const SIZE_SUMMARY_METRICS = ["total", "tarball", "files", "sysimg", "sysimg.text", "sysimg.image_data", "sysimg.dwarf",
+                              "pkgimg.ji", "pkgimg.so", "libjulia-codegen", "libjulia-internal", "libLLVM", "libs.other",
+                              "share.stdlib"]
+
+# The CI tarballs replace the manyjulias builds from the first commit CI was
+# measured on; the summary draws that switch as a marker
+const SIZE_SWITCH_LABEL = "Measured from CI"
+const SIZE_SWITCH_DESCRIPTION = "From here on the sizes are of the tarball each julia-ci master build uploaded. Before, they are of " *
+    "manyjulias builds of the same commits, which have three CPU targets where CI has four (so the code and DWARF of sys.so and " *
+    "the pkgimages are about a fifth smaller) and no share/doc or share/man: the step at this line is that difference, not a commit."
+
+# One source's measured commits from `from` (inclusive) to `until` (exclusive)
+# in merge order, with one array per metric aligned with them (null where a
+# commit lacks the metric)
+function size_series(db, src, wanted; from="", until="")
+    window = (isempty(from) ? "" : " AND merged_at >= ?") * (isempty(until) ? "" : " AND merged_at < ?")
+    params = Any[src, SIZE_TRIPLET]
+    isempty(from) || push!(params, from)
+    isempty(until) || push!(params, until)
+    bs = rows(db, "SELECT id, commit_sha, merged_at, version, build, message FROM size_builds WHERE source = ? AND triplet = ?" * window *
+                  " ORDER BY merged_at, commit_sha", params)
+    index = Dict(Int(b.id) => i for (i, b) in enumerate(bs))
+    values = OrderedDict(m => Vector{Any}(nothing, length(bs)) for m in wanted)
+    if !isempty(bs)
+        for r in rows(db, "SELECT m.size_build_id AS id, m.metric, m.value FROM size_metrics m JOIN size_builds b ON b.id = m.size_build_id " *
+                          "WHERE b.source = ? AND b.triplet = ? AND m.metric IN (SELECT value FROM json_each(?))",
+                      (src, SIZE_TRIPLET, JSON3.write(wanted)))
+            i = get(index, Int(r.id), nothing)
+            i === nothing || (values[String(r.metric)][i] = Int(r.value))
+        end
+    end
+    return OrderedDict{String,Any}("commits" => [String(b.commit_sha) for b in bs], "merged_at" => [String(b.merged_at) for b in bs],
+                                   "versions" => [String(b.version) for b in bs], "builds" => Any[js(b.build) for b in bs],
+                                   "messages" => [String(b.message) for b in bs], "sources" => fill(src, length(bs)), "values" => values)
+end
+
+# The measured commits in merge order and one array per metric aligned with
+# them: the manyjulias builds up to the first CI measurement and the CI
+# tarballs from there, with a marker at the switch. `source` gives one source
+# alone instead. `metrics` empty means the summary set, ["all"] every metric.
+function sizes(db; since="", metrics=String[], source="")
+    all_metrics = [String(r.metric) for r in rows(db, "SELECT DISTINCT metric FROM size_metrics ORDER BY metric")]
+    wanted = isempty(metrics) ? SIZE_SUMMARY_METRICS : metrics == ["all"] ? all_metrics : metrics
+    markers = Any[]
+    if !isempty(source)
+        series = size_series(db, source, wanted; from=since)
+    else
+        first_ci = rows(db, "SELECT commit_sha, merged_at FROM size_builds WHERE source = 'ci' AND triplet = ? " *
+                            "ORDER BY merged_at, commit_sha LIMIT 1", (SIZE_TRIPLET,))
+        switch = isempty(first_ci) ? "" : String(first_ci[1].merged_at)
+        series = size_series(db, "manyjulias", wanted; from=since, until=switch)
+        if !isempty(switch)
+            ci = size_series(db, "ci", wanted; from=max(since, switch))
+            for k in ("commits", "merged_at", "versions", "builds", "messages", "sources")
+                append!(series[k], ci[k])
+            end
+            for m in wanted
+                append!(series["values"][m], ci["values"][m])
+            end
+            push!(markers, OrderedDict("at" => switch, "commit" => String(first_ci[1].commit_sha),
+                                       "label" => SIZE_SWITCH_LABEL, "description" => SIZE_SWITCH_DESCRIPTION))
+        end
+    end
+    return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => all_metrics,
+                       series..., "markers" => markers)
+end
+
+# Every metric of measurement `id` next to measurement `before`'s (0 for none),
+# and every file of at least 1 MiB in either, the files that changed most first
+function size_diff(db, id, before)
+    metrics_of(i) = Dict(String(r.metric) => Int(r.value)
+                         for r in rows(db, "SELECT metric, value FROM size_metrics WHERE size_build_id = ?", (i,)))
+    files_of(i) = Dict(String(r.path) => Int(r.bytes)
+                       for r in rows(db, "SELECT path, bytes FROM size_files WHERE size_build_id = ?", (i,)))
+    metrics, metrics_before = metrics_of(id), metrics_of(before)
+    files, files_before = files_of(id), files_of(before)
+    paths = sort!(collect(union(keys(files), keys(files_before))),
+                  by=p -> (-abs(get(files, p, 0) - get(files_before, p, 0)), p))
+    return OrderedDict(
+        "metrics" => OrderedDict(m => [metrics[m], get(metrics_before, m, nothing)] for m in sort!(collect(keys(metrics)))),
+        "files" => [OrderedDict("path" => p, "bytes" => get(files, p, nothing), "previous" => get(files_before, p, nothing))
+                    for p in paths])
+end
+
+# One commit's measurement in each source next to the previous commit that
+# source measured. nothing when no source has the commit.
+function size_commit(db, ref)
+    occursin(r"^[0-9a-f]{7,40}$", ref) || return nothing
+    out = OrderedDict{String,Any}()
+    for b in rows(db, "SELECT * FROM size_builds WHERE commit_sha GLOB ? AND triplet = ? AND source != 'pr' ORDER BY source",
+                  (ref * "*", SIZE_TRIPLET))
+        src, sha = String(b.source), String(b.commit_sha)
+        prev = rows(db, "SELECT id, commit_sha, merged_at, version FROM size_builds WHERE source = ? AND triplet = ? AND " *
+                        "(merged_at < ? OR (merged_at = ? AND commit_sha < ?)) ORDER BY merged_at DESC, commit_sha DESC LIMIT 1",
+                    (src, SIZE_TRIPLET, b.merged_at, b.merged_at, sha))
+        out[src] = OrderedDict(
+            "commit" => sha, "merged_at" => String(b.merged_at), "version" => String(b.version), "build" => js(b.build),
+            "previous" => isempty(prev) ? nothing : OrderedDict("commit" => String(prev[1].commit_sha), "merged_at" => String(prev[1].merged_at),
+                                                                 "version" => String(prev[1].version)),
+            size_diff(db, Int(b.id), isempty(prev) ? 0 : Int(prev[1].id))...)
+    end
+    return isempty(out) ? nothing : OrderedDict("query" => ref, "triplet" => SIZE_TRIPLET, "sources" => out)
+end
+
+const SIZE_PR_METRICS = filter(!=("tarball"), SIZE_SUMMARY_METRICS)
+
+const SIZE_PR_QUERY = "SELECT p.*, h.id AS head_id, h.version AS head_version, h.measured_at AS measured_at, " *
+    "b.id AS base_id, b.merged_at AS base_merged_at, b.version AS base_version FROM size_prs p " *
+    "JOIN size_builds h ON h.source = 'pr' AND h.triplet = ?1 AND h.commit_sha = p.head_commit " *
+    "LEFT JOIN size_builds b ON b.source = 'ci' AND b.triplet = ?1 AND b.commit_sha = p.base_commit"
+
+function size_pr_info(r)
+    base = r.base_id === missing ? nothing :
+        OrderedDict("commit" => String(r.base_commit), "merged_at" => String(r.base_merged_at), "version" => String(r.base_version))
+    return OrderedDict("number" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+                       "base_ref" => String(r.base_ref), "build" => Int(r.build), "build_created_at" => String(r.build_created_at),
+                       "web_url" => js(r.web_url), "measured_at" => String(r.measured_at),
+                       "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
+                       "merge_base" => String(r.merge_base), "base" => base)
+end
+
+# Every open pull request with a measured build, newest build first: the summary
+# metrics of its head and of its merge-base, once that is measured
+function size_prs(db)
+    prs = rows(db, SIZE_PR_QUERY * " ORDER BY p.build DESC", (SIZE_TRIPLET,))
+    ids = unique(Int[id for r in prs for id in (r.head_id, r.base_id) if id !== missing])
+    values = Dict{Int,Dict{String,Int}}()
+    for r in rows(db, "SELECT size_build_id AS id, metric, value FROM size_metrics WHERE size_build_id IN (SELECT value FROM json_each(?)) " *
+                      "AND metric IN (SELECT value FROM json_each(?))", (JSON3.write(ids), JSON3.write(SIZE_PR_METRICS)))
+        get!(values, Int(r.id), Dict{String,Int}())[String(r.metric)] = Int(r.value)
+    end
+    out = Any[]
+    for r in prs
+        e = size_pr_info(r)
+        e["values"] = get(values, Int(r.head_id), Dict{String,Int}())
+        e["base_values"] = r.base_id === missing ? nothing : get(values, Int(r.base_id), Dict{String,Int}())
+        push!(out, e)
+    end
+    return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => SIZE_PR_METRICS, "prs" => out)
+end
+
+# One open pull request's measurement next to its merge-base's: every metric and
+# every file of at least 1 MiB in either
+function size_pr(db, number)
+    n = tryparse(Int, number)
+    n === nothing && return nothing
+    r = rows(db, SIZE_PR_QUERY * " WHERE p.pr_number = ?2", (SIZE_TRIPLET, n))
+    isempty(r) && return nothing
+    e = size_pr_info(r[1])
+    merge!(e, size_diff(db, Int(r[1].head_id), r[1].base_id === missing ? 0 : Int(r[1].base_id)))
+    return e
+end
+
 # --- downloads ---------------------------------------------------------------
 
 const DL_SOURCE = "https://julialang-logs.s3.amazonaws.com/public_outputs/current/resource_types_by_date.csv.gz"
@@ -1168,6 +1326,7 @@ const LATEST_DATA = Dict(
     "benchmarks" => "SELECT MAX(date) AS t FROM bench_reports",
     "pkgeval" => "SELECT MAX(date) AS t FROM pkgeval_reports",
     "ttfx" => "SELECT MAX(build_created_at) AS t FROM ttfx_jobs",
+    "sizes" => "SELECT MAX(merged_at) AS t FROM size_builds WHERE source IN ('ci', 'pr')",
     "packages" => "SELECT MAX(date) AS t FROM dl_series",
     "agents" => "SELECT MAX(time) AS t FROM agent_snapshots")
 

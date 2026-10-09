@@ -1,8 +1,8 @@
 # Julia Performance Tracking
 
 Dashboard for Julia language performance: Nanosoldier benchmark reports every 2 to 3 days,
-[CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, PkgEval and
-package-server downloads. The Overview tab sums up every source, the Commit tab gathers
+[CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, distribution size,
+PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), and the other tabs go deep.
 
 **Live:** <https://perf.julialang.org/>
@@ -13,6 +13,7 @@ Short paths open a tab directly and forward any other query parameters:
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
 [/timing](https://perf.julialang.org/timing), [/builds](https://perf.julialang.org/builds),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
+[/sizes](https://perf.julialang.org/sizes),
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval).
 Each is a small redirect page under a directory of that name; the `?tab=` URLs
 they resolve to keep working as before.
@@ -22,7 +23,7 @@ they resolve to keep working as before.
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Six fetchers write a SQLite database every half hour (`db/schema.sql`):
+- Seven fetchers write a SQLite database every half hour (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
     receiving builds in July 2026)
@@ -34,6 +35,11 @@ container image (`Dockerfile`):
     the load and run times also from repeats with the GC disabled)
     from the `TTFX` job on every `julia-ci` master build, see
     [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
+  - `fetch_sizes.jl`: the size of the binary distribution (`tools/measure_sizes.jl`)
+    of every `julia-ci` master build, from the tarball in the nightlies bucket, and of
+    the latest `julia-pr` build of every open pull request, from its build job's
+    artifact (the token needs `read_artifacts`). `db/import_sizes.jl` imported the
+    history before that from manyjulias builds
   - `fetch_packages.jl`: package-server download rollups, per package too,
     with names from the General registry
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every

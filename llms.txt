@@ -3,7 +3,8 @@
 > Performance and health data for the Julia language, refreshed every half hour: CI job and
 > build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
 > PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
-> tasks on every master build, package-server downloads, and the Buildkite agents.
+> tasks on every master build, the size of the binary distribution of master commits and
+> open pull requests, package-server downloads, and the Buildkite agents.
 > Everything lives in one SQLite database. The web pages are a JavaScript app; read the
 > data through one of the three routes below instead of scraping them.
 
@@ -27,6 +28,8 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 - `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
 - `/api/ttfx/summary?since=`: TTFX per task on every master build
 - `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master, with whether CI passes on their head
+- `/api/sizes/summary?since=`: size of the linux-x86_64 distribution (total, sys.so, pkgimages, runtime libraries) of master commits, back to 2020
+- `/api/sizes/prs`: the size of each open pull request's latest build against the master commit it branched from
 - `/api/downloads/package/<Name>`: one package's daily downloads
 - `/api/agents/backlog?since=`: per agent pool, the julia-pr and julia-ci jobs waiting for an agent and running over time
 - `/api/agents/usage?days=`: agent seconds of the julia-pr and julia-ci jobs finished in the last `days` (7 by default), per pipeline, job name, pool and state

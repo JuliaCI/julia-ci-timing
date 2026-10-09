@@ -7,7 +7,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host; the six
+The source of truth is a SQLite database on the site's host; the seven
 `fetch_*.jl` scripts write to it every half hour. `docs/querying.md` is the
 guide to reading it (tables by topic, example queries, conventions), and
 `llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
