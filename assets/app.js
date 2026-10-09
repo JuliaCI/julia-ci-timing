@@ -9903,6 +9903,7 @@ function updatePackagesDownloadsChart() {
 // === PkgEval State ===
 let pkgevalData = null;
 let pkgevalChart = null;
+const PKGEVAL_TIME_RANGES = [7, 14, 30, 90, 180, 365, 730, 0];
 let pkgevalTimeRangeDays = 0;
 let pkgevalProportional = false;
 
@@ -9946,7 +9947,7 @@ function applyPkgevalURLParams() {
   const pt = params.get("pt");
   if (pt !== null) {
     const days = parseInt(pt, 10);
-    if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+    if (PKGEVAL_TIME_RANGES.includes(days)) {
       pkgevalTimeRangeDays = days;
       const sel = document.getElementById("pkgeval-time-range");
       if (sel) sel.value = days;
@@ -10257,8 +10258,8 @@ function updatePkgevalChart() {
       datasets: visibleDatasets.map((ds) => ({
         ...ds,
         borderWidth: pkgevalProportional ? 0 : 1.5,
-        pointRadius: 0,
-        pointHitRadius: 8,
+        pointRadius: 1.5,
+        ...ttfxHoverPointStyle(),
         tension: 0.1,
         backgroundColor: pkgevalProportional
           ? ds.borderColor + "cc"
