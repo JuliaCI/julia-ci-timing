@@ -105,6 +105,16 @@ const IS_TOUCH = window.matchMedia("(hover: none) and (pointer: coarse)").matche
 // Phone width, where some views switch to a phone layout of their own
 const PHONE_WIDTH = window.matchMedia("(max-width: 600px)");
 
+// Time charts box zoom (drag) on both axes but wheel and pinch zoom on time
+// alone. The zoom plugin has one `mode` for all three gestures, so it asks
+// which one is under way: a drag starts with a press, the others never do.
+let boxZooming = false;
+document.addEventListener("mousedown", () => (boxZooming = true), true);
+for (const type of ["wheel", "touchstart"]) {
+  document.addEventListener(type, () => (boxZooming = false), { capture: true, passive: true });
+}
+const boxZoomMode = () => (boxZooming ? "xy" : "x");
+
 // The phone layout of a table, rendered beside it (the stylesheet shows one
 // or the other): one item per row with a title, a line of detail and the key
 // number on the right. `attrs` repeats the row's data attributes, so the
@@ -7841,7 +7851,13 @@ function updateBenchChart() {
           zoom: {
             wheel: { enabled: true },
             pinch: { enabled: true },
-            mode: "x",
+            drag: {
+              enabled: !IS_TOUCH,
+              backgroundColor: isDark
+                ? "rgba(56,139,253,0.15)"
+                : "rgba(31,111,235,0.1)",
+            },
+            mode: boxZoomMode,
             onZoomComplete: () => {
               document.getElementById("bench-btn-reset-zoom").style.display =
                 "";
@@ -10322,7 +10338,7 @@ function updatePkgevalChart() {
                 ? "rgba(56,139,253,0.15)"
                 : "rgba(31,111,235,0.1)",
             },
-            mode: "x",
+            mode: boxZoomMode,
             onZoom: () => {
               document.getElementById("pkgeval-btn-reset-zoom").style.display =
                 "";
@@ -11182,7 +11198,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
             enabled: !IS_TOUCH,
             backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
           },
-          mode: "x",
+          mode: boxZoomMode,
           onZoomComplete: onZoomChange,
         },
       },
@@ -11288,8 +11304,9 @@ function ttfxLegendIcon(chart, ds) {
 
 // Runs after Chart.js has found the data extent (and again on every x zoom,
 // which refits y), so widen symmetrically about the midpoint when the
-// visible span is below the floor
+// visible span is below the floor. A box zoom's y range is kept as drawn.
 function ttfxEnforceMinYSpan(axis) {
+  if (axis.options.min != null || axis.options.max != null) return;
   if (!isFinite(axis.min) || !isFinite(axis.max)) return;
   const mid = (axis.min + axis.max) / 2;
   const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
@@ -12649,7 +12666,7 @@ function updateSizesChart() {
               enabled: !IS_TOUCH,
               backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
             },
-            mode: "x",
+            mode: boxZoomMode,
             onZoomComplete: showSizesResetZoom,
           },
         },
