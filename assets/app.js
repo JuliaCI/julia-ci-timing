@@ -12675,7 +12675,9 @@ function updateSizesChart() {
       scales: {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd HH:mm" }),
         y: {
-          ticks: { color: textColor, callback: (v) => fmt(v) },
+          beginAtZero: true,
+          // The shared byte formatter shows a dash for 0, which means missing elsewhere
+          ticks: { color: textColor, callback: (v) => (v === 0 && !sizesNormalized ? "0" : fmt(v)) },
           grid: { color: gridColor },
         },
       },
