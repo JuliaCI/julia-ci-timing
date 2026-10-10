@@ -205,10 +205,10 @@ version = "1.0.0"
 
 [[deps.SQLite]]
 deps = ["DBInterface", "Random", "SQLite_jll", "Serialization", "Tables", "WeakRefStrings"]
-git-tree-sha1 = "2a4d0a468db82170e9111b89aaad4ef68d83599c"
+git-tree-sha1 = "711f845818c355340894a802defe812c890ae4f1"
 registries = "General"
 uuid = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
-version = "1.8.3"
+version = "1.9.0"
 
 [[deps.SQLite_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll", "dlfcn_win32_jll"]
