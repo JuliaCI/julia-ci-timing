@@ -114,9 +114,10 @@
           }
         },
         "ttfx_jobs": {
-          "description": "The TTFX job of each julia-ci master build: it precompiles, loads and runs a set of package tasks (Julia-TTFX-Snippets) and records the times.",
+          "description": "The TTFX job of each julia-ci master build: it precompiles, loads and runs a set of package tasks (Julia-TTFX-Snippets) and records the times. A weekly job measures the newest stable release the same way, as a reference (kind release).",
           "columns": {
             "build": "the julia-ci build number",
+            "kind": "master for the job of a master build, release for the weekly run of the newest stable release (version and commit_sha are the release's)",
             "build_created_at": "when the build was created, UTC (minute precision)"
           }
         },
@@ -290,7 +291,7 @@
         "ttfx_task_history": {
           "title": "TTFX of one task per master build over the last :days days",
           "description": "task is Package/Snippet as in ttfx_results.task, e.g. BaseDirs/Project-Path",
-          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
+          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
         },
         "package_downloads_by_day": {
           "title": "One package's downloads per day, user and CI",

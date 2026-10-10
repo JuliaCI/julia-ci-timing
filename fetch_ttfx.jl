@@ -11,6 +11,8 @@
 # task; db/export.jl renders data/ttfx_summary.json.gz from them. The
 # job repeats each task script with the GC disabled as well; those give the load, run
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
+# A weekly job measures the newest stable release on the same tasks and machines, as a
+# reference; its rows have kind 'release' and the release's version and commit.
 # It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
@@ -25,9 +27,10 @@ const BUILDKITE_ORG = "julialang"
 const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
 const API_BASE = "https://api.buildkite.com/v2"
-# Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml); the
-# triplet keeps the group's "Launch TTFX benchmark jobs" step from matching
-const TTFX_JOB = r"\bTTFX\s+([a-z0-9_]+-[a-z0-9_-]+)$"
+# Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml), or
+# ":macos: TTFX release <triplet>" for the weekly release reference; the triplet keeps
+# the group's "Launch TTFX benchmark jobs" step from matching
+const TTFX_JOB = r"\bTTFX\s+(release\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
@@ -149,7 +152,8 @@ function build_row(build, job, results, meta)
 
     name = String(job.name)
     m = match(TTFX_JOB, name)
-    triplet = m === nothing ? "" : String(m.captures[1])
+    triplet = m === nothing ? "" : String(m.captures[2])
+    kind = m !== nothing && m.captures[1] !== nothing ? "release" : "master"
     raw_message = something(get(build, :message, ""), "")
     message = first(split(String(raw_message), '\n'))
     message = length(message) > 80 ? first(message, 77) * "..." : message
@@ -163,6 +167,7 @@ function build_row(build, job, results, meta)
         "build" => build.number,
         "job_id" => String(job.id),
         "triplet" => triplet,
+        "kind" => kind,
         "state" => String(get(job, :state, "unknown")),
         "date" => Dates.format(parse_datetime(String(build.created_at)), dateformat"yyyy-mm-dd HH:MM"),
         "commit" => commit,
@@ -281,14 +286,14 @@ at(x) = x === nothing ? missing : Store.iso(Store.parse_upstream(String(x)))
 str_or_missing(x) = x === nothing ? missing : String(x)
 jsonstr(x) = x === nothing ? missing : JSON3.write(x)
 
-const JOB_COLS = ["pipeline", "build", "triplet", "state", "build_created_at", "commit_sha", "version", "message", "agent", "cpu",
+const JOB_COLS = ["pipeline", "build", "triplet", "kind", "state", "build_created_at", "commit_sha", "version", "message", "agent", "cpu",
                   "snippets", "blocks", "n_tasks", "n_metrics", "selected_arm", "started_at", "finished_at", "web_url", "has_samples"]
 
 # Store one row and its children, replacing whatever the job had before.
 function write_row!(db, r, seq, stmts)
     uuid = r["job_id"]
     job = r["_job"]
-    upsert!(stmts.job, (uuid, CI_PIPELINE, r["build"], r["triplet"], r["state"], legacy_minute_to_iso(r["date"]), r["commit"],
+    upsert!(stmts.job, (uuid, CI_PIPELINE, r["build"], r["triplet"], r["kind"], r["state"], legacy_minute_to_iso(r["date"]), r["commit"],
                         r["version"], r["message"], r["agent"], r["cpu"], r["snippets"], something(r["blocks"], missing),
                         something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
                         at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
@@ -396,7 +401,9 @@ function pr_ttfx_jobs(since::DateTime)
             for job in get(build, :jobs, [])
                 get(job, :type, nothing) == "script" || continue
                 name = get(job, :name, nothing)
-                (name === nothing || match(TTFX_JOB, String(name)) === nothing) && continue
+                m = name === nothing ? nothing : match(TTFX_JOB, String(name))
+                # Only the comparison job; a release run would have no verdict to keep
+                (m === nothing || m.captures[1] !== nothing) && continue
                 String(get(job, :state, "")) in FINISHED_STATES || continue
                 push!(get!(jobs, n, Any[]), (build, job))
             end
