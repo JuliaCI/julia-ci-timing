@@ -17,7 +17,7 @@ function fixture_server()
     end
     pool = Channel{SQLite.DB}(1)
     put!(pool, db)
-    return Server(pool, ReentrantLock(), Dict(), String[], 0, nothing, nothing, 0.0, Dict(), false)
+    return Server(pool, ReentrantLock(), Dict(), 0, nothing, nothing, 0.0, Dict(), false)
 end
 
 @setup_workload begin
@@ -34,5 +34,6 @@ end
         handle(s, HTTP.Request("GET", "/healthz"))
         handle(s, HTTP.Request("GET", "/index.html"))
         refresh_stale!(s)
+        fill_landing!(s)
     end
 end

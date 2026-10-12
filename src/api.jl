@@ -29,15 +29,17 @@ function build_id()
     return isfile(f) ? first(strip(read(f, String)), 12) : string(hash(read(joinpath(dirname(@__DIR__), "db", "Render.jl"))); base=16)
 end
 
-const CACHE_MAX_ENTRIES = 32
-const CACHE_MAX_BYTES = 64 * 1024 * 1024
+const CACHE_MAX_ENTRIES = 256
+const CACHE_MAX_BYTES = 128 * 1024 * 1024
 const POOL_SIZE = 4
 # The refresher's pass interval, how long it may go without finishing a pass
-# before stale entries are rendered inline again, and how long an entry
-# nobody asks for is kept up to date
+# before stale entries are rendered inline again, how long an entry
+# nobody asks for is kept up to date, and how long before midnight UTC the
+# landing windows of the next day are rendered
 const REFRESH_INTERVAL_S = 20
 const REFRESH_HEALTHY_S = 120
 const REFRESH_KEEP_S = 24 * 3600
+const NEXT_DAY_AHEAD = Minute(15)
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "host" => "127.0.0.1", "port" => 8002, "site" => nothing, "data" => nothing)
@@ -69,14 +71,13 @@ mutable struct CacheEntry
     body::Vector{UInt8}           # gzipped
     segments::Vector{String}
     params::Dict{String,String}
-    hit_at::Float64               # last served, for dropping what nobody asks for
+    hit_at::Float64               # last served, for eviction and for dropping what nobody asks for
 end
 
 mutable struct Server
     pool::Channel{SQLite.DB}
     lock::ReentrantLock                            # the cache
     cache::Dict{String,CacheEntry}
-    cache_order::Vector{String}
     cache_bytes::Int
     site::Union{Nothing,String}
     data::Union{Nothing,String}
@@ -334,11 +335,12 @@ end
 # --- cache -------------------------------------------------------------------
 
 # The entry for a key at whatever sequence it was rendered, marking it used
-function cache_get(s::Server, key)
+# unless the refresher is only checking for it
+function cache_get(s::Server, key; touch=true)
     lock(s.lock) do
         e = get(s.cache, key, nothing)
         e === nothing && return nothing
-        e.hit_at = time()
+        touch && (e.hit_at = time())
         return (e.seq, e.body)
     end
 end
@@ -349,17 +351,18 @@ function cache_put!(s::Server, key, seq, body, segments, params)
     lock(s.lock) do
         old = get(s.cache, key, nothing)
         hit_at = old === nothing ? time() : old.hit_at
-        if old !== nothing
-            s.cache_bytes -= length(old.body)
-            filter!(!=(key), s.cache_order)
-        end
+        old === nothing || (s.cache_bytes -= length(old.body))
         s.cache[key] = CacheEntry(seq, body, segments, params, hit_at)
-        push!(s.cache_order, key)
         s.cache_bytes += length(body)
-        while (length(s.cache_order) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) && length(s.cache_order) > 1
-            evicted = popfirst!(s.cache_order)
-            s.cache_bytes -= length(s.cache[evicted].body)
-            delete!(s.cache, evicted)
+        (length(s.cache) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) || return
+        # The least recently served goes first. The landing routes stay, so
+        # that a crawler walking every package cannot make a visitor wait.
+        pinned = landing_keys()
+        evictable = sort!([(e.hit_at, k) for (k, e) in s.cache if k != key && !(k in pinned)])
+        for (_, k) in evictable
+            (length(s.cache) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) || break
+            s.cache_bytes -= length(s.cache[k].body)
+            delete!(s.cache, k)
         end
     end
 end
@@ -369,7 +372,6 @@ function cache_delete!(s::Server, key)
         e = pop!(s.cache, key, nothing)
         e === nothing && return
         s.cache_bytes -= length(e.body)
-        filter!(!=(key), s.cache_order)
     end
 end
 
@@ -414,8 +416,9 @@ function refresh_stale!(s::Server)
     entries = lock(s.lock) do
         [(k, e.seq, e.segments, e.params, e.hit_at) for (k, e) in s.cache]
     end
+    pinned = landing_keys()
     for (key, old, segments, params, hit_at) in entries
-        if time() - hit_at > REFRESH_KEEP_S
+        if time() - hit_at > REFRESH_KEEP_S && !(key in pinned)
             cache_delete!(s, key)
             continue
         end
@@ -425,10 +428,23 @@ function refresh_stale!(s::Server)
     end
 end
 
+# Render any landing route the cache lacks. Its windows move at midnight UTC,
+# so the next day's are rendered shortly before, and none is left for the
+# first visitor of the day.
+function fill_landing!(s::Server)
+    for target in landing_targets_now()
+        uri, segments, params = split_target(target)
+        key = cache_key(segments, uri.query)
+        cache_get(s, key; touch=false) === nothing || continue
+        render_cached!(s, key, segments, params, route_seq(s, segments))
+    end
+end
+
 function refresh_loop(s::Server)
     while true
         try
             refresh_stale!(s)
+            fill_landing!(s)
             s.refreshed_at = time()
         catch e
             @error "cache refresh failed" exception=(e, catch_backtrace())
@@ -442,6 +458,10 @@ refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
 gzip(bytes) = transcode(GzipCompressor, bytes)
 
 cache_key(segments, query) = "/api/" * join(segments, "/") * "?" * query
+function target_key(target)
+    uri, segments, _ = split_target(target)
+    return cache_key(segments, uri.query)
+end
 
 # --- responses ---------------------------------------------------------------
 
@@ -559,13 +579,24 @@ end
 # What the Overview and the Commit tab ask for on landing, under the query
 # strings the browser sends (site/assets/app.js: apiGet keeps its
 # parameters' order, windows are UTC days)
-function landing_targets()
-    day(n) = Dates.format(Date(now(UTC)) - Day(n), dateformat"yyyy-mm-dd")
+function landing_targets(today=Date(now(UTC)))
+    day(n) = Dates.format(today - Day(n), dateformat"yyyy-mm-dd")
     return ["/api/timing/runs?since=$(day(30))", "/api/timing/builds?since=$(day(7))",
             "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/prs", "/api/downloads/summary",
+            "/api/sizes/summary?since=$(day(30))", "/api/sizes/prs", "/api/agents/backlog?since=$(day(14))",
             "/api/agents/latest", "/api/pkgeval/reasons", "/api/downloads/top?days=7&client=user",
             "/api/pkgeval/popular?days=30&client=user&limit=50", "/api/commits?limit=100"]
 end
+
+# Today's landing targets, and the next day's as well once midnight UTC is near
+function landing_targets_now()
+    t = now(UTC)
+    targets = landing_targets(Date(t))
+    Date(t + NEXT_DAY_AHEAD) == Date(t) || append!(targets, landing_targets(Date(t) + Day(1)))
+    return targets
+end
+
+landing_keys() = Set(target_key(t) for t in landing_targets_now())
 
 function sizes_commit_example(db)
     r = Store.query(db, "SELECT commit_sha FROM size_builds ORDER BY merged_at DESC LIMIT 1")
@@ -621,7 +652,7 @@ function main(args)
     opts = parse_args(args)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
-    s = Server(pool, ReentrantLock(), Dict(), String[], 0, opts["site"], opts["data"], 0.0, Dict(), false)
+    s = Server(pool, ReentrantLock(), Dict(), 0, opts["site"], opts["data"], 0.0, Dict(), false)
     server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
     Threads.@spawn begin
