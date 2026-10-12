@@ -1666,6 +1666,17 @@ function wrapTooltipText(text, width = TOOLTIP_WRAP_CHARS) {
 }
 
 // Escape HTML special characters for safe insertion into attributes
+// Whether `text` holds every word of a sidebar search, in any order and case:
+// "build apple" finds ":macos: build x86_64-apple-darwin"
+function matchesSearchWords(text, query) {
+  const t = text.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((w) => t.includes(w));
+}
+
 function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
@@ -2661,6 +2672,8 @@ function updateURL() {
   }
   // cv is legacy; tab now fully identifies CI timing/workers.
   url.searchParams.delete("cv");
+  if (jobFilter) url.searchParams.set("jq", jobFilter);
+  else url.searchParams.delete("jq");
   if (timingView === "usage") {
     url.searchParams.set("jv", "usage");
   } else {
@@ -2737,6 +2750,8 @@ function loadFromLocalStorage() {
 
 function applyURLParams() {
   const params = new URLSearchParams(window.location.search);
+  jobFilter = params.get("jq") || "";
+  document.getElementById("job-filter").value = jobFilter;
 
   // Apply time range
   const t = params.get("t");
@@ -5414,9 +5429,10 @@ function updateToolbarButtons() {
     .classList.toggle("primary", selected === 0);
 }
 
+// With a filter typed, All adds the jobs it shows
 function selectAllJobs() {
   for (const name of Object.keys(data.jobs)) {
-    selectedJobs.add(name);
+    if (jobMatchesFilter(name)) selectedJobs.add(name);
   }
   syncJobListUI();
   refreshAllUI();
@@ -5863,7 +5879,51 @@ function renderMatrixTable() {
     }
   }
 
+  applyJobFilter();
   refreshAllUI();
+}
+
+// The job list's search text, matched against the job name as written
+// (":linux: test x86_64-linux-gnu") and as shown
+let jobFilter = "";
+const jobMatchesFilter = (name) => matchesSearchWords(`${name} ${convertEmojiText(name)}`, jobFilter);
+
+function setJobFilter(q) {
+  jobFilter = q.trim();
+  applyJobFilter();
+  updateURL();
+}
+
+// Hide the jobs the filter leaves out, and a group header with none left
+function applyJobFilter() {
+  const list = document.getElementById("job-list");
+  let header = null;
+  let headerShown = false;
+  let shown = 0;
+  for (const el of list.children) {
+    if (el.classList.contains("job-group-header")) {
+      if (header) header.hidden = !headerShown;
+      header = el;
+      headerShown = false;
+    } else if (el.dataset.job) {
+      const match = jobMatchesFilter(el.dataset.job);
+      el.hidden = !match;
+      if (match) {
+        headerShown = true;
+        shown++;
+      }
+    }
+  }
+  if (header) header.hidden = !headerShown;
+  let none = list.querySelector(".sidebar-no-match");
+  if (!shown && jobFilter) {
+    if (!none) {
+      none = document.createElement("div");
+      none.className = "col-secondary sidebar-no-match";
+      none.textContent = "No job matches";
+      list.appendChild(none);
+    }
+  } else if (none) none.remove();
 }
 
 function updateMatrixHighlights() {
@@ -6460,6 +6520,7 @@ const DASHBOARD_PARAMS = new Set([
   "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "jv", // CI timing view (history or worker time)
   "jf", // worker time filters
+  "jq", // CI timing job filter
   "wq", // workers text filter
   "tab", // active tab
   "c", // commit lookup ref
@@ -6484,6 +6545,7 @@ const DASHBOARD_PARAMS = new Set([
   "th", // ttfx hide annotated jumps toggle
   "tg", // ttfx GC-off repeats toggle (retired; stripped from the URL)
   "tk", // ttfx selected tasks
+  "tq", // ttfx task filter
   "tx", // ttfx excluded tasks (when most are selected)
   "tv", // ttfx table view
   "ts", // ttfx chart mode (summary or per task)
@@ -10748,9 +10810,10 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric, gcoff = false) {
 // over time. Per metric, since a task's run can round to 0 while its
 // precompile is fine.
 function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, gcoff = false) {
-  const measured = builds.filter(
-    (b) => b.tasks && Object.keys(b.tasks).some((t) => ttfxValue(b, t, metric, gcoff) != null),
-  );
+  // The builds that measured any of `tasks`: a task added to the job later
+  // (Ferrite in October 2026) then has a line of its own from when it starts,
+  // instead of none because the builds before it measured other tasks
+  const measured = builds.filter((b) => b.tasks && tasks.some((t) => ttfxValue(b, t, metric, gcoff) != null));
   if (!measured.length) return [];
   return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric, gcoff) != null));
 }
@@ -10847,8 +10910,13 @@ function toggleTtfxTask(task) {
   updateTtfxURL();
 }
 
+// With a filter typed, the tasks it shows are added to the selection
 function selectAllTtfxTasks() {
-  ttfxSelectedTasks = new Set(ttfxAllTasks());
+  if (ttfxTaskFilter) {
+    for (const t of ttfxAllTasks()) if (ttfxTaskMatches(t)) ttfxSelectedTasks.add(t);
+  } else {
+    ttfxSelectedTasks = new Set(ttfxAllTasks());
+  }
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
@@ -10878,6 +10946,7 @@ function updateTtfxURL() {
   url.searchParams.delete("tg");
   setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
+  setOrDelete("tq", ttfxTaskFilter, !ttfxTaskFilter);
   // Whichever of the selected or the excluded tasks is the shorter list
   const all = ttfxAllTasks();
   const selected = ttfxSelectedList();
@@ -10894,6 +10963,8 @@ let ttfxURLExcluded = null;
 
 function applyTtfxURLParams() {
   const params = new URLSearchParams(window.location.search);
+  ttfxTaskFilter = params.get("tq") || "";
+  document.getElementById("ttfx-task-filter").value = ttfxTaskFilter;
   const tm = params.get("tm");
   if (tm && TTFX_METRICS[tm]) {
     ttfxMetric = tm;
@@ -10970,8 +11041,7 @@ async function loadTtfxData() {
     console.error("Failed to load TTFX data:", err);
     document.getElementById("ttfx-chart-loading").innerHTML =
       '<span class="error">No TTFX data. It appears once the update workflow has run <code>fetch_ttfx.jl</code> against a julia-ci build with a finished TTFX job.</span>';
-    document.getElementById("ttfx-task-list").innerHTML =
-      '<div class="group-header">Tasks</div><div class="error">Failed to load</div>';
+    document.getElementById("ttfx-task-items").innerHTML = '<div class="error">Failed to load</div>';
     document.getElementById("ttfx-stats-tbody").innerHTML =
       '<tr><td class="error">Failed to load data</td></tr>';
   }
@@ -11015,14 +11085,28 @@ function ttfxLatestMeasured(builds) {
   return null;
 }
 
+// The task list's search text: narrows the list and what All tasks selects
+let ttfxTaskFilter = "";
+const ttfxTaskMatches = (t) => matchesSearchWords(t, ttfxTaskFilter);
+
+function setTtfxTaskFilter(q) {
+  ttfxTaskFilter = q.trim();
+  populateTtfxTaskList();
+  updateTtfxURL();
+}
+
 function populateTtfxTaskList() {
-  const container = document.getElementById("ttfx-task-list");
+  // The header and the search box stay put, so typing keeps its focus
+  const container = document.getElementById("ttfx-task-items");
   const tasks = ttfxAllTasks();
+  const shown = tasks.filter(ttfxTaskMatches);
   const latest = ttfxLatestMeasured(getTtfxFilteredBuilds());
   const metricLabel = ttfxMetricLabel().toLowerCase();
 
-  let html = `<div class="group-header">Tasks (${ttfxSelectedTasks.size}/${tasks.length})</div>`;
-  for (const t of tasks) {
+  document.getElementById("ttfx-task-header").textContent =
+    `Tasks (${ttfxSelectedTasks.size}/${tasks.length}${ttfxTaskFilter ? `, ${shown.length} match` : ""})`;
+  let html = shown.length ? "" : '<div class="col-secondary sidebar-no-match">No task matches</div>';
+  for (const t of shown) {
     const selected = ttfxSelectedTasks.has(t);
     const failedMsg = latest && latest.failed && latest.failed[t];
     const v = latest ? ttfxValue(latest, t) : null;
