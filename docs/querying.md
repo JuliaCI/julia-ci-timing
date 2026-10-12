@@ -70,7 +70,10 @@ It is taken once a week. No row or time limits, and no load on the host.
   `pkgeval_reasons` (counts per status and reason).
 - **TTFX.** `ttfx_jobs` (one per master build's TTFX job; `kind` is `release` for the
   weekly reference run of the newest stable release), `ttfx_results` (job and task:
-  precompile, load, run, warm, and load, run and warm with the GC off, in seconds),
+  precompile, load, run, warm, and load, run and warm with the GC off, in seconds, and
+  the MethodInstances the task script invalidated), `ttfx_invalidation_causes` (the top
+  causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
+  methods compiled again because an invalidation dropped their code),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
@@ -151,6 +154,17 @@ SELECT j.build, j.commit_sha, j.build_created_at, r.precompile, r.load, r.run, r
 FROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid
 WHERE r.task = 'BaseDirs/Project-Path' AND j.kind = 'master' AND j.build_created_at >= date('now', '-30 days')
 ORDER BY j.build_created_at
+```
+
+The methods master builds of the last 30 days compiled again after an invalidation, by how
+many tasks did so (the saved query `ttfx_recompile_steps` lists the builds where one
+appeared or went away):
+
+```sql
+SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, count(*) AS tasks, c.statement
+FROM ttfx_recompiles c JOIN ttfx_jobs j ON j.job_uuid = c.job_uuid
+WHERE j.kind = 'master' AND j.build_created_at >= date('now', '-30 days')
+GROUP BY j.build, c.statement ORDER BY j.build_created_at DESC, tasks DESC
 ```
 
 The sysimage size of master commits over 90 days, from the CI tarballs:

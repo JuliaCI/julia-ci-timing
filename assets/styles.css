@@ -2540,13 +2540,20 @@ a {
 }
 .ttfx-summary-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   grid-template-rows: auto 1fr 1fr;
   gap: 8px;
   width: 100%;
   height: 100%;
 }
-/* One legend for the four summary panels; an entry hides or shows its
+/* Two columns of three when three would be too narrow */
+@media (max-width: 1200px) {
+  .ttfx-summary-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr 1fr 1fr;
+  }
+}
+/* One legend for the summary panels; an entry hides or shows its
    series in all of them */
 .ttfx-summary-legend {
   grid-column: 1 / -1;
@@ -2686,7 +2693,7 @@ a {
   font-size: 11px;
 }
 .ttfx-build-popup {
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
   max-height: 85vh;
   overflow-y: auto;
 }
@@ -2754,6 +2761,27 @@ a {
 }
 .ttfx-popup-note {
   color: var(--color-attention-fg);
+}
+/* What the job's trace logs and invalidation run recorded, below the table */
+.ttfx-popup-section {
+  margin-top: 12px;
+  font-weight: 600;
+}
+.ttfx-compile-table {
+  table-layout: fixed;
+}
+.ttfx-compile-table th:not(:first-child),
+.ttfx-compile-table td:not(:first-child) {
+  width: 72px;
+}
+.ttfx-compile-table .ttfx-compile-stmt {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ttfx-compile-table .ttfx-compile-gone .ttfx-compile-stmt {
+  color: var(--color-fg-muted);
+  text-decoration: line-through;
 }
 .ttfx-popup-failed ul {
   margin: 4px 0;
@@ -2841,7 +2869,7 @@ a {
 @media (max-width: 768px), (max-height: 500px) {
   .ttfx-summary-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(4, minmax(160px, 1fr));
+    grid-template-rows: repeat(6, minmax(160px, 1fr));
   }
   .ttfx-content {
     flex-direction: column;
@@ -2853,12 +2881,12 @@ a {
     border-bottom: 1px solid var(--color-border-default);
   }
   /* The wrapper is absolutely positioned, so the container has to reserve
-     the height: one chart, or four stacked panels */
+     the height: one chart, or six stacked panels */
   .ttfx-chart-container {
     min-height: 320px;
   }
   .ttfx-chart-container:has(.ttfx-summary-grid:not([hidden])) {
-    min-height: 700px;
+    min-height: 1040px;
   }
 }
 
@@ -3980,7 +4008,9 @@ a {
   .ttfx-summary-grid[data-metric="precompile"] > .ttfx-panel[data-metric="precompile"],
   .ttfx-summary-grid[data-metric="load"] > .ttfx-panel[data-metric="load"],
   .ttfx-summary-grid[data-metric="run"] > .ttfx-panel[data-metric="run"],
-  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"] {
+  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"],
+  .ttfx-summary-grid[data-metric="recompiled"] > .ttfx-panel[data-metric="recompiled"],
+  .ttfx-summary-grid[data-metric="invalidated"] > .ttfx-panel[data-metric="invalidated"] {
     display: block;
   }
 

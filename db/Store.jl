@@ -84,6 +84,10 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_prs", "head_ref", "TEXT NOT NULL DEFAULT ''"),
     ("ttfx_prs", "base_ref", "TEXT NOT NULL DEFAULT ''"),
     ("ttfx_jobs", "kind", "TEXT NOT NULL DEFAULT 'master'"),
+    ("ttfx_jobs", "trace_state", "TEXT"),
+    ("ttfx_results", "invalidated", "INTEGER"),
+    ("ttfx_results", "invalidated_by_definition", "INTEGER"),
+    ("ttfx_results", "invalidated_rejected", "INTEGER"),
 ]
 
 function apply_schema!(db::SQLite.DB)

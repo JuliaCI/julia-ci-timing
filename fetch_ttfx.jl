@@ -13,11 +13,17 @@
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
 # A weekly job measures the newest stable release on the same tasks and machines, as a
 # reference; its rows have kind 'release' and the release's version and commit.
+# Jobs whose driver logs invalidations add, per task, how many MethodInstances the task
+# script invalidated, and the top causes (ttfx_invalidation_causes). Separately, every
+# job's ttfx/trace-compile.tar.gz is parsed for the methods compiled again because an
+# invalidation dropped their code (ttfx_traces, ttfx_recompiles; see refresh_traces!).
 # It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
 using JSON3
 using Dates
+using CodecZlib: GzipDecompressor
+using Tar
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
 using .Store
@@ -35,7 +41,7 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
 # fetched again in case the job already recorded it, the rest are padded.
-const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff")
+const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated")
 const REFETCH_BUILDS = 30
 
 function get_token()
@@ -103,10 +109,34 @@ function parse_datetime(s::AbstractString)
     return DateTime(s[1:19], dateformat"yyyy-mm-ddTHH:MM:SS")
 end
 
+# A record's `invalidations` (block 1, from the job's untimed invalidation run): the
+# MethodInstances invalidated over the load and run phases, split by how, and the top
+# causes of each kind as (phase, kind, rank, cause, n). Nothing for a record without it.
+function record_invalidations(r)
+    inv = get(r, :invalidations, nothing)
+    inv === nothing && return nothing
+    total = by_definition = rejected = 0
+    causes = Any[]
+    for phase in ("load", "run")
+        p = get(inv, Symbol(phase), nothing)
+        p === nothing && continue
+        total += Int(p.invalidated)
+        by_definition += Int(p.by_definition)
+        rejected += Int(p.rejected_at_load)
+        for (kind, key) in (("definition", :top_definitions), ("rejected", :top_rejected))
+            for (rank, (cause, n)) in enumerate(get(p, key, []))
+                push!(causes, (phase, kind, rank, String(cause), Int(n)))
+            end
+        end
+    end
+    return (; invalidated=total, by_definition, rejected, causes)
+end
+
 # results.json records for one arm, reduced to the minimum over blocks of each metric.
 # Cold numbers are the first repeat; "warm" is the best of the later repeats' totals,
 # matching ttfx_compare.jl in julia-buildkite. A task that never produced a sample is
-# listed under `failed` with its first error instead.
+# listed under `failed` with its first error instead. `invalidations` holds, per task,
+# record_invalidations of the record that has them.
 function summarize_records(records, arm)
     bytask = Dict{String,Vector{Any}}()
     for r in records
@@ -116,6 +146,7 @@ function summarize_records(records, arm)
     end
     tasks = Dict{String,Any}()
     failed = Dict{String,String}()
+    invalidations = Dict{String,Any}()
     nanmin(v) = isempty(v) ? nothing : minimum(v)
     for (name, recs) in bytask
         ok = filter(r -> get(r, :status, "") == "ok", recs)
@@ -135,10 +166,14 @@ function summarize_records(records, arm)
         run_gcoff = nanmin([Float64(gcoff(r, :run_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :run_times_gcoff))])
         warm_gcoff = nanmin([minimum(Float64.(gcoff(r, :total_times_gcoff)[2:end])) for r in ok if length(gcoff(r, :total_times_gcoff)) >= 2])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
+        k = findfirst(r -> get(r, :invalidations, nothing) !== nothing, ok)
+        inv = k === nothing ? nothing : record_invalidations(ok[k])
+        inv === nothing || (invalidations[name] = inv)
         tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
-                          round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff)]
+                          round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff),
+                          inv === nothing ? nothing : inv.invalidated]
     end
-    return tasks, failed
+    return tasks, failed, invalidations
 end
 
 function build_row(build, job, results, meta)
@@ -147,8 +182,8 @@ function build_row(build, job, results, meta)
     arm = "head" in String.(order) || (arms !== nothing && haskey(arms, :head)) ? "head" :
           isempty(order) ? "head" : String(order[end])
     head = arms === nothing ? nothing : get(arms, Symbol(arm), nothing)
-    tasks, failed = results === nothing ? (Dict{String,Any}(), Dict{String,String}()) :
-                    summarize_records(results, arm)
+    tasks, failed, invalidations = results === nothing ? (Dict{String,Any}(), Dict{String,String}(), Dict{String,Any}()) :
+                                   summarize_records(results, arm)
 
     name = String(job.name)
     m = match(TTFX_JOB, name)
@@ -186,6 +221,7 @@ function build_row(build, job, results, meta)
         "_job" => job,
         "_results" => results,
         "_meta" => meta,
+        "_invalidations" => invalidations,
     )
 end
 
@@ -298,11 +334,17 @@ function write_row!(db, r, seq, stmts)
                         something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
                         at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
                         r["_results"] === nothing ? 0 : 1, seq))
-    for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples")
+    for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples", "ttfx_invalidation_causes")
         DBInterface.execute(db, "DELETE FROM $t WHERE job_uuid = ?", (uuid,))
     end
     for (task, vals) in r["tasks"]
-        DBInterface.execute(stmts.result, (uuid, task, (something(v, missing) for v in vals)...))
+        inv = get(r["_invalidations"], task, nothing)
+        DBInterface.execute(stmts.result, (uuid, task, (something(v, missing) for v in vals)...,
+                                           inv === nothing ? missing : inv.by_definition, inv === nothing ? missing : inv.rejected))
+        inv === nothing && continue
+        for (phase, kind, rank, cause, n) in inv.causes
+            DBInterface.execute(stmts.cause, (uuid, task, phase, kind, rank, cause, n))
+        end
     end
     for (task, err) in r["failed"]
         DBInterface.execute(stmts.failure, (uuid, task, err))
@@ -331,7 +373,9 @@ function write_rows!(db, rows)
     seq = next_seq!(db)
     stmts = (
         job = upsert_stmt(db, "ttfx_jobs", ["job_uuid"], JOB_COLS),
-        result = DBInterface.prepare(db, "INSERT INTO ttfx_results (job_uuid, task, $(join(METRICS, ", "))) VALUES (?, ?, $(join(fill("?", length(METRICS)), ", ")))"),
+        result = DBInterface.prepare(db, "INSERT INTO ttfx_results (job_uuid, task, $(join(METRICS, ", ")), invalidated_by_definition, invalidated_rejected) " *
+                                         "VALUES (?, ?, $(join(fill("?", length(METRICS) + 2), ", ")))"),
+        cause = DBInterface.prepare(db, "INSERT INTO ttfx_invalidation_causes (job_uuid, task, phase, kind, rank, cause, n) VALUES (?, ?, ?, ?, ?, ?, ?)"),
         failure = DBInterface.prepare(db, "INSERT INTO ttfx_failures (job_uuid, task, error) VALUES (?, ?, ?)"),
         arm = DBInterface.prepare(db, "INSERT INTO ttfx_arms (job_uuid, arm, commit_sha, version) VALUES (?, ?, ?, ?)"),
         sample = DBInterface.prepare(db, "INSERT INTO ttfx_samples (job_uuid, seq, task, arm, block, status, error, error_gcoff, precompile_s, " *
@@ -341,6 +385,109 @@ function write_rows!(db, rows)
         write_row!(db, r, seq, stmts)
     end
     return length(rows)
+end
+
+# --- traces ------------------------------------------------------------------
+#
+# The job runs each task script once more per arm with --trace-compile
+# --trace-compile-timing and uploads the logs as ttfx/trace-compile.tar.gz
+# (trace/<Package>-<Task>-<arm>.log). A statement the log marks "# recompile" is a
+# method compiled again because an invalidation had dropped its earlier code. Every
+# job is looked at once, newest first and TRACE_JOBS_PER_RUN per run, so the history
+# whose artifacts have not expired is filled in over a few runs.
+
+const TRACE_ARTIFACT = "ttfx/trace-compile.tar.gz"
+const TRACE_JOBS_PER_RUN = 60
+const TRACE_STATEMENT_MAX = 2000
+
+# One trace log: its precompile statements, and the recompiled ones as (ms, statement)
+# with the timing comment and the marker stripped
+function parse_trace(text::AbstractString)
+    statements = 0
+    recompiles = Tuple{Union{Float64,Missing},String}[]
+    for line in eachline(IOBuffer(text))
+        occursin("precompile(", line) || continue
+        statements += 1
+        endswith(rstrip(line), "# recompile") || continue
+        m = match(r"^#=\s*([\d.]+)\s*ms\s*=#\s*", line)
+        ms = m === nothing ? missing : parse(Float64, m.captures[1])
+        stmt = strip(replace(m === nothing ? line : line[length(m.match)+1:end], r"\s*# recompile\s*$" => ""))
+        push!(recompiles, (ms, first(stmt, TRACE_STATEMENT_MAX)))
+    end
+    return (; statements, recompiles)
+end
+
+# The logs of one arm in a trace tarball, by task ("Package/Task"). A package name
+# has no '-', so the first one ends it.
+function parse_trace_tarball(bytes, arm)
+    dir = mktempdir()
+    try
+        Tar.extract(IOBuffer(transcode(GzipDecompressor, bytes)), dir)
+        out = Dict{String,Any}()
+        tracedir = joinpath(dir, "trace")
+        isdir(tracedir) || return out
+        suffix = "-$arm.log"
+        for f in readdir(tracedir)
+            endswith(f, suffix) || continue
+            stem = f[1:end-length(suffix)]
+            i = findfirst('-', stem)
+            i === nothing && continue
+            out[stem[1:i-1] * "/" * stem[i+1:end]] = parse_trace(read(joinpath(tracedir, f), String))
+        end
+        return out
+    finally
+        rm(dir; recursive=true, force=true)
+    end
+end
+
+# Parse the traces of jobs not looked at yet. A job without the artifact (it predates
+# the trace runs, or Buildkite has expired it) is marked 'none'; one whose listing or
+# download fails is left for the next run.
+function refresh_traces!(db; limit=TRACE_JOBS_PER_RUN)
+    jobs = query(db, "SELECT job_uuid, pipeline, build, selected_arm FROM ttfx_jobs WHERE trace_state IS NULL " *
+                     "ORDER BY build_created_at DESC LIMIT ?", (limit,))
+    isempty(jobs) && return 0
+    @info "Looking at TTFX traces" jobs=length(jobs)
+    parsed = Any[]
+    for j in jobs
+        uuid = String(j.job_uuid)
+        artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$(j.pipeline)/builds/$(j.build)/jobs/$uuid/artifacts")
+        artifacts === nothing && continue
+        i = findfirst(a -> String(get(a, :path, "")) == TRACE_ARTIFACT && String(get(a, :state, "")) == "finished", artifacts)
+        if i === nothing
+            push!(parsed, (uuid, nothing))
+            continue
+        end
+        body = download_artifact(String(artifacts[i].download_url))
+        body === nothing && continue
+        tasks = try
+            parse_trace_tarball(body, String(coalesce(j.selected_arm, "head")))
+        catch e
+            @warn "Unreadable trace tarball; marked as none" build=j.build exception=e
+            nothing
+        end
+        push!(parsed, (uuid, tasks))
+    end
+    transaction(db) do
+        seq = next_seq!(db)
+        trace = DBInterface.prepare(db, "INSERT INTO ttfx_traces (job_uuid, task, statements, recompiled, recompile_s) VALUES (?, ?, ?, ?, ?)")
+        recompile = DBInterface.prepare(db, "INSERT INTO ttfx_recompiles (job_uuid, task, seq, ms, statement) VALUES (?, ?, ?, ?, ?)")
+        for (uuid, tasks) in parsed
+            for t in ("ttfx_traces", "ttfx_recompiles")
+                DBInterface.execute(db, "DELETE FROM $t WHERE job_uuid = ?", (uuid,))
+            end
+            for (task, tr) in something(tasks, Dict())
+                secs = sum((coalesce(ms, 0.0) for (ms, _) in tr.recompiles); init=0.0) / 1000
+                DBInterface.execute(trace, (uuid, task, tr.statements, length(tr.recompiles), round(secs; digits=4)))
+                for (k, (ms, stmt)) in enumerate(tr.recompiles)
+                    DBInterface.execute(recompile, (uuid, task, k, ms, stmt))
+                end
+            end
+            DBInterface.execute(db, "UPDATE ttfx_jobs SET trace_state = ?, change_seq = ? WHERE job_uuid = ?",
+                                (tasks === nothing ? "none" : "ok", seq, uuid))
+        end
+    end
+    return length(parsed)
 end
 
 # --- pull requests -----------------------------------------------------------
@@ -572,6 +719,12 @@ function run!(db)
                                                     "WHERE job_uuid IN (SELECT value FROM json_each(?))",
                                                 (length(METRICS), seq, JSON3.write(expired)))
         write_rows!(db, new_rows)
+    end
+    # A trace that cannot be fetched is looked at again next run
+    try
+        refresh_traces!(db)
+    catch e
+        @error "Updating the TTFX traces failed" exception=(e, catch_backtrace())
     end
     # GitHub's anonymous quota or a julia-pr listing failing leaves the rows as they
     # were rather than failing the master results with it

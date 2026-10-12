@@ -283,13 +283,14 @@ CREATE TABLE IF NOT EXISTS ttfx_jobs (
     snippets         TEXT NOT NULL DEFAULT '',
     blocks           INTEGER,
     n_tasks          INTEGER,
-    n_metrics        INTEGER NOT NULL,       -- length of the legacy metric arrays; < 7 means "re-fetch me"
+    n_metrics        INTEGER NOT NULL,       -- length of the legacy metric arrays; < length(METRICS) in fetch_ttfx.jl means "re-fetch me"
     selected_arm     TEXT,
     started_at       TEXT,
     finished_at      TEXT,
     web_url          TEXT,
     has_samples      INTEGER NOT NULL DEFAULT 0,
-    change_seq       INTEGER NOT NULL
+    change_seq       INTEGER NOT NULL,
+    trace_state      TEXT                    -- trace-compile.tar.gz: NULL not looked at yet, 'ok' parsed, 'none' not uploaded or expired
 );
 CREATE INDEX IF NOT EXISTS ttfx_jobs_build ON ttfx_jobs (build_created_at, build);
 
@@ -305,7 +306,44 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     load_gcoff REAL,
     run_gcoff  REAL,
     warm_gcoff REAL,
+    invalidated               INTEGER,       -- MethodInstances invalidated by the task script (load and run phases)
+    invalidated_by_definition INTEGER,       -- of those, by a method definition
+    invalidated_rejected      INTEGER,       -- of those, package-image code not reinstated on load
     PRIMARY KEY (job_uuid, task)
+) WITHOUT ROWID;
+
+-- The causes behind invalidated: the top five of each kind per task and phase,
+-- as the job's untimed invalidation run reported them.
+CREATE TABLE IF NOT EXISTS ttfx_invalidation_causes (
+    job_uuid TEXT NOT NULL REFERENCES ttfx_jobs (job_uuid),
+    task     TEXT NOT NULL,
+    phase    TEXT NOT NULL,                  -- 'load' or 'run'
+    kind     TEXT NOT NULL,                  -- 'definition' (a new method) or 'rejected' (the root of package code dropped on load)
+    rank     INTEGER NOT NULL,
+    cause    TEXT NOT NULL,                  -- module and signature of the method
+    n        INTEGER NOT NULL,               -- MethodInstances it invalidated
+    PRIMARY KEY (job_uuid, task, phase, kind, rank)
+) WITHOUT ROWID;
+
+-- From the job's trace-compile.tar.gz (one --trace-compile --trace-compile-timing
+-- run of each task script, untimed): per task, what it compiled and which of it
+-- was compiled again because invalidation had dropped the earlier code.
+CREATE TABLE IF NOT EXISTS ttfx_traces (
+    job_uuid    TEXT NOT NULL REFERENCES ttfx_jobs (job_uuid),
+    task        TEXT NOT NULL,
+    statements  INTEGER NOT NULL,            -- precompile statements in the trace
+    recompiled  INTEGER NOT NULL,            -- of those, marked "# recompile"
+    recompile_s REAL NOT NULL,               -- their compile time, seconds
+    PRIMARY KEY (job_uuid, task)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS ttfx_recompiles (
+    job_uuid  TEXT NOT NULL REFERENCES ttfx_jobs (job_uuid),
+    task      TEXT NOT NULL,
+    seq       INTEGER NOT NULL,              -- order in the trace
+    ms        REAL,                          -- compile time
+    statement TEXT NOT NULL,                 -- the precompile(...) statement
+    PRIMARY KEY (job_uuid, task, seq)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS ttfx_failures (

@@ -432,13 +432,28 @@ end
 
 # --- ttfx --------------------------------------------------------------------
 
-const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff"]
+# The first TTFX_RESULT_METRICS come from the job's results (ttfx_results, as many as
+# the job's n_metrics), the rest from its trace logs (ttfx_traces)
+const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
+                      "recompiled", "recompile_s"]
+const TTFX_RESULT_METRICS = 8
 
 function ttfx(db; since="")
     results = Dict{String,Dict{String,Any}}()
-    for r in rows(db, "SELECT job_uuid, task, precompile, load, run, warm, load_gcoff, run_gcoff, warm_gcoff FROM ttfx_results")
-        vals = Any[js(getproperty(r, Symbol(m))) for m in TTFX_METRICS]
+    cols = join(TTFX_METRICS[1:TTFX_RESULT_METRICS], ", ")
+    for r in rows(db, "SELECT job_uuid, task, $cols FROM ttfx_results")
+        vals = Any[js(getproperty(r, Symbol(m))) for m in TTFX_METRICS[1:TTFX_RESULT_METRICS]]
         get!(results, String(r.job_uuid), Dict{String,Any}())[String(r.task)] = vals
+    end
+    traces = Dict{String,Dict{String,Any}}()
+    for r in rows(db, "SELECT job_uuid, task, recompiled, recompile_s FROM ttfx_traces")
+        get!(traces, String(r.job_uuid), Dict{String,Any}())[String(r.task)] = Any[Int(r.recompiled), Float64(r.recompile_s)]
+    end
+    # A job's results cut to the metrics it recorded, then its trace values when it has them
+    function task_values(v, n, tr)
+        vals = v[1:min(n, TTFX_RESULT_METRICS)]
+        tr === nothing && return vals
+        return Any[vals; fill(nothing, TTFX_RESULT_METRICS - length(vals)); tr]
     end
     failures = Dict{String,Dict{String,String}}()
     for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures")
@@ -452,13 +467,14 @@ function ttfx(db; since="")
         for j in rows(db, sql, (params..., kind))
             pipeline = String(j.pipeline)
             tasks = get(results, String(j.job_uuid), Dict{String,Any}())
+            job_traces = get(traces, String(j.job_uuid), Dict{String,Any}())
             n = Int(j.n_metrics)
             push!(out, Dict{String,Any}(
                 "build" => Int(j.build), "job_id" => String(j.job_uuid), "triplet" => String(j.triplet), "state" => String(j.state),
                 "date" => iso_to_legacy_minute(String(j.build_created_at)), "commit" => String(j.commit_sha),
                 "version" => String(j.version), "message" => String(j.message), "agent" => String(j.agent), "cpu" => String(j.cpu),
                 "snippets" => String(j.snippets), "blocks" => js(j.blocks), "n_tasks" => js(j.n_tasks),
-                "tasks" => Dict(k => v[1:n] for (k, v) in tasks),
+                "tasks" => Dict(k => task_values(v, n, get(job_traces, k, nothing)) for (k, v) in tasks),
                 "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
         end
         return out
@@ -468,6 +484,41 @@ function ttfx(db; since="")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
                        "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases)
+end
+
+# What one job recorded about compilation, per task: the statements its trace marks as
+# recompiled, and the invalidations of the task script with their top causes. `task`
+# narrows it to one task. Nothing when there is no such job.
+function ttfx_job(db, job_id; task="")
+    j = rows(db, "SELECT job_uuid, build, kind, commit_sha, trace_state FROM ttfx_jobs WHERE job_uuid = ?", (job_id,))
+    isempty(j) && return nothing
+    j = j[1]
+    filter_sql = isempty(task) ? "" : " AND task = ?"
+    params = isempty(task) ? (job_id,) : (job_id, task)
+    tasks = OrderedDict{String,Any}()
+    entry(t) = get!(() -> OrderedDict{String,Any}("statements" => nothing, "recompiles" => Any[], "invalidated" => nothing,
+                                                    "invalidated_by_definition" => nothing, "invalidated_rejected" => nothing,
+                                                    "causes" => Any[]), tasks, t)
+    for r in rows(db, "SELECT task, statements FROM ttfx_traces WHERE job_uuid = ?$filter_sql ORDER BY task", params)
+        entry(String(r.task))["statements"] = Int(r.statements)
+    end
+    for r in rows(db, "SELECT task, ms, statement FROM ttfx_recompiles WHERE job_uuid = ?$filter_sql ORDER BY task, seq", params)
+        push!(entry(String(r.task))["recompiles"], OrderedDict("ms" => js(r.ms), "statement" => String(r.statement)))
+    end
+    for r in rows(db, "SELECT task, invalidated, invalidated_by_definition, invalidated_rejected FROM ttfx_results " *
+                      "WHERE job_uuid = ? AND invalidated IS NOT NULL$filter_sql ORDER BY task", params)
+        e = entry(String(r.task))
+        e["invalidated"] = Int(r.invalidated)
+        e["invalidated_by_definition"] = js(r.invalidated_by_definition)
+        e["invalidated_rejected"] = js(r.invalidated_rejected)
+    end
+    for r in rows(db, "SELECT task, phase, kind, cause, n FROM ttfx_invalidation_causes WHERE job_uuid = ?$filter_sql " *
+                      "ORDER BY task, phase, kind, rank", params)
+        push!(entry(String(r.task))["causes"], OrderedDict("phase" => String(r.phase), "kind" => String(r.kind),
+                                                          "cause" => String(r.cause), "n" => Int(r.n)))
+    end
+    return OrderedDict("job_id" => String(j.job_uuid), "build" => Int(j.build), "kind" => String(j.kind),
+                       "commit" => String(j.commit_sha), "trace" => js(j.trace_state), "tasks" => sort!(tasks))
 end
 
 # Open pull requests by how their latest TTFX comparison looks, best first.

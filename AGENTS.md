@@ -63,16 +63,26 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
 
 ```text
 {
+  "metrics": ["precompile", "load", ...],
   "tasks":  ["Package/Task", ...],
   "builds": [ { "build", "job_id", "commit", "date", "version", "state",
-                "tasks":  { "Package/Task": [precompile, load, run, warm] },
+                "tasks":  { "Package/Task": [precompile, load, run, warm, ...] },
                 "failed": { "Package/Task": "error" } }, ... ]
 }
 ```
 
-Times are seconds, the minimum over the job's ABBA blocks; `load` and
-`run` are the cold first run of the task script, `warm` the best total
-of the later runs. `builds` is sorted by date. A build whose job failed
+Each task's array follows the file's `metrics` list. Times are seconds,
+the minimum over the job's ABBA blocks; `load` and `run` are the cold
+first run of the task script, `warm` the best total of the later runs,
+and the `_gcoff` ones the same from repeats with the GC disabled. Then
+come counts: `invalidated`, the MethodInstances the task script
+invalidated (from an untimed run that logs them; null for jobs before
+the driver did), and from the job's trace logs (`trace-compile.tar.gz`)
+`recompiled`, the methods compiled again because an invalidation had
+dropped their code, with their compile seconds `recompile_s`; a job
+without trace logs has the array end before them. `api/ttfx/job/<job_id>`
+has the recompiled statements and the top causes of the invalidations.
+`builds` is sorted by date. A build whose job failed
 before uploading has an empty `tasks`. `releases` is a second array of
 the same shape for the weekly `TTFX release` job, which measures the
 newest stable release on the same tasks and machines as a reference;

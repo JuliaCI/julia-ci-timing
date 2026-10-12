@@ -10455,7 +10455,8 @@ function updatePkgevalChart() {
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===
 // api/ttfx/summary, from fetch_ttfx.jl: one row per julia-ci TTFX
 // job, with each task's per-metric minimum over the job's ABBA blocks as
-// [precompile, load, run, warm] seconds. Failed tasks are in row.failed.
+// [precompile, load, run, warm] seconds, then the GC-off repeats and the
+// counts (TTFX_METRICS). Failed tasks are in row.failed.
 let ttfxData = null;
 let ttfxChart = null; // per-task chart
 let ttfxSummaryCharts = {}; // metric => chart, summary mode
@@ -10484,12 +10485,20 @@ const TTFX_ANNOTATION_HINT =
   "Annotations mark changes to the runners or to the benchmark itself that shifted the results without a Julia commit being responsible.";
 
 // `gcoffIndex`: the same phase from the job's repeats with the GC disabled
-// (fetch_ttfx.jl's METRICS order); precompile has no such run
+// (Render.TTFX_METRICS order); precompile has no such run. A `count` is a
+// number of methods, often 0: its suite value is the total over the tasks
+// rather than their geomean, and it is never drawn as % change.
 const TTFX_METRICS = {
   precompile: { label: "Precompile", index: 0 },
   load: { label: "Load (cold)", index: 1, gcoffIndex: 4 },
   run: { label: "Run (cold)", index: 2, gcoffIndex: 5 },
   warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
+  // Marked "# recompile" in the task's trace log: compiled again because an
+  // invalidation had dropped the code compiled before
+  recompiled: { label: "Recompiled methods", index: 8, count: true },
+  // MethodInstances the task script's load and run invalidated, by method
+  // definitions or as package-image code rejected on load
+  invalidated: { label: "Invalidations", index: 7, count: true },
 };
 const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
 const TTFX_SUITE_LABEL = "Suite geomean";
@@ -10542,23 +10551,23 @@ function showTtfxBuildPopup(b, task) {
   html += row("Tasks", `${nOk} measured${failed.length ? `, ${failed.length} failed` : ""}${b.blocks ? `, ${b.blocks} ABBA blocks` : ""}`);
 
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
-  html += "<th class=\"num\">Suite geomean</th><th class=\"num\">vs previous</th>";
+  html += "<th class=\"num\" title=\"Geometric mean over the selected tasks; for a count, their total\">Suite</th><th class=\"num\">vs previous</th>";
   if (task) html += '<th class="num">Clicked task</th>';
   html += "</tr></thead><tbody>";
   for (const key of Object.keys(TTFX_METRICS)) {
     const common = ttfxSuiteTasks(builds, tasks, key);
-    const g = ttfxGeomean(b, common, key);
-    const off = ttfxShowsGcOff(key) ? ttfxGeomean(b, common, key, true) : null;
+    const g = ttfxSuiteValue(b, common, key);
+    const off = ttfxShowsGcOff(key) ? ttfxSuiteValue(b, common, key, true) : null;
     let prev = null;
-    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxGeomean(builds[j], common, key);
-    const pct = g != null && prev != null ? (g / prev - 1) * 100 : null;
+    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxSuiteValue(builds[j], common, key);
+    const change = ttfxChange(g, prev, key);
     const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
-    html += `<tr><th title="Over ${common.length} tasks">${escapeHtml(ttfxMetricLabel(key))}</th>`;
-    html += `<td class="num">${formatTtfxSeconds(g)}${offHtml(off)}</td>`;
-    html += `<td class="num ${ttfxPctClass(pct)}">${formatTtfxPct(pct)}</td>`;
+    html += `<tr><th title="${ttfxIsCount(key) ? "Total" : "Geometric mean"} over ${common.length} tasks">${escapeHtml(ttfxMetricLabel(key))}</th>`;
+    html += `<td class="num">${formatTtfxValue(g, key)}${offHtml(off)}</td>`;
+    html += `<td class="num ${change.cls}">${change.text}</td>`;
     if (task) {
       const off = ttfxShowsGcOff(key) ? ttfxValue(b, task, key, true) : null;
-      html += `<td class="num">${formatTtfxSeconds(ttfxValue(b, task, key))}${offHtml(off)}</td>`;
+      html += `<td class="num">${formatTtfxValue(ttfxValue(b, task, key), key)}${offHtml(off)}</td>`;
     }
     html += "</tr>";
   }
@@ -10567,6 +10576,7 @@ function showTtfxBuildPopup(b, task) {
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
 
   for (const a of ttfxAnnotationsFor(b)) html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}</div>`;
+  html += `<div class="ttfx-popup-compile" id="ttfx-popup-compile" data-job="${escapeHtml(b.job_id)}"><div class="ttfx-popup-muted">Loading recompiles and invalidations…</div></div>`;
   if (failed.length) {
     html += `<details class="ttfx-popup-failed"><summary>${failed.length} failed task${failed.length > 1 ? "s" : ""}</summary><ul>`;
     for (const t of failed) html += `<li><b>${escapeHtml(t)}</b>: ${escapeHtml(b.failed[t])}</li>`;
@@ -10584,6 +10594,108 @@ function showTtfxBuildPopup(b, task) {
   const overlay = document.getElementById("ttfx-build-popup-overlay");
   overlay.classList.add("visible");
   overlay.setAttribute("aria-hidden", "false");
+  // The release runs are compared with the release run before them
+  const series = ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds;
+  const k = series.indexOf(b);
+  renderTtfxCompileDetails(b, k > 0 ? series[k - 1] : null, task);
+}
+
+// Below the popup's table, from api/ttfx/job: the methods the job's trace logs
+// show compiled again after an invalidation, and what the task scripts
+// invalidated, for the clicked task or else the selected ones. A recompiled
+// method new or gone since `prev` (the run before it) is marked, which names
+// what a step in the Recompiled methods chart was.
+const TTFX_POPUP_ROWS = 10;
+async function renderTtfxCompileDetails(b, prev, task) {
+  const params = task ? { task } : {};
+  const job = (x) => apiGet(`ttfx/job/${encodeURIComponent(x.job_id)}`, params);
+  let cur, before;
+  try {
+    [cur, before] = await Promise.all([job(b), prev ? job(prev).catch(() => null) : null]);
+  } catch (err) {
+    cur = null;
+  }
+  // The popup may show another build by now
+  const el = document.getElementById("ttfx-popup-compile");
+  if (!el || el.dataset.job !== b.job_id) return;
+  if (!cur) {
+    el.innerHTML = '<div class="ttfx-popup-muted">Could not load the recompiles and invalidations.</div>';
+    return;
+  }
+  const wanted = new Set(task ? [task] : ttfxSelectedList());
+  const entries = (d) => (d ? Object.entries(d.tasks).filter(([t]) => wanted.has(t)) : []);
+  const scope = task ? "" : ` (the ${wanted.size} selected tasks)`;
+  const tasksTitle = (ts) => escapeHtml(ts.slice().sort().join("\n"));
+  let html = `<div class="ttfx-popup-section">Recompiled methods${scope}</div>`;
+  if (cur.trace !== "ok") {
+    html += `<div class="ttfx-popup-muted">${cur.trace === "none" ? "The job has no trace logs, or they have expired." : "The trace logs have not been fetched yet."}</div>`;
+  } else {
+    // Each statement with the tasks that compiled it again and their milliseconds
+    const recompiles = (d) => {
+      const m = new Map();
+      for (const [t, e] of entries(d))
+        for (const r of e.recompiles) {
+          const x = m.get(r.statement) || { tasks: [], ms: 0 };
+          x.tasks.push(t);
+          x.ms += r.ms || 0;
+          m.set(r.statement, x);
+        }
+      return m;
+    };
+    const now = recompiles(cur);
+    const was = before && before.trace === "ok" ? recompiles(before) : null;
+    const rows = [...now].map(([stmt, x]) => ({ stmt, x, delta: was ? x.tasks.length - (was.get(stmt)?.tasks.length || 0) : 0 }));
+    if (was) for (const [stmt, x] of was) if (!now.has(stmt)) rows.push({ stmt, x, delta: -x.tasks.length, gone: true });
+    rows.sort((p, q) => Math.abs(q.delta) - Math.abs(p.delta) || q.x.tasks.length - p.x.tasks.length || q.x.ms - p.x.ms);
+    if (!rows.length) html += '<div class="ttfx-popup-muted">None.</div>';
+    else {
+      html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Method</th><th class="num">Tasks</th><th class="num">ms</th>';
+      if (was) html += '<th class="num" title="Tasks compiling it again, against the run before">vs previous</th>';
+      html += "</tr></thead><tbody>";
+      for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
+        const sig = r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1");
+        const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
+        html += `<tr class="${r.gone ? "ttfx-compile-gone" : ""}"><td class="ttfx-compile-stmt" title="${escapeHtml(r.stmt)}">${escapeHtml(sig)}</td>`;
+        html += `<td class="num" title="${tasksTitle(r.x.tasks)}">${r.gone ? "–" : r.x.tasks.length}</td>`;
+        html += `<td class="num">${r.gone ? "–" : r.x.ms.toFixed(1)}</td>`;
+        if (was) html += `<td class="num ${r.delta > 0 ? "ttfx-up" : r.delta < 0 ? "ttfx-down" : ""}" title="${r.gone ? "Gone; it was in:\n" + tasksTitle(r.x.tasks) : ""}">${delta}</td>`;
+        html += "</tr>";
+      }
+      html += "</tbody></table>";
+      if (rows.length > TTFX_POPUP_ROWS) html += `<div class="ttfx-popup-muted ttfx-popup-hint">and ${rows.length - TTFX_POPUP_ROWS} more</div>`;
+    }
+  }
+
+  html += `<div class="ttfx-popup-section">Invalidations${scope}</div>`;
+  const inv = entries(cur).filter(([, e]) => e.invalidated != null);
+  if (!inv.length) {
+    html += '<div class="ttfx-popup-muted">Not recorded: the job ran before the TTFX driver logged invalidations.</div>';
+  } else {
+    const sum = (k) => inv.reduce((n, [, e]) => n + (e[k] || 0), 0);
+    html += `<div>${sum("invalidated").toLocaleString("en-US")} MethodInstances: ${sum("invalidated_by_definition").toLocaleString("en-US")} by method definitions, ` +
+      `${sum("invalidated_rejected").toLocaleString("en-US")} package-image code rejected on load</div>`;
+    // The causes over the tasks: a method definition, or the root of the package
+    // code rejected on load, with the MethodInstances it cost and in how many tasks
+    for (const [kind, title] of [["definition", "Method definitions invalidating the most"], ["rejected", "Rejected on load, by the method behind it"]]) {
+      const m = new Map();
+      for (const [t, e] of inv)
+        for (const c of e.causes)
+          if (c.kind === kind) {
+            const x = m.get(c.cause) || { n: 0, tasks: new Set() };
+            x.n += c.n;
+            x.tasks.add(t);
+            m.set(c.cause, x);
+          }
+      if (!m.size) continue;
+      html += `<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>${title}</th><th class="num">Tasks</th><th class="num" title="MethodInstances invalidated">Count</th></tr></thead><tbody>`;
+      for (const [cause, x] of [...m].sort((p, q) => q[1].n - p[1].n).slice(0, TTFX_POPUP_ROWS / 2)) {
+        html += `<tr><td class="ttfx-compile-stmt" title="${escapeHtml(cause)}">${escapeHtml(cause)}</td><td class="num" title="${tasksTitle([...x.tasks])}">${x.tasks.size}</td><td class="num">${x.n.toLocaleString("en-US")}</td></tr>`;
+      }
+      html += "</tbody></table>";
+    }
+    html += '<div class="ttfx-popup-muted ttfx-popup-hint">The job keeps the top five causes of each kind per task and phase.</div>';
+  }
+  el.innerHTML = html;
 }
 
 function closeTtfxBuildPopup() {
@@ -10701,8 +10813,9 @@ function ttfxValue(b, task, metric = ttfxMetric, gcoff = false) {
   if (gcoff && m.gcoffIndex == null) return null;
   const i = gcoff ? m.gcoffIndex : m.index;
   const x = v[i];
-  if (x == null || !(x > 0)) return null;
-  const scale = ttfxHideJumps && ttfxJumpScales.get(b)?.[task];
+  if (x == null || !(m.count ? x >= 0 : x > 0)) return null;
+  // The annotated steps are steps in time; a count stays as recorded
+  const scale = ttfxHideJumps && !m.count && ttfxJumpScales.get(b)?.[task];
   return scale ? x * scale[i] : x;
 }
 
@@ -10803,6 +10916,51 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric, gcoff = false) {
     s += Math.log(v);
   }
   return Math.exp(s / tasks.length);
+}
+
+function ttfxIsCount(metric = ttfxMetric) {
+  return !!TTFX_METRICS[metric].count;
+}
+
+// The suite value of `metric` in one build: the geomean over `tasks`, or for
+// a count their total; null unless every task has a value
+function ttfxSuiteValue(b, tasks, metric = ttfxMetric, gcoff = false) {
+  if (!ttfxIsCount(metric)) return ttfxGeomean(b, tasks, metric, gcoff);
+  if (!tasks.length) return null;
+  let s = 0;
+  for (const t of tasks) {
+    const v = ttfxValue(b, t, metric, gcoff);
+    if (v == null) return null;
+    s += v;
+  }
+  return s;
+}
+
+function ttfxSuiteLabel(metric = ttfxMetric) {
+  return ttfxIsCount(metric) ? "Suite total" : TTFX_SUITE_LABEL;
+}
+
+// Whether `metric` is drawn as % change from the first build: a count is
+// often 0, so it is always drawn as recorded
+function ttfxNormalizedFor(metric = ttfxMetric) {
+  return ttfxNormalized && !ttfxIsCount(metric);
+}
+
+function formatTtfxValue(v, metric = ttfxMetric) {
+  if (!ttfxIsCount(metric)) return formatTtfxSeconds(v);
+  return v == null ? "–" : Math.round(v).toLocaleString("en-US");
+}
+
+// `v` against `prev` as a table cell's text and class: the % change of a
+// time, the difference of a count
+function ttfxChange(v, prev, metric = ttfxMetric) {
+  if (v == null || prev == null) return { text: "–", cls: "" };
+  if (!ttfxIsCount(metric)) {
+    const p = (v / prev - 1) * 100;
+    return { text: formatTtfxPct(p), cls: ttfxPctClass(p) };
+  }
+  const d = v - prev;
+  return { text: (d > 0 ? "+" : "") + d.toLocaleString("en-US"), cls: d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "" };
 }
 
 // The selected tasks with a value for `metric` in every build of the range
@@ -11110,10 +11268,10 @@ function populateTtfxTaskList() {
     const selected = ttfxSelectedTasks.has(t);
     const failedMsg = latest && latest.failed && latest.failed[t];
     const v = latest ? ttfxValue(latest, t) : null;
-    const latestLabel = failedMsg ? "failed" : v == null ? "" : formatTtfxSeconds(v);
+    const latestLabel = failedMsg ? "failed" : v == null ? "" : formatTtfxValue(v);
     const title = failedMsg
       ? `${t}: fails on the latest build: ${failedMsg}`
-      : `${t}${v != null ? `: ${metricLabel} ${formatTtfxSeconds(v)} on the latest build` : ""}`;
+      : `${t}${v != null ? `: ${metricLabel} ${formatTtfxValue(v)} on the latest build` : ""}`;
     // data-task + delegated listener: see populateBenchGroupList
     html += `<div class="group-item ${selected ? "selected" : ""} ${failedMsg ? "failed" : ""}" data-task="${escapeHtml(t)}" title="${escapeHtml(title)}">`;
     html += `<span class="color-dot" style="background: ${ttfxTaskColors[t] || "#888"}"></span>`;
@@ -11167,11 +11325,13 @@ function highlightTtfxRow(build) {
 // Chart options shared by the per-task chart and the summary panels.
 // `normalized` series are % change from the first build in range.
 // `legendSummary`: group the tasks' lines in the legend (see TTFX_LEGEND_TASKS_MAX)
-function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
+function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
   const isDark = isDarkMode();
   const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
   const textColor = isDark ? "#8b949e" : "#656d76";
-  const fmt = ttfxNormalized ? formatTtfxPct : formatTtfxSeconds;
+  const normalized = ttfxNormalizedFor(metric);
+  const count = ttfxIsCount(metric);
+  const fmt = normalized ? formatTtfxPct : (v) => formatTtfxValue(v, metric);
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -11282,7 +11442,7 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
             const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
             if (suite && !items[0].dataset._common) {
               const p = suite.data.find((q) => q.build === b);
-              if (p) lines.push(`${TTFX_SUITE_LABEL} (${suite._common} tasks): ${fmt(p.y)}`);
+              if (p) lines.push(`${suite.label} (${suite._common} tasks): ${fmt(p.y)}`);
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(...wrapTooltipText(b.message));
@@ -11332,14 +11492,20 @@ function ttfxChartOptions({ metricLabel, title, legendDisplay, legendSummary = f
       x: timeAxis({ textColor, gridColor }),
       y: {
         grid: { color: gridColor },
-        afterDataLimits: ttfxEnforceMinYSpan,
+        // A count starts at 0, so a step from 0 to a few methods reads as one
+        beginAtZero: count,
+        afterDataLimits: count ? undefined : ttfxEnforceMinYSpan,
         // Tick values carry float noise (13.600000000000001) on fine steps
-        ticks: { color: textColor, callback: (v) => (ttfxNormalized ? formatTtfxPct(v) : parseFloat(v.toFixed(4)) + "s") },
+        ticks: {
+          color: textColor,
+          precision: count ? 0 : undefined,
+          callback: (v) => (normalized ? formatTtfxPct(v) : count ? formatTtfxValue(v, metric) : parseFloat(v.toFixed(4)) + "s"),
+        },
         title: {
           display: true,
-          text: ttfxNormalized
+          text: normalized
             ? `${metricLabel}, % change from first build in range`
-            : `${metricLabel} (seconds)`,
+            : count ? metricLabel : `${metricLabel} (seconds)`,
           color: textColor,
         },
       },
@@ -11427,12 +11593,12 @@ function ttfxEnforceMinYSpan(axis) {
   axis.max = mid + minSpan / 2;
 }
 
-// In % mode every series is rebased to its first point in range; a GC-off
-// twin to its line's `base`, so the gap between them stays visible. `s`
-// keeps the seconds for the tooltip's GC share.
-function ttfxRebase(pts, base = null) {
+// In % mode every series of a time is rebased to its first point in range; a
+// GC-off twin to its line's `base`, so the gap between them stays visible.
+// `s` keeps the seconds for the tooltip's GC share.
+function ttfxRebase(pts, base = null, metric = ttfxMetric) {
   const withSeconds = pts.map((p) => ({ ...p, s: p.y }));
-  if (!ttfxNormalized || !pts.length) return withSeconds;
+  if (!ttfxNormalizedFor(metric) || !pts.length) return withSeconds;
   const b = base ?? pts[0].y;
   return withSeconds.map((p) => ({ ...p, y: (p.y / b - 1) * 100 }));
 }
@@ -11476,12 +11642,13 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
   const suiteColor = ttfxSuiteColor();
   const pts = [];
   for (const b of builds) {
-    const y = ttfxGeomean(b, common, metric, gcoff);
+    const y = ttfxSuiteValue(b, common, metric, gcoff);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
+  const label = ttfxSuiteLabel(metric);
   const ds = {
-    label: TTFX_SUITE_LABEL,
-    data: ttfxRebase(pts, base),
+    label,
+    data: ttfxRebase(pts, base, metric),
     _color: suiteColor,
     _common: common.length,
     borderColor: suiteColor,
@@ -11493,7 +11660,7 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
     order: 0,
   };
   if (!gcoff) return ds;
-  return { ...ds, ...ttfxTwinStyle(suiteColor, TTFX_SUITE_TWIN_WIDTH), label: `${TTFX_SUITE_LABEL}, GC off`, _twinOf: TTFX_SUITE_LABEL };
+  return { ...ds, ...ttfxTwinStyle(suiteColor, TTFX_SUITE_TWIN_WIDTH), label: `${label}, GC off`, _twinOf: label };
 }
 
 // The weekly runs of the newest stable release, as the suite geomean over the
@@ -11517,12 +11684,12 @@ function ttfxReleaseStyle(color) {
 function ttfxReleaseDataset(common, metric, base) {
   const pts = [];
   for (const b of getTtfxFilteredReleases()) {
-    const y = ttfxGeomean(b, common, metric);
+    const y = ttfxSuiteValue(b, common, metric);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
   return {
     label: TTFX_RELEASE_LABEL,
-    data: ttfxRebase(pts, base),
+    data: ttfxRebase(pts, base, metric),
     _release: common.length,
     ...ttfxReleaseStyle(ttfxReleaseColor()),
     ...ttfxHoverPointStyle(),
@@ -11576,7 +11743,7 @@ function setTtfxMode(mode) {
 
 // Phones show one chart at a time: pills pick the metric, and in summary
 // mode only that metric's panel is shown
-const TTFX_PILL_LABELS = { precompile: "Precompile", load: "Load", run: "Run", warm: "Warm" };
+const TTFX_PILL_LABELS = { precompile: "Precompile", load: "Load", run: "Run", warm: "Warm", recompiled: "Recompiled", invalidated: "Invalidated" };
 function updateTtfxMetricPills() {
   const el = document.getElementById("ttfx-metric-pills");
   if (!el) return;
@@ -11588,6 +11755,12 @@ function updateTtfxMetricPills() {
 
 function updateTtfxChart() {
   updateTtfxMetricPills();
+  // A count is never drawn as % change; the summary's time panels still are
+  const normalize = document.getElementById("ttfx-btn-normalize");
+  normalize.disabled = ttfxMode === "tasks" && ttfxIsCount();
+  normalize.title = normalize.disabled
+    ? "A count is drawn as recorded: it is often 0, which has no % change"
+    : "Plot every series as % change from its first build in the range";
   if (ttfxMode === "summary") updateTtfxSummaryCharts();
   else updateTtfxTaskChart();
 }
@@ -11606,7 +11779,7 @@ function renderTtfxSummaryLegend() {
   const color = ttfxSuiteColor();
   const drawn = new Set();
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
-  const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
+  const entries = [["suite", "Geomean of the selected tasks (of a count, their total)", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   if (drawn.has("release")) entries.push(["release", "The newest stable release, measured weekly", ttfxReleaseStyle(ttfxReleaseColor())]);
   el.innerHTML = entries
@@ -11631,8 +11804,9 @@ function toggleTtfxSummarySeries(key) {
   renderTtfxSummaryLegend();
 }
 
-// One panel per metric: the geometric mean over the selected tasks that
-// every build in range measured. Zoom and pan are mirrored across panels.
+// One panel per metric: the geometric mean (of a count, the total) over the
+// selected tasks that every build in range measured. Zoom and pan are
+// mirrored across panels.
 function updateTtfxSummaryCharts() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
@@ -11658,8 +11832,11 @@ function updateTtfxSummaryCharts() {
     const label = ttfxMetricLabel(metric);
     const datasets = ttfxSuiteDatasets(builds, common, metric);
     const options = ttfxChartOptions({
+      metric,
       metricLabel: label,
-      title: `${label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
+      title: !common.length
+        ? `${label}: none recorded in this range`
+        : `${label}: ${ttfxIsCount(metric) ? "total over" : "geomean of"} ${common.length} task${common.length > 1 ? "s" : ""}`,
       legendDisplay: false,
       onZoomChange,
       builds,
@@ -11700,7 +11877,7 @@ function updateTtfxTaskChart() {
     const color = ttfxTaskColors[t] || "#888";
     const on = {
       label: t,
-      data: ttfxRebase(pts),
+      data: ttfxRebase(pts, null, ttfxMetric),
       _color: color,
       borderColor: color,
       backgroundColor: color,
@@ -11717,12 +11894,13 @@ function updateTtfxTaskChart() {
       ...on,
       ...ttfxTwinStyle(color, TTFX_TASK_TWIN_WIDTH),
       label: `${t}, GC off`,
-      data: ttfxRebase(off, on.data[0].s),
+      data: ttfxRebase(off, on.data[0].s, ttfxMetric),
       _twinOf: t,
     });
   }
 
   const options = ttfxChartOptions({
+    metric: ttfxMetric,
     metricLabel: ttfxMetricLabel(),
     title: null,
     legendDisplay: true,
@@ -11757,12 +11935,12 @@ function renderTtfxBuildsTable() {
     metricCols
       .map(
         (key) =>
-          `<th class="num" title="Geometric mean over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsGcOff(key) ? "; after it, muted, the same from the repeats with the GC off" : ""}">${ttfxMetricLabel(key)}</th>`,
+          `<th class="num" title="${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsGcOff(key) ? "; after it, muted, the same from the repeats with the GC off" : ""}">${ttfxMetricLabel(key)}</th>`,
       )
       .join("") +
     '<th class="col-secondary">Message</th></tr>';
   if (!builds.length) {
-    tbody.innerHTML = '<tr><td colspan="9">No data</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${metricCols.length + 5}">No data</td></tr>`;
     return;
   }
   let html = "";
@@ -11780,8 +11958,8 @@ function renderTtfxBuildsTable() {
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const key of metricCols) {
-      const off = ttfxShowsGcOff(key) ? ttfxGeomean(b, common[key], key, true) : null;
-      html += `<td class="num">${formatTtfxSeconds(ttfxGeomean(b, common[key], key))}${off != null ? ` <span class="col-secondary" title="GC off">${formatTtfxSeconds(off)}</span>` : ""}</td>`;
+      const off = ttfxShowsGcOff(key) ? ttfxSuiteValue(b, common[key], key, true) : null;
+      html += `<td class="num">${formatTtfxValue(ttfxSuiteValue(b, common[key], key), key)}${off != null ? ` <span class="col-secondary" title="GC off">${formatTtfxSeconds(off)}</span>` : ""}</td>`;
     }
     const notes = ttfxAnnotationsFor(b);
     const noteBadge = notes.length
@@ -12407,7 +12585,7 @@ function renderTtfxTasksTable() {
         const arrow = ttfxTaskSortCol === key ? (ttfxTaskSortAsc ? " ▲" : " ▼") : "";
         const title =
           key === "change"
-            ? "Latest vs first build in range"
+            ? `Latest vs first build in range${ttfxIsCount() ? ", as the difference" : ""}`
             : key === "gcoff"
               ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
               : key === "task" ? "" : `${metricLabel} over the builds in range`;
@@ -12439,7 +12617,7 @@ function renderTtfxTasksTable() {
       median: vals.length ? sorted[Math.floor(sorted.length / 2)] : null,
       min: vals.length ? sorted[0] : null,
       max: vals.length ? sorted[sorted.length - 1] : null,
-      change: vals.length >= 2 ? (vals[vals.length - 1] / vals[0] - 1) * 100 : null,
+      change: vals.length < 2 ? null : ttfxIsCount() ? vals[vals.length - 1] - vals[0] : (vals[vals.length - 1] / vals[0] - 1) * 100,
       n: vals.length,
       failedMsg,
     });
@@ -12472,9 +12650,10 @@ function renderTtfxTasksTable() {
     if (r.failedMsg) html += ` <span class="ttfx-failed" title="${escapeHtml(r.failedMsg)}">fails on latest</span>`;
     html += `</td>`;
     for (const k of ["latest", ...(ttfxShowsGcOff() ? ["gcoff"] : []), "median", "min", "max"]) {
-      html += `<td class="num ${k === "latest" ? "" : "col-secondary"}">${formatTtfxSeconds(r[k])}</td>`;
+      html += `<td class="num ${k === "latest" ? "" : "col-secondary"}">${formatTtfxValue(r[k])}</td>`;
     }
-    html += `<td class="num ${ttfxPctClass(r.change)}">${formatTtfxPct(r.change)}</td>`;
+    const change = ttfxIsCount() ? ttfxChange(r.change, 0) : { text: formatTtfxPct(r.change), cls: ttfxPctClass(r.change) };
+    html += `<td class="num ${change.cls}">${change.text}</td>`;
     html += `<td class="num col-secondary">${r.n}</td>`;
     html += "</tr>";
   }
