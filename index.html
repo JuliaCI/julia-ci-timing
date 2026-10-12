@@ -705,6 +705,14 @@
                 </button>
               </span>
             </div>
+            <input
+              class="sidebar-filter job-filter"
+              id="job-filter"
+              type="search"
+              placeholder="Filter jobs"
+              oninput="setJobFilter(this.value)"
+              aria-label="Filter jobs"
+            />
             <div
               class="job-list"
               id="job-list"
@@ -1295,8 +1303,9 @@
       </div>
       <div class="ttfx-content">
         <div class="ttfx-sidebar" id="ttfx-task-list">
-          <div class="group-header">Tasks</div>
-          <div class="loading">Loading...</div>
+          <div class="group-header" id="ttfx-task-header">Tasks</div>
+          <input class="sidebar-filter" id="ttfx-task-filter" type="search" placeholder="Filter tasks" oninput="setTtfxTaskFilter(this.value)" aria-label="Filter tasks" />
+          <div id="ttfx-task-items"><div class="loading">Loading...</div></div>
         </div>
         <div class="ttfx-chart-area">
           <div class="m-pills" id="ttfx-metric-pills" role="group" aria-label="Metric"></div>
