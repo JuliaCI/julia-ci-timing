@@ -2540,18 +2540,11 @@ a {
 }
 .ttfx-summary-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   grid-template-rows: auto 1fr 1fr;
   gap: 8px;
   width: 100%;
   height: 100%;
-}
-/* Two columns of three when three would be too narrow */
-@media (max-width: 1200px) {
-  .ttfx-summary-grid {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto 1fr 1fr 1fr;
-  }
 }
 /* One legend for the summary panels; an entry hides or shows its
    series in all of them */
@@ -2869,7 +2862,7 @@ a {
 @media (max-width: 768px), (max-height: 500px) {
   .ttfx-summary-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(6, minmax(160px, 1fr));
+    grid-template-rows: repeat(4, minmax(160px, 1fr));
   }
   .ttfx-content {
     flex-direction: column;
@@ -2881,12 +2874,12 @@ a {
     border-bottom: 1px solid var(--color-border-default);
   }
   /* The wrapper is absolutely positioned, so the container has to reserve
-     the height: one chart, or six stacked panels */
+     the height: one chart, or four stacked panels */
   .ttfx-chart-container {
     min-height: 320px;
   }
   .ttfx-chart-container:has(.ttfx-summary-grid:not([hidden])) {
-    min-height: 1040px;
+    min-height: 700px;
   }
 }
 
@@ -4008,9 +4001,7 @@ a {
   .ttfx-summary-grid[data-metric="precompile"] > .ttfx-panel[data-metric="precompile"],
   .ttfx-summary-grid[data-metric="load"] > .ttfx-panel[data-metric="load"],
   .ttfx-summary-grid[data-metric="run"] > .ttfx-panel[data-metric="run"],
-  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"],
-  .ttfx-summary-grid[data-metric="recompiled"] > .ttfx-panel[data-metric="recompiled"],
-  .ttfx-summary-grid[data-metric="invalidated"] > .ttfx-panel[data-metric="invalidated"] {
+  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"] {
     display: block;
   }
 

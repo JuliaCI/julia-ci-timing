@@ -10487,7 +10487,8 @@ const TTFX_ANNOTATION_HINT =
 // `gcoffIndex`: the same phase from the job's repeats with the GC disabled
 // (Render.TTFX_METRICS order); precompile has no such run. A `count` is a
 // number of methods, often 0: its suite value is the total over the tasks
-// rather than their geomean, and it is never drawn as % change.
+// rather than their geomean, it is never drawn as % change, and it has no
+// summary panel: only the per-task chart draws it.
 const TTFX_METRICS = {
   precompile: { label: "Precompile", index: 0 },
   load: { label: "Load (cold)", index: 1, gcoffIndex: 4 },
@@ -11017,6 +11018,8 @@ function setTtfxMetric(val) {
   if (!TTFX_METRICS[val]) return;
   ttfxMetric = val;
   document.getElementById("ttfx-metric").value = val;
+  // A count has no summary panel
+  if (ttfxIsCount() && ttfxMode === "summary") applyTtfxMode("tasks");
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
@@ -11144,13 +11147,8 @@ function applyTtfxURLParams() {
     ttfxHideJumps = true;
     document.getElementById("ttfx-btn-hide-jumps").classList.add("btn-primary");
   }
-  if (params.get("ts") === "tasks") {
-    ttfxMode = "tasks";
-    document.getElementById("ttfx-mode-summary").classList.remove("btn-primary");
-    document.getElementById("ttfx-mode-tasks").classList.add("btn-primary");
-    document.getElementById("ttfx-summary-grid").hidden = true;
-    document.getElementById("ttfx-single").hidden = false;
-  }
+  // A count has no summary panel
+  if (params.get("ts") === "tasks" || ttfxIsCount()) applyTtfxMode("tasks");
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
@@ -11729,7 +11727,8 @@ function resetTtfxZoom() {
   document.getElementById("ttfx-btn-reset-zoom").style.display = "none";
 }
 
-function setTtfxMode(mode) {
+// Sets the mode and its buttons and containers, without drawing
+function applyTtfxMode(mode) {
   ttfxMode = mode === "tasks" ? "tasks" : "summary";
   for (const m of ["summary", "tasks"]) {
     document.getElementById("ttfx-mode-" + m).classList.toggle("btn-primary", m === ttfxMode);
@@ -11737,12 +11736,19 @@ function setTtfxMode(mode) {
   document.getElementById("ttfx-summary-grid").hidden = ttfxMode !== "summary";
   document.getElementById("ttfx-single").hidden = ttfxMode !== "tasks";
   destroyTtfxCharts();
+}
+
+function setTtfxMode(mode) {
+  applyTtfxMode(mode);
+  // The summary has no panel for a count
+  if (ttfxMode === "summary" && ttfxIsCount()) return setTtfxMetric("precompile");
   updateTtfxChart();
   updateTtfxURL();
 }
 
 // Phones show one chart at a time: pills pick the metric, and in summary
-// mode only that metric's panel is shown
+// mode only that metric's panel is shown (a count switches to the per-task
+// chart)
 const TTFX_PILL_LABELS = { precompile: "Precompile", load: "Load", run: "Run", warm: "Warm", recompiled: "Recompiled", invalidated: "Invalidated" };
 function updateTtfxMetricPills() {
   const el = document.getElementById("ttfx-metric-pills");
@@ -11779,7 +11785,7 @@ function renderTtfxSummaryLegend() {
   const color = ttfxSuiteColor();
   const drawn = new Set();
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
-  const entries = [["suite", "Geomean of the selected tasks (of a count, their total)", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
+  const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   if (drawn.has("release")) entries.push(["release", "The newest stable release, measured weekly", ttfxReleaseStyle(ttfxReleaseColor())]);
   el.innerHTML = entries
@@ -11804,9 +11810,8 @@ function toggleTtfxSummarySeries(key) {
   renderTtfxSummaryLegend();
 }
 
-// One panel per metric: the geometric mean (of a count, the total) over the
-// selected tasks that every build in range measured. Zoom and pan are
-// mirrored across panels.
+// One panel per time metric: the geometric mean over the selected tasks that
+// every build in range measured. Zoom and pan are mirrored across panels.
 function updateTtfxSummaryCharts() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
@@ -11827,6 +11832,7 @@ function updateTtfxSummaryCharts() {
     syncing = false;
   };
   for (const metric of Object.keys(TTFX_METRICS)) {
+    if (ttfxIsCount(metric)) continue;
     const canvas = document.getElementById("ttfx-chart-" + metric);
     const common = ttfxSuiteTasks(builds, tasks, metric);
     const label = ttfxMetricLabel(metric);
@@ -11836,7 +11842,7 @@ function updateTtfxSummaryCharts() {
       metricLabel: label,
       title: !common.length
         ? `${label}: none recorded in this range`
-        : `${label}: ${ttfxIsCount(metric) ? "total over" : "geomean of"} ${common.length} task${common.length > 1 ? "s" : ""}`,
+        : `${label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
       legendDisplay: false,
       onZoomChange,
       builds,
