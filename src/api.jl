@@ -228,11 +228,14 @@ const ROUTES = [
               Render.pkgeval_popular(db; days=days_param(p, 30), limit=limit == 0 ? 50 : min(limit, 500), client=client_param(p))
           end),
     Route("ttfx/summary", [SINCE],
-          "TTFX on every master build: per task, the precompile, load, run and warm seconds (and load, run and warm with the GC off), plus failed tasks. releases holds the same for the weekly runs of the newest stable release on the same tasks and machines, each with the release's version and commit, as a reference.",
+          "TTFX on every master build: per task, an array in the order of metrics: the precompile, load, run and warm seconds (and load, run and warm with the GC off), the MethodInstances the task script invalidated, and from the trace logs the methods compiled again after an invalidation and their compile seconds; null where the job did not record it. Plus failed tasks. releases holds the same for the weekly runs of the newest stable release on the same tasks and machines, each with the release's version and commit, as a reference.",
           (db, _, p) -> Render.ttfx(db; since=instant(p, "since"))),
     Route("ttfx/prs", [],
           "Open julia pull requests ranked by their latest TTFX comparison (head against the master build of the merge-base), best first: the job's verdict and robust improvements and regressions, the suite geomean ratio per metric and block, and the flagged tasks. score is the estimated ratio of the suite's total time: the precompile, load, run and warm ratios weighted by each metric's time on master, taking per metric the block nearest no change (1 when the blocks disagree); below 1 is faster. outdated means the pull request has moved on since the job's commit. stack is null unless the pull request targets another one's branch: then the job measured it against that branch, own_score is that comparison, and score and stack.suite estimate the whole stack against master by multiplying in the suite geomeans of the pull requests below it (stack.parents, nearest first; complete false when one has no comparison, which leaves score null; exact false when a lower one has moved on since this job's base). ci is the state of the newest julia-pr build of the pull request's current head (null until looked up, state none when it has no build).",
           (db, _, _) -> Render.ttfx_prs(db)),
+    Route("ttfx/job/<job_id>", ["task" => "a task as Package/Task; every task by default"],
+          "What one TTFX job (the job_id of a ttfx/summary build) recorded about compilation, per task: from its trace logs, the precompile statements and those compiled again because an invalidation had dropped their code (recompiles, with milliseconds), and the MethodInstances the task script invalidated (by a method definition, or package-image code rejected on load) with the top causes of each kind per phase. trace is ok, none (no trace logs, or they expired) or null (not fetched yet).",
+          (db, a, p) -> Render.ttfx_job(db, a[1]; task=get(p, "task", ""))),
     Route("sizes/summary", [SINCE, "metrics" => "comma-separated metric names (the summary set by default, all for every one)",
                             "source" => "ci or manyjulias for that source alone"],
           "Size of the unpacked linux-x86_64 distribution of master commits: the commits in merge order with their merge time, version, julia-ci build, subject and source, and one array per metric aligned with them, in bytes (files and pkgimg.count are counts). metrics lists every metric there is. The sizes are of the tarball CI built from the first commit measured that way (the nightlies bucket keeps them about 60 days), and of manyjulias builds of master back to 2020 before it; markers has that switch, where the series steps because the manyjulias builds have fewer CPU targets.",
@@ -574,6 +577,11 @@ function sizes_pr_example(db)
     return isempty(r) ? "0" : string(r[1].pr_number)
 end
 
+function ttfx_job_example(db)
+    r = Store.query(db, "SELECT job_uuid FROM ttfx_jobs ORDER BY build_created_at DESC LIMIT 1")
+    return isempty(r) ? "0" : String(r[1].job_uuid)
+end
+
 # One request of every other route, with arguments the database has
 function other_targets(db)
     since = Dates.format(Date(now(UTC)) - Day(7), dateformat"yyyy-mm-dd")
@@ -583,6 +591,7 @@ function other_targets(db)
             "/api/pkgeval/packages?q=A", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
+            "/api/ttfx/job/$(ttfx_job_example(db))",
             "/api/commit/$(isempty(latest) ? "0000000" : latest[1]["commit"])",
             (isempty(groups) ? String[] : ["/api/benchmarks/groups/$(groups[1])?since=$since"])...]
 end

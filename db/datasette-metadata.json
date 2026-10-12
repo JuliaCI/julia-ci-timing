@@ -118,11 +118,12 @@
           "columns": {
             "build": "the julia-ci build number",
             "kind": "master for the job of a master build, release for the weekly run of the newest stable release (version and commit_sha are the release's)",
-            "build_created_at": "when the build was created, UTC (minute precision)"
+            "build_created_at": "when the build was created, UTC (minute precision)",
+            "trace_state": "whether the job's trace logs (trace-compile.tar.gz) were parsed: ok, none when the job uploaded none or they expired, null when not looked at yet"
           }
         },
         "ttfx_results": {
-          "description": "Per TTFX job and task: the minimum over the job's repeats, in seconds.",
+          "description": "Per TTFX job and task: the minimum over the job's repeats, in seconds, and the invalidations of the task script.",
           "columns": {
             "precompile": "Pkg.precompile() from a cleared cache",
             "load": "the task script's load phase on its first run",
@@ -130,7 +131,32 @@
             "warm": "the best total of the later runs",
             "load_gcoff": "load, from repeats with the GC disabled",
             "run_gcoff": "run, with the GC disabled",
-            "warm_gcoff": "warm, with the GC disabled"
+            "warm_gcoff": "warm, with the GC disabled",
+            "invalidated": "MethodInstances the task script's load and run invalidated, from the job's untimed invalidation run; null before the driver logged them",
+            "invalidated_by_definition": "of those, invalidated by a method definition",
+            "invalidated_rejected": "of those, package-image code not reinstated on load because an edge no longer held"
+          }
+        },
+        "ttfx_invalidation_causes": {
+          "description": "The causes behind ttfx_results.invalidated: per task and phase (load, run), the top five method definitions by MethodInstances invalidated (kind definition) and the top five methods behind package-image code rejected on load (kind rejected).",
+          "columns": {
+            "cause": "the method's module and signature",
+            "n": "MethodInstances it invalidated"
+          }
+        },
+        "ttfx_traces": {
+          "description": "From each TTFX job's trace logs (one untimed --trace-compile --trace-compile-timing run of each task script): per task, the precompile statements and how many were compiled again because an invalidation had dropped their earlier code.",
+          "columns": {
+            "statements": "precompile statements in the trace",
+            "recompiled": "statements marked # recompile",
+            "recompile_s": "their compile time, seconds"
+          }
+        },
+        "ttfx_recompiles": {
+          "description": "The statements behind ttfx_traces.recompiled, in trace order, with their compile time.",
+          "columns": {
+            "ms": "compile time, milliseconds",
+            "statement": "the precompile(...) statement"
           }
         },
         "ttfx_failures": {
@@ -292,6 +318,11 @@
           "title": "TTFX of one task per master build over the last :days days",
           "description": "task is Package/Snippet as in ttfx_results.task, e.g. BaseDirs/Project-Path",
           "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
+        },
+        "ttfx_recompile_steps": {
+          "title": "Builds where TTFX recompiles appeared or went away",
+          "description": "Recompiled statements (summed over tasks) per master build, and how many tasks recompile each statement that is new or gone against the build before",
+          "sql": "WITH per AS (\n  SELECT j.build, j.build_created_at, j.commit_sha, c.statement, count(*) AS tasks\n  FROM ttfx_recompiles c JOIN ttfx_jobs j ON j.job_uuid = c.job_uuid\n  WHERE j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\n  GROUP BY j.build, c.statement\n), builds AS (\n  SELECT build, build_created_at, commit_sha, lag(build) OVER (ORDER BY build_created_at) AS prev\n  FROM ttfx_jobs WHERE kind = 'master' AND trace_state = 'ok' AND build_created_at >= date('now', '-' || :days || ' days')\n)\nSELECT b.build, substr(b.commit_sha, 1, 10) AS commit_sha, b.build_created_at, s.statement,\n  coalesce(n.tasks, 0) - coalesce(o.tasks, 0) AS change_in_tasks\nFROM builds b\nJOIN (SELECT build, statement FROM per UNION SELECT b2.build, p.statement FROM builds b2 JOIN per p ON p.build = b2.prev) s ON s.build = b.build\nLEFT JOIN per n ON n.build = b.build AND n.statement = s.statement\nLEFT JOIN per o ON o.build = b.prev AND o.statement = s.statement\nWHERE b.prev IS NOT NULL AND coalesce(n.tasks, 0) != coalesce(o.tasks, 0)\nORDER BY b.build_created_at DESC, abs(change_in_tasks) DESC"
         },
         "package_downloads_by_day": {
           "title": "One package's downloads per day, user and CI",

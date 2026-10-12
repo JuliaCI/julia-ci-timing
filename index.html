@@ -1210,12 +1210,14 @@
           id="ttfx-metric"
           onchange="setTtfxMetric(this.value)"
           aria-label="Metric"
-          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs. Thin lines without markers: load, run and warm from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost."
+          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs. Thin lines without markers: load, run and warm from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost. Recompiled methods: methods the task's trace log shows compiled again because an invalidation dropped their code, summed over the tasks. Invalidations: MethodInstances whose code the task script's load and run invalidated, summed over the tasks."
         >
           <option value="precompile" selected>Precompile</option>
           <option value="load">Load (cold)</option>
           <option value="run">Run (cold)</option>
           <option value="warm">Load+run (warm)</option>
+          <option value="recompiled">Recompiled methods</option>
+          <option value="invalidated">Invalidations</option>
         </select>
         <select
           class="time-select"
@@ -1320,6 +1322,8 @@
                 <div class="ttfx-panel" data-metric="load"><canvas id="ttfx-chart-load"></canvas></div>
                 <div class="ttfx-panel" data-metric="run"><canvas id="ttfx-chart-run"></canvas></div>
                 <div class="ttfx-panel" data-metric="warm"><canvas id="ttfx-chart-warm"></canvas></div>
+                <div class="ttfx-panel" data-metric="recompiled"><canvas id="ttfx-chart-recompiled"></canvas></div>
+                <div class="ttfx-panel" data-metric="invalidated"><canvas id="ttfx-chart-invalidated"></canvas></div>
               </div>
               <div class="ttfx-single" id="ttfx-single" hidden>
                 <canvas id="ttfx-chart"></canvas>
