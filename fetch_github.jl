@@ -11,7 +11,7 @@
 #
 # The history before the first run comes from a seed: a dump of both tables
 # (`--dump-seed DIR` writes one from a filled database) published as the assets of
-# the github-seed release, which a run imports when its tables are empty and then
+# the github-seed-v2 release, which a run imports when its tables are empty and then
 # catches up from. Without the seed the first run lists everything, about 1300
 # requests, which needs GITHUB_TOKEN (anonymous requests get 60 an hour); later runs
 # take a few and fit in the anonymous quota.
@@ -35,8 +35,10 @@ const ITEM_COLS = ["kind", "title", "author", "labels", "created_at", "closed_at
 const COMMIT_COLS = ["author", "authored_at", "committed_at", "subject", "pr_number"]
 # Commits can land with a committer date a little older than the newest stored one
 const COMMIT_OVERLAP = Day(2)
-const SEED_URL = get(ENV, "GITHUB_SEED_URL", "https://github.com/JuliaCI/julia-ci-timing/releases/download/github-seed")
+const SEED_URL = get(ENV, "GITHUB_SEED_URL", "https://github.com/JuliaCI/julia-ci-timing/releases/download/github-seed-v2")
 const SEED_TABLES = ("gh_items" => ["number"; ITEM_COLS], "commits" => ["sha"; COMMIT_COLS])
+# The meta key that marks a table as holding a whole listing
+const LISTED_KEYS = Dict("gh_items" => "github_items_backfilled", "commits" => "github_commits_backfilled")
 
 # A page of a listing; throws when it failed, so a run never takes part of a
 # listing for the whole
@@ -61,18 +63,25 @@ function item_row(it)
             pr === nothing ? missing : at(get(pr, :merged_at, nothing)), at(it.updated_at))
 end
 
-# Walk the issues listing by updated_at, from the newest stored row. Each page is
-# committed on its own, so an interrupted backfill resumes where it stopped.
+# Every issue and pull request by creation until a whole listing has finished,
+# then those updated since the newest stored, with an hour's overlap. GitHub
+# refuses page numbers deep into a large listing, so both follow the cursor in
+# the Link header; a cursor that moves `since` along with page numbers lost
+# items.
 function update_items!(db)
+    done = !isempty(query(db, "SELECT 1 FROM meta WHERE key = ?", (LISTED_KEYS["gh_items"],)))
     r = query(db, "SELECT max(gh_updated_at) AS t FROM gh_items")
-    # An earlier since (1970) lists nothing
-    since = r[1].t === missing ? "2009-01-01T00:00:00Z" : String(r[1].t)
+    url = if done && r[1].t !== missing
+        since = Store.iso(DateTime(String(r[1].t), Store.ISO_SECONDS) - Hour(1))
+        "$GITHUB_REPO/issues?state=all&sort=updated&direction=asc&per_page=100&since=$since"
+    else
+        "$GITHUB_REPO/issues?state=all&sort=created&direction=asc&per_page=100"
+    end
     stmt = upsert_stmt(db, "gh_items", ["number"], ITEM_COLS)
-    page, n = 1, 0
-    while true
-        resp = github_get("$GITHUB_REPO/issues?state=all&sort=updated&direction=asc&per_page=100&page=$page&since=$since")
+    n = 0
+    while url !== nothing
+        resp = github_get(url)
         items = JSON3.read(resp.body)
-        isempty(items) && break
         transaction(db) do
             seq = next_seq!(db)
             for it in items
@@ -80,16 +89,10 @@ function update_items!(db)
             end
         end
         n += length(items)
-        length(items) < 100 && break
-        last = at(items[end].updated_at)
-        # Many rows updated in the same second would keep `since` in place
-        if last == since
-            page += 1
-        else
-            since, page = last, 1
-        end
-        n % 5000 < 100 && @info "Issues and pull requests" fetched=n through=since
+        n >= 100 && n % 5000 < 100 && @info "Issues and pull requests" fetched=n through=isempty(items) ? "" : Int(items[end].number)
+        url = next_link(HTTP.header(resp, "Link"))
     end
+    done || transaction(() -> Store.setmeta!(db, LISTED_KEYS["gh_items"], Store.iso_now()), db)
     return n
 end
 
@@ -98,7 +101,7 @@ pr_number(subject) = (m = match(r"\(#(\d+)\)\s*$", subject); m === nothing ? mis
 function update_commits!(db)
     # Until a full listing has finished, newest first, the newest stored commit
     # says nothing about the older ones
-    done = !isempty(query(db, "SELECT 1 FROM meta WHERE key = 'github_commits_backfilled'"))
+    done = !isempty(query(db, "SELECT 1 FROM meta WHERE key = ?", (LISTED_KEYS["commits"],)))
     r = query(db, "SELECT max(committed_at) AS t FROM commits")
     url = "$GITHUB_REPO/commits?sha=master&per_page=100"
     (done && r[1].t !== missing) && (url *= "&since=" * Store.iso(DateTime(String(r[1].t), Store.ISO_SECONDS) - COMMIT_OVERLAP))
@@ -120,7 +123,7 @@ function update_commits!(db)
         n >= 100 && n % 5000 < 100 && @info "Commits" fetched=n through=isempty(list) ? "" : at(list[end].commit.committer.date)
         url = next_link(HTTP.header(resp, "Link"))
     end
-    done || transaction(() -> Store.setmeta!(db, "github_commits_backfilled", Store.iso_now()), db)
+    done || transaction(() -> Store.setmeta!(db, LISTED_KEYS["commits"], Store.iso_now()), db)
     return n
 end
 
@@ -144,12 +147,14 @@ function dump_seed(db, dir)
     end
 end
 
-# Import the seed into whichever table is empty; a seed that cannot be had leaves
-# the run to list everything from the API
+# Import the seed into whichever table does not hold a whole listing yet; a seed
+# that cannot be had leaves the run to list everything from the API. A row already
+# stored wins when it is as new as the seed's, so importing over a partial table
+# (the first seed's issue listing had gaps) only fills it in. Commits do not change.
 function import_seed!(db)
     n = 0
     for (table, cols) in SEED_TABLES
-        isempty(query(db, "SELECT 1 FROM $table LIMIT 1")) || continue
+        isempty(query(db, "SELECT 1 FROM meta WHERE key = ?", (LISTED_KEYS[table],))) || continue
         resp = try
             http_get_retry("$SEED_URL/$(seed_file(table))")
         catch e
@@ -160,7 +165,13 @@ function import_seed!(db)
             @warn "No seed" table status=resp.status
             continue
         end
-        stmt = upsert_stmt(db, table, cols[1:1], cols[2:end]; seq=table == "gh_items")
+        allcols = table == "gh_items" ? [cols; "change_seq"] : cols
+        sql = "INSERT INTO $table ($(join(allcols, ", "))) VALUES ($(join(fill("?", length(allcols)), ", "))) "
+        sql *= table == "gh_items" ?
+            "ON CONFLICT (number) DO UPDATE SET " * join(["$c = excluded.$c" for c in allcols[2:end]], ", ") *
+            " WHERE excluded.gh_updated_at > gh_items.gh_updated_at" :
+            "ON CONFLICT (sha) DO NOTHING"
+        stmt = DBInterface.prepare(db, sql)
         before = n
         transaction(db) do
             seq = next_seq!(db)
@@ -170,8 +181,8 @@ function import_seed!(db)
                 upsert!(stmt, Tuple(row))
                 n += 1
             end
-            # The seed is a whole listing, so the commits need no backfill
-            table == "commits" && Store.setmeta!(db, "github_commits_backfilled", Store.iso_now())
+            # The seed is a whole listing, so the table needs no backfill
+            Store.setmeta!(db, LISTED_KEYS[table], Store.iso_now())
         end
         @info "Imported seed" table rows=n-before
     end

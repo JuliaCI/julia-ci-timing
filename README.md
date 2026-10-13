@@ -51,7 +51,7 @@ container image (`Dockerfile`):
     queue backlog (the token needs the `read_agents` and `read_builds` scopes)
   - `fetch_github.jl`: every issue, pull request and master commit of
     JuliaLang/julia, for the Activity tab. The first run imports the history from
-    the assets of the `github-seed` release and catches up from there, so no token
+    the assets of the `github-seed-v2` release and catches up from there, so no token
     is needed
 - `db/serve.jl` runs the site's API (`/api/`, the `CITiming` package in
   `src/`): the shapes in `db/Render.jl`, served with a time window so the
