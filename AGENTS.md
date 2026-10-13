@@ -7,7 +7,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host; the seven
+The source of truth is a SQLite database on the site's host; the eight
 `fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC). `docs/querying.md` is the
 guide to reading it (tables by topic, example queries, conventions), and
 `llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
@@ -152,6 +152,14 @@ finished in the last 7 days, which the Timing tab's Worker time view
 (`?tab=ci-timing&jv=usage`) splits by pipeline, job type, OS and so on;
 clicking slices filters the other charts (`jf=os.Linux~queue.test`).
 
+Repository activity (the Repo → Activity tab) comes from `fetch_github.jl`:
+`gh_items` holds every issue and pull request of JuliaLang/julia as GitHub lists
+it now, and `commits` the master commits. `api/github/activity` renders per-day series
+from them: open counts, opened/closed/merged and commits per day, and over a
+trailing 30 days the distinct commit authors and PR openers and the median
+days to merge. A reopened item keeps only its latest close, so the open
+counts are slightly off for items that were closed and reopened.
+
 ## Analysis helpers (`analysis/`)
 
 All scripts activate the repo's `Project.toml` automatically. Run
@@ -277,8 +285,8 @@ agents include:
   same benchmark).
 - Correlating regressions with the commits in each report's range.
   `api/commit/<ref>` and `bench_reports.baseline_commit_sha` give the
-  range; the `commits` table (subjects, authors, PR numbers from a clone
-  of JuliaLang/julia) is still empty.
+  range; the `commits` table (subjects, authors, PR numbers) has master's
+  commits from `fetch_github.jl`.
 - Filtering by inferred noise floor (`noise_pct`) so we don't chase
   benchmarks that bounce ±20% run to run.
 

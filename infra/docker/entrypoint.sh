@@ -21,7 +21,7 @@ fetch_all() {
   # fetcher gets its own time limit (the slowest takes about 10 minutes), so
   # one that hangs does not use up the whole run's.
   local failed=0
-  for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl; do
+  for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl fetch_github.jl; do
     echo "==> $f"
     if ! timeout --kill-after=1m 30m julia --color=no --project "/app/$f"; then
       echo "!! $f failed" >&2

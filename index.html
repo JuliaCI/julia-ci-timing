@@ -278,6 +278,23 @@
             </button>
           </div>
         </div>
+        <div class="tab-group" role="presentation">
+          <span class="tab-group-label" aria-hidden="true">Repo</span>
+          <div class="tab-group-buttons" role="presentation">
+            <button
+              class="tab-btn"
+              id="tab-activity"
+              role="tab"
+              aria-selected="false"
+              aria-controls="activity-view"
+              tabindex="-1"
+              onclick="switchTab('activity')"
+              title="JuliaLang/julia over time: open issues and pull requests, how many are opened, closed and merged, commits and contributors"
+            >
+              Activity
+            </button>
+          </div>
+        </div>
       </div>
       <button
         class="btn btn-icon"
@@ -1413,6 +1430,89 @@
             <table>
               <thead id="sizes-stats-thead"></thead>
               <tbody id="sizes-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="ttfx-main view-hidden"
+      id="activity-view"
+      role="tabpanel"
+      aria-labelledby="tab-activity"
+      tabindex="0"
+    >
+      <div class="ttfx-toolbar">
+        <select
+          class="time-select"
+          id="activity-time-range"
+          onchange="setActivityTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="730" selected>Last 2 years</option>
+          <option value="0">All time</option>
+        </select>
+        <select
+          class="time-select"
+          id="activity-smoothing"
+          onchange="setActivitySmoothing(this.value)"
+          aria-label="Averaging window"
+          title="The per-day counts are averaged over this many days up to each day"
+        >
+          <option value="1">Daily counts</option>
+          <option value="7">7-day average</option>
+          <option value="28" selected>28-day average</option>
+          <option value="91">91-day average</option>
+        </select>
+        <button
+          class="btn btn-primary"
+          id="activity-btn-reset-zoom"
+          onclick="resetActivityZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="activity-chart-loading">
+                <span class="loading">Loading activity data...</span>
+              </div>
+              <div class="ttfx-summary-grid activity-grid" id="activity-grid">
+                <div class="ttfx-panel"><canvas id="activity-chart-open"></canvas></div>
+                <div class="ttfx-panel"><canvas id="activity-chart-issues"></canvas></div>
+                <div class="ttfx-panel"><canvas id="activity-chart-prs"></canvas></div>
+                <div class="ttfx-panel"><canvas id="activity-chart-commits"></canvas></div>
+                <div class="ttfx-panel"><canvas id="activity-chart-people"></canvas></div>
+                <div class="ttfx-panel"><canvas id="activity-chart-merge"></canvas></div>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="activity-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize activity table"
+          ></div>
+          <div class="ttfx-stats" id="activity-stats" style="height: 240px">
+            <table>
+              <thead id="activity-stats-thead"></thead>
+              <tbody id="activity-stats-tbody">
                 <tr>
                   <td class="loading">Loading...</td>
                 </tr>

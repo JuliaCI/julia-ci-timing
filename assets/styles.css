@@ -2708,6 +2708,18 @@ th.sorted .sort-indicator {
 .ttfx-single[hidden] {
   display: none;
 }
+/* The Activity tab's six panels: the TTFX grid without its legend row,
+   three columns of two where they fit */
+.activity-grid {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+@media (max-width: 1200px) {
+  .activity-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+  }
+}
 .ttfx-stats {
   flex-shrink: 0;
   min-height: 50px;

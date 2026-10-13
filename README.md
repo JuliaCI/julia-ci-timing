@@ -14,7 +14,8 @@ Short paths open a tab directly and forward any other query parameters:
 [/timing](https://perf.julialang.org/timing), [/builds](https://perf.julialang.org/builds),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
 [/sizes](https://perf.julialang.org/sizes),
-[/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval).
+[/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),
+[/activity](https://perf.julialang.org/activity).
 Each is a small redirect page under a directory of that name; the `?tab=` URLs
 they resolve to keep working as before.
 
@@ -23,7 +24,7 @@ they resolve to keep working as before.
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Seven fetchers write a SQLite database every half hour (`db/schema.sql`):
+- Eight fetchers write a SQLite database every half hour (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
     receiving builds in July 2026)
@@ -48,6 +49,10 @@ container image (`Dockerfile`):
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every
     run, and the queue and run times of every julia-pr and julia-ci job for the
     queue backlog (the token needs the `read_agents` and `read_builds` scopes)
+  - `fetch_github.jl`: every issue, pull request and master commit of
+    JuliaLang/julia, for the Activity tab. The first run imports the history from
+    the assets of the `github-seed` release and catches up from there, so no token
+    is needed
 - `db/serve.jl` runs the site's API (`/api/`, the `CITiming` package in
   `src/`): the shapes in `db/Render.jl`, served with a time window so the
   browser loads what it shows. The package is precompiled with every route

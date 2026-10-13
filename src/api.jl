@@ -130,7 +130,8 @@ end
 # The sources each route family reads, for its ETag; nothing means global.
 # The popular list ranks PkgEval's packages by their downloads.
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
-                           "ttfx" => ["ttfx"], "sizes" => ["sizes"], "downloads" => ["packages"], "agents" => ["agents"])
+                           "ttfx" => ["ttfx"], "sizes" => ["sizes"], "downloads" => ["packages"], "agents" => ["agents"],
+                           "github" => ["github"])
 const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"])
 
 function route_seq(s::Server, segments)
@@ -169,7 +170,7 @@ end
 
 # --- routes ------------------------------------------------------------------
 
-const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents")
+const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents", "github")
 
 function status(db)
     return Dict("change_seq" => Store.current_seq(db),
@@ -317,6 +318,9 @@ const ROUTES = [
     Route("agents/usage", ["days" => "window in days before the latest agents snapshot, 7 by default, at most 60 (the jobs are kept for 60 days)"],
           "Agent time spent on julia-pr and julia-ci jobs that finished in the window, from start to finish: seconds and job count per pipeline, job name, pool (queue, os, arch) and final state, busiest first. Jobs still running are left out.",
           (db, _, p) -> Render.worker_time(db; days=min(days_param(p, 7), 60))),
+    Route("github/activity", [SINCE],
+          "JuliaLang/julia activity per day from start: open issues and pull requests at the end of each day; issues opened and closed, pull requests opened, merged and closed unmerged, and master commits on each day; and over the trailing window_days days the distinct commit authors and pull request openers and the median days merged pull requests were open (null without merges). The open counts and windows count everything before since too.",
+          (db, _, p) -> Render.github_activity(db; since=instant(p, "since"))),
     Route("commits", ["before" => "the first_at of the last commit already listed, to page back", "limit" => "commits per page, 100 by default, at most 500"],
           "Master commits newest first, one row per commit: first build time, latest build state, author, subject, and whether a daily benchmark or PkgEval report ran on it.",
           (db, _, p) -> begin
@@ -604,7 +608,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "downloads", "pkgeval"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "downloads", "pkgeval", "activity"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
