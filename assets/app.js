@@ -11419,6 +11419,7 @@ function highlightTtfxDataset(label) {
     // A task's GC-off twin goes with the task
     const own = ds._twinOf != null && ds._common == null ? ds._twinOf : ds.label;
     const on = label === null || own === label;
+    ds._dimmed = !on;
     ds.borderColor = on ? (ds._alpha ? colorToRgba(ds._color, ds._alpha) : ds._color) : colorToRgba(ds._color, 0.12);
     ds.backgroundColor = ds.borderColor;
   }
@@ -11488,7 +11489,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           filter: (item, data) => {
             if (item._group) return true;
             const ds = data.datasets[item.datasetIndex];
-            return ds._twinOf == null || ds._common != null;
+            return ds._twinOf == null || ds._common != null || ds._release;
           },
           // A sample of each line, dashed or solid, with its marker; with
           // many tasks, the suite lines and a sample for each group
@@ -11541,7 +11542,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           label: (item) => {
             const ds = item.dataset;
             const label = ds._release
-              ? `Julia ${item.raw.build.version} (release, ${ds._release} tasks)`
+              ? `Julia ${item.raw.build.version} (release${ds._twinOf != null ? ", GC off" : ""}, ${ds._release} tasks)`
               : ds._common
                 ? `${ds.label} (${ds._common} tasks)`
                 : ds.label;
@@ -11624,7 +11625,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
 
 // Whether `ds` is the GC-off twin of the task line `of`
 function ttfxIsTaskTwinOf(ds, of) {
-  return of._common == null && ds._common == null && ds._twinOf != null && ds._twinOf === of.label;
+  return of._common == null && !of._release && ds._common == null && ds._twinOf != null && ds._twinOf === of.label;
 }
 
 // The dataset indices a grouped legend entry stands for: every task line,
@@ -11772,7 +11773,22 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
 // first point `base`. Diamonds on a dashed line in a neutral colour; the
 // version of each point is in the tooltip. `_release` holds the task count.
 const TTFX_RELEASE_LABEL = "Latest release";
-const ttfxReleaseColor = () => (isDarkMode() ? "#8b949e" : "#6e7781");
+// Each minor series of releases has its own hue, and the shade alternates
+// with the patch number so a new release shows where it starts
+const TTFX_RELEASE_HUES = [28, 280, 175, 330, 210, 95];
+function ttfxReleaseVersionColor(version) {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version || "");
+  if (!m) return isDarkMode() ? "#8b949e" : "#6e7781";
+  const hue = TTFX_RELEASE_HUES[(+m[1] * 100 + +m[2]) % TTFX_RELEASE_HUES.length];
+  const odd = +(m[3] || 0) % 2 === 1;
+  const lightness = isDarkMode() ? (odd ? 80 : 55) : odd ? 62 : 34;
+  return `hsl(${hue + (odd ? 15 : 0)}, 80%, ${lightness}%)`;
+}
+// The colour of the newest release, which the legend shows
+const ttfxReleaseColor = () => {
+  const releases = ttfxData?.releases || [];
+  return ttfxReleaseVersionColor(releases.length ? releases[releases.length - 1].version : null);
+};
 function ttfxReleaseStyle(color) {
   return {
     borderColor: color,
@@ -11785,19 +11801,41 @@ function ttfxReleaseStyle(color) {
   };
 }
 
-function ttfxReleaseDataset(common, metric, base) {
+function ttfxReleaseDataset(common, metric, base, { gcoff = false } = {}) {
   const pts = [];
   for (const b of getTtfxFilteredReleases()) {
-    const y = ttfxSuiteValue(b, common, metric);
+    const y = ttfxSuiteValue(b, common, metric, gcoff);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
-  return {
+  const ds = {
     label: TTFX_RELEASE_LABEL,
     data: ttfxRebase(pts, base, metric),
     _release: common.length,
     ...ttfxReleaseStyle(ttfxReleaseColor()),
     ...ttfxHoverPointStyle(),
     order: 0,
+  };
+  // Each point and the line from it in its version's colour, unless the
+  // dataset is dimmed while another series is highlighted
+  const alpha = gcoff ? TTFX_TWIN_ALPHA : 1;
+  const colorAt = (dataset, b) => (dataset._dimmed ? undefined : colorToRgba(ttfxReleaseVersionColor(b?.version), alpha));
+  const versionColors = {
+    pointBackgroundColor: (ctx) => colorAt(ctx.dataset, ctx.raw?.build) ?? ctx.dataset.backgroundColor,
+    pointBorderColor: (ctx) => colorAt(ctx.dataset, ctx.raw?.build) ?? ctx.dataset.borderColor,
+    segment: {
+      borderColor: (ctx) => {
+        const dataset = ctx.chart.data.datasets[ctx.datasetIndex];
+        return colorAt(dataset, dataset.data[ctx.p0DataIndex]?.build);
+      },
+    },
+  };
+  if (!gcoff) return { ...ds, ...versionColors };
+  return {
+    ...ds,
+    ...ttfxTwinStyle(ttfxReleaseColor(), TTFX_SUITE_TWIN_WIDTH),
+    ...versionColors,
+    label: `${TTFX_RELEASE_LABEL}, GC off`,
+    _twinOf: TTFX_RELEASE_LABEL,
   };
 }
 
@@ -11813,6 +11851,10 @@ function ttfxSuiteDatasets(builds, common, metric) {
   }
   const release = ttfxReleaseDataset(common, metric, on.data[0].s);
   if (release.data.length) out.push(release);
+  if (release.data.length && ttfxShowsGcOff(metric)) {
+    const off = ttfxReleaseDataset(common, metric, on.data[0].s, { gcoff: true });
+    if (off.data.length) out.push(off);
+  }
   return out;
 }
 
@@ -11885,7 +11927,8 @@ function updateTtfxChart() {
 // from it.
 const ttfxSummaryHidden = new Set();
 function ttfxSummarySeriesKey(ds) {
-  return ds._release ? "release" : ds._twinOf != null ? "gcoff" : "suite";
+  if (ds._release) return ds._twinOf != null ? "release-gcoff" : "release";
+  return ds._twinOf != null ? "gcoff" : "suite";
 }
 
 function renderTtfxSummaryLegend() {
@@ -11896,6 +11939,7 @@ function renderTtfxSummaryLegend() {
   const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   if (drawn.has("release")) entries.push(["release", "The newest stable release, measured weekly", ttfxReleaseStyle(ttfxReleaseColor())]);
+  if (drawn.has("release-gcoff")) entries.push(["release-gcoff", "The release with the GC off", ttfxTwinStyle(ttfxReleaseColor(), TTFX_SUITE_TWIN_WIDTH)]);
   el.innerHTML = entries
     .map(([key, text, sample]) => {
       const off = ttfxSummaryHidden.has(key);
