@@ -19,27 +19,31 @@
 # local development; on the host Caddy does that.
 
 # Part of every ETag: the deployed commit (BUILD_COMMIT is written into the
-# image by deploy.yml), or a hash of the renderer's source on a checkout,
-# so a deploy that changes a route's shape is not answered from a browser's
-# cache with 304 until that source's data happens to change. Read when the
-# package loads, not when it is precompiled.
+# image by deploy.yml), or a hash of the renderer's and the router's source
+# on a checkout, so a deploy that changes a route's shape is not answered
+# from a browser's cache with 304 until that source's data happens to change.
+# Read when the package loads, not when it is precompiled.
 const BUILD_ID = Ref("")
 function build_id()
     f = joinpath(dirname(@__DIR__), "BUILD_COMMIT")
-    return isfile(f) ? first(strip(read(f, String)), 12) : string(hash(read(joinpath(dirname(@__DIR__), "db", "Render.jl"))); base=16)
+    isfile(f) && return first(strip(read(f, String)), 12)
+    return string(hash(read(joinpath(@__DIR__, "api.jl")), hash(read(joinpath(dirname(@__DIR__), "db", "Render.jl")))); base=16)
 end
 
 const CACHE_MAX_ENTRIES = 256
 const CACHE_MAX_BYTES = 128 * 1024 * 1024
 const POOL_SIZE = 4
 # The refresher's pass interval, how long it may go without finishing a pass
-# before stale entries are rendered inline again, how long an entry
-# nobody asks for is kept up to date, and how long before midnight UTC the
-# landing windows of the next day are rendered
+# before stale entries are rendered inline again, how recently an entry
+# nobody asked for since its last render must have been served to be rendered
+# again, and how long before midnight UTC the landing windows of the next day
+# are rendered
 const REFRESH_INTERVAL_S = 20
 const REFRESH_HEALTHY_S = 120
-const REFRESH_KEEP_S = 24 * 3600
+const REFRESH_RECENT_S = 3600
 const NEXT_DAY_AHEAD = Minute(15)
+# How long a /healthz body is reused: it runs df and a few queries per source
+const HEALTH_TTL_S = 10
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "host" => "127.0.0.1", "port" => 8002, "site" => nothing, "data" => nothing)
@@ -72,6 +76,7 @@ mutable struct CacheEntry
     segments::Vector{String}
     params::Dict{String,String}
     hit_at::Float64               # last served, for eviction and for dropping what nobody asks for
+    rendered_at::Float64
 end
 
 mutable struct Server
@@ -85,6 +90,8 @@ mutable struct Server
     refreshed_at::Float64                          # the refresher's last finished pass
     inflight::Dict{String,Base.Event}              # renders under way, by cache key (under `lock`)
     ready::Bool                                    # the warm-up has finished
+    health_at::Float64
+    health::String                                 # the last /healthz body
 end
 
 function open_readonly(path)
@@ -259,10 +266,13 @@ const ROUTES = [
                             "source" => "ci or manyjulias for that source alone"],
           "Size of the unpacked linux-x86_64 distribution of master commits: the commits in merge order with their merge time, version, julia-ci build, subject and source, and one array per metric aligned with them, in bytes (files and pkgimg.count are counts). metrics lists every metric there is. The sizes are of the tarball CI built from the first commit measured that way (the nightlies bucket keeps them about 60 days), and of manyjulias builds of master back to 2020 before it; markers has that switch, where the series steps because the manyjulias builds have fewer CPU targets.",
           (db, _, p) -> begin
-              metrics = String[strip(m) for m in split(get(p, "metrics", ""), ',') if !isempty(strip(m))]
+              metrics = unique(String[strip(m) for m in split(get(p, "metrics", ""), ',') if !isempty(strip(m))])
+              all_metrics = Render.size_metric_names(db)
+              (metrics == ["all"] || all(in(all_metrics), metrics)) ||
+                  throw(BadRequest("metrics must be all or names from the metrics list of /api/sizes/summary"))
               source = get(p, "source", "")
               source in ("", "ci", "manyjulias") || throw(BadRequest("source must be ci or manyjulias"))
-              Render.sizes(db; since=instant(p, "since"), metrics, source)
+              Render.sizes(db; since=instant(p, "since"), metrics, source, all_metrics)
           end),
     Route("sizes/commit/<sha>", [],
           "One commit's size measurement in each source next to the previous commit that source measured: every metric, and every file of at least 1 MiB in either, the files that changed most first.",
@@ -327,11 +337,20 @@ function match_route(route, segments)
     return args
 end
 
+# The route `segments` match and its path arguments, else nothing
+function find_route(segments)
+    for route in ROUTES
+        args = match_route(route, segments)
+        args === nothing || return (route, args)
+    end
+    return nothing
+end
+
 # GET /api/: what the API serves and where the rest of the data is
 function api_index()
     routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
     return OrderedDict(
-        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, package downloads and Buildkite agents, from one SQLite database refreshed every half hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, distribution sizes, package downloads and Buildkite agents, from one SQLite database refreshed every half hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
         "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 220 MB)",
@@ -343,11 +362,8 @@ end
 # path segments after /api/ and the query parameters -> the rendered value
 function render(db, segments, params)
     isempty(segments) && return api_index()
-    for route in ROUTES
-        args = match_route(route, segments)
-        args === nothing || return route.handler(db, args, params)
-    end
-    return nothing
+    found = find_route(segments)
+    return found === nothing ? nothing : found[1].handler(db, found[2], params)
 end
 
 # --- cache -------------------------------------------------------------------
@@ -370,9 +386,10 @@ function cache_put!(s::Server, key, seq, body, segments, params; refresh=false)
     lock(s.lock) do
         old = get(s.cache, key, nothing)
         refresh && old === nothing && return
-        hit_at = old === nothing ? time() : old.hit_at
+        t = time()
+        hit_at = old === nothing ? t : old.hit_at
         old === nothing || (s.cache_bytes -= length(old.body))
-        s.cache[key] = CacheEntry(seq, body, segments, params, hit_at)
+        s.cache[key] = CacheEntry(seq, body, segments, params, hit_at, t)
         s.cache_bytes += length(body)
         (length(s.cache) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) || return
         # The least recently served goes first. The landing routes stay, so
@@ -430,20 +447,22 @@ end
 # it; rendering them again here, rather than for the next visitor, means
 # nobody waits on a render the cache has already been asked for (pkgeval's
 # popular list takes seconds). Until the new body is in, the old one is
-# served with its own ETag.
+# served with its own ETag. Besides the landing routes, only what was asked
+# for since its last render, or lately, is rendered again; the rest, such as
+# a page a crawler fetched once, is dropped instead.
 function refresh_stale!(s::Server)
     entries = lock(s.lock) do
-        [(k, e.seq, e.segments, e.params, e.hit_at) for (k, e) in s.cache]
+        [(k, e.seq, e.segments, e.params, e.hit_at, e.rendered_at) for (k, e) in s.cache]
     end
     pinned = landing_keys()
-    for (key, old, segments, params, hit_at) in entries
-        if time() - hit_at > REFRESH_KEEP_S && !(key in pinned)
-            cache_delete!(s, key)
-            continue
-        end
+    for (key, old, segments, params, hit_at, rendered_at) in entries
         try
             seq = route_seq(s, segments)
             seq == old && continue
+            if !(key in pinned) && hit_at <= rendered_at && time() - hit_at > REFRESH_RECENT_S
+                cache_delete!(s, key)
+                continue
+            end
             render_cached!(s, key, segments, params, seq; refresh=true) === nothing && cache_delete!(s, key)
         catch e
             @error "cache refresh failed" key exception=(e, catch_backtrace())
@@ -456,8 +475,7 @@ end
 # first visitor of the day.
 function fill_landing!(s::Server)
     for target in landing_targets_now()
-        uri, segments, params = split_target(target)
-        key = cache_key(segments, uri.query)
+        key, segments, params = split_target(target)
         cache_get(s, key; touch=false) === nothing || continue
         try
             render_cached!(s, key, segments, params, route_seq(s, segments))
@@ -491,11 +509,7 @@ function render_gzip(s::Server, segments, params)
     end
 end
 
-cache_key(segments, query) = "/api/" * join(segments, "/") * "?" * query
-function target_key(target)
-    uri, segments, _ = split_target(target)
-    return cache_key(segments, uri.query)
-end
+target_key(target) = split_target(target)[1]
 
 # --- responses ---------------------------------------------------------------
 
@@ -505,17 +519,25 @@ accepts_gzip(req) = occursin("gzip", HTTP.header(req, "Accept-Encoding", ""))
 
 not_found() = json_response(404, Dict("error" => "not found", "routes" => "/api/ lists every route"))
 
-# A request target under /api/ -> its URI, path segments and query parameters
+# A request target under /api/ -> its cache key, path segments and the query
+# parameters its route reads. The key lists those parameters in the route
+# table's order, so a reordered query or an unknown parameter does not make an
+# entry and a render of its own.
 function split_target(target)
     uri = HTTP.URI(target)
     segments = String[String(x) for x in split(uri.path, '/'; keepempty=false)]
     popfirst!(segments)   # "api"
-    params = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
-    return uri, segments, params
+    query = Dict{String,String}(String(k) => String(v) for (k, v) in HTTP.queryparams(uri))
+    found = find_route(segments)
+    names = found === nothing ? String[] : first.(found[1].params)
+    # An empty value reads the same as none
+    known = [k => query[k] for k in names if !isempty(get(query, k, ""))]
+    key = "/api/" * join(segments, "/") * "?" * join(("$k=$(HTTP.escapeuri(v))" for (k, v) in known), "&")
+    return key, segments, Dict{String,String}(known)
 end
 
 function api(s::Server, req::HTTP.Request)
-    uri, segments, params = split_target(req.target)
+    key, segments, params = split_target(req.target)
     # A deploy and the proxy's health checks ask; answered before anything
     # touches the database or the cache
     if segments == ["ready"]
@@ -532,7 +554,6 @@ function api(s::Server, req::HTTP.Request)
     # Incremental refreshes are small and their cursors differ per client;
     # the cache is for the windows and extracts everyone asks for
     cacheable = !haskey(params, "changed_since")
-    key = cache_key(segments, uri.query)
     hit = cacheable ? cache_get(s, key) : nothing
     # An outdated entry is served while the refresher renders it again,
     # unless the refresher has stopped
@@ -589,13 +610,21 @@ function static(root, path; allowed=SITE_PATHS)
     return HTTP.Response(200, ["Content-Type" => ctype, "Cache-Control" => "no-cache"], read(file))
 end
 
+function health(s::Server)
+    if time() - s.health_at > HEALTH_TTL_S
+        s.health = JSON3.write(withdb(Render.health, s))
+        s.health_at = time()
+    end
+    return HTTP.Response(200, ["Content-Type" => "application/json; charset=utf-8"], s.health)
+end
+
 function handle(s::Server, req::HTTP.Request)
     path = HTTP.URI(req.target).path
     try
         if startswith(path, "/api/")
             return api(s, req)
         elseif path == "/healthz"
-            return json_response(200, withdb(Render.health, s))
+            return health(s)
         elseif s.data !== nothing && startswith(path, "/data/")
             return static(s.data, path[6:end]; allowed=nothing)   # the export directory holds only extracts
         elseif s.site !== nothing
@@ -687,7 +716,7 @@ function main(args)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
     seqdb = Channel{SQLite.DB}(1)
     put!(seqdb, open_readonly(opts["db"]))
-    s = Server(pool, seqdb, ReentrantLock(), Dict(), 0, opts["site"], opts["data"], 0.0, Dict(), false)
+    s = Server(pool, seqdb, ReentrantLock(), Dict(), 0, opts["site"], opts["data"], 0.0, Dict(), false, 0.0, "")
     server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
     Threads.@spawn begin

@@ -221,6 +221,7 @@ CREATE TABLE IF NOT EXISTS bench_report_groups (
     allocs_count         INTEGER,
     PRIMARY KEY (report_id, grp, stat)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS bench_report_groups_grp ON bench_report_groups (grp, stat, report_id);
 
 -- --------------------------------------------------------------- pkgeval --
 

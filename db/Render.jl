@@ -370,19 +370,25 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
     since = Dates.format(Date(until) - Day(days - 1), dateformat"yyyy-mm-dd")
     metric = client == "all" ? "total" : client
     report_id = Int(reports[1].id)
-    # Downloads per registry package name over the window, ranked
-    dl = "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
-         "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
-         "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
-         "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
-         "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name), " *
-         "ranked AS (SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl) "
+    # Downloads per registry package name over the window, ranked. Summing the
+    # window's rollups is the slow part, so it runs once and the queries below
+    # read the ranking back as a JSON parameter.
+    ranking = rows(db, "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
+                       "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
+                       "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
+                       "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
+                       "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name) " *
+                       "SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl ORDER BY rank", (since, until))
+    ranked_json(n=length(ranking)) = JSON3.write([(String(r.name), Int(r.total), Int(r.user), Int(r.ci), Int(r.rank)) for r in ranking if r.rank <= n])
+    all_ranked = ranked_json()
+    dl = "WITH ranked AS (SELECT value ->> 0 AS name, value ->> 1 AS total, value ->> 2 AS user, value ->> 3 AS ci, " *
+         "value ->> 4 AS rank FROM json_each(?)) "
     packages = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
                             "version" => js(r.version), "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci))
                 for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, p.version, ranked.total, ranked.user, ranked.ci " *
-                                  "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
+                                  "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id " *
                                   "WHERE p.report_id = ? AND p.status IN (SELECT value FROM json_each(?)) " *
-                                  "ORDER BY ranked.rank LIMIT ?", (since, until, report_id, JSON3.write(collect(statuses)), limit))]
+                                  "ORDER BY ranked.rank, p.package_id LIMIT ?", (all_ranked, report_id, JSON3.write(collect(statuses)), limit))]
     # How long each has been failing
     runs = failing_runs(db, [p["name"] for p in packages])
     for p in packages
@@ -390,12 +396,12 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
     end
     # Of the top N by these downloads that the report tested, how many are not ok
     top = rows(db, dl * "SELECT COUNT(*) AS tested, SUM(CASE WHEN p.status != 'ok' THEN 1 ELSE 0 END) AS not_ok " *
-                        "FROM ranked JOIN packages k ON k.name = ranked.name JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
-                        "WHERE ranked.rank <= ?", (since, until, report_id, PKGEVAL_TOP_N))[1]
+                        "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
+                        "WHERE ranked.rank <= ?", (ranked_json(PKGEVAL_TOP_N), report_id, PKGEVAL_TOP_N))[1]
     # Downloads to tested packages, and the share of them going to passing ones
     w = rows(db, dl * "SELECT SUM(ranked.$metric) AS total, SUM(CASE WHEN p.status = 'ok' THEN ranked.$metric ELSE 0 END) AS ok " *
-                      "FROM ranked JOIN packages k ON k.name = ranked.name JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
-                      "WHERE ranked.rank <= ?", (since, until, report_id, PKGEVAL_WEIGHT_N))[1]
+                      "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id AND p.report_id = ? " *
+                      "WHERE ranked.rank <= ?", (ranked_json(PKGEVAL_WEIGHT_N), report_id, PKGEVAL_WEIGHT_N))[1]
     pass_pct(x) = x.total === missing || x.total == 0 ? nothing : round(100 * Float64(x.ok) / Float64(x.total); digits=1)
     # The same share on every report of the past year, weighted by today's downloads
     year_ago = Dates.format(Date(String(reports[1].date)) - Year(1), dateformat"yyyy-mm-dd")
@@ -404,7 +410,7 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
                                       "FROM pkgeval_reports r JOIN pkgeval_results p ON p.report_id = r.id " *
                                       "JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
                                       "WHERE ranked.rank <= ? AND r.kind = 'daily' AND r.date >= ? GROUP BY r.id ORDER BY r.date",
-                                  (since, until, PKGEVAL_WEIGHT_N, year_ago))]
+                                  (ranked_json(PKGEVAL_WEIGHT_N), PKGEVAL_WEIGHT_N, year_ago))]
     # Passed the previous report, not this one: the nightly breakage
     newly_broken = Any[]
     previous = nothing
@@ -413,10 +419,10 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
         newly_broken = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
                                     "user" => Int(r.user))
                         for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, ranked.user " *
-                                          "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
+                                          "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id " *
                                           "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
-                                          "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY ranked.rank LIMIT ?",
-                                      (since, until, Int(reports[2].id), report_id, limit))]
+                                          "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY ranked.rank, p.package_id LIMIT ?",
+                                      (all_ranked, Int(reports[2].id), report_id, limit))]
     end
     return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)),
                        "days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages,
@@ -446,14 +452,17 @@ const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gc
 const TTFX_RESULT_METRICS = 8
 
 function ttfx(db; since="")
+    where, params = where_clause("build_created_at", since, "")
+    # The per-task tables are read for the window's jobs alone
+    windowed = isempty(where) ? "" : " WHERE job_uuid IN (SELECT job_uuid FROM ttfx_jobs$where)"
     results = Dict{String,Dict{String,Any}}()
     cols = join(TTFX_METRICS[1:TTFX_RESULT_METRICS], ", ")
-    for r in rows(db, "SELECT job_uuid, task, $cols FROM ttfx_results")
+    for r in rows(db, "SELECT job_uuid, task, $cols FROM ttfx_results" * windowed, params)
         vals = Any[js(getproperty(r, Symbol(m))) for m in TTFX_METRICS[1:TTFX_RESULT_METRICS]]
         get!(results, String(r.job_uuid), Dict{String,Any}())[String(r.task)] = vals
     end
     traces = Dict{String,Dict{String,Any}}()
-    for r in rows(db, "SELECT job_uuid, task, recompiled, recompile_s FROM ttfx_traces")
+    for r in rows(db, "SELECT job_uuid, task, recompiled, recompile_s FROM ttfx_traces" * windowed, params)
         get!(traces, String(r.job_uuid), Dict{String,Any}())[String(r.task)] = Any[Int(r.recompiled), Float64(r.recompile_s)]
     end
     # A job's results cut to the metrics it recorded, then its trace values when it has them
@@ -463,11 +472,10 @@ function ttfx(db; since="")
         return Any[vals; fill(nothing, TTFX_RESULT_METRICS - length(vals)); tr]
     end
     failures = Dict{String,Dict{String,String}}()
-    for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures")
+    for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures" * windowed, params)
         get!(failures, String(r.job_uuid), Dict{String,String}())[String(r.task)] = String(r.error)
     end
     pipeline = "julia-ci"
-    where, params = where_clause("build_created_at", since, "")
     function jobs(kind)
         out = Any[]
         sql = "SELECT * FROM ttfx_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = ? ORDER BY build_created_at, build"
@@ -960,9 +968,9 @@ function size_series(db, src, wanted; from="", until="")
     index = Dict(Int(b.id) => i for (i, b) in enumerate(bs))
     values = OrderedDict(m => Vector{Any}(nothing, length(bs)) for m in wanted)
     if !isempty(bs)
-        for r in rows(db, "SELECT m.size_build_id AS id, m.metric, m.value FROM size_metrics m JOIN size_builds b ON b.id = m.size_build_id " *
-                          "WHERE b.source = ? AND b.triplet = ? AND m.metric IN (SELECT value FROM json_each(?))",
-                      (src, SIZE_TRIPLET, JSON3.write(wanted)))
+        for r in rows(db, "SELECT size_build_id AS id, metric, value FROM size_metrics " *
+                          "WHERE size_build_id IN (SELECT value FROM json_each(?)) AND metric IN (SELECT value FROM json_each(?))",
+                      (JSON3.write(collect(keys(index))), JSON3.write(wanted)))
             i = get(index, Int(r.id), nothing)
             i === nothing || (values[String(r.metric)][i] = Int(r.value))
         end
@@ -972,12 +980,13 @@ function size_series(db, src, wanted; from="", until="")
                                    "messages" => [String(b.message) for b in bs], "sources" => fill(src, length(bs)), "values" => values)
 end
 
+size_metric_names(db) = [String(r.metric) for r in rows(db, "SELECT DISTINCT metric FROM size_metrics ORDER BY metric")]
+
 # The measured commits in merge order and one array per metric aligned with
 # them: the manyjulias builds up to the first CI measurement and the CI
 # tarballs from there, with a marker at the switch. `source` gives one source
 # alone instead. `metrics` empty means the summary set, ["all"] every metric.
-function sizes(db; since="", metrics=String[], source="")
-    all_metrics = [String(r.metric) for r in rows(db, "SELECT DISTINCT metric FROM size_metrics ORDER BY metric")]
+function sizes(db; since="", metrics=String[], source="", all_metrics=size_metric_names(db))
     wanted = isempty(metrics) ? SIZE_SUMMARY_METRICS : metrics == ["all"] ? all_metrics : metrics
     markers = Any[]
     if !isempty(source)

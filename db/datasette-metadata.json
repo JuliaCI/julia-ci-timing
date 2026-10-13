@@ -278,7 +278,7 @@
       "queries": {
         "pool_waiting_now": {
           "title": "Jobs waiting for an agent now, per pool",
-          "sql": "SELECT queue, os, arch, count(*) AS waiting,\n  round(max(julianday('now') - julianday(runnable_at)) * 24, 1) AS longest_wait_h\nFROM pool_jobs WHERE state = 'scheduled' AND started_at IS NULL\nGROUP BY queue, os, arch ORDER BY waiting DESC"
+          "sql": "SELECT queue, os, arch, count(*) AS waiting,\n  round(max(julianday('now') - julianday(runnable_at)) * 24, 1) AS longest_wait_h\nFROM pool_jobs WHERE state IN ('scheduled', 'reserved', 'assigned', 'accepted', 'limited', 'limiting') AND started_at IS NULL\nGROUP BY queue, os, arch ORDER BY waiting DESC"
         },
         "source_freshness": {
           "title": "When each source last ran",
