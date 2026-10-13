@@ -13124,7 +13124,30 @@ function updateSizesChart() {
       stepped: "before",
       _metric: m,
     });
+    // The newest release's size as a dashed level from its publication, as % of
+    // the same first point in % mode
+    const release = sizesData.release;
+    const rv = release && release.values[m];
+    const start = release ? Math.max(Date.parse(release.published_at), points[0].x) : null;
+    const end = points[points.length - 1].x;
+    if (rv != null && start < end) {
+      const y = sizesNormalized ? ((rv - base) / base) * 100 : rv;
+      datasets.push({
+        label: `${sizesMetricLabel(m)}, ${release.version}`,
+        data: [start, end].map((x) => ({ x, y, release: true })),
+        borderColor: sizesColors[m],
+        backgroundColor: sizesColors[m],
+        borderWidth: 1.5,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        _metric: m,
+        _release: true,
+      });
+    }
   }
+  const release = sizesData.release;
+  const hasRelease = datasets.some((d) => d._release);
   const fmt = (v) => (sizesNormalized ? formatSignedPct(v) : formatSizeValue(v));
   sizesChart = new Chart(canvas, {
     type: "line",
@@ -13135,16 +13158,51 @@ function updateSizesChart() {
       normalized: true,
       interaction: { mode: "near", intersect: false },
       onClick: tapAgainToOpen((evt, elements, chart) => {
-        if (!elements.length) return;
-        const ds = chart.data.datasets[elements[0].datasetIndex];
-        showSizesCommitPopup(ds.data[elements[0].index].i, ds._metric);
+        const el = elements.find((e) => !chart.data.datasets[e.datasetIndex]._release);
+        if (!el) return;
+        const ds = chart.data.datasets[el.datasetIndex];
+        showSizesCommitPopup(ds.data[el.index].i, ds._metric);
       }),
       onHover: (evt, elements, chart) => {
-        evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
-        highlightSizesRow(elements.length ? chart.data.datasets[elements[0].datasetIndex].data[elements[0].index].i : null);
+        const el = elements.find((e) => !chart.data.datasets[e.datasetIndex]._release);
+        evt.native.target.style.cursor = el ? "pointer" : "";
+        highlightSizesRow(el ? chart.data.datasets[el.datasetIndex].data[el.index].i : null);
       },
       plugins: {
-        legend: { labels: { color: textColor, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
+        legend: {
+          labels: {
+            color: textColor,
+            usePointStyle: true,
+            boxWidth: 8,
+            boxHeight: 8,
+            // The release levels share one entry, drawn as a dashed line
+            generateLabels: (chart) => {
+              const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+              const own = items.filter((item) => !chart.data.datasets[item.datasetIndex]._release);
+              if (!hasRelease) return own;
+              const members = chart.data.datasets.map((d, k) => (d._release ? k : -1)).filter((k) => k >= 0);
+              return [
+                ...own,
+                {
+                  text: `Julia ${release.version} release`,
+                  fontColor: textColor,
+                  strokeStyle: textColor,
+                  lineDash: [4, 3],
+                  lineWidth: 1.5,
+                  pointStyle: "line",
+                  hidden: members.every((k) => !chart.isDatasetVisible(k)),
+                  _release: members,
+                },
+              ];
+            },
+          },
+          onClick: (evt, item, legend) => {
+            const chart = legend.chart;
+            if (!item._release) return Chart.defaults.plugins.legend.onClick.call(legend, evt, item, legend);
+            for (const k of item._release) chart.setDatasetVisibility(k, item.hidden);
+            chart.update();
+          },
+        },
         annotation: {
           interaction: { mode: "nearest", intersect: true },
           annotations: buildSizesMarkers(isDark),
@@ -13156,12 +13214,14 @@ function updateSizesChart() {
           callbacks: {
             title: (items) => {
               if (!items.length) return "";
+              if (items[0].raw.release) return `Julia ${release.version} release, published ${formatUtc(release.published_at)}`;
               const i = items[0].raw.i;
               const d = sizesData;
               return `${formatUtc(d.merged_at[i])}  ${d.commits[i].slice(0, 10)}${d.versions[i] ? "  " + d.versions[i] : ""}`;
             },
             label: (ctx) => {
               const ds = ctx.dataset;
+              if (ctx.raw.release) return ` ${ds.label}: ${sizesNormalized ? fmt(ctx.raw.y) : formatSizeValue(release.values[ds._metric])}`;
               const vals = sizesData.values[ds._metric];
               const i = ctx.raw.i;
               const prev = sizesPrevious(vals, i);
@@ -13170,6 +13230,7 @@ function updateSizesChart() {
             },
             footer: (items) => {
               if (!items.length) return "";
+              if (items[0].raw.release) return ["The official tarball of the newest stable release"];
               const i = items[0].raw.i;
               const d = sizesData;
               const lines = [d.sources[i] === "ci" ? `build ${d.builds[i]}, CI tarball` : "manyjulias build"];
