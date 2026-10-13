@@ -594,9 +594,9 @@ function drawUsageView() {
   const hours = (s) => `${perDay(s) >= 10 ? Math.round(perDay(s)) : perDay(s).toFixed(1)} h/day`;
   const pct = (v, of) => `${of ? ((100 * v) / of).toFixed(1) : "0.0"}%`;
   summaryEl.innerHTML =
-    `On average <strong>${Math.round(perDay(total)).toLocaleString()}</strong> agent hours a day, ` +
+    `On average <strong>${Math.round(perDay(total)).toLocaleString("en-US")}</strong> agent hours a day, ` +
     `as if <strong>${Math.round(total / (d.days * 86400))}</strong> agents were busy all the time, ` +
-    `over ${jobs.toLocaleString()} jobs` +
+    `over ${jobs.toLocaleString("en-US")} jobs` +
     (usageFilters.size ? `: <strong>${pct(total, all)}</strong> of all agent time.` : ".");
   filtersEl.innerHTML = usageFilters.size
     ? "Showing only " +
@@ -659,7 +659,7 @@ function drawUsageView() {
               ? escapeHtml(s.label)
               : `<button type="button" class="usage-legend-btn" data-dim="${donut.dim.id}" data-key="${escapeHtml(s.key)}" aria-pressed="${usageFilters.get(donut.dim.id)?.has(s.key) ? "true" : "false"}">${escapeHtml(s.label)}</button>`;
           return (
-            `<li class="${s.active ? "" : "usage-legend-off"}" title="${escapeHtml(`${s.label}: ${hours(s.value)}, ${s.jobs.toLocaleString()} jobs`)}"><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${label}</span>` +
+            `<li class="${s.active ? "" : "usage-legend-off"}" title="${escapeHtml(`${s.label}: ${hours(s.value)}, ${s.jobs.toLocaleString("en-US")} jobs`)}"><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${label}</span>` +
             `<span class="overview-legend-value">${pct(s.value, donut.total)}</span>` +
             `<span class="overview-legend-value overview-legend-pct usage-legend-hours">${escapeHtml(hours(s.value))}</span></li>`
           );
@@ -887,7 +887,7 @@ function renderBuildsTable(builds) {
     .map((b) => {
       const url = escapeHtml(buildkiteBuildUrl(b));
       return `<tr tabindex="0" data-url="${url}"${buildRunning(b) ? ' class="builds-running"' : ""}>
-        <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
+        <td>${timeHtml(b.created_at)}</td>
         <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
         <td class="commits-reg-msg"><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
         <td>${escapeHtml(b.state)}</td>
@@ -903,7 +903,7 @@ function renderBuildsTable(builds) {
     recent.map((b) => ({
       attrs: `data-url="${escapeHtml(buildkiteBuildUrl(b))}"`,
       title: escapeHtml(b.message || b.commit),
-      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${escapeHtml(timeAgo(b.created_at))} · ${b.jobs} jobs${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
+      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${timeHtml(b.created_at, { relative: true })} · ${b.jobs} jobs${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
       value: b.wall_s != null ? formatDuration(b.wall_s) : escapeHtml(b.state),
       valueClass: b.state === "failed" ? "m-bad" : b.state === "passed" ? "" : "m-muted",
     })),
@@ -1066,7 +1066,7 @@ async function renderAgentsSection() {
   const latest = snapshots[snapshots.length - 1];
   const latestMs = Date.parse(latest.time);
   updatedEl.textContent = `Snapshot ${timeAgo(latest.time)}`;
-  updatedEl.title = latest.time;
+  updatedEl.title = formatUtc(latest.time);
 
   // Summary: connected now, per queue, and how many are missing
   const connected = new Set(latest.connected);
@@ -1158,7 +1158,7 @@ async function renderAgentsSection() {
     parts.push(`<td>${escapeHtml([rec.os, rec.arch].filter(Boolean).join(" / "))}</td>`);
     parts.push(`<td>${escapeHtml(statusText)}</td>`);
     parts.push(`<td class="agents-job" title="${escapeHtml(jobText)}">${escapeHtml(jobText)}</td>`);
-    parts.push(`<td title="${escapeHtml(status === "connected" ? rec.connected_at || "" : "")}">${escapeHtml(since)}</td>`);
+    parts.push(`<td title="${escapeHtml(status === "connected" ? formatUtc(rec.connected_at) : "")}">${escapeHtml(since)}</td>`);
     parts.push("</tr>");
   }
   if (filtering && shown === 0) {
@@ -1328,8 +1328,7 @@ function renderBacklogChart(d) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            title: (items) =>
-              items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
+            title: (items) => (items.length ? formatUtc(items[0].parsed.x) : ""),
             label: (item) => {
               const p = item.dataset._pool;
               const j = item.dataIndex;
@@ -1502,8 +1501,7 @@ function renderBalanceCharts(d) {
             legend: { display: false },
             tooltip: {
               callbacks: {
-                title: (items) =>
-                  items.length ? new Date(items[0].parsed.x).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "",
+                title: (items) => (items.length ? formatUtc(items[0].parsed.x) : ""),
                 label: (item) => {
                   const { running, waiting } = item.raw;
                   const f = (v) => (bucket > 1 ? v.toFixed(1) : String(v));
@@ -4029,7 +4027,7 @@ function showPopup(meta) {
     document.getElementById("popup-duration").innerHTML =
       '<span class="text-muted">—</span>';
     document.getElementById("popup-agent").textContent = "(n/a)";
-    document.getElementById("popup-date").textContent = `${meta.date} UTC`;
+    document.getElementById("popup-date").innerHTML = timeHtml(meta.date);
     document.getElementById("popup-commit").textContent = meta.commit;
     document.getElementById("popup-message").textContent = "(coverage data)";
     document.getElementById("popup-author").textContent = "(n/a)";
@@ -4081,7 +4079,7 @@ function showPopup(meta) {
     );
     document.getElementById("popup-agent").textContent =
       meta.agent || "(unknown)";
-    document.getElementById("popup-date").textContent = `${meta.date} UTC`;
+    document.getElementById("popup-date").innerHTML = timeHtml(meta.date);
     document.getElementById("popup-commit").textContent = meta.commit;
     document.getElementById("popup-message").textContent =
       meta.message || "(no message)";
@@ -5980,7 +5978,7 @@ function syncJobListUI() {
 }
 
 function timeAgo(dateString) {
-  const date = new Date(dateString);
+  const date = new Date(runTime({ date: dateString }));
   const now = new Date();
   const seconds = Math.floor((now - date) / 1000);
 
@@ -5993,6 +5991,21 @@ function timeAgo(dateString) {
   if (days < 7) return `${days}d ago`;
   const weeks = Math.floor(days / 7);
   return `${weeks}w ago`;
+}
+
+// "2026-10-13 01:04 UTC", from any form of time the data has: ISO,
+// "yyyy-mm-dd HH:MM" in UTC, milliseconds or a Date
+function formatUtc(t) {
+  const ms = runTime({ date: t });
+  return isNaN(ms) ? "" : new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
+// A time on the page: in UTC with how long ago in its tooltip, or with
+// `relative` how long ago with the UTC time in the tooltip
+function timeHtml(t, { relative = false } = {}) {
+  const abs = formatUtc(t);
+  const rel = timeAgo(t);
+  return `<span title="${escapeHtml(relative ? abs : rel)}">${escapeHtml(relative ? rel : abs)}</span>`;
 }
 
 // === Timing data ===
@@ -6294,7 +6307,7 @@ function setUpdatedLabels() {
     const el = document.getElementById(id);
     if (!el || !at) continue;
     el.textContent = `Updated ${timeAgo(at)}`;
-    el.title = at;
+    el.title = formatUtc(at);
   }
 }
 
@@ -7121,7 +7134,7 @@ function formatBytes(b) {
 // A value of the selected benchmark metric
 function formatBenchValue(v) {
   if (benchMetric === "memory") return formatBytes(v);
-  if (benchMetric === "allocs") return v == null || v === 0 ? "—" : Math.round(v).toLocaleString();
+  if (benchMetric === "allocs") return v == null || v === 0 ? "—" : Math.round(v).toLocaleString("en-US");
   return formatTime(v);
 }
 
@@ -9056,7 +9069,7 @@ function renderPackagesPackage(d) {
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
         title: { display: true, text: `${d.name}: successful package requests per day`, color: textColor },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString()}` } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString("en-US")}` } },
       },
       scales: {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
@@ -9066,7 +9079,7 @@ function renderPackagesPackage(d) {
   });
   const sum = (key, from) => series.slice(from).reduce((n, s) => n + s[key], 0);
   const week = Math.max(0, series.length - 7);
-  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", 0).toLocaleString()} requests (${sum("user", 0).toLocaleString()} user, ${sum("ci", 0).toLocaleString()} CI); last 7 days ${sum("all", week).toLocaleString()} (${sum("user", week).toLocaleString()} user, ${sum("ci", week).toLocaleString()} CI).</p>`;
+  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", 0).toLocaleString("en-US")} requests (${sum("user", 0).toLocaleString("en-US")} user, ${sum("ci", 0).toLocaleString("en-US")} CI); last 7 days ${sum("all", week).toLocaleString("en-US")} (${sum("user", week).toLocaleString("en-US")} user, ${sum("ci", week).toLocaleString("en-US")} CI).</p>`;
 }
 
 // The most requested packages over the last week of data
@@ -9107,9 +9120,9 @@ function renderPackagesTop() {
       (p) => `<tr class="clickable" tabindex="0" data-name="${escapeHtml(p.name || "")}">
         <td class="num">${p.rank}</td>
         <td>${p.name ? escapeHtml(p.name) : `<code title="not in General">${escapeHtml(p.uuid)}</code>`}</td>
-        <td class="num">${p.user.toLocaleString()}</td>
-        <td class="num">${p.ci.toLocaleString()}</td>
-        <td class="num">${p.all.toLocaleString()}</td>
+        <td class="num">${p.user.toLocaleString("en-US")}</td>
+        <td class="num">${p.ci.toLocaleString("en-US")}</td>
+        <td class="num">${p.all.toLocaleString("en-US")}</td>
       </tr>`,
     )
     .join("");
@@ -9775,7 +9788,7 @@ function updatePackagesDownloadsChart() {
               if (packagesProportional) {
                 return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toFixed(1)}%`;
               }
-              return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString()}`;
+              return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString("en-US")}`;
             },
           },
         },
@@ -9795,9 +9808,7 @@ function updatePackagesDownloadsChart() {
             callback: (v) =>
               packagesProportional
                 ? `${Number(v).toFixed(0)}%`
-                : PHONE_WIDTH.matches
-                  ? compactNumber(v)
-                  : Number(v).toLocaleString(),
+                : compactNumber(v),
           },
           title: {
             // A phone needs the width for the plot; the page says what it is
@@ -10028,20 +10039,20 @@ function renderPkgevalPopular() {
           ? "new"
           : `${p.last_passed ? "" : "≥ "}${days} day${days === 1 ? "" : "s"} <span class="col-secondary">since ${escapeHtml(p.failing_since)}</span>`;
       return `<tr tabindex="0" data-name="${escapeHtml(p.name)}" class="${recency}">
-        <td class="num">${p.rank.toLocaleString()}</td>
+        <td class="num">${p.rank.toLocaleString("en-US")}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
         <td class="num" title="${escapeHtml(title)}">${since}</td>
         <td>${escapeHtml(p.reason || "(none)")}</td>
-        <td class="num">${p.user.toLocaleString()}</td>
+        <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
     })
     .join("");
   const url = pkgevalReportUrl(d.date_path || d.date);
   const weighted =
     d.weighted_pass_pct != null
-      ? `${d.weighted_pass_pct.toFixed(1)}% of user downloads (among the ${d.weight_n.toLocaleString()} most downloaded packages) went to packages that passed`
+      ? `${d.weighted_pass_pct.toFixed(1)}% of user downloads (among the ${d.weight_n.toLocaleString("en-US")} most downloaded packages) went to packages that passed`
       : "";
   const topLine =
     d.top_tested > 0
@@ -10055,7 +10066,7 @@ function renderPkgevalPopular() {
         const isNew = p.failing_since === d.date;
         return {
           attrs: `data-name="${escapeHtml(p.name)}"`,
-          lead: p.rank.toLocaleString(),
+          lead: p.rank.toLocaleString("en-US"),
           title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
           meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> · ${escapeHtml(p.reason || "(none)")} · ${compactNumber(p.user)} downloads`,
           value: isNew ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
@@ -10232,13 +10243,13 @@ function updatePkgevalChart() {
               const raw = r[key] || r[key === "ok" ? "ok" : key] || 0;
               const pct =
                 r.total > 0 ? ((raw / r.total) * 100).toFixed(1) : "0.0";
-              return ` ${item.dataset.label}: ${raw.toLocaleString()} (${pct}%)`;
+              return ` ${item.dataset.label}: ${raw.toLocaleString("en-US")} (${pct}%)`;
             },
             afterBody: (items) => {
               if (!items.length) return "";
               const idx = items[0].dataIndex;
               const r = reports[idx];
-              return `Total: ${(r.total || 0).toLocaleString()}`;
+              return `Total: ${(r.total || 0).toLocaleString("en-US")}`;
             },
           },
         },
@@ -10269,9 +10280,7 @@ function updatePkgevalChart() {
           grid: { color: gridColor },
           ticks: {
             color: textColor,
-            callback: pkgevalProportional
-              ? (v) => v.toFixed(0) + "%"
-              : undefined,
+            callback: pkgevalProportional ? (v) => v.toFixed(0) + "%" : compactNumber,
           },
           title: {
             display: true,
@@ -10383,7 +10392,7 @@ function showTtfxBuildPopup(b, task) {
     "Commit",
     `<code>${escapeHtml(b.commit.slice(0, 10))}</code> (${commitLink(b.commit, "everything recorded for it")})`,
   );
-  html += row("Date", `${escapeHtml(b.date)} UTC`);
+  html += row("Date", timeHtml(b.date));
   html += row("Version", escapeHtml(b.version || ""));
   html += row("Build", `#${b.build}, job ${escapeHtml(b.state)}`);
   html += row("Agent", escapeHtml([b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")));
@@ -10424,7 +10433,8 @@ function showTtfxBuildPopup(b, task) {
   }
 
   openDetailPopup({
-    title: ttfxIsRelease(b) ? `TTFX release ${b.version} ${b.date}` : `TTFX build ${b.date}`,
+    title: ttfxIsRelease(b) ? `TTFX release ${b.version} ${formatUtc(b.date)}` : `TTFX build ${formatUtc(b.date)}`,
+
     html,
     key: `ttfx-job-${b.job_id}`,
   });
@@ -11255,8 +11265,8 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           title: (items) => {
             if (!items.length) return "";
             const b = items[0].raw.build;
-            if (items[0].dataset._release) return `${b.date}  Julia ${b.version} (release)  ${b.commit.slice(0, 10)}`;
-            return `${b.date}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
+            if (items[0].dataset._release) return `${formatUtc(b.date)}  Julia ${b.version} (release)  ${b.commit.slice(0, 10)}`;
+            return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
           },
           label: (item) => {
             const ds = item.dataset;
@@ -11787,7 +11797,7 @@ function renderTtfxBuildsTable() {
       : nRun ? "All tasks measured" : `Job ${b.state}: no results`;
     const stateClass = nRun === 0 || failed.length ? "ttfx-failed" : "";
     html += `<tr tabindex="0" data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
-    html += `<td>${escapeHtml(b.date)}</td>`;
+    html += `<td>${timeHtml(b.date)}</td>`;
     html += `<td><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
@@ -11996,7 +12006,7 @@ function showTtfxPrPopup(p) {
     "Base",
     `${ghCommit(p.base, sha(p.base))} (${escapeHtml(p.base.version)}${st ? `, on ${parent}` : ""}; ${commitLink(p.base.commit, "everything recorded for it")})`,
   );
-  html += row("Measured", `${escapeHtml(p.date.replace("T", " ").replace(/Z$/, ""))} UTC (${escapeHtml(timeAgo(p.date))})`);
+  html += row("Measured", timeHtml(p.date));
   html += row("Job", `#${p.build}, ${escapeHtml(p.state)}; ${p.n_tasks} tasks${p.blocks ? `, ${p.blocks} ABBA blocks` : ""}`);
   html += row(
     "Score",
@@ -12113,7 +12123,7 @@ function renderTtfxPrsList() {
         p.outdated ? "older commit" : "",
         ttfxPrStackBadge(p).trim(),
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
-        escapeHtml(timeAgo(p.date)),
+        timeHtml(p.date, { relative: true }),
       ].filter(Boolean);
       return `${toggle}<tr class="m-list-row" data-pr="${p.pr}"><td><div class="m-item">
         <span class="m-item-rank">${i + 1}</span>
@@ -12204,7 +12214,7 @@ function renderTtfxPrsTable() {
       ...worse.map((t) => `- ${t.name}: ${ttfxTaskChanges(t, t.regressions)}`),
     ].join("\n");
     html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
-    html += `<td class="col-secondary" title="${escapeHtml(`${p.date}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
+    html += `<td class="col-secondary" title="${escapeHtml(`${formatUtc(p.date)}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
     html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button></td>`;
     html += "</tr>";
   });
@@ -12523,7 +12533,7 @@ function formatSizeDelta(d, isCount = false) {
   if (d == null) return "";
   if (d === 0) return "0";
   const sign = d > 0 ? "+" : "−";
-  return sign + (isCount ? Math.abs(d).toLocaleString() : formatBytes(Math.abs(d)));
+  return sign + (isCount ? Math.abs(d).toLocaleString("en-US") : formatBytes(Math.abs(d)));
 }
 
 // A change as a percentage of `before`, for after a byte delta; empty when it
@@ -12533,12 +12543,34 @@ function formatSizePct(delta, before) {
   return pct && ` <small>${pct}</small>`;
 }
 
+// Ticks for a byte axis at round sizes, at most eight of them: 1, 2 or 5 times a
+// power of ten of one unit (200 MiB, 1 GiB), all labelled in that unit
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"];
+function byteTicks(axis) {
+  const range = axis.max - axis.min;
+  if (!(range > 0)) return;
+  const rough = range / 8;
+  axis._byteUnit = Math.min(BYTE_UNITS.length - 1, Math.max(0, Math.floor(Math.log(rough) / Math.log(1024))));
+  const unit = 1024 ** axis._byteUnit;
+  const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].map((m) => m * unit).find((s) => s >= rough) || 1024 * unit;
+  const ticks = [];
+  for (let v = Math.ceil(axis.min / step) * step; v <= axis.max; v += step) ticks.push({ value: v });
+  axis.ticks = ticks;
+}
+
+function byteTickLabel(v) {
+  const k = this._byteUnit ?? 0;
+  return `${Number((v / 1024 ** k).toFixed(1))} ${BYTE_UNITS[k]}`;
+}
+
+
 // Unlike the shared byte formatter, a size of 0 reads 0: here a dash means
+
 // not measured
 function formatSizeValue(v, isCount = false) {
   if (v == null) return "—";
   if (v === 0) return "0";
-  return isCount ? v.toLocaleString() : formatBytes(v);
+  return isCount ? v.toLocaleString("en-US") : formatBytes(v);
 }
 
 // The window's start as a timestamp, or -Infinity for all time
@@ -12815,7 +12847,7 @@ function updateSizesChart() {
               if (!items.length) return "";
               const i = items[0].raw.i;
               const d = sizesData;
-              return `${d.merged_at[i].slice(0, 16).replace("T", " ")}  ${d.commits[i].slice(0, 10)}${d.versions[i] ? "  " + d.versions[i] : ""}`;
+              return `${formatUtc(d.merged_at[i])}  ${d.commits[i].slice(0, 10)}${d.versions[i] ? "  " + d.versions[i] : ""}`;
             },
             label: (ctx) => {
               const ds = ctx.dataset;
@@ -12843,7 +12875,8 @@ function updateSizesChart() {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd HH:mm" }),
         y: {
           beginAtZero: true,
-          ticks: { color: textColor, callback: fmt },
+          afterBuildTicks: sizesNormalized ? undefined : byteTicks,
+          ticks: { color: textColor, callback: sizesNormalized ? fmt : byteTickLabel },
           grid: { color: gridColor },
         },
       },
@@ -13063,7 +13096,7 @@ async function showSizesPrPopup(n) {
   html += "</div>";
   html += row("Title", escapeHtml(p.title));
   html += row("Author", escapeHtml(p.author));
-  html += row("Build", `#${p.build}, ${escapeHtml(p.build_created_at.slice(0, 16).replace("T", " "))} UTC, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
+  html += row("Build", `#${p.build}, ${timeHtml(p.build_created_at)}, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
   html += row("Merge-base", `<code>${escapeHtml(p.merge_base.slice(0, 10))}</code>`);
   html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
@@ -13161,7 +13194,7 @@ function renderSizesCommitsTable() {
     const sha = d.commits[i];
     const p = sizesPrevious(d.values.total || [], i);
     html += `<tr class="clickable" tabindex="0" data-i="${i}">`;
-    html += `<td>${escapeHtml(d.merged_at[i].slice(0, 16).replace("T", " "))}</td>`;
+    html += `<td>${timeHtml(d.merged_at[i])}</td>`;
     // A step over several commits is theirs together: its link lists them
     const span = sizesSpan(p, i);
     const multi = span > 1 && p != null;
@@ -13237,7 +13270,7 @@ function showSizesCommitPopup(i, metric) {
     html += row("Title", escapeHtml(d.messages[i] || ""));
     html += row("Commit", `<code>${escapeHtml(sha.slice(0, 10))}</code> (${commitLink(sha, "everything recorded for it")})`);
   }
-  html += row("Merged", `${escapeHtml(d.merged_at[i].slice(0, 16).replace("T", " "))} UTC`);
+  html += row("Merged", timeHtml(d.merged_at[i]));
   html += row("Version", escapeHtml(d.versions[i] || ""));
   html += row("Measured", ci ? `the tarball of julia-ci build #${d.builds[i]}` : "a manyjulias build of the commit");
   if (!multi) html += row("Previous", prevSha ? `<code>${escapeHtml(prevSha.slice(0, 10))}</code>, ${escapeHtml(d.merged_at[anyPrev].slice(0, 10))}` : "");
@@ -13700,7 +13733,7 @@ function overviewPkgevalCard(src) {
       ["Popular packages", overviewPkgevalPopular()],
       ["Newly broken", overviewPkgevalNewlyBroken()],
       ["Why packages fail", overviewPkgevalReasons()],
-      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
 }
@@ -13793,7 +13826,7 @@ function overviewBenchCard(src) {
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
       ["Commit", last.commit ? overviewExtLink(githubCommitURL(last.commit), last.commit.slice(0, 10)) : ""],
       ["Groups", groups ? `${groups} benchmark groups` : ""],
-      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
 }
@@ -13903,7 +13936,7 @@ function overviewCICard() {
   if (flaky.length) {
     rows.push([`Below ${PASS_RATE_THRESHOLD * 100}% pass rate (${PASS_RATE_DAYS} d)`, overviewList(flaky)]);
   }
-  rows.push(["Data updated", `<span title="${escapeHtml(data.generated_at)}">${overviewAgo(data.generated_at)}</span>`]);
+  rows.push(["Data updated", `<span title="${formatUtc(data.generated_at)}">${overviewAgo(data.generated_at)}</span>`]);
 
   const spark = overviewSpark(
     builds.filter((b) => b.runMs >= now - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS).map((b) => ({ x: b.runMs, y: b.failed })),
@@ -14002,7 +14035,7 @@ function overviewTtfxCard(src, prs) {
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
-      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
 }
@@ -14081,10 +14114,10 @@ function overviewSizesCard(src, prs) {
     rows: [
       ["Latest commit", `${overviewExtLink(githubCommitURL(sha), sha.slice(0, 10))} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
-      ["Files", at("files") != null ? at("files").toLocaleString() : ""],
+      ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
-      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
 }
@@ -14215,7 +14248,7 @@ function overviewPackagesCard(src) {
       ["Biggest shift", biggestShift],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${compactNumber(series[series.length - 1].all)} downloads`],
       ["Most requested", overviewTopPackages()],
-      ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
 }
@@ -14277,7 +14310,7 @@ function overviewAgentsCard(src, backlog) {
       ["Running jobs", String(running)],
       ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
       ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
-      ["Snapshot", `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
+      ["Snapshot", `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
     ],
   });
 }
@@ -14434,7 +14467,7 @@ function overviewSparkChart(canvas, spark) {
         tooltip: {
           displayColors: multi,
           callbacks: {
-            title: (items) => new Date(items[0].parsed.x).toISOString().slice(0, 16).replace("T", " "),
+            title: (items) => formatUtc(items[0].parsed.x),
             label: (item) => `${multi ? item.dataset.label : spark.label}: ${spark.format(item.parsed.y)}`,
           },
         },
@@ -14541,7 +14574,7 @@ function drawOverview() {
   if (stamps.length) {
     const newest = new Date(Math.max(...stamps)).toISOString();
     updatedEl.textContent = `Update workflow last wrote data ${timeAgo(newest)}`;
-    updatedEl.title = `${newest}. Every source is fetched every hour; a file is only rewritten when its data changed.`;
+    updatedEl.title = `${formatUtc(newest)}. Every source is fetched every hour; a file is only rewritten when its data changed.`;
   } else {
     updatedEl.textContent = "";
   }
@@ -14861,7 +14894,7 @@ function commitMatchesHtml(ref, data, pr) {
       <td>${commitLink(m.prefix, `<code>${escapeHtml(m.prefix)}</code>`)}</td>
       <td class="commits-reg-msg">${escapeHtml(m.message || "")}</td>
       <td>${escapeHtml(m.author || "")}</td>
-      <td>${escapeHtml((m.created_at || "").replace("T", " ").slice(0, 16))}</td>
+      <td>${timeHtml(m.created_at)}</td>
     </tr>`,
   );
   return `<p class="commit-message">${data.matches.length} commits match ${/^\d+$/.test(ref) ? `PR #${r}` : `<code>${r}</code>`}:</p>
@@ -14876,7 +14909,7 @@ function commitHeaderHtml(data, pr) {
     overviewExtLink(githubCommitURL(id), id),
     c.author ? escapeHtml(c.author) : "",
     prNumber ? overviewExtLink(githubPrURL(prNumber), `#${prNumber}`) : "",
-    c.created_at ? `first built ${escapeHtml(c.created_at.replace("T", " ").slice(0, 16))} UTC (${escapeHtml(timeAgo(c.created_at))})` : "",
+    c.created_at ? `first built ${timeHtml(c.created_at)}` : "",
   ].filter(Boolean);
   const older = data.previous
     ? commitLink(data.previous.commit, `← older <code>${escapeHtml(data.previous.commit)}</code>`)
@@ -14899,8 +14932,9 @@ function commitCIHtml(data) {
       return `<tr>
         <td>${escapeHtml(b.pipeline)}</td>
         <td>${b.url ? overviewExtLink(b.url, `#${b.build}`) : `#${b.build}`}</td>
-        <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
+        <td>${timeHtml(b.created_at)}</td>
         <td>${escapeHtml(b.state || "")}</td>
+
         <td class="num" title="${escapeHtml(wallTitle)}">${formatDuration(b.wall_s)}</td>
         <td class="num" title="${escapeHtml(wallTitle)}">${commitPctHtml(commitPct(b.wall_s, prevWall))}</td>
         <td class="num">${formatDuration(b.queue_median_s)}</td>
