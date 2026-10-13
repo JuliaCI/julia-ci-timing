@@ -434,17 +434,18 @@ CREATE TABLE IF NOT EXISTS raw_ttfx (
 -- while the bucket still has it (about 60 days). Source 'manyjulias' is a
 -- rebuild from the manyjulias store, imported once by db/import_sizes.jl to
 -- seed the history back to 2020. Source 'pr' is the latest julia-pr build of
--- an open pull request (size_prs). Compare within a source: those rebuilds have
+-- an open pull request (size_prs). Source 'release' is the official tarball of
+-- the newest stable release, as a reference. Compare within a source: those rebuilds have
 -- three CPU targets where CI has had four since March 2024 (the code and DWARF
 -- of sys.so and the pkgimages are about a fifth smaller), and lack share/doc
 -- and share/man.
 
 CREATE TABLE IF NOT EXISTS size_builds (
     id          INTEGER PRIMARY KEY,
-    source      TEXT NOT NULL,              -- ci | manyjulias | pr
+    source      TEXT NOT NULL,              -- ci | manyjulias | pr | release
     triplet     TEXT NOT NULL,              -- x86_64-linux-gnu
     commit_sha  TEXT NOT NULL,
-    merged_at   TEXT NOT NULL,              -- ci: the build's created_at; manyjulias: the committer date
+    merged_at   TEXT NOT NULL,              -- ci: the build's created_at; manyjulias: the committer date; release: the tag's publication
     version     TEXT NOT NULL DEFAULT '',   -- the distribution's JULIA_VERSION_STRING
     build       INTEGER,                    -- the julia-ci build (ci only)
     message     TEXT NOT NULL DEFAULT '',   -- the commit's subject

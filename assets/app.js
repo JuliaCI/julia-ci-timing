@@ -14340,11 +14340,37 @@ function overviewTtfxCard(src, prs) {
       ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
+      overviewTtfxRelease(src, latest),
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// Larger than the release is worse, for times and sizes alike; a change that
+// rounds to 0.0% is neither
+const overviewReleaseClass = (pct) =>
+  Math.abs(pct) < 0.05 ? "overview-delta-neutral" : pct > 0 ? "overview-delta-bad" : "overview-delta-good";
+
+// The latest build against the newest release's latest weekly run, per time
+// metric over the snippets both measured
+function overviewTtfxRelease(src, latest) {
+  const releases = (src && src.releases) || [];
+  const rel = releases[releases.length - 1];
+  if (!rel) return ["Against release", ""];
+  const parts = [];
+  for (const m of ["precompile", "load", "run", "warm"]) {
+    const tasks = ttfxCommonTasks([latest, rel], src.tasks || [], m);
+    const a = ttfxGeomean(latest, tasks, m);
+    const b = ttfxGeomean(rel, tasks, m);
+    if (a == null || !b) continue;
+    const pct = (100 * (a - b)) / b;
+    parts.push(
+      `${TTFX_PILL_LABELS[m]} <span class="${overviewReleaseClass(pct)}" title="${formatTtfxSeconds(a)} against ${formatTtfxSeconds(b)}, geomean over ${tasks.length} snippets">${formatSignedPct(pct)}</span>`,
+    );
+  }
+  return [`Against ${escapeHtml(rel.version)}`, parts.join(", ")];
 }
 
 // The five best-ranked open pull requests that come out faster, with their score
@@ -14422,11 +14448,30 @@ function overviewSizesCard(src, prs) {
       ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
+      overviewSizesRelease(src, at),
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
   });
+}
+
+// The latest measured commit against the official tarball of the newest
+// release, for the total and its biggest parts
+function overviewSizesRelease(src, at) {
+  const rel = src.release;
+  if (!rel) return ["Against release", ""];
+  const parts = [];
+  for (const [label, m] of [["Total", "total"], ["sys.so", "sysimg"], ["Tarball", "tarball"]]) {
+    const a = at(m);
+    const b = rel.values[m];
+    if (a == null || !b) continue;
+    const d = a - b;
+    parts.push(
+      `${label} <span class="${overviewReleaseClass((100 * d) / b)}" title="${formatBytes(a)} against ${formatBytes(b)}">${formatSizeDelta(d)} (${formatSignedPct((100 * d) / b)})</span>`,
+    );
+  }
+  return [`Against ${escapeHtml(rel.version)}`, parts.join(", ")];
 }
 
 // The five open pull requests that change the total most, with the change

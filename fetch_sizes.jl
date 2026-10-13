@@ -21,6 +21,9 @@
 # authors) comes from GitHub every PULLS_REFRESH and is kept in size_open_prs; GitHub also
 # gives each new build's merge-base. Anonymously, which the host is, that stays well
 # within the hourly quota fetch_ttfx.jl shares.
+#
+# The newest stable release, the one the weekly TTFX release job measures, is measured
+# once from its tarball on julialang-s3 as source `release`, as a reference for master.
 
 using HTTP
 using JSON3
@@ -54,6 +57,7 @@ const JOB_TARBALL = r"^julia-[0-9a-f]+-linux-x86_64\.tar\.gz$"
 # not measured
 const PR_LOOKBACK_DAYS = 14
 const PULLS_REFRESH = Hour(2)
+const RELEASE_BUCKET = "https://julialang-s3.julialang.org/bin/linux/x64"
 
 function github_get(path)
     resp = http_get_retry("$GITHUB_REPO/$path", github_headers())
@@ -218,6 +222,28 @@ function measure_master!(db, bucket; deadline)
     return n
 end
 
+# The newest release the TTFX release job has measured, unless it is measured already.
+# Dated by its tag's publication when the tag is known. Whether it was measured.
+function measure_release!(db)
+    r = query(db, "SELECT version, commit_sha, build_created_at FROM ttfx_jobs " *
+                  "WHERE kind = 'release' AND version != '' AND commit_sha != '' ORDER BY build_created_at DESC LIMIT 1")
+    isempty(r) && return false
+    version, commit = String(r[1].version), String(r[1].commit_sha)
+    m = match(r"^(\d+\.\d+)\.\d+$", version)
+    m === nothing && return false
+    isempty(query(db, "SELECT 1 FROM size_builds WHERE source = 'release' AND triplet = ? AND commit_sha = ?", (TRIPLET, commit))) || return false
+    tag = query(db, "SELECT published_at FROM julia_tags WHERE tag = ?", ("v" * version,))
+    merged_at = isempty(tag) ? String(r[1].build_created_at) : Store.iso(Store.parse_upstream(String(tag[1].published_at)))
+    url = "$RELEASE_BUCKET/$(m.captures[1])/julia-$version-linux-x86_64.tar.gz"
+    measured_version, metrics, files = measure_tarball(io -> HTTP.get(url; response_stream=io, retry=true, read_idle_timeout=120))
+    row = (merged_at, version=measured_version, build=nothing, message="v" * version, measured_at=iso_now())
+    transaction(db) do
+        write_measurement!(db, "release", TRIPLET, commit, row, metrics, files; seq=next_seq!(db))
+    end
+    @info "Measured the release" version total=metrics["total"] sysimg=metrics["sysimg"]
+    return true
+end
+
 # --- pull requests -------------------------------------------------------------
 
 const PR_COLS = ["title", "author", "draft", "base_ref", "build", "build_created_at", "web_url", "head_commit",
@@ -377,6 +403,11 @@ end
 function run!(db)
     bucket = bucket_tarballs()
     n = measure_master!(db, bucket; deadline=now(UTC) + TIME_BUDGET)
+    try
+        measure_release!(db) && (n += 1)
+    catch e
+        @error "Measuring the release failed" exception=(e, catch_backtrace())
+    end
     # A failing GitHub or julia-pr listing leaves the pull requests as they were rather
     # than failing the master measurements with it
     try

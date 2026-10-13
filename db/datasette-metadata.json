@@ -247,16 +247,16 @@
           }
         },
         "size_builds": {
-          "description": "One measurement of the unpacked linux-x86_64 distribution of a commit (tools/measure_sizes.jl). source ci: the tarball a julia-ci master build uploaded to the nightlies bucket (fetch_sizes.jl, from August 2026); manyjulias: a manyjulias build of the master commit, imported to seed the history back to 2020, with three CPU targets where CI has four (code and DWARF of sys.so and the pkgimages about a fifth smaller); pr: the latest julia-pr build of an open pull request (size_prs). Compare within a source.",
+          "description": "One measurement of the unpacked linux-x86_64 distribution of a commit (tools/measure_sizes.jl). source ci: the tarball a julia-ci master build uploaded to the nightlies bucket (fetch_sizes.jl, from August 2026); manyjulias: a manyjulias build of the master commit, imported to seed the history back to 2020, with three CPU targets where CI has four (code and DWARF of sys.so and the pkgimages about a fifth smaller); pr: the latest julia-pr build of an open pull request (size_prs); release: the official tarball of the newest stable release the TTFX release job measured, as a reference for master. Compare within a source.",
           "columns": {
-            "merged_at": "ci and pr: the build's created_at; manyjulias: the committer date",
+            "merged_at": "ci and pr: the build's created_at; manyjulias: the committer date; release: the tag's publication",
             "version": "VERSION with the build number, e.g. 1.14.0-DEV.3551: the difference between two master commits' build numbers is the commits between them",
             "build": "the julia-ci or julia-pr build",
-            "message": "the commit's subject, or the pull request's title for pr"
+            "message": "the commit's subject, the pull request's title for pr, or the tag for release"
           }
         },
         "size_metrics": {
-          "description": "Size measurements of a size_builds row, in bytes (files and pkgimg.count are counts): total, dir.* and share.* per directory, sysimg (sys.so) and libjulia-internal, libjulia-codegen, libLLVM, libjulia with their .text, .rodata, .data, .dwarf, .symtab, .dynsym and other section bytes (sysimg.image_data: the image's data blob), libs.other (the other bundled libraries) and its DWARF, pkgimg.ji, pkgimg.so and pkgimg.so.dwarf (the stdlib pkgimages), tarball (ci only).",
+          "description": "Size measurements of a size_builds row, in bytes (files and pkgimg.count are counts): total, dir.* and share.* per directory, sysimg (sys.so) and libjulia-internal, libjulia-codegen, libLLVM, libjulia with their .text, .rodata, .data, .dwarf, .symtab, .dynsym and other section bytes (sysimg.image_data: the image's data blob), libs.other (the other bundled libraries) and its DWARF, pkgimg.ji, pkgimg.so and pkgimg.so.dwarf (the stdlib pkgimages), tarball (ci and release only).",
           "columns": {}
         },
         "size_files": {

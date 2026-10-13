@@ -1051,7 +1051,21 @@ function sizes(db; since="", metrics=String[], source="", all_metrics=size_metri
         end
     end
     return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => all_metrics,
-                       series..., "markers" => markers)
+                       series..., "markers" => markers, "release" => isempty(source) ? size_release(db, wanted) : nothing)
+end
+
+# The newest measured stable release, a reference for master: its commit,
+# version, publication and the `wanted` metrics it has
+function size_release(db, wanted)
+    r = rows(db, "SELECT id, commit_sha, merged_at, version FROM size_builds WHERE source = 'release' AND triplet = ? " *
+                 "ORDER BY merged_at DESC LIMIT 1", (SIZE_TRIPLET,))
+    isempty(r) && return nothing
+    values = OrderedDict{String,Any}(m => nothing for m in wanted)
+    for v in rows(db, "SELECT metric, value FROM size_metrics WHERE size_build_id = ?", (r[1].id,))
+        haskey(values, String(v.metric)) && (values[String(v.metric)] = Int(v.value))
+    end
+    return OrderedDict("commit" => String(r[1].commit_sha), "published_at" => String(r[1].merged_at),
+                       "version" => String(r[1].version), "values" => values)
 end
 
 # Every metric of measurement `id` next to measurement `before`'s (0 for none),

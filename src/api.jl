@@ -274,7 +274,7 @@ const ROUTES = [
           (db, a, p) -> Render.ttfx_job(db, a[1]; task=get(p, "task", ""))),
     Route("sizes/summary", [SINCE, "metrics" => "comma-separated metric names (the summary set by default, all for every one)",
                             "source" => "ci or manyjulias for that source alone"],
-          "Size of the unpacked linux-x86_64 distribution of master commits: the commits in merge order with their merge time, version, julia-ci build, subject and source, and one array per metric aligned with them, in bytes (files and pkgimg.count are counts). metrics lists every metric there is. The sizes are of the tarball CI built from the first commit measured that way (the nightlies bucket keeps them about 60 days), and of manyjulias builds of master back to 2020 before it; markers has that switch, where the series steps because the manyjulias builds have fewer CPU targets.",
+          "Size of the unpacked linux-x86_64 distribution of master commits: the commits in merge order with their merge time, version, julia-ci build, subject and source, and one array per metric aligned with them, in bytes (files and pkgimg.count are counts). metrics lists every metric there is. The sizes are of the tarball CI built from the first commit measured that way (the nightlies bucket keeps them about 60 days), and of manyjulias builds of master back to 2020 before it; markers has that switch, where the series steps because the manyjulias builds have fewer CPU targets. release has the same metrics for the official tarball of the newest stable release (null until it is measured, or with source).",
           (db, _, p) -> begin
               metrics = unique(String[strip(m) for m in split(get(p, "metrics", ""), ',') if !isempty(strip(m))])
               all_metrics = Render.size_metric_names(db)
@@ -671,7 +671,7 @@ end
 landing_keys() = Set(target_key(t) for t in landing_targets_now())
 
 function sizes_commit_example(db)
-    r = Store.query(db, "SELECT commit_sha FROM size_builds ORDER BY merged_at DESC LIMIT 1")
+    r = Store.query(db, "SELECT commit_sha FROM size_builds WHERE source = 'ci' ORDER BY merged_at DESC LIMIT 1")
     return isempty(r) ? "0000000" : first(String(r[1].commit_sha), 10)
 end
 
