@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "d4082cc490449cf93d4ee1e047d34635efc164de"
+project_hash = "325f151ae5a2011ab74e0d9e81a3607e80f204fe"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -17,7 +17,7 @@ uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
 
 [[deps.CITiming]]
-deps = ["CodecZlib", "CodecZstd", "DBInterface", "DataStructures", "Dates", "HTTP", "JSON3", "PrecompileTools", "Printf", "SQLite", "Statistics", "Tar"]
+deps = ["CodecZlib", "CodecZstd", "DBInterface", "DataStructures", "Dates", "HTTP", "JSON3", "PrecompileTools", "SQLite", "Statistics", "Tar"]
 path = "."
 uuid = "1b0d996c-9f90-477f-a1f4-861e930e5de0"
 version = "0.1.0"

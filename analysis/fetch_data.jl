@@ -20,6 +20,7 @@ const SOURCES = Dict(
     "benchmarks" => ["benchmark_summary.json.gz"],   # plus one file per group, listed from the summary
     "pkgeval" => ["pkgeval_summary.json.gz"],
     "ttfx" => ["ttfx_summary.json.gz"],
+    "sizes" => ["sizes_summary.json.gz"],
     "packages" => ["packages_downloads_summary.json.gz"],
     "agents" => ["agents/latest.json"],               # plus the month files it implies
 )

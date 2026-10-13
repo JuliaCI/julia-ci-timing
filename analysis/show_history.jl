@@ -3,8 +3,8 @@
 # hash, so a regression can be bisected.
 #
 # Usage:
-#   julia --project=.. show_history.jl array "index/('sumlinear_view', 'Matrix{Int64}')"
-#   julia --project=.. show_history.jl array "sub2ind"        # substring match
+#   julia analysis/show_history.jl array "index/('sumlinear_view', 'Matrix{Int64}')"
+#   julia analysis/show_history.jl array "sub2ind"        # substring match
 
 using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
 include(joinpath(@__DIR__, "BenchHistory.jl"))

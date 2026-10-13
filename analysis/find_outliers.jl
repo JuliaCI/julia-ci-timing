@@ -1,11 +1,11 @@
 #!/usr/bin/env julia
-# Print benchmark variants that are >5x slower than their family median.
+# Print benchmark variants whose recent level is >5x their family median.
 # Useful for spotting type-specialization regressions and codegen sensitivity.
 #
 # Usage:
-#   julia --project=.. find_outliers.jl                # default thresholds
-#   julia --project=.. find_outliers.jl --ratio 10 --min-ns 500
-#   julia --project=.. find_outliers.jl --groups array,union,scalar
+#   julia analysis/find_outliers.jl                # default thresholds
+#   julia analysis/find_outliers.jl --ratio 10 --min-ns 500
+#   julia analysis/find_outliers.jl --groups array,union,scalar
 
 using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
 include(joinpath(@__DIR__, "BenchHistory.jl"))

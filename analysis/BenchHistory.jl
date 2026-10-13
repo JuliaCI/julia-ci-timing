@@ -19,20 +19,20 @@ using JSON3
 using CodecZlib
 using Statistics
 
-export load_group, all_groups, recent_minimum, noise_pct,
-       all_benches, family_key, find_family_outliers
+export load_group, all_groups, clean_times, recent_minimum, recent_level,
+       noise_pct, all_benches, family_key, find_family_outliers
 
 const DATA_DIR = abspath(joinpath(@__DIR__, "..", "data", "benchmarks"))
 
-const KNOWN_GROUPS = ["alloc","array","broadcast","collection","dates","find",
-                      "frontend","inference","io","linalg","micro","misc",
-                      "parallel","problem","random","scalar","shootout","simd",
-                      "sort","sparse","string","tuple","union"]
-
-all_groups() = [g for g in KNOWN_GROUPS if isfile(joinpath(DATA_DIR, "$g.json.gz"))]
+"Groups with a downloaded file in `data/benchmarks/`, sorted."
+all_groups() = isdir(DATA_DIR) ?
+    sort!([f[1:end-8] for f in readdir(DATA_DIR) if endswith(f, ".json.gz")]) : String[]
 
 function load_group(name::AbstractString)
     path = joinpath(DATA_DIR, "$name.json.gz")
+    isfile(path) || error(isempty(all_groups()) ?
+        "no benchmark data in $DATA_DIR; run `julia --project analysis/fetch_data.jl --only benchmarks`" :
+        "no data for group $name; groups: $(join(all_groups(), ", "))")
     open(path) do io
         JSON3.read(transcode(GzipDecompressor, read(io)))
     end
@@ -48,6 +48,26 @@ function recent_minimum(v; n::Int = 10)
     t = clean_times(v)
     isempty(t) && return NaN
     minimum(@view t[max(1, end-n+1):end])
+end
+
+"""
+    recent_level(v; n=20, step=0.2)
+
+Median of the valid samples since the last step change of more than `step`
+(a fraction) among the last `n`. Unlike `recent_minimum`, a recent step up is
+not hidden behind the faster samples from before it.
+"""
+function recent_level(v; n::Int = 20, step::Real = 0.2)
+    t = clean_times(v)
+    isempty(t) && return NaN
+    w = t[max(1, end-n+1):end]
+    start = 1
+    # Need three samples on each side so one noisy point is not taken for a step.
+    for i in 4:length(w)-2
+        i - start >= 3 || continue
+        abs(log(median(@view w[i:end]) / median(@view w[start:i-1]))) > log1p(step) && (start = i)
+    end
+    median(@view w[start:end])
 end
 
 "Run-to-run noise in % over the last `n` valid samples (median |Δlog|)."
@@ -105,8 +125,8 @@ end
 """
     find_family_outliers(; ratio=5.0, min_time_ns=100, min_family_size=3, groups=all_groups())
 
-Return Vector of NamedTuples for benchmarks that are `ratio`× slower than
-the median of their family (same `family_key`). Useful for spotting type
+Return Vector of NamedTuples for benchmarks whose `recent_level` is `ratio`×
+slower than the median of their family (same `family_key`). Useful for spotting type
 specializations that didn't optimize as well as their siblings.
 """
 function find_family_outliers(; ratio::Real = 5.0,
@@ -115,11 +135,11 @@ function find_family_outliers(; ratio::Real = 5.0,
                               groups = all_groups())
     fams = Dict{String, Vector{NamedTuple}}()
     for (g, name, v) in all_benches(groups)
-        rm = recent_minimum(v)
-        isnan(rm) && continue
+        lv = recent_level(v)
+        isnan(lv) && continue
         fk = string(g, '|', family_key(name))
         push!(get!(fams, fk, NamedTuple[]),
-              (group=g, bench=name, time=rm))
+              (group=g, bench=name, time=lv))
     end
     out = NamedTuple[]
     for (_, members) in fams

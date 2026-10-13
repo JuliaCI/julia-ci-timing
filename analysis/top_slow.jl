@@ -3,9 +3,9 @@
 # which dominate trivially because of GMP).
 #
 # Usage:
-#   julia --project=.. top_slow.jl array            # top 25 slowest in array
-#   julia --project=.. top_slow.jl array 50         # top 50
-#   julia --project=.. top_slow.jl --all 10         # top 10 of every group
+#   julia analysis/top_slow.jl array            # top 25 slowest in array
+#   julia analysis/top_slow.jl array 50         # top 50
+#   julia analysis/top_slow.jl --all 10         # top 10 of every group
 
 using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
 include(joinpath(@__DIR__, "BenchHistory.jl"))
