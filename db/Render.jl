@@ -119,9 +119,15 @@ function timing_jobs(db; since="", until="", changed_since=0, stats=false, build
     return jobs
 end
 
-function coverage(db; changed_since=0)
+# With a window, only the commits of the builds in it
+function coverage(db; since="", until="", changed_since=0)
     out = SortedDict{String,Any}()
     where, params = where_clause("", "", ""; seq_col="change_seq", changed_since)
+    if !isempty(since) || !isempty(until)
+        bwhere, bparams = where_clause("created_at", since, until)
+        where *= (isempty(where) ? " WHERE " : " AND ") * "substr(commit_sha, 1, 8) IN (SELECT commit_prefix FROM builds" * bwhere * ")"
+        append!(params, bparams)
+    end
     for r in rows(db, "SELECT commit_sha, measured_at, codecov, coveralls FROM coverage" * where, params)
         out[String(r.commit_sha)] = SortedDict("coveralls" => js(r.coveralls), "codecov" => js(r.codecov), "date" => js(r.measured_at))
     end
@@ -141,7 +147,8 @@ function timing(db; since="", until="", changed_since=0)
     jobs = timing_jobs(db; since, until, changed_since, builds)
     return OrderedDict(
         "generated_at" => generated_at(db, "timing"), "change_seq" => seq,
-        "since" => since, "until" => until, "builds" => builds, "jobs" => jobs, "coverage" => coverage(db; changed_since))
+        "since" => since, "until" => until, "builds" => builds, "jobs" => jobs,
+        "coverage" => changed_since > 0 ? coverage(db; changed_since) : coverage(db; since, until))
 end
 
 seconds_between(a, b) = (a === missing || b === missing) ? nothing : round((DateTime(String(b), Store.ISO_SECONDS) - DateTime(String(a), Store.ISO_SECONDS)).value / 1000; digits=1)

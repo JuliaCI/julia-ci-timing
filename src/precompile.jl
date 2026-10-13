@@ -17,7 +17,7 @@ function fixture_server()
     end
     pool = Channel{SQLite.DB}(1)
     put!(pool, db)
-    return Server(pool, ReentrantLock(), Dict(), 0, nothing, nothing, 0.0, Dict(), false)
+    return Server(pool, pool, ReentrantLock(), Dict(), 0, nothing, nothing, 0.0, Dict(), false)
 end
 
 @setup_workload begin

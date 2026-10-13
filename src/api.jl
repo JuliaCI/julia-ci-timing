@@ -76,6 +76,7 @@ end
 
 mutable struct Server
     pool::Channel{SQLite.DB}
+    seqdb::Channel{SQLite.DB}                      # a connection of its own for the cheap reads every request makes
     lock::ReentrantLock                            # the cache
     cache::Dict{String,CacheEntry}
     cache_bytes::Int
@@ -97,24 +98,40 @@ function open_readonly(path)
     return db
 end
 
-function withdb(f, s::Server)
-    db = take!(s.pool)
+function withdb(f, s::Server; pool=s.pool)
+    db = take!(pool)
     try
         return f(db)
     finally
-        put!(s.pool, db)
+        put!(pool, db)
     end
 end
 
-change_seq(s::Server) = withdb(db -> Store.current_seq(db), s)
+# HTTP.jl serves every request on the one interactive thread, and a render
+# blocks its thread for up to seconds. Run there, it would hold up every other
+# request, cache hits included, so it runs on the default pool instead.
+function offload(f)
+    t = Threads.@spawn :default f()
+    try
+        return fetch(t)
+    catch e
+        e isa TaskFailedException && throw(e.task.exception)
+        rethrow()
+    end
+end
 
-# The source each route family reads, for its ETag; nothing means global
-const ROUTE_SOURCES = Dict("timing" => "timing", "benchmarks" => "benchmarks", "pkgeval" => "pkgeval",
-                           "ttfx" => "ttfx", "sizes" => "sizes", "downloads" => "packages", "agents" => "agents")
+# The sources each route family reads, for its ETag; nothing means global.
+# The popular list ranks PkgEval's packages by their downloads.
+const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
+                           "ttfx" => ["ttfx"], "sizes" => ["sizes"], "downloads" => ["packages"], "agents" => ["agents"])
+const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"])
 
 function route_seq(s::Server, segments)
-    source = isempty(segments) ? nothing : get(ROUTE_SOURCES, segments[1], nothing)
-    return source === nothing ? change_seq(s) : withdb(db -> Store.source_seq(db, source), s)
+    sources = get(ROUTE_SOURCES_EXACT, segments, nothing)
+    sources === nothing && (sources = isempty(segments) ? nothing : get(ROUTE_SOURCES, segments[1], nothing))
+    return withdb(s; pool=s.seqdb) do db
+        sources === nothing ? Store.current_seq(db) : maximum(src -> Store.source_seq(db, src), sources)
+    end
 end
 
 # --- parameters --------------------------------------------------------------
@@ -131,7 +148,8 @@ function instant(params, key)
     v = get(params, key, "")
     isempty(v) && return ""
     occursin(ISO_INSTANT, v) || throw(BadRequest("$key must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ"))
-    return v
+    # The database's instants carry seconds, and the bounds are compared as text
+    return length(v) == 17 ? v[1:16] * ":00Z" : v
 end
 
 function cursor(params, key)
@@ -346,10 +364,12 @@ function cache_get(s::Server, key; touch=true)
 end
 
 # A new entry counts as used now; a render of an existing one (the
-# refresher's) keeps its last use, so what nobody asks for still ages out
-function cache_put!(s::Server, key, seq, body, segments, params)
+# refresher's) keeps its last use, so what nobody asks for still ages out.
+# The refresher does not bring back an entry evicted while it rendered.
+function cache_put!(s::Server, key, seq, body, segments, params; refresh=false)
     lock(s.lock) do
         old = get(s.cache, key, nothing)
+        refresh && old === nothing && return
         hit_at = old === nothing ? time() : old.hit_at
         old === nothing || (s.cache_bytes -= length(old.body))
         s.cache[key] = CacheEntry(seq, body, segments, params, hit_at)
@@ -380,7 +400,7 @@ end
 # rather than starting another (after a restart they would all compile and
 # run the same heavy query side by side). Returns (seq, body), or nothing
 # when the route has no such resource.
-function render_cached!(s::Server, key, segments, params, seq)
+function render_cached!(s::Server, key, segments, params, seq; refresh=false)
     while true
         ev, mine = lock(s.lock) do
             e = get(s.inflight, key, nothing)
@@ -390,10 +410,9 @@ function render_cached!(s::Server, key, segments, params, seq)
         end
         if mine
             try
-                value = withdb(db -> render(db, segments, params), s)
-                value === nothing && return nothing
-                body = gzip(Vector{UInt8}(JSON3.write(value)))
-                cache_put!(s, key, seq, body, segments, params)
+                body = render_gzip(s, segments, params)
+                body === nothing && return nothing
+                cache_put!(s, key, seq, body, segments, params; refresh)
                 return (seq, body)
             finally
                 lock(() -> delete!(s.inflight, key), s.lock)
@@ -422,9 +441,13 @@ function refresh_stale!(s::Server)
             cache_delete!(s, key)
             continue
         end
-        seq = route_seq(s, segments)
-        seq == old && continue
-        render_cached!(s, key, segments, params, seq) === nothing && cache_delete!(s, key)
+        try
+            seq = route_seq(s, segments)
+            seq == old && continue
+            render_cached!(s, key, segments, params, seq; refresh=true) === nothing && cache_delete!(s, key)
+        catch e
+            @error "cache refresh failed" key exception=(e, catch_backtrace())
+        end
     end
 end
 
@@ -436,7 +459,11 @@ function fill_landing!(s::Server)
         uri, segments, params = split_target(target)
         key = cache_key(segments, uri.query)
         cache_get(s, key; touch=false) === nothing || continue
-        render_cached!(s, key, segments, params, route_seq(s, segments))
+        try
+            render_cached!(s, key, segments, params, route_seq(s, segments))
+        catch e
+            @error "landing render failed" key exception=(e, catch_backtrace())
+        end
     end
 end
 
@@ -456,6 +483,13 @@ end
 refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
 
 gzip(bytes) = transcode(GzipCompressor, bytes)
+
+function render_gzip(s::Server, segments, params)
+    return offload() do
+        value = withdb(db -> render(db, segments, params), s)
+        value === nothing ? nothing : gzip(Vector{UInt8}(JSON3.write(value)))
+    end
+end
 
 cache_key(segments, query) = "/api/" * join(segments, "/") * "?" * query
 function target_key(target)
@@ -518,9 +552,8 @@ function api(s::Server, req::HTTP.Request)
         # A render already under way when this request came may be older
         served, body = r
     else
-        value = withdb(db -> render(db, segments, params), s)
-        value === nothing && return not_found()
-        body = gzip(Vector{UInt8}(JSON3.write(value)))
+        body = render_gzip(s, segments, params)
+        body === nothing && return not_found()
     end
     if accepts_gzip(req)
         return HTTP.Response(200, push!(headers(served), "Content-Encoding" => "gzip"), body)
@@ -577,7 +610,7 @@ function handle(s::Server, req::HTTP.Request)
 end
 
 # What the Overview and the Commit tab ask for on landing, under the query
-# strings the browser sends (site/assets/app.js: apiGet keeps its
+# strings the browser sends (assets/app.js: apiGet keeps its
 # parameters' order, windows are UTC days)
 function landing_targets(today=Date(now(UTC)))
     day(n) = Dates.format(today - Day(n), dateformat"yyyy-mm-dd")
@@ -652,7 +685,9 @@ function main(args)
     opts = parse_args(args)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
-    s = Server(pool, ReentrantLock(), Dict(), 0, opts["site"], opts["data"], 0.0, Dict(), false)
+    seqdb = Channel{SQLite.DB}(1)
+    put!(seqdb, open_readonly(opts["db"]))
+    s = Server(pool, seqdb, ReentrantLock(), Dict(), 0, opts["site"], opts["data"], 0.0, Dict(), false)
     server = HTTP.serve!(req -> handle(s, req), opts["host"], opts["port"])
     @info "serving" host=opts["host"] port=opts["port"] db=opts["db"] site=opts["site"] data=opts["data"]
     Threads.@spawn begin
