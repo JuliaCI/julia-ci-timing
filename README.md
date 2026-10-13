@@ -1,6 +1,6 @@
 # Julia Performance Tracking
 
-Dashboard for Julia language performance: Nanosoldier benchmark reports every 2 to 3 days,
+Dashboard for Julia language performance: daily Nanosoldier benchmark reports,
 [CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, distribution size,
 PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), and the other tabs go deep.
@@ -59,7 +59,7 @@ container image (`Dockerfile`):
   is a snapshot of the whole thing.
 
 To use the data yourself, [`docs/querying.md`](docs/querying.md) covers the API
-(`/api/` lists its routes), SQL and the snapshot, with example queries;
+(`/api/` lists its routes), SQL, the snapshot and the extracts, with example queries;
 [`/llms.txt`](https://perf.julialang.org/llms.txt) is the short version for agents.
 
 Pushing to `main` builds the image and deploys it (`.github/workflows/deploy.yml`);

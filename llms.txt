@@ -6,9 +6,9 @@
 > tasks on every master build, the size of the binary distribution of master commits and
 > open pull requests, package-server downloads, and the Buildkite agents.
 > Everything lives in one SQLite database. The web pages are a JavaScript app; read the
-> data through one of the three routes below instead of scraping them.
+> data through one of the four routes below instead of scraping them.
 
-Pick by the size of the answer. All three are public, read-only and need no key.
+Pick by the size of the answer. All four are public, read-only and need no key.
 
 ## 1. The API: what a page of the site shows
 
@@ -23,6 +23,7 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 - `/api/commits?limit=100`: master commits, newest first
 - `/api/timing/builds?since=`: wall time and queue wait per master build
 - `/api/timing/runs?since=`: every CI job run in the window (30 days is about 0.2 MB)
+- `/api/benchmarks/groups/<group>?since=`: every benchmark of one group on every daily report, minimum and mean estimates (group names are the keys of `/api/benchmarks/summary`)
 - `/api/benchmarks/verdicts?since=`: Nanosoldier's regressions and improvements
 - `/api/pkgeval/package/<Name>`: one package's PkgEval status on every report
 - `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
@@ -63,6 +64,13 @@ once a week (about 220 MB, 700 MB unpacked). Download it once and query it with
 `sqlite3` for anything that needs many queries or scans large tables such as
 `bench_results` or `pkgeval_results`.
 
+## 4. The extracts
+
+`https://perf.julialang.org/data/<file>.json.gz` are the API's main shapes over all
+history, rendered after every ingest: `timing_summary`, `benchmark_summary` and
+`benchmarks/<group>`, `pkgeval_summary`, `ttfx_summary`, `sizes_summary` and
+`packages_downloads_summary`. `analysis/fetch_data.jl` in the repository downloads them.
+
 ## Reference
 
 - [Schema](https://github.com/JuliaCI/julia-ci-timing/blob/main/db/schema.sql): every table and column, with comments
@@ -76,7 +84,7 @@ once a week (about 220 MB, 700 MB unpacked). Download it once and query it with
   times nanoseconds, memory bytes.
 - A commit is identified by its full SHA where known; many older builds only have the
   8-character prefix (`builds.commit_prefix`).
-- Benchmark and PkgEval reports run every few days, not per commit; a commit's results
+- Benchmark and PkgEval reports run daily, not per commit; a commit's results
   are in the first report after it.
 - Queue waits and build wall times exist only for builds since September 2026.
 - To show a result, link the site with its view in the URL, for example

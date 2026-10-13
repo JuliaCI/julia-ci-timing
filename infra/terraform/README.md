@@ -54,7 +54,7 @@ terraform apply
 
 First bring-up, in order: apply, upload a seed backup (a tar.gz holding
 `ci-timing.sqlite` and an `export/` directory; the bucket's `runtime/` and
-daily archives are what a new data volume restores) to
+weekly archives are what a new data volume restores) to
 `s3://<backup bucket>/runtime/latest.tar.gz`, create the Buildkite token
 parameter
 (`aws ssm put-parameter --name /ci-timing/buildkite-api-token --type SecureString --overwrite --value ...`),
@@ -74,13 +74,6 @@ the same database; a backup first (`aws ssm send-command ...
 --parameters 'commands=["/usr/local/bin/ci-timing-backup"]'`) is still cheap
 insurance. Only a brand-new volume restores from S3.
 
-The first apply of the data volume replaces the instance too, and that new
-volume is empty: it restores from the latest backup, so run `ci-timing-backup`
-right before. The same apply forgets the token parameter without deleting it
-(the `removed` block); afterwards delete `terraform.tfstate.backup` and any
-`terraform.tfstate.*.backup`, which still hold the decrypted token from the
-resource's time.
-
 A one-off fetcher run (a backfill) runs the image the way the ingest does,
 under the ingest lock so the timer waits for it, in the background:
 
@@ -98,3 +91,12 @@ Shell on the host: `aws ssm start-session --target <instance_id>`. Logs:
 
 State is local (`terraform.tfstate`, ignored by git). Losing it means
 re-importing the resources; the data lives in the backup bucket.
+
+## History
+
+The data volume and the `removed` block for the Buildkite token parameter
+came in one apply (2026-09). It replaced the instance, and the new, empty
+volume restored from the latest backup. Terraform now forgets the token
+parameter without deleting it, but `terraform.tfstate.backup` and any
+`terraform.tfstate.*.backup` from before that apply still hold the decrypted
+token: delete them.

@@ -8,7 +8,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 ## Where the data lives
 
 The source of truth is a SQLite database on the site's host; the seven
-`fetch_*.jl` scripts write to it every half hour. `docs/querying.md` is the
+`fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC). `docs/querying.md` is the
 guide to reading it (tables by topic, example queries, conventions), and
 `llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
 version for agents arriving at the site. Four ways in, cheapest first:
@@ -28,7 +28,8 @@ version for agents arriving at the site. Four ways in, cheapest first:
   and run any SQL locally with `sqlite3`, no limits and no load on the host.
 - **The extracts**: the gzipped JSON files described below, at
   `https://perf.julialang.org/data/<file>`, rendered from the database
-  after every ingest. `julia --project analysis/fetch_data.jl` downloads
+  by `db/export.jl` after every ingest. The site itself reads the API, not
+  these. `julia --project analysis/fetch_data.jl` downloads
   them all into `data/` (revalidating by ETag), which is what the analysis
   scripts and `tools/inspect-bench.mjs` read.
 
@@ -57,8 +58,8 @@ corresponds to the i-th `dates`/`commits` entry. `nothing` (or 0)
 means the benchmark was missing on that date, so always filter
 those out before computing anything. Times are nanoseconds.
 
-TTFX history (the CI → TTFX tab) is `data/ttfx_summary.json.gz`, written
-by `fetch_ttfx.jl` from the artifacts of the `TTFX` job on every julia-ci
+TTFX history (the CI → TTFX tab) is `data/ttfx_summary.json.gz`, rendered
+from what `fetch_ttfx.jl` records from the artifacts of the `TTFX` job on every julia-ci
 master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
 
 ```text
@@ -95,7 +96,8 @@ and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
 comparison of each open pull request, in `ttfx_prs` (no history: a closed
 pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
 tab's "Open PRs" table. It lists the open pull requests from GitHub
-anonymously (about a dozen requests an hour; `GITHUB_TOKEN` is used if set).
+anonymously, which makes it the largest user of the 60 requests an hour GitHub
+allows the host (`GITHUB_TOKEN` is used if set).
 
 Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
 (not touched by `fetch_ttfx.jl`): each entry names a `job_id` from the summary
@@ -110,9 +112,10 @@ An optional `tasks` list names the tasks the change affected. The TTFX tab's
 "Hide annotated jumps" toggle (`th=1`) scales each series before an annotated
 job by the step it measures there, over all tasks or just the listed ones.
 
-Agent snapshots (the CI → Workers tab) live under `data/agents/`, written
-by `fetch_agents.jl` from the Buildkite agents API on every update run.
-`history-YYYY-MM.ndjson` is append-only, one line per run:
+Agent snapshots (the CI → Workers tab) live under `data/agents/`, rendered
+from what `fetch_agents.jl` records from the Buildkite agents API on every
+ingest. `history-YYYY-MM.ndjson` has one line per run, and each export
+rewrites every month file in full:
 
 ```text
 { "time": "2026-09-12T02:00:00Z", "connected": ["<agent name>", ...] }
@@ -160,6 +163,7 @@ fine).
 Library module. Import with:
 
 ```julia
+# in `julia --project`, from the repository root
 include("analysis/BenchHistory.jl"); using .BenchHistory
 ```
 
@@ -171,13 +175,17 @@ Useful exports:
   `(group, bench, raw_series)` tuples across the corpus.
 - `clean_times(v)` — drop `nothing`/0 entries, return `Vector{Float64}`.
 - `recent_minimum(v; n=10)` — minimum of the last `n` valid samples.
+  It hides a step up in the last few samples.
+- `recent_level(v; n=20, step=0.2)`: median of the valid samples since the
+  last step of more than `step` (20%) among the last `n`, so a recent
+  regression shows. `find_family_outliers` ranks by it.
 - `noise_pct(v; n=20)` — median |Δlog| over recent samples, in percent.
   A practical "is this benchmark stable enough to trust?" signal.
 - `family_key(name)` — strip type tokens (`Int64`, `Float32`, ...) and
   long integer literals so that variants of the same benchmark map
   to the same key.
 - `find_family_outliers(; ratio=5, min_time_ns=100, ...)` — return
-  variants that are `ratio`× slower than the median of their family.
+  variants whose `recent_level` is `ratio`× the median of their family.
   This is the main hook for finding suspicious type specializations.
 
 ### `find_outliers.jl`
@@ -214,31 +222,35 @@ julia analysis/show_history.jl array "sumlinear_view" mean
 
 ## Dashboard inspector (`tools/inspect-bench.mjs`)
 
-Node CLI that reproduces what the website's bench chart computes,
+Node CLI that reproduces what the website's bench chart computes
+(including the time range, with `--days`),
 using the same shared module (`assets/bench-core.js`) that the
 browser loads. Use it when you want to diagnose a discrepancy
 between the group geomean line and the individual benchmark lines
 on the live dashboard without opening a browser.
 
 ```sh
-node tools/inspect-bench.mjs                  # sparse, minimum
+node tools/inspect-bench.mjs                  # sparse, minimum, all dates
 node tools/inspect-bench.mjs sparse mean
-node tools/inspect-bench.mjs array minimum
+node tools/inspect-bench.mjs array minimum --days 15   # the site's default range
 ```
 
 It prints:
 
-1. The post-cutoff group geomean series in ns and as `%` from
-   baseline (the first post-cutoff point).
+1. The group geomean series in the range in ns and as `%` from
+   baseline (the first point in the range).
 2. A table of per-benchmark `%` from baseline at the three most
    recent dates, sorted by `|last %|` — i.e. the benchmarks moving
-   the chart most.
+   the chart most. Benchmarks with an entry in
+   `data/methodology_changes.json` are flagged; like the chart, the CLI
+   does not cut their series at the change (the chart only fades the
+   older points), so their `%` can be huge over a long range.
 3. A spread summary (`min / p25 / median / p75 / max`) of the
    per-benchmark `%` at each recent date, alongside the geomean
    line's `%`. If those columns disagree, the geomean line is not
    representing the visible benchmarks.
 
-The shared logic (methodology-change cutoffs, series construction,
+The shared logic (the methodology-change registry, series construction,
 baselining) lives in `assets/bench-core.js` so the CLI and the
 browser stay in sync; do not duplicate that math elsewhere.
 
@@ -260,8 +272,8 @@ agents include:
 
 - A "regression detector" that walks each series with changepoint
   detection and reports the most recent step.
-- Cross-version comparison (only the 1.13 manifest is wired up; an
-  `--branch` flag would let us compare nightly vs release on the
+- Cross-version comparison (the benchmark data is master only; a
+  release series would let us compare nightly vs release on the
   same benchmark).
 - Correlating regressions with the commits in each report's range.
   `api/commit/<ref>` and `bench_reports.baseline_commit_sha` give the
@@ -279,8 +291,8 @@ this file with whatever new entry points you add.
 - Read data with the helpers in `BenchHistory.jl`; do not parse
   the JSON yourself.
 - Always drop `nothing`/0 before computing statistics.
-- Don't extrapolate from a single sample; use `recent_minimum` (or
-  similar) over at least the last 5–10 points.
+- Don't extrapolate from a single sample; use `recent_level` or
+  `recent_minimum` over at least the last 5–10 points.
 - Cross-check any candidate against `show_history.jl` before
   claiming a regression — many "outliers" are simply noisy
   benchmarks, not real regressions.

@@ -1,7 +1,7 @@
 # Querying the data
 
 Everything perf.julialang.org shows comes from one SQLite database (`db/schema.sql` is
-the authoritative description of every table). There are three ways to read it, all
+the authoritative description of every table). There are four ways to read it, all
 public and read-only. Pick by the size of the answer:
 
 | Need | Use |
@@ -9,6 +9,7 @@ public and read-only. Pick by the size of the answer:
 | What one page of the site shows, or one commit, package or task | the API, `https://perf.julialang.org/api/` |
 | A few rows or an aggregate | Datasette SQL, `https://perf.julialang.org/db/` (2 s and 5000 rows per query) |
 | Many queries, or scans of the large tables | the snapshot, `https://perf.julialang.org/data/ci-timing.sqlite.gz` |
+| A whole history in one file, for scripts | the extracts, `https://perf.julialang.org/data/*.json.gz` |
 
 Set `B=https://perf.julialang.org` for the examples below.
 
@@ -51,6 +52,16 @@ sqlite3 ci-timing.sqlite
 ```
 
 It is taken once a week. No row or time limits, and no load on the host.
+
+## The extracts
+
+After every ingest, `db/export.jl` renders the API's main shapes to gzipped JSON files
+under `$B/data/`: `timing_summary.json.gz`, `benchmark_summary.json.gz` and one
+`benchmarks/<group>.json.gz` per group, `pkgeval_summary.json.gz`, `ttfx_summary.json.gz`,
+`sizes_summary.json.gz`, `packages_downloads_summary.json.gz`, and `agents/latest.json`
+with the month files `agents/history-YYYY-MM.ndjson`. They hold all history, with no
+`since`. `julia --project analysis/fetch_data.jl` downloads them into `data/`, fetching
+only the files that changed. `AGENTS.md` describes their shapes.
 
 ## Tables by topic
 
@@ -188,7 +199,8 @@ WHERE g.name = 'DataFrames' GROUP BY d.date ORDER BY d.date
 ## Things to know
 
 - Times are UTC ISO 8601 (`...Z`). Durations are seconds, benchmark times nanoseconds,
-  memory bytes. The API's timing run rows use the older `yyyy-mm-dd HH:MM` form.
+  memory bytes. The `date` of the API's timing run rows and TTFX builds uses the older
+  `yyyy-mm-dd HH:MM` form.
 - Many older builds have only `commit_prefix` (8 characters); `commit_sha` is filled for
   builds fetched from the Buildkite API.
 - Queue waits and build wall times exist only for builds since September 2026.
