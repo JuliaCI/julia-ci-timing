@@ -10712,7 +10712,9 @@ function showTtfxBuildPopup(b, task) {
   if (tasks.length && Object.keys(TTFX_METRICS).some((k) => ttfxShowsGcOff(k)))
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
 
-  for (const a of ttfxAnnotationsFor(b)) html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}</div>`;
+  for (const a of ttfxAnnotationsFor(b)) {
+    html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}${a.url ? ` (${ttfxAnnotationLink(a)})` : ""}</div>`;
+  }
   html += '<div class="ttfx-popup-compile" id="ttfx-popup-compile"><div class="ttfx-popup-muted">Loading recompiles and invalidations…</div></div>';
   if (failed.length) {
     html += `<details class="ttfx-popup-failed"><summary>${failed.length} failed task${failed.length > 1 ? "s" : ""}</summary><ul>`;
@@ -10865,6 +10867,14 @@ function ttfxAnnotationsFor(b) {
 function ttfxAnnotationText(a) {
   return a.label && a.label !== a.description ? `${a.label}: ${a.description}` : a.description;
 }
+// An annotation's optional `url`, as owner/repo#N for a GitHub pull request or issue
+function ttfxAnnotationLinkText(a) {
+  const m = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/.exec(a.url || "");
+  return m ? `${m[1]}#${m[2]}` : a.url;
+}
+function ttfxAnnotationLink(a) {
+  return a.url ? `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(ttfxAnnotationLinkText(a))}</a>` : "";
+}
 function ttfxAnnotationTitle(notes) {
   return notes.map(ttfxAnnotationText).join("\n") + "\n\n" + TTFX_ANNOTATION_HINT;
 }
@@ -10909,9 +10919,16 @@ function buildTtfxAnnotations(builds, isDark) {
       const before = earlier.slice();
       earlier.push(x);
       out[`note-${b.job_id}-${i}`] = {
-        enter: ({ chart }, event) =>
-          showChartNote(chart, `${escapeHtml(ttfxAnnotationText(a))}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`, event),
-        leave: ({ chart }) => hideChartNote(chart),
+        enter: ({ chart }, event) => {
+          const open = a.url ? `<div class="ttfx-note-hint">Click to open ${escapeHtml(ttfxAnnotationLinkText(a))}</div>` : "";
+          showChartNote(chart, `${escapeHtml(ttfxAnnotationText(a))}${open}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`, event);
+          if (a.url) chart.canvas.style.cursor = "pointer";
+        },
+        leave: ({ chart }) => {
+          hideChartNote(chart);
+          chart.canvas.style.cursor = "";
+        },
+        click: a.url ? () => window.open(a.url, "_blank", "noopener") : undefined,
         type: "line",
         xMin: x,
         xMax: x,
