@@ -844,6 +844,7 @@ function drawBuildsView() {
       ...baseChartOptions(),
       interaction: { mode: "near", intersect: false },
       plugins: {
+        title: { display: true, text: "Master builds", color: textColor },
         legend: { labels: { color: textColor, usePointStyle: true } },
         tooltip: {
           callbacks: {

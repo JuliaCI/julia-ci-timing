@@ -894,19 +894,6 @@
           </div>
         </div>
         <div class="commits-view view-hidden" id="builds-view">
-          <div class="workers-note" role="note">
-            <span class="workers-note-icon" aria-hidden="true">ℹ️</span>
-            <span
-              >Each point is one <strong>master</strong> build: its wall time
-              from the first job starting to the last finishing, the median
-              wait of its jobs between becoming runnable and starting on an
-              agent (the queue), and the total job time it consumed. Builds
-              fetched from the Buildkite API since the database started carry
-              the timestamps; click a point or row to open the build. Builds
-              still running are faded: their job time and queue wait are
-              partial.</span
-            >
-          </div>
           <div class="commits-chart-container">
             <div class="chart-wrapper">
               <canvas
