@@ -16,6 +16,7 @@
   --color-danger-fg: #d1242f;
   --color-danger-subtle: rgba(255, 129, 130, 0.15);
   --color-severe-fg: #bc4c00;
+  --color-done-fg: #8250df;
   --color-attention-fg: #9a6700;
   --color-attention-subtle: rgba(212, 167, 44, 0.4);
   --color-attention-emphasis: #bf8700;
@@ -52,6 +53,7 @@
     --color-danger-fg: #f85149;
     --color-danger-subtle: rgba(248, 81, 73, 0.15);
     --color-severe-fg: #db6d28;
+    --color-done-fg: #a371f7;
     --color-attention-fg: #d29922;
     --color-attention-subtle: rgba(210, 153, 34, 0.5);
     --color-attention-emphasis: #f0b429;
@@ -86,6 +88,7 @@
   --color-danger-fg: #f85149;
   --color-danger-subtle: rgba(248, 81, 73, 0.15);
   --color-severe-fg: #db6d28;
+  --color-done-fg: #a371f7;
   --color-attention-fg: #d29922;
   --color-attention-subtle: rgba(210, 153, 34, 0.5);
   --color-attention-emphasis: #f0b429;
@@ -2376,7 +2379,7 @@ th.sorted .sort-indicator {
 .package-panel .pe-fail { color: var(--color-danger-fg); }
 .package-panel .pe-crash { color: var(--color-severe-fg); }
 .package-panel .pe-skip { color: var(--color-fg-muted); }
-.package-panel .pe-kill { color: var(--color-attention-fg); }
+.package-panel .pe-kill { color: var(--color-done-fg); }
 /* One cell per report, colored by status */
 .pkgeval-strip {
   display: flex;
@@ -2393,7 +2396,7 @@ th.sorted .sort-indicator {
 .pkgeval-strip .st-ok { background: var(--color-success-emphasis, #1a7f37); }
 .pkgeval-strip .st-fail { background: var(--color-danger-emphasis, #cf222e); }
 .pkgeval-strip .st-crash { background: var(--color-severe-emphasis, #bc4c00); }
-.pkgeval-strip .st-kill { background: var(--color-attention-emphasis, #9a6700); }
+.pkgeval-strip .st-kill { background: var(--color-done-fg); }
 .pkgeval-strip .st-skip { background: var(--color-neutral-muted, #d0d7de); }
 .package-panel tr.clickable {
   cursor: pointer;

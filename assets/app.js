@@ -210,7 +210,16 @@ function chartTheme() {
   };
 }
 
-const baseChartOptions = () => ({ responsive: true, maintainAspectRatio: false, animation: false });
+// Outcome colours shared by CI, PkgEval and the Overview: a crash and a kill
+// must not be confused, so a kill is purple rather than another orange
+const STATUS_COLORS = {
+  light: { ok: "#1a7f37", fail: "#d1242f", timedOut: "#9a6700", crash: "#bc4c00", kill: "#8250df", skip: "#8c959f" },
+  dark: { ok: "#3fb950", fail: "#f85149", timedOut: "#d29922", crash: "#db6d28", kill: "#a371f7", skip: "#8b949e" },
+};
+const statusColors = () => STATUS_COLORS[isDarkMode() ? "dark" : "light"];
+
+const baseChartOptions = () =>
+ ({ responsive: true, maintainAspectRatio: false, animation: false });
 
 // Pan and wheel or pinch zoom on time, box zoom by dragging; `onChange`
 // runs after each
@@ -867,14 +876,15 @@ function drawBuildsView() {
         x: timeAxis({ textColor, gridColor }),
         y: {
           beginAtZero: true,
-          title: { display: true, text: "minutes", color: textColor },
-          ticks: { color: textColor },
+          title: { display: true, text: "Wall time and queue wait", color: textColor },
+          ticks: { color: textColor, callback: (v) => formatDuration(v * 60) },
+          afterBuildTicks: durationTicks(60),
           grid: { color: gridColor },
         },
         y2: {
           position: "right",
           beginAtZero: true,
-          title: { display: true, text: "job time, hours", color: textColor },
+          title: { display: true, text: "Job time (hours)", color: textColor },
           ticks: { color: textColor },
           grid: { drawOnChartArea: false },
         },
@@ -1364,7 +1374,7 @@ function renderBacklogChart(d) {
           grid: { color: gridColor },
           title: {
             display: true,
-            text: { oldest: "longest wait (h)", waiting: "jobs waiting", "per-slot": "jobs waiting per slot" }[metric],
+            text: { oldest: "Longest wait (hours)", waiting: "Jobs waiting", "per-slot": "Jobs waiting per slot" }[metric],
             color: textColor,
           },
         },
@@ -1536,7 +1546,7 @@ function renderBalanceCharts(d) {
               },
               ticks: { color: textColor, callback: (v) => `${v}×` },
               grid: { color: gridColor },
-              title: { display: true, text: "demand / slots", color: textColor },
+              title: { display: true, text: "Demand per slot", color: textColor },
             },
           },
         },
@@ -1941,6 +1951,19 @@ function formatDuration(seconds) {
   const hours = Math.floor(mins / 60);
   const remainMins = mins % 60;
   return remainMins > 0 ? `${hours}h ${remainMins}m` : `${hours}h`;
+}
+
+// Ticks of a duration axis at round steps, 1m to a day, at most ten of them;
+// the axis counts in units of `unit` seconds
+function durationTicks(unit) {
+  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400];
+  return (axis) => {
+    const range = (axis.max - axis.min) * unit;
+    const step = (steps.find((s) => range / s <= 10) || steps[steps.length - 1]) / unit;
+    const ticks = [];
+    for (let v = Math.ceil(axis.min / step) * step; v <= axis.max; v += step) ticks.push({ value: v });
+    axis.ticks = ticks;
+  };
 }
 
 // === Shared time x axis ===
@@ -3954,23 +3977,11 @@ function updateChart() {
           ticks: {
             color: textColor,
             callback: (v) => formatDuration(v),
-            // Use nice intervals: 1m, 2m, 5m, 10m, 15m, 30m, 1h, 2h
             autoSkip: true,
             maxTicksLimit: 10,
           },
           grid: { color: gridColor },
-          afterBuildTicks: (axis) => {
-            const range = axis.max - axis.min;
-            // Pick step size for nice round numbers
-            const niceSteps = [60, 120, 300, 600, 900, 1800, 3600, 7200];
-            let step = niceSteps.find((s) => range / s <= 10) || 7200;
-            const minTick = Math.ceil(axis.min / step) * step;
-            const ticks = [];
-            for (let v = minTick; v <= axis.max; v += step) {
-              ticks.push({ value: v });
-            }
-            axis.ticks = ticks;
-          },
+          afterBuildTicks: durationTicks(1),
         },
         y2: {
           display: hasCoverageData,
@@ -3979,7 +3990,7 @@ function updateChart() {
           max: 100,
           title: {
             display: hasCoverageData,
-            text: "Coverage %",
+            text: "Coverage (%)",
             color: textColor,
           },
           ticks: {
@@ -7801,7 +7812,7 @@ function updateBenchChart() {
   if (multiSeries) {
     yAxis.title = {
       display: true,
-      text: `% Change from Start`,
+      text: "Change from start (%)",
       color: textColor,
     };
     yAxis.ticks.callback = (value) => formatSignedPct(value, { digits: 0 });
@@ -7809,8 +7820,8 @@ function updateBenchChart() {
   } else {
     const yLabel =
       expandedWithDetail.length > 0 || noisyView
-        ? `${statLabel} ${benchMetricLabel()}`
-        : `${statLabel} Geomean ${benchMetricLabel()}`;
+        ? `${statLabel} ${benchMetricLabel().toLowerCase()}`
+        : `${statLabel} geomean ${benchMetricLabel().toLowerCase()}`;
     yAxis.title = { display: true, text: yLabel, color: textColor };
     yAxis.ticks.callback = function (value) {
       return formatBenchValue(value);
@@ -9610,7 +9621,7 @@ function updatePackagesDownloadsChart() {
             },
             title: {
               display: true,
-              text: "Prerelease share of Julia version requests",
+              text: "Prerelease share of Julia version requests (%)",
               color: textColor,
             },
           },
@@ -10215,7 +10226,8 @@ function updatePkgevalChart() {
     return;
   }
 
-  const { isDark, text: textColor, grid: gridColor } = chartTheme();
+  const { text: textColor, grid: gridColor } = chartTheme();
+  const outcome = statusColors();
 
   const dates = reports.map((r) => r.date);
   const toData = (key) =>
@@ -10234,40 +10246,35 @@ function updatePkgevalChart() {
     {
       label: "OK",
       data: okData,
-      borderColor: "#3fb950",
-      backgroundColor: "rgba(63,185,80,0.15)",
+      borderColor: outcome.ok,
       fill: true,
       order: 5,
     },
     {
       label: "Fail",
       data: failData,
-      borderColor: "#f85149",
-      backgroundColor: "rgba(248,81,73,0.15)",
+      borderColor: outcome.fail,
       fill: true,
       order: 4,
     },
     {
       label: "Crash",
       data: crashData,
-      borderColor: "#db6d28",
-      backgroundColor: "rgba(219,109,40,0.15)",
+      borderColor: outcome.crash,
       fill: true,
       order: 3,
     },
     {
       label: "Skip",
       data: skipData,
-      borderColor: "#8b949e",
-      backgroundColor: "rgba(139,148,158,0.15)",
+      borderColor: outcome.skip,
       fill: true,
       order: 2,
     },
     {
       label: "Kill",
       data: killData,
-      borderColor: "#d29922",
-      backgroundColor: "rgba(210,153,34,0.15)",
+      borderColor: outcome.kill,
       fill: true,
       order: 1,
     },
@@ -10286,9 +10293,7 @@ function updatePkgevalChart() {
         pointRadius: 1.5,
         ...ttfxHoverPointStyle(),
         tension: 0.1,
-        backgroundColor: pkgevalProportional
-          ? ds.borderColor + "cc"
-          : ds.backgroundColor,
+        backgroundColor: colorToRgba(ds.borderColor, pkgevalProportional ? 0.8 : 0.15),
       })),
     },
     options: {
@@ -10365,7 +10370,7 @@ function updatePkgevalChart() {
           },
           title: {
             display: true,
-            text: pkgevalProportional ? "Percentage" : "Packages",
+            text: pkgevalProportional ? "Packages (%)" : "Packages",
             color: textColor,
           },
           max: pkgevalProportional ? 100 : undefined,
@@ -11425,7 +11430,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
         title: {
           display: true,
           text: normalized
-            ? `${metricLabel}, % change from first build in range`
+            ? `${metricLabel}, change from first build in range (%)`
             : count ? metricLabel : `${metricLabel} (seconds)`,
           color: textColor,
         },
@@ -13432,33 +13437,25 @@ const OVERVIEW_DOWNLOADS_TOP_MINORS = 4;
 const OVERVIEW_LIST_LIMIT = 6;
 const OVERVIEW_SPARK_DAYS = 30;
 
-// Status hues for outcomes (pass/fail/...) and a categorical set for
-// identities (Julia minors, queues), light and dark; text tokens carry the
-// labels, the colours only mark identity
+// A categorical set for identities (Julia minors, queues), light and dark,
+// beside the shared outcome colours; text tokens carry the labels, the
+// colours only mark identity
 const OVERVIEW_COLORS = {
   light: {
-    good: "#1a7f37",
-    bad: "#d1242f",
-    severe: "#bc4c00",
-    attention: "#9a6700",
-    neutral: "#8c959f",
     accent: "#0969da",
     categorical: ["#0969da", "#bc4c00", "#8250df", "#bf3989", "#8c959f"],
   },
   dark: {
-    good: "#3fb950",
-    bad: "#f85149",
-    severe: "#db6d28",
-    attention: "#d29922",
-    neutral: "#8b949e",
     accent: "#388bfd",
     categorical: ["#388bfd", "#db6d28", "#a371f7", "#f778ba", "#8b949e"],
   },
 };
 
 function overviewColors() {
-  return OVERVIEW_COLORS[isDarkMode() ? "dark" : "light"];
+  const outcome = statusColors();
+  return { ...OVERVIEW_COLORS[isDarkMode() ? "dark" : "light"], good: outcome.ok, bad: outcome.fail, neutral: outcome.skip };
 }
+
 
 async function loadOverviewSources() {
   const quiet = (route, params) =>
@@ -13789,12 +13786,13 @@ function overviewPkgevalCard(src) {
     reports.filter((r) => Date.parse(r.date) >= sparkFrom).map((r) => ({ x: Date.parse(r.date), y: passRate(r) })),
     { color: colors.good, label: "Packages passing", format: (v) => `${v.toFixed(1)}%` },
   );
+  const outcome = statusColors();
   const donut = overviewDonut([
-    { label: "OK", value: last.ok, color: colors.good },
-    { label: "Fail", value: last.fail, color: colors.bad },
-    { label: "Crash", value: last.crash, color: colors.severe },
-    { label: "Skip", value: last.skip, color: colors.neutral },
-    { label: "Kill", value: last.kill, color: colors.attention },
+    { label: "OK", value: last.ok, color: outcome.ok },
+    { label: "Fail", value: last.fail, color: outcome.fail },
+    { label: "Crash", value: last.crash, color: outcome.crash },
+    { label: "Skip", value: last.skip, color: outcome.skip },
+    { label: "Kill", value: last.kill, color: outcome.kill },
   ]);
   return overviewCard({
     tab: "pkgeval",
@@ -13970,10 +13968,11 @@ function overviewCICard() {
       : null;
   const rows = [];
   let failedNames = [];
+  const outcome = statusColors();
   const donut = overviewDonut([
-    { label: "Passed", value: week.passed, color: colors.good },
-    { label: "Failed", value: week.failed, color: colors.bad },
-    { label: "Timed out", value: week.timed_out, color: colors.severe },
+    { label: "Passed", value: week.passed, color: outcome.ok },
+    { label: "Failed", value: week.failed, color: outcome.fail },
+    { label: "Timed out", value: week.timed_out, color: outcome.timedOut },
   ]);
   if (latest) {
     const counts = { passed: 0, failed: 0, timed_out: 0, canceled: 0 };
@@ -15550,7 +15549,13 @@ function applyTheme() {
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
+  if (sizesChart) updateSizesChart();
   if (buildsChart) drawBuildsView();
+  if (backlogData && !backlogData.error) {
+    renderBacklogChart(backlogData);
+    renderBalanceCharts(backlogData);
+  }
+
   if (usageCharts.length) drawUsageView();
   if (activeTab === "overview" && overviewSources) drawOverview();
 }
