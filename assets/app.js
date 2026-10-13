@@ -889,7 +889,7 @@ function renderBuildsTable(builds) {
       return `<tr tabindex="0" data-url="${url}"${buildRunning(b) ? ' class="builds-running"' : ""}>
         <td>${timeHtml(b.created_at)}</td>
         <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
-        <td class="commits-reg-msg"><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
+        <td class="commits-reg-msg">${commitShaLink(b.commit)} ${escapeHtml(b.message || "")}</td>
         <td>${escapeHtml(b.state)}</td>
         <td class="num">${formatDuration(b.wall_s)}</td>
         <td class="num">${b.jobs}</td>
@@ -4102,6 +4102,13 @@ function showPopup(meta) {
     // Hide coverage links for regular jobs
     coverageLinksEl.style.display = "none";
   }
+  const commitLinkEl = document.getElementById("popup-commit-link");
+  commitLinkEl.href = `?tab=${tabToURLValue("commit")}&c=${encodeURIComponent(meta.commit)}`;
+  commitLinkEl.onclick = (e) => {
+    e.preventDefault();
+    closePopupOverlay();
+    lookupCommit(meta.commit);
+  };
 
   document.getElementById("popup-overlay").classList.add("visible");
   document.getElementById("popup-overlay").setAttribute("aria-hidden", "false");
@@ -8162,7 +8169,7 @@ function renderBenchRunsTable() {
       ? `<a class="bench-runs-link" href="${comparisonUrl}">compare</a>`
       : "—";
     const commitDisplay = row.commit
-      ? `<a class="bench-runs-link" href="${githubCommitURL(encodeURIComponent(row.commit))}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.commit.slice(0, 8))}</a>`
+      ? commitShaLink(row.commit, 8)
       : "—";
     const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : "—";
     const summaryUrl = row.date_path
@@ -10385,12 +10392,12 @@ function showTtfxBuildPopup(b, task) {
   let html = '<div class="ttfx-popup-actions">';
   html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
-  html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">Commit</a>`;
+  html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">GitHub commit</a>`;
   html += "</div>";
   html += row("Title", escapeHtml(b.message || ""));
   html += row(
     "Commit",
-    `<code>${escapeHtml(b.commit.slice(0, 10))}</code> (${commitLink(b.commit, "everything recorded for it")})`,
+    `${commitShaLink(b.commit)} ${githubCommitLink(b.commit)}`,
   );
   html += row("Date", timeHtml(b.date));
   html += row("Version", escapeHtml(b.version || ""));
@@ -11798,7 +11805,7 @@ function renderTtfxBuildsTable() {
     const stateClass = nRun === 0 || failed.length ? "ttfx-failed" : "";
     html += `<tr tabindex="0" data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
     html += `<td>${timeHtml(b.date)}</td>`;
-    html += `<td><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
+    html += `<td>${commitShaLink(b.commit)}</td>`;
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const key of metricCols) {
@@ -11988,9 +11995,6 @@ function showTtfxPrPopup(p) {
   const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `<code>${escapeHtml(st.base_ref)}</code>`) : "master";
   const chained = st && st.complete ? st.suite : null;
   const ci = ttfxPrCi(p);
-  const sha = (c) => `<code>${escapeHtml(c.commit.slice(0, 10))}</code>`;
-  const ghCommit = (c, text) =>
-    `<a href="${githubCommitURL(escapeHtml(c.commit))}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 
   let html = '<div class="ttfx-popup-actions">';
   html += `<a class="btn" href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${p.pr}</a>`;
@@ -12001,10 +12005,12 @@ function showTtfxPrPopup(p) {
   html += row("Author", escapeHtml(p.author));
   const ciText = escapeHtml(ci.title.replace(/^CI: /, ""));
   html += row("CI", `${ci.dot} ${ci.url ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener noreferrer">${ciText}</a>` : ciText}`);
-  html += row("Head", `${ghCommit(p.head, sha(p.head))} (${escapeHtml(p.head.version)})`);
+  // The head is not on master, so it links to GitHub rather than the Commit page
+  html += row("Head", `${extLink(githubCommitURL(p.head.commit), `<code>${escapeHtml(p.head.commit.slice(0, 10))}</code>`)} (${escapeHtml(p.head.version)})`);
+
   html += row(
     "Base",
-    `${ghCommit(p.base, sha(p.base))} (${escapeHtml(p.base.version)}${st ? `, on ${parent}` : ""}; ${commitLink(p.base.commit, "everything recorded for it")})`,
+    `${commitShaLink(p.base.commit)} ${githubCommitLink(p.base.commit)} (${escapeHtml(p.base.version)}${st ? `, on ${parent}` : ""})`,
   );
   html += row("Measured", timeHtml(p.date));
   html += row("Job", `#${p.build}, ${escapeHtml(p.state)}; ${p.n_tasks} tasks${p.blocks ? `, ${p.blocks} ABBA blocks` : ""}`);
@@ -13079,7 +13085,7 @@ function sizesPrBaseText(p) {
 
 function sizesPrBaseHtml(p) {
   return p.base
-    ? `<span title="${escapeHtml(sizesPrBaseText(p))}"><code>${escapeHtml(p.base.commit.slice(0, 10))}</code></span>`
+    ? `<span title="${escapeHtml(sizesPrBaseText(p))}">${commitShaLink(p.base.commit)}</span>`
     : `<span class="ttfx-note-badge" title="${escapeHtml(sizesPrBaseText(p))}">waiting</span>`;
 }
 
@@ -13097,7 +13103,8 @@ async function showSizesPrPopup(n) {
   html += row("Title", escapeHtml(p.title));
   html += row("Author", escapeHtml(p.author));
   html += row("Build", `#${p.build}, ${timeHtml(p.build_created_at)}, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
-  html += row("Merge-base", `<code>${escapeHtml(p.merge_base.slice(0, 10))}</code>`);
+  html += row("Merge-base", `${commitShaLink(p.merge_base)} ${githubCommitLink(p.merge_base)}`);
+
   html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
   html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading...</div>';
@@ -13200,7 +13207,7 @@ function renderSizesCommitsTable() {
     const multi = span > 1 && p != null;
     html += multi
       ? `<td><a href="${githubCompareURL(d.commits[p], sha)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(sizesSpanText(span))}">${span} commits</a></td>`
-      : `<td><a href="${githubCommitURL(sha)}" target="_blank" rel="noopener noreferrer">${escapeHtml(sha.slice(0, 10))}</a></td>`;
+      : `<td>${commitShaLink(sha)}</td>`;
     html += `<td class="col-secondary">${escapeHtml(d.versions[i] || "")}</td>`;
     for (const m of metrics) {
       const c = r.deltas[m];
@@ -13259,16 +13266,16 @@ function showSizesCommitPopup(i, metric) {
     html += `<a class="btn" href="${githubCompareURL(prevSha, sha)}" target="_blank" rel="noopener noreferrer">The ${span} commits</a>`;
   } else {
     if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
-    html += `<a class="btn" href="${githubCommitURL(sha)}" target="_blank" rel="noopener noreferrer">Commit</a>`;
+    html += `<a class="btn" href="${githubCommitURL(sha)}" target="_blank" rel="noopener noreferrer">GitHub commit</a>`;
   }
   html += "</div>";
   if (multi) {
     html += `<div class="ttfx-popup-note">${escapeHtml(sizesSpanText(span))}.</div>`;
     html += row("Commits", `<code>${escapeHtml(prevSha.slice(0, 10))}</code>..<code>${escapeHtml(sha.slice(0, 10))}</code>`);
-    html += row("Last", `${escapeHtml(d.messages[i] || "")} (${commitLink(sha, "everything recorded for it")})`);
+    html += row("Last", `${escapeHtml(d.messages[i] || "")} (${commitShaLink(sha)})`);
   } else {
     html += row("Title", escapeHtml(d.messages[i] || ""));
-    html += row("Commit", `<code>${escapeHtml(sha.slice(0, 10))}</code> (${commitLink(sha, "everything recorded for it")})`);
+    html += row("Commit", `${commitShaLink(sha)} ${githubCommitLink(sha)}`);
   }
   html += row("Merged", timeHtml(d.merged_at[i]));
   html += row("Version", escapeHtml(d.versions[i] || ""));
@@ -13824,7 +13831,7 @@ function overviewBenchCard(src) {
     donut,
     rows: [
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
-      ["Commit", last.commit ? overviewExtLink(githubCommitURL(last.commit), last.commit.slice(0, 10)) : ""],
+      ["Commit", last.commit ? commitShaLink(last.commit) : ""],
       ["Groups", groups ? `${groups} benchmark groups` : ""],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
@@ -13900,8 +13907,8 @@ function overviewCICard() {
     failedNames = latest.jobs.filter((j) => isFail(j.state)).map((j) => overviewJobLabel(j.name));
     const r = latest.run;
     const buildLink = overviewExtLink(buildkiteBuildUrl({ pipeline: "julia-ci", build: latest.build }), `#${latest.build}`);
-    const commitLink = r.commit ? overviewExtLink(githubCommitURL(r.commit), r.commit) : "";
-    rows.push(["Latest build", `${buildLink} (${overviewAgo(new Date(latest.runMs).toISOString())}) ${commitLink} ${escapeHtml(r.message || "")}`]);
+    const commit = r.commit ? commitShaLink(r.commit) : "";
+    rows.push(["Latest build", `${buildLink} (${overviewAgo(new Date(latest.runMs).toISOString())}) ${commit} ${escapeHtml(r.message || "")}`]);
     rows.push(["Latest build jobs", `${latest.jobs.length}: ${counts.passed} passed${counts.failed ? `, ${counts.failed} failed` : ""}${counts.timed_out ? `, ${counts.timed_out} timed out` : ""}${counts.canceled ? `, ${counts.canceled} canceled` : ""}`]);
     if (failedNames.length) rows.push(["Failed in latest", overviewList(failedNames)]);
   }
@@ -14112,7 +14119,7 @@ function overviewSizesCard(src, prs) {
     spark,
     donut,
     rows: [
-      ["Latest commit", `${overviewExtLink(githubCommitURL(sha), sha.slice(0, 10))} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
+      ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
       ["Biggest open PRs", overviewSizesPrs(prs)],
@@ -14628,9 +14635,20 @@ function lookupCommit(value) {
   else switchTab("commit", { pushHistory: false });
 }
 
+// A link to the Commit page; a click on it does not reach the row it sits in
 function commitLink(ref, text) {
   const r = escapeHtml(ref);
-  return `<a href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="lookupCommit('${r}');return false">${text}</a>`;
+  return `<a href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="event.stopPropagation();lookupCommit('${r}');return false">${text}</a>`;
+}
+
+// A master commit's short SHA linking to the Commit page
+function commitShaLink(sha, length = 10) {
+  return commitLink(sha, `<code>${escapeHtml(sha.slice(0, length))}</code>`);
+}
+
+// The small GitHub link beside a commit in a popup
+function githubCommitLink(sha) {
+  return extLink(githubCommitURL(sha), "GitHub", 'class="gh-link" title="The commit on GitHub"');
 }
 
 // The merge commit of a PR, from GitHub's API (unauthenticated, 60 an hour

@@ -2476,7 +2476,14 @@ th.sorted .sort-indicator {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+/* The small GitHub link beside a commit that links to the Commit page */
+.gh-link {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
 #builds-table tr[data-url],
+
 .package-panel tr[data-name] {
   cursor: pointer;
 }
