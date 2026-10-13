@@ -3316,8 +3316,11 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   background: var(--color-neutral-subtle);
 }
+/* The donut moves below the headline rather than squeeze it into a column
+   that wraps every few words */
 .overview-card-top {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
@@ -3327,13 +3330,14 @@ th.sorted .sort-indicator {
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
 }
 .overview-figure {
   font-size: 32px;
   font-weight: 600;
   line-height: 1.1;
+  white-space: nowrap;
   color: var(--color-fg-default);
 }
 .overview-figure-label {
