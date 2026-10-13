@@ -13778,7 +13778,7 @@ async function loadOverviewSources() {
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
-  const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog] = await Promise.all([
+  const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog, activity] = await Promise.all([
     fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
     fresh("benchmarks", benchData) || quiet("benchmarks/summary"),
     fresh("ttfx", ttfxData) || quiet("ttfx/summary"),
@@ -13792,8 +13792,9 @@ async function loadOverviewSources() {
     quiet("downloads/top", { days: 7, client: "user" }),
     quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
     quiet("agents/backlog", { since: twoWeeksAgo }),
+    fresh("activity", activityData) || quiet("github/activity", { since: sparkStart }),
   ]);
-  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, sizes, sizesPrs: sizesPrsList, packages, agents, builds, reasons, top, popular, backlog };
+  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, sizes, sizesPrs: sizesPrsList, packages, agents, builds, reasons, top, popular, backlog, activity };
 }
 
 async function renderOverview({ force = false } = {}) {
@@ -14032,6 +14033,67 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
   }
   parts.push("</dl></section>");
   return { html: parts.join(""), tab, title, status, charts };
+}
+
+// JuliaLang/julia's pull requests and issues: merges this week against last,
+// the open pull requests over the month, and the week's flow
+function overviewActivityCard(src) {
+  const s = src && src.series;
+  const n = s ? (s.open_prs || []).length : 0;
+  if (n < 2) return overviewMissingCard("activity", "Repo Activity", "The activity summary");
+  const colors = overviewColors();
+  const dayMs = (i) => Date.parse(src.start + "T00:00:00Z") + i * OVERVIEW_DAY_MS;
+  const sum = (key, from, to) => (s[key] || []).slice(Math.max(0, from), to).reduce((a, v) => a + (v || 0), 0);
+  const week = (key) => sum(key, n - 7, n);
+  const merged = week("prs_merged");
+  const mergedBefore = n >= 14 ? sum("prs_merged", n - 14, n - 7) : null;
+  const delta = mergedBefore
+    ? overviewDelta({
+        value: (100 * (merged - mergedBefore)) / mergedBefore,
+        unit: "%",
+        upIsGood: true,
+        detail: overviewWeekWindowsDetail("Pull requests merged", dayMs(n)),
+      })
+    : null;
+  const spark = overviewSpark(
+    s.open_prs.map((y, i) => ({ x: dayMs(i), y })),
+    { color: colors.accent, label: "Open pull requests at the end of each day", format: (v) => v.toLocaleString("en-US") },
+  );
+  // Today's count against the end of the day a week before
+  const open = (key) => {
+    const now = s[key][n - 1];
+    const before = n >= 8 ? s[key][n - 8] : null;
+    if (now == null) return "";
+    const d = before == null ? "" : ` <span class="overview-delta-neutral">(${now - before >= 0 ? "+" : ""}${(now - before).toLocaleString("en-US")} this week)</span>`;
+    return `${now.toLocaleString("en-US")}${d}`;
+  };
+  const last = (key) => s[key] && s[key][n - 1];
+  const ageMs = src.generated_at ? Date.now() - Date.parse(src.generated_at) : Infinity;
+  const status =
+    ageMs > OVERVIEW_DAY_MS
+      ? overviewStatus("warn", `No update for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS) || 1)}`)
+      : overviewStatus("ok", "Current");
+  const fmt = (v) => (v || 0).toLocaleString("en-US");
+  return overviewCard({
+    tab: "activity",
+    title: "Repo Activity",
+    status,
+    description: "Issues, pull requests and master commits of JuliaLang/julia.",
+    headline: fmt(merged),
+    headlineLabel: "pull requests merged in the last 7 days",
+    delta,
+    spark,
+    rows: [
+      ["Open pull requests", open("open_prs")],
+      ["Open issues", open("open_issues")],
+      ["Pull requests, 7 days", `${fmt(week("prs_opened"))} opened, ${fmt(merged)} merged, ${fmt(week("prs_closed"))} closed unmerged`],
+      ["Issues, 7 days", `${fmt(week("issues_opened"))} opened, ${fmt(week("issues_closed"))} closed`],
+      ["Master commits, 7 days", fmt(week("commits"))],
+      [`Contributors, ${src.window_days} days`, last("commit_authors") != null ? `${fmt(last("commit_authors"))} commit authors, ${fmt(last("pr_authors"))} pull request authors` : ""],
+      [`Median time to merge, ${src.window_days} days`, last("merge_days") != null ? overviewFormatDays(last("merge_days")) : ""],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
 }
 
 function overviewMissingCard(tab, title, what) {
@@ -14959,6 +15021,7 @@ function drawOverview() {
     overviewCICard(),
     overviewBenchCard(src.bench),
     overviewAgentsCard(src.agents, src.backlog),
+    overviewActivityCard(src.activity),
   ];
   const grid = document.getElementById("overview-grid");
   grid.innerHTML = cards.map((c) => c.html).join("");
