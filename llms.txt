@@ -4,7 +4,8 @@
 > build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
 > PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
 > tasks on every master build, the size of the binary distribution of master commits and
-> open pull requests, package-server downloads, and the Buildkite agents.
+> open pull requests, package-server downloads, the Buildkite agents, and the
+> issues, pull requests and commits of JuliaLang/julia.
 > Everything lives in one SQLite database. The web pages are a JavaScript app; read the
 > data through one of the four routes below instead of scraping them.
 
@@ -34,6 +35,7 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 - `/api/sizes/prs`: the size of each open pull request's latest build against the master commit it branched from
 - `/api/downloads/package/<Name>`: one package's daily downloads
 - `/api/agents/backlog?since=`: per agent pool, the julia-pr and julia-ci jobs waiting for an agent and running over time
+- `/api/github/activity`: JuliaLang/julia per day: open issues and pull requests, issues and pull requests opened, closed and merged, master commits, and contributors and time to merge over 30 days
 - `/api/agents/usage?days=`: agent seconds of the julia-pr and julia-ci jobs finished in the last `days` (7 by default), per pipeline, job name, pool and state
 
 The response shapes are the site's own and can change; the database schema is stable.

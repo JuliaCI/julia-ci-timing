@@ -38,8 +38,9 @@ CREATE TABLE IF NOT EXISTS source_runs (
 );
 CREATE INDEX IF NOT EXISTS source_runs_source ON source_runs (source, started_at);
 
--- Optional enrichment from a clone of JuliaLang/julia. pr_number is parsed from
--- the subject's trailing "(#NNNN)" and may be NULL.
+-- Commits on master, from GitHub's commits listing (fetch_github.jl). author is
+-- the GitHub login, or the git name without a linked account. pr_number is
+-- parsed from the subject's trailing "(#NNNN)" and may be NULL.
 CREATE TABLE IF NOT EXISTS commits (
     sha          TEXT PRIMARY KEY CHECK (length(sha) = 40),
     author       TEXT,
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS commits (
     subject      TEXT,
     pr_number    INTEGER
 );
+CREATE INDEX IF NOT EXISTS commits_committed ON commits (committed_at);
 
 -- ---------------------------------------------------------------- timing --
 
@@ -673,3 +675,24 @@ CREATE TABLE IF NOT EXISTS pool_jobs (
     change_seq  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pool_jobs_runnable ON pool_jobs (runnable_at);
+
+-- ---------------------------------------------------------------- github --
+
+-- Every issue and pull request of JuliaLang/julia, from fetch_github.jl, as
+-- GitHub's issues listing has it now (one row each, updated in place). kind is
+-- issue or pr; a merged pull request has merged_at and a closed one closed_at.
+-- labels is a comma separated list. The Activity tab draws how many were open
+-- each day and how many were opened, closed and merged.
+CREATE TABLE IF NOT EXISTS gh_items (
+    number      INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,              -- issue | pr
+    title       TEXT NOT NULL DEFAULT '',
+    author      TEXT,
+    labels      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    closed_at   TEXT,
+    merged_at   TEXT,
+    gh_updated_at TEXT NOT NULL,            -- GitHub's updated_at, the fetch cursor
+    change_seq  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gh_items_updated ON gh_items (gh_updated_at);

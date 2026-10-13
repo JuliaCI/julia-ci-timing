@@ -1449,6 +1449,88 @@ function disk_used_pct(db)
     end
 end
 
+# --- github ------------------------------------------------------------------
+
+const GH_WINDOW_DAYS = 30
+
+# Per day from the first issue: how many issues and pull requests were open at
+# the end of it, how many were opened, closed and merged in it, how many master
+# commits landed, and over the trailing GH_WINDOW_DAYS days the distinct commit
+# authors and pull request openers and the median days a merged pull request was
+# open. A reopened item counts as open from its creation to its latest close,
+# which is all the listing keeps. `since` (a day or an instant) trims the arrays;
+# the open counts and windows still count everything before it.
+function github_activity(db; since="")
+    items = rows(db, "SELECT kind, author, created_at, closed_at, merged_at FROM gh_items")
+    commits = rows(db, "SELECT author, committed_at FROM commits WHERE committed_at IS NOT NULL")
+    isempty(items) && return OrderedDict("generated_at" => generated_at(db, "github"), "start" => nothing, "series" => OrderedDict())
+    day(s) = Date(SubString(s, 1, 10))
+    first_day = minimum(day(String(r.created_at)) for r in items)
+    last_day = Date(now(UTC))
+    n = Dates.value(last_day - first_day) + 1
+    ix(s) = Dates.value(day(String(s)) - first_day) + 1
+    names = ["issues_opened", "issues_closed", "prs_opened", "prs_merged", "prs_closed", "commits"]
+    counts = OrderedDict(k => zeros(Int, n) for k in names)
+    bump!(k, s) = s === missing || !(1 <= ix(s) <= n) || (counts[k][ix(s)] += 1)
+    pr_authors = [String[] for _ in 1:n]
+    merge_days = [Float64[] for _ in 1:n]
+    for r in items
+        if r.kind == "issue"
+            bump!("issues_opened", r.created_at)
+            bump!("issues_closed", r.closed_at)
+        else
+            bump!("prs_opened", r.created_at)
+            r.author === missing || push!(pr_authors[ix(r.created_at)], String(r.author))
+            if r.merged_at !== missing
+                bump!("prs_merged", r.merged_at)
+                d = (Store.parse_upstream(String(r.merged_at)) - Store.parse_upstream(String(r.created_at))).value / 86_400_000
+                1 <= ix(r.merged_at) <= n && push!(merge_days[ix(r.merged_at)], d)
+            else
+                bump!("prs_closed", r.closed_at)
+            end
+        end
+    end
+    commit_authors = [String[] for _ in 1:n]
+    for c in commits
+        1 <= ix(c.committed_at) <= n || continue
+        counts["commits"][ix(c.committed_at)] += 1
+        c.author === missing || push!(commit_authors[ix(c.committed_at)], String(c.author))
+    end
+    open_issues = cumsum(counts["issues_opened"] .- counts["issues_closed"])
+    open_prs = cumsum(counts["prs_opened"] .- counts["prs_merged"] .- counts["prs_closed"])
+    # Distinct names over the trailing window, by a sliding count per name
+    function distinct_window(per_day)
+        live = Dict{String,Int}()
+        out = zeros(Int, n)
+        for i in 1:n
+            for a in per_day[i]
+                live[a] = get(live, a, 0) + 1
+            end
+            if i > GH_WINDOW_DAYS
+                for a in per_day[i-GH_WINDOW_DAYS]
+                    (live[a] -= 1) == 0 && delete!(live, a)
+                end
+            end
+            out[i] = length(live)
+        end
+        return out
+    end
+    merge_median = Vector{Union{Nothing,Float64}}(nothing, n)
+    for i in 1:n
+        v = reduce(vcat, merge_days[max(1, i - GH_WINDOW_DAYS + 1):i])
+        isempty(v) || (merge_median[i] = round(median(v); digits=2))
+    end
+    series = OrderedDict{String,Any}("open_issues" => open_issues, "open_prs" => open_prs)
+    merge!(series, counts)
+    series["commit_authors"] = distinct_window(commit_authors)
+    series["pr_authors"] = distinct_window(pr_authors)
+    series["merge_days"] = merge_median
+    lo = isempty(since) ? 1 : clamp(Dates.value(Date(since[1:10]) - first_day) + 1, 1, n)
+    return OrderedDict("generated_at" => generated_at(db, "github"), "start" => string(first_day + Day(lo - 1)),
+                       "window_days" => GH_WINDOW_DAYS,
+                       "series" => OrderedDict(k => v[lo:end] for (k, v) in series))
+end
+
 # The newest instant or day each source has data for: a run that succeeds
 # without storing anything (an upstream returning nothing) shows here.
 const LATEST_DATA = Dict(
@@ -1458,7 +1540,8 @@ const LATEST_DATA = Dict(
     "ttfx" => "SELECT MAX(build_created_at) AS t FROM ttfx_jobs",
     "sizes" => "SELECT MAX(merged_at) AS t FROM size_builds WHERE source IN ('ci', 'pr')",
     "packages" => "SELECT MAX(date) AS t FROM dl_series",
-    "agents" => "SELECT MAX(time) AS t FROM agent_snapshots")
+    "agents" => "SELECT MAX(time) AS t FROM agent_snapshots",
+    "github" => "SELECT MAX(gh_updated_at) AS t FROM gh_items")
 
 # /healthz for monitoring: the latest run and latest success per source,
 # the newest data each holds, and the disk.

@@ -4805,6 +4805,11 @@ makeResizablePanel({
   targetId: "sizes-stats",
   storageKey: "sizes-stats-height",
 });
+makeResizablePanel({
+  handleId: "activity-resize-handle",
+  targetId: "activity-stats",
+  storageKey: "activity-stats-height",
+});
 
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
@@ -6308,6 +6313,7 @@ const SOURCE_VIEWS = {
   sizes: ["sizes"],
   packages: ["packages"],
   agents: ["agents", "backlog", "usage"],
+  github: ["activity"],
 };
 
 // A tab's first load, once at a time: switching away and back before it
@@ -6328,6 +6334,7 @@ function reloadStaleView(tab) {
   if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
   if (tab === "ci-sizes" && takeStale("sizes") && sizesData) reloadSizesData();
   if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
+  if (tab === "activity" && takeStale("activity") && activityData) loadActivityData();
   // The Workers view loads what is marked whenever it draws
   if (tab === "ci-workers" && (staleViews.has("agents") || staleViews.has("backlog"))) renderWorkerPresence();
   if (tab === "ci-timing" && timingView === "usage" && staleViews.has("usage")) renderUsageView();
@@ -6344,6 +6351,7 @@ const TAB_SOURCES = {
   benchmarks: "benchmarks",
   packages: "packages",
   pkgeval: "pkgeval",
+  activity: "github",
 };
 
 // A body's own generated_at can be older than the last ingest: its ETag only
@@ -6357,6 +6365,7 @@ function setUpdatedLabels() {
     benchmarks: benchData?.generated_at,
     packages: packagesDownloadsData?.generated_at,
     agents: agentsData?.generated_at,
+    github: activityData?.generated_at,
   };
   const source = TAB_SOURCES[activeTab];
   const at = source && (sourceTimes[source] || fallback[source]);
@@ -6412,6 +6421,7 @@ const TAB_URL_MAP = {
   "ci-sizes": "ci-sizes",
   packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
+  activity: "repo-activity",
 };
 
 // The short paths the redirect directories give each tab, sent to analytics
@@ -6428,6 +6438,7 @@ const TAB_SHORT_PATH = {
   "ci-sizes": "/sizes",
   packages: "/downloads",
   pkgeval: "/pkgeval",
+  activity: "/activity",
 };
 
 // One analytics page view per tab shown, without the query string
@@ -6519,6 +6530,8 @@ const DASHBOARD_PARAMS = new Set([
   "zn", // sizes normalized (% change) toggle
   "zm", // sizes selected metrics
   "zv", // sizes table view (open pull requests or master commits)
+  "at", // activity time range
+  "aw", // activity averaging window
   "perf", // legacy: full iframe path
 ]);
 
@@ -6611,6 +6624,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     perf: "tab-perf",
     overview: "tab-overview",
     commit: "tab-commit",
+    activity: "tab-activity",
   };
   for (const [name, id] of Object.entries(tabIds)) {
     const btn = document.getElementById(id);
@@ -6652,6 +6666,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
     .getElementById("sizes-view")
     .classList.toggle("view-hidden", tab !== "ci-sizes");
   document
+    .getElementById("activity-view")
+    .classList.toggle("view-hidden", tab !== "activity");
+  document
     .getElementById("perf-view")
     .classList.toggle("view-hidden", tab !== "perf");
   document
@@ -6680,6 +6697,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-ttfx" && !ttfxData) loadTabOnce(tab, loadTtfxData);
   if (tab === "ci-sizes" && !sizesData) loadTabOnce(tab, loadSizesData);
   if (tab === "packages" && !packagesDownloadsData) loadTabOnce(tab, loadPackagesDownloadsData);
+  if (tab === "activity" && !activityData) loadTabOnce(tab, loadActivityData);
   reloadStaleView(tab);
 
   updatePhoneShell(tab);
@@ -6706,6 +6724,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-sizes") updateSizesURL();
   if (tab === "packages") updatePackagesURL();
   if (tab === "pkgeval") updatePkgevalURL();
+  if (tab === "activity") updateActivityURL();
   document.title = tabTitle(tab);
   trackPageView(tab);
 }
@@ -6727,6 +6746,7 @@ const TAB_URL_KEYS = {
   benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
   "ci-ttfx": ["tm", "tt", "tn", "th", "tg", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
+  activity: ["at", "aw"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
   pkgeval: ["pt", "pp", "pkg", "pr", "pv"],
 };
@@ -15550,6 +15570,278 @@ document.addEventListener("click", (e) => {
   if (help && !e.target.closest("a")) help.classList.toggle("m-expanded");
 });
 
+// === Activity ===
+// JuliaLang/julia over time from api/github/activity: day-aligned series from
+// `start`. The open counts are drawn as they are; the per-day counts are
+// averaged over the trailing `activitySmoothing` days; the contributor and
+// time-to-merge series are already over the server's trailing window.
+let activityData = null;
+let activityCharts = [];
+let activityTimeRangeDays = 730;
+let activitySmoothing = 28;
+const ACTIVITY_SMOOTHINGS = [1, 7, 28, 91];
+
+// The outcome palette in GitHub's sense: open green, merged purple, closed
+// red; issues orange, pull requests and commits blue
+function activityColors() {
+  const c = statusColors();
+  const blue = isDarkMode() ? "#4493f8" : "#0969da";
+  return { open: c.ok, merged: c.kill, closed: c.fail, issue: c.crash, pr: blue, commit: blue };
+}
+
+// Each panel: its title, its series (key, label, colour) and whether the
+// series are per-day counts to average
+const ACTIVITY_PANELS = [
+  {
+    id: "open",
+    title: "Open issues and pull requests",
+    series: [
+      ["open_issues", "Issues", "issue"],
+      ["open_prs", "Pull requests", "pr"],
+    ],
+  },
+  {
+    id: "issues",
+    title: "Issues per day",
+    perDay: true,
+    series: [
+      ["issues_opened", "Opened", "open"],
+      ["issues_closed", "Closed", "merged"],
+    ],
+  },
+  {
+    id: "prs",
+    title: "Pull requests per day",
+    perDay: true,
+    series: [
+      ["prs_opened", "Opened", "open"],
+      ["prs_merged", "Merged", "merged"],
+      ["prs_closed", "Closed unmerged", "closed"],
+    ],
+  },
+  { id: "commits", title: "Commits to master per day", perDay: true, series: [["commits", "Commits", "commit"]] },
+  {
+    id: "people",
+    title: "Distinct people over 30 days",
+    series: [
+      ["commit_authors", "Commit authors", "commit"],
+      ["pr_authors", "Pull request openers", "open"],
+    ],
+  },
+  { id: "merge", title: "Days a merged pull request was open (median over 30 days)", series: [["merge_days", "Median days", "merged"]] },
+];
+
+const ACTIVITY_DAY_MS = 864e5;
+const activityDayTime = (i) => Date.parse(activityData.start + "T00:00:00Z") + i * ACTIVITY_DAY_MS;
+
+function applyActivityURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const at = params.get("at");
+  if (at !== null) {
+    const days = nearestTimeRange(at);
+    if (days !== null) {
+      activityTimeRangeDays = days;
+      document.getElementById("activity-time-range").value = days;
+    }
+  }
+  const aw = parseInt(params.get("aw"), 10);
+  if (ACTIVITY_SMOOTHINGS.includes(aw)) {
+    activitySmoothing = aw;
+    document.getElementById("activity-smoothing").value = aw;
+  }
+}
+
+function updateActivityURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  if (activityTimeRangeDays === 730) url.searchParams.delete("at");
+  else url.searchParams.set("at", activityTimeRangeDays);
+  if (activitySmoothing === 28) url.searchParams.delete("aw");
+  else url.searchParams.set("aw", activitySmoothing);
+  history.replaceState(null, "", url);
+}
+
+async function loadActivityData() {
+  try {
+    activityData = await apiGet("github/activity");
+    if (!activityData.start) throw new Error("no data");
+    setUpdatedLabels();
+    document.getElementById("activity-chart-loading").style.display = "none";
+    updateActivityCharts();
+    updateActivityTable();
+  } catch (err) {
+    console.error("Failed to load activity data:", err);
+    document.getElementById("activity-chart-loading").innerHTML =
+      '<span class="error">No activity data. It appears once <code>fetch_github.jl</code> has run.</span>';
+    document.getElementById("activity-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+  }
+}
+
+function setActivityTimeRange(val) {
+  activityTimeRangeDays = parseInt(val, 10);
+  updateActivityCharts();
+  updateActivityURL();
+}
+
+function setActivitySmoothing(val) {
+  activitySmoothing = parseInt(val, 10);
+  updateActivityCharts();
+  updateActivityTable();
+  updateActivityURL();
+}
+
+// The trailing mean of a per-day series over `w` days; null until a full window
+function activityRolling(vals, w) {
+  if (w <= 1) return vals;
+  const out = new Array(vals.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < vals.length; i++) {
+    sum += vals[i];
+    if (i >= w) sum -= vals[i - w];
+    if (i >= w - 1) out[i] = sum / w;
+  }
+  return out;
+}
+
+// Zooming one panel zooms them all to the same days
+function syncActivityZoom({ chart }) {
+  const { min, max } = chart.scales.x;
+  for (const c of activityCharts) {
+    if (c === chart) continue;
+    c.options.scales.x.min = min;
+    c.options.scales.x.max = max;
+    c.update("none");
+  }
+  document.getElementById("activity-btn-reset-zoom").style.display = "";
+}
+
+function resetActivityZoom() {
+  document.getElementById("activity-btn-reset-zoom").style.display = "none";
+  updateActivityCharts();
+}
+
+function formatActivityValue(v, key) {
+  if (v == null) return "—";
+  if (key === "merge_days") return `${v.toFixed(1)} d`;
+  return Number.isInteger(v) ? v.toLocaleString("en-US") : v.toFixed(1);
+}
+
+function updateActivityCharts() {
+  if (!activityData) return;
+  for (const c of activityCharts) c.destroy();
+  activityCharts = [];
+  document.getElementById("activity-btn-reset-zoom").style.display = "none";
+  const theme = chartTheme();
+  const palette = activityColors();
+  const n = activityData.series.open_issues.length;
+  const lo = activityTimeRangeDays > 0 ? Math.max(0, n - activityTimeRangeDays) : 0;
+  const xMin = activityDayTime(lo);
+  const xMax = activityDayTime(n - 1);
+  const avg = activitySmoothing > 1 ? ` (${activitySmoothing}-day average)` : "";
+  for (const panel of ACTIVITY_PANELS) {
+    const datasets = panel.series.map(([key, label, color]) => {
+      let vals = activityData.series[key] || [];
+      if (panel.perDay) vals = activityRolling(vals, activitySmoothing);
+      const points = [];
+      for (let i = lo; i < vals.length; i++) if (vals[i] != null) points.push({ x: activityDayTime(i), y: vals[i] });
+      return {
+        label,
+        data: points,
+        borderColor: palette[color],
+        backgroundColor: palette[color],
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        _key: key,
+      };
+    });
+    const canvas = document.getElementById(`activity-chart-${panel.id}`);
+    activityCharts.push(
+      new Chart(canvas, {
+        type: "line",
+        data: { datasets },
+        options: {
+          ...baseChartOptions(),
+          parsing: false,
+          normalized: true,
+          interaction: { mode: "index", intersect: false },
+          elements: { line: { tension: 0 } },
+          plugins: {
+            title: {
+              display: true,
+              text: panel.title + (panel.perDay ? avg : ""),
+              color: theme.text,
+              font: { size: 12, weight: "600" },
+              padding: { top: 2, bottom: 6 },
+            },
+            legend: {
+              display: datasets.length > 1,
+              labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8 },
+            },
+            decimation: { enabled: true, algorithm: "min-max" },
+            zoom: zoomOptions(syncActivityZoom),
+            tooltip: {
+              usePointStyle: true,
+              boxPadding: 4,
+              callbacks: {
+                title: (items) => (items.length ? new Date(items[0].raw.x).toISOString().slice(0, 10) : ""),
+                label: (ctx) => ` ${ctx.dataset.label}: ${formatActivityValue(ctx.raw.y, ctx.dataset._key)}`,
+              },
+            },
+          },
+          scales: {
+            x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd", min: xMin, max: xMax }),
+            y: {
+              beginAtZero: true,
+              ticks: { color: theme.text, callback: (v) => compactNumber(v) },
+              grid: { color: theme.grid },
+            },
+          },
+        },
+      }),
+    );
+  }
+}
+
+// One row per series: now (or the mean over the last window) against the
+// window before and the same window a year earlier
+function updateActivityTable() {
+  if (!activityData) return;
+  const w = Math.max(activitySmoothing, 7);
+  const s = activityData.series;
+  const n = s.open_issues.length;
+  const at = (vals, end, perDay) => {
+    if (end < 0) return null;
+    if (!perDay) return vals[end];
+    if (end - w + 1 < 0) return null;
+    let sum = 0;
+    for (let i = end - w + 1; i <= end; i++) sum += vals[i];
+    return sum / w;
+  };
+  // Uncoloured: more activity is neither better nor worse here
+  const pct = (a, b) => (a == null || b == null || b === 0 ? "" : formatSignedPct(((a - b) / b) * 100, { digits: 0 }));
+  document.getElementById("activity-stats-thead").innerHTML =
+    `<tr><th>Series</th><th class="num">Now</th><th class="num">${w} days before</th><th class="num">A year before</th>` +
+    `<th class="num">Change over the year</th></tr>`;
+  let html = "";
+  for (const panel of ACTIVITY_PANELS) {
+    for (const [key, label] of panel.series) {
+      const vals = s[key] || [];
+      const now = at(vals, n - 1, panel.perDay);
+      const before = at(vals, n - 1 - w, panel.perDay);
+      const yearAgo = at(vals, n - 1 - 365, panel.perDay);
+      const unit = panel.perDay ? ` <small>per day, ${w}-day mean</small>` : "";
+      html +=
+        `<tr><td>${escapeHtml(panel.title.replace(/ \(.*\)$/, ""))}: ${escapeHtml(label)}${unit}</td>` +
+        `<td class="num">${formatActivityValue(now, key)}</td>` +
+        `<td class="num">${formatActivityValue(before, key)}</td>` +
+        `<td class="num">${formatActivityValue(yearAgo, key)}</td>` +
+        `<td class="num">${pct(now, yearAgo)}</td></tr>`;
+    }
+  }
+  document.getElementById("activity-stats-tbody").innerHTML = html;
+}
+
 // === Phone shell ===
 // On a phone the page gets an app's frame: a bottom bar of the five
 // sections, the open section's pages as pills under the header, and each
@@ -15560,7 +15852,7 @@ const PHONE_SECTIONS = [
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
   { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx", "ci-sizes"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
-  { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
+  { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 // The view holding each tab's toolbar; the three CI pages share one
 const PHONE_TOOLBAR_VIEWS = {
@@ -15572,6 +15864,7 @@ const PHONE_TOOLBAR_VIEWS = {
   benchmarks: "benchmarks-view",
   packages: "packages-view",
   pkgeval: "pkgeval-view",
+  activity: "activity-view",
 };
 const PHONE_TOOLBARS = ".ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar";
 const phoneLastTab = {};
@@ -15777,6 +16070,7 @@ applyPackagesURLParams();
 applyPkgevalURLParams();
 applyTtfxURLParams();
 applySizesURLParams();
+applyActivityURLParams();
 applyCommitURLParams();
 const perfDeepLink = applyPerfURLParams();
 
@@ -15882,6 +16176,7 @@ function applyTheme() {
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
   if (sizesChart) updateSizesChart();
+  if (activityData) updateActivityCharts();
   if (buildsChart) drawBuildsView();
   if (backlogData && !backlogData.error) {
     renderBacklogChart(backlogData);

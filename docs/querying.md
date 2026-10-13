@@ -105,6 +105,10 @@ only the files that changed. `AGENTS.md` describes their shapes.
   runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
   for (queue, os, arch) and when it became runnable, started and finished: the queue
   backlog behind `api/agents/backlog` and the worker time shares behind `api/agents/usage`.
+- **GitHub.** `gh_items` (every issue and pull request of JuliaLang/julia: kind, author,
+  labels, created_at, closed_at, merged_at; a reopened item keeps only its latest close)
+  and `commits` (master commits: author, dates, subject, PR number), behind
+  `api/github/activity`.
 - **Freshness.** `source_runs`: when each fetcher ran and whether it succeeded.
 
 ## Example queries

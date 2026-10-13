@@ -18,7 +18,7 @@
           }
         },
         "commits": {
-          "description": "Reserved for commit metadata from a clone of JuliaLang/julia; not filled yet. Use builds for commit subjects and authors."
+          "description": "Commits on JuliaLang/julia master from GitHub's commits listing (fetch_github.jl): author (GitHub login, or the git name when the commit has no linked account), dates, subject, and the PR number from the subject's trailing (#NNNN)."
         },
         "builds": {
           "description": "Buildkite builds of Julia master. Pipelines: julia-ci (current), julia-master and julia-master-scheduled (stopped receiving builds in July 2026).",
@@ -234,6 +234,16 @@
           "columns": {
             "fold_key": "the name without its '.N' slot suffix, to group per-job agents by host",
             "job_json": "the running job as JSON, when connected"
+          }
+        },
+        "gh_items": {
+          "description": "Every issue and pull request of JuliaLang/julia as GitHub lists it now (fetch_github.jl), one row each. A reopened item keeps only its latest close. The Activity tab counts how many were open each day and how many were opened, closed and merged.",
+          "columns": {
+            "kind": "issue or pr",
+            "labels": "comma separated label names",
+            "closed_at": "when it was last closed; NULL while open. Set for merged pull requests too",
+            "merged_at": "when a pull request was merged; NULL for issues and unmerged pull requests",
+            "gh_updated_at": "GitHub's updated_at, which the fetcher walks to pick up changes"
           }
         },
         "pool_jobs": {
