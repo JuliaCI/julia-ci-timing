@@ -3470,6 +3470,12 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   white-space: nowrap;
 }
+.overview-rows dt.overview-delta-bad {
+  color: var(--color-danger-fg);
+}
+.overview-rows dt.overview-delta-good {
+  color: var(--color-success-fg);
+}
 .overview-rows dd {
   margin: 0;
   min-width: 0;

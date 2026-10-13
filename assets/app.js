@@ -14144,9 +14144,9 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     charts.push({ id, kind: "bars", spec: bars });
   }
   parts.push('<dl class="overview-rows">');
-  for (const [label, value] of rows) {
+  for (const [label, value, labelClass] of rows) {
     if (value == null || value === "") continue;
-    parts.push(`<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`);
+    parts.push(`<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`);
   }
   parts.push("</dl></section>");
   return { html: parts.join(""), tab, title, status, charts };
@@ -14612,6 +14612,10 @@ function overviewTtfxCard(src, prs) {
 const overviewReleaseClass = (pct) =>
   Math.abs(pct) < 0.05 ? "overview-delta-neutral" : pct > 0 ? "overview-delta-bad" : "overview-delta-good";
 
+// A comparison's label is red when any of its changes is, else green when any is
+const overviewReleaseRowClass = (tones) =>
+  tones.includes("overview-delta-bad") ? "overview-delta-bad" : tones.includes("overview-delta-good") ? "overview-delta-good" : "";
+
 // The latest build against the newest release's latest weekly run, per time
 // metric over the snippets both measured
 function overviewTtfxRelease(src, latest) {
@@ -14619,17 +14623,19 @@ function overviewTtfxRelease(src, latest) {
   const rel = releases[releases.length - 1];
   if (!rel) return ["Against release", ""];
   const parts = [];
+  const tones = [];
   for (const m of ["precompile", "load", "run", "warm"]) {
     const tasks = ttfxCommonTasks([latest, rel], src.tasks || [], m);
     const a = ttfxGeomean(latest, tasks, m);
     const b = ttfxGeomean(rel, tasks, m);
     if (a == null || !b) continue;
     const pct = (100 * (a - b)) / b;
+    tones.push(overviewReleaseClass(pct));
     parts.push(
       `${TTFX_PILL_LABELS[m]} <span class="${overviewReleaseClass(pct)}" title="${formatTtfxSeconds(a)} against ${formatTtfxSeconds(b)}, geomean over ${tasks.length} snippets">${formatSignedPct(pct)}</span>`,
     );
   }
-  return [`Against ${escapeHtml(rel.version)}`, parts.join(", ")];
+  return [`Against ${rel.version}`, parts.join(", "), overviewReleaseRowClass(tones)];
 }
 
 // The five best-ranked open pull requests that come out faster, with their score
@@ -14707,7 +14713,8 @@ function overviewSizesCard(src, prs) {
       ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
-      overviewSizesRelease(src, at),
+      overviewSizesRelease(src.release, at),
+      overviewSizesRelease(overviewSizesLts(src), at, " (LTS)"),
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -14715,22 +14722,31 @@ function overviewSizesCard(src, prs) {
   });
 }
 
-// The latest measured commit against the official tarball of the newest
-// release, for the total and its biggest parts
-function overviewSizesRelease(src, at) {
-  const rel = src.release;
+// The newest measured release of the long-term support series
+function overviewSizesLts(src) {
+  const lts = (src.releases || []).filter((r) => src.lts && r.version.startsWith(src.lts + "."));
+  let best = null;
+  for (const r of lts) if (!best || sizesVersionAfter(r.version, best.version)) best = r;
+  return best;
+}
+
+// The latest measured commit against the official tarball of release `rel`,
+// unpacked and packed
+function overviewSizesRelease(rel, at, suffix = "") {
   if (!rel) return ["Against release", ""];
   const parts = [];
-  for (const [label, m] of [["Total", "total"], ["sys.so", "sysimg"], ["Tarball", "tarball"]]) {
+  const tones = [];
+  for (const [label, m] of [["Total", "total"], ["Tarball", "tarball"]]) {
     const a = at(m);
     const b = rel.values[m];
     if (a == null || !b) continue;
     const d = a - b;
+    tones.push(overviewReleaseClass((100 * d) / b));
     parts.push(
       `${label} <span class="${overviewReleaseClass((100 * d) / b)}" title="${formatBytes(a)} against ${formatBytes(b)}">${formatSizeDelta(d)} (${formatSignedPct((100 * d) / b)})</span>`,
     );
   }
-  return [`Against ${escapeHtml(rel.version)}`, parts.join(", ")];
+  return [`Against ${rel.version}${suffix}`, parts.join(", "), overviewReleaseRowClass(tones)];
 }
 
 // The five open pull requests that change the total most, with the change
