@@ -3,7 +3,7 @@
 #
 # The Workers tab infers agent presence from finished master jobs, which says nothing
 # about agents that only run PR jobs and lags a dropped agent by up to a day. This
-# script asks the agents API directly on every run of the update workflow and keeps
+# script asks the agents API directly on every ingest run and keeps
 # the answer in the database (db/): one `agent_snapshots` row per run with the
 # connected agent names in `agent_snapshot_members`, and the latest details of
 # every agent in `agents`. db/export.jl renders data/agents/ from them:
@@ -39,38 +39,13 @@ include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
-const BUILDKITE_ORG = "julialang"
-const API_BASE = "https://api.buildkite.com/v2"
 const RETAIN_MONTHS = 12   # applied by the export, not by deletion
-const DATEFMT = dateformat"yyyy-mm-ddTHH:MM:SSZ"
-
-function get_token()
-    # An empty variable (the host exports one when the parameter is unset)
-    # counts as unset
-    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
-    if isempty(token)
-        token_file = joinpath(homedir(), ".buildkite_token")
-        isfile(token_file) && (token = strip(read(token_file, String)))
-    end
-    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
-    return token
-end
 
 # Every agent the API lists, across pages
-function fetch_agents(; token=get_token(), per_page=100)
+function fetch_agents()
     agents = Any[]
-    for page in 1:50
-        url = "$API_BASE/organizations/$BUILDKITE_ORG/agents?per_page=$per_page&page=$page"
-        resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
-        if resp.status in (401, 403)
-            error("The token cannot list agents (HTTP $(resp.status); it needs the read_agents scope)")
-        end
-        if resp.status != 200
-            error("Agents request failed with HTTP $(resp.status): $(String(resp.body))")
-        end
-        batch = JSON3.read(resp.body)
+    buildkite_pages("organizations/$BUILDKITE_ORG/agents"; max_pages=50) do batch, _
         append!(agents, batch)
-        length(batch) < per_page && break
     end
     return agents
 end
@@ -128,7 +103,7 @@ const AGENT_COLS = ["fold_key", "agent_id", "hostname", "queue", "os", "arch", "
 # its record so the state shows in the table. Nothing is deleted: the
 # retention window is applied when the files are rendered.
 function record_snapshot!(db, agents, now_time::DateTime)
-    snapshot_time = Dates.format(now_time, DATEFMT)
+    snapshot_time = Store.iso(now_time)
     seq = next_seq!(db)
     first_seen = Dict{String,String}()
     for r in query(db, "SELECT name, first_seen FROM agents")
@@ -169,19 +144,10 @@ const POOL_JOB_RETAIN_DAYS = 60
 const POOL_OVERLAP = Hour(2)
 
 # Every build of `pipeline` matching `params` (pairs, repeated keys allowed), across pages
-function fetch_builds(pipeline, params; token=get_token(), per_page=100, max_pages=200)
+function fetch_builds(pipeline, params)
     builds = Any[]
-    for page in 1:max_pages
-        q = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in [params; "per_page" => string(per_page); "page" => string(page)]], "&")
-        url = "$API_BASE/organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds?$q"
-        resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
-        if resp.status in (401, 403)
-            error("The token cannot list builds (HTTP $(resp.status); it needs the read_builds scope)")
-        end
-        resp.status == 200 || error("Builds request failed with HTTP $(resp.status): $(String(resp.body))")
-        batch = JSON3.read(resp.body)
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds", params; max_pages=200) do batch, _
         append!(builds, batch)
-        length(batch) < per_page && break
     end
     return builds
 end
@@ -223,7 +189,7 @@ end
 function pool_window_start(db, now_time)
     isempty(query(db, "SELECT 1 FROM pool_jobs LIMIT 1")) && return ("created_from", now_time - Day(POOL_BACKFILL_DAYS))
     r = query(db, "SELECT started_at FROM source_runs WHERE source = 'agents' AND ok = 1 ORDER BY id DESC LIMIT 1")
-    last_ok = isempty(r) ? now_time - Day(1) : DateTime(String(r[1].started_at), Store.ISO_SECONDS)
+    last_ok = isempty(r) ? now_time - Day(1) : Store.parse_upstream(String(r[1].started_at))
     return ("finished_from", max(last_ok - POOL_OVERLAP, now_time - Day(POOL_BACKFILL_DAYS)))
 end
 
@@ -232,7 +198,7 @@ function update_pool_jobs!(db, now_time::DateTime)
     fetched = Dict{String,Vector{Any}}()
     for pipeline in POOL_PIPELINES
         active = fetch_builds(pipeline, ["state[]" => s for s in ACTIVE_BUILD_STATES])
-        recent = fetch_builds(pipeline, [key => Dates.format(from, Store.ISO_SECONDS)])
+        recent = fetch_builds(pipeline, [key => Store.iso(from)])
         fetched[pipeline] = vcat(active, recent)
     end
     return transaction(db) do

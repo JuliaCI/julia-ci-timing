@@ -46,8 +46,6 @@ const LOOKBACK_DAYS = 60
 # master builds and pull requests for this long each and leaves the rest to the next run
 const TIME_BUDGET = Minute(5)
 
-const BUILDKITE_ORG = "julialang"
-const API_BASE = "https://api.buildkite.com/v2"
 const CI_PIPELINE = "julia-ci"
 const PR_PIPELINE = "julia-pr"
 const BUILD_JOB = ":linux: build x86_64-linux-gnu"
@@ -56,37 +54,9 @@ const JOB_TARBALL = r"^julia-[0-9a-f]+-linux-x86_64\.tar\.gz$"
 # not measured
 const PR_LOOKBACK_DAYS = 14
 const PULLS_REFRESH = Hour(2)
-const GITHUB_REPO = "https://api.github.com/repos/JuliaLang/julia"
 
-function get_token()
-    # An empty variable (the host exports one when the parameter is unset)
-    # counts as unset
-    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
-    if isempty(token)
-        token_file = joinpath(homedir(), ".buildkite_token")
-        isfile(token_file) && (token = strip(read(token_file, String)))
-    end
-    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
-    return token
-end
-
-function api_get(endpoint; token=get_token(), params=Dict())
-    url = "$API_BASE/$endpoint"
-    isempty(params) || (url *= "?" * join(["$k=$v" for (k, v) in params], "&"))
-    resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
-    if resp.status != 200
-        @warn "API request failed" url resp.status
-        return nothing
-    end
-    return JSON3.read(resp.body)
-end
-
-# The host passes no token: anonymous, GitHub allows an address 60 requests an hour
 function github_get(path)
-    headers = ["User-Agent" => "julia-ci-timing-fetcher", "Accept" => "application/vnd.github+json"]
-    token = get(ENV, "GITHUB_TOKEN", "")
-    isempty(token) || push!(headers, "Authorization" => "Bearer $token")
-    resp = http_get_retry("$GITHUB_REPO/$path", headers)
+    resp = http_get_retry("$GITHUB_REPO/$path", github_headers())
     if resp.status != 200
         @warn "GitHub request failed" path resp.status
         return nothing
@@ -168,19 +138,11 @@ end
 
 bucket_download(key) = io -> HTTP.get("$BUCKET/$key"; response_stream=io, retry=true, read_idle_timeout=120)
 
-# The artifact download endpoint answers with a redirect to a signed storage URL; follow
-# it by hand so the API token is not sent along to the storage host
-function artifact_download(url; token=get_token())
-    return function (io)
-        resp = http_get_retry(url, ["Authorization" => "Bearer $token"]; redirect=false)
-        resp.status in (301, 302, 303, 307, 308) || error("artifact download failed: HTTP $(resp.status)")
-        HTTP.get(HTTP.header(resp, "Location"); response_stream=io, retry=true, read_idle_timeout=120)
-    end
-end
+artifact_download(url) = io -> download_artifact(url; io)
 
 # The download URL of the tarball the build job uploaded, or nothing
 function job_tarball_url(pipeline, number, job_id)
-    artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$number/jobs/$job_id/artifacts")
+    artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$number/jobs/$job_id/artifacts")
     artifacts === nothing && return nothing
     i = findfirst(a -> occursin(JOB_TARBALL, String(a.filename)), collect(artifacts))
     return i === nothing ? nothing : String(artifacts[i].download_url)
@@ -198,7 +160,7 @@ function measure_master_commit!(db, commit, bucket; build=nothing)
         r = query(db, "SELECT number, created_at, message FROM builds WHERE pipeline = 'julia-ci' AND commit_sha = ? " *
                       "ORDER BY number LIMIT 1", (commit,))
         if isempty(r)
-            bs = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds"; params=Dict("commit" => commit, "branch" => "master", "per_page" => 5))
+            bs = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds"; params=["commit" => commit, "branch" => "master", "per_page" => 5])
             (bs === nothing || isempty(bs)) && return false
             b = bs[end]   # the first build of the commit
             build = (number=Int(b.number), created_at=Store.iso(Store.parse_upstream(String(b.created_at))),
@@ -211,7 +173,7 @@ function measure_master_commit!(db, commit, bucket; build=nothing)
     download = if key !== nothing
         bucket_download(key)
     else
-        b = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds/$(build.number)")
+        b = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds/$(build.number)")
         job = b === nothing ? nothing : build_job(b)
         url = job === nothing ? nothing : job_tarball_url(CI_PIPELINE, build.number, job.id)
         url === nothing && return false
@@ -265,11 +227,7 @@ const PR_COLS = ["title", "author", "draft", "base_ref", "build", "build_created
 # build job passed, as pull request number => (build, job)
 function pr_builds(since)
     out = Dict{Int,Any}()
-    for page in 1:50
-        params = Dict("created_from" => Store.iso(since), "per_page" => 100, "page" => page)
-        builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params)
-        builds === nothing && error("listing $PR_PIPELINE builds failed (page $page)")
-        isempty(builds) && break
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds", ["created_from" => Store.iso(since)]; max_pages=50) do builds, _
         for build in builds
             pr = get(build, :pull_request, nothing)
             n = pr === nothing ? nothing : tryparse(Int, string(get(pr, :id, "")))
@@ -336,23 +294,21 @@ function open_prs!(db)
         return (title=String(something(get(p, :title, ""), "")), author=u === nothing ? "" : String(u.login),
                 draft=get(p, :draft, false) === true ? 1 : 0, base_ref=String(p.base.ref))
     end
-    pulls = Dict{Int,Any}()
-    for page in 1:50
-        list = github_get("pulls?state=open&per_page=100&page=$page")
+    listed = try
+        github_open_pulls()
+    catch e
         # The old copy serves until the next run rather than dropping rows on a partial list
-        list === nothing && return cached()
-        isempty(list) && break
-        for p in list
-            pulls[Int(p.number)] = summary(p)
-        end
+        @warn "Listing the open pull requests failed" exception=e
+        return cached()
     end
+    pulls = Dict{Int,Any}(n => summary(p) for (n, p) in listed)
     # A pull request closed while the list was paged moves the later pages up
     # by one, so an open one can be missing; those with a measurement are
     # asked about one at a time before their rows go
     for r in query(db, "SELECT pr_number FROM size_prs")
         n = Int(r.pr_number)
         haskey(pulls, n) && continue
-        p = github_get("pulls/$n")
+        p = github_pull(n)
         p === nothing && return cached()
         String(p.state) == "open" && (pulls[n] = summary(p))
     end

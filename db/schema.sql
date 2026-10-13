@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS ttfx_jobs (
     triplet          TEXT NOT NULL,
     kind             TEXT NOT NULL DEFAULT 'master', -- 'master', or 'release' for the weekly run of the newest stable release
     state            TEXT NOT NULL,
-    build_created_at TEXT NOT NULL,          -- legacy "date", minute precision
+    build_created_at TEXT NOT NULL,          -- seconds; minutes in rows written before 2026-10-13
     commit_sha       TEXT NOT NULL DEFAULT '',
     version          TEXT NOT NULL DEFAULT '',
     message          TEXT NOT NULL DEFAULT '',
@@ -610,7 +610,7 @@ CREATE TABLE IF NOT EXISTS dl_mix (
     PRIMARY KEY (date, kind, key)
 ) WITHOUT ROWID;
 
--- published_at is kept as the fetcher formats it (no zone suffix).
+-- published_at is UTC with a Z, except rows written before 2026-10-13.
 CREATE TABLE IF NOT EXISTS julia_tags (
     tag          TEXT PRIMARY KEY,
     date         TEXT NOT NULL,

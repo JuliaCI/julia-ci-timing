@@ -14,38 +14,7 @@ include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
-const BUILDKITE_ORG = "julialang"
 const PIPELINE = "julia-master"
-const API_BASE = "https://api.buildkite.com/v2"
-
-function get_token()
-    # An empty variable (the host exports one when the parameter is unset)
-    # counts as unset
-    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
-    if isempty(token)
-        token_file = joinpath(homedir(), ".buildkite_token")
-        if isfile(token_file)
-            token = strip(read(token_file, String))
-        end
-    end
-    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
-    return token
-end
-
-
-function api_get(endpoint; token=get_token(), params=Dict())
-    url = "$API_BASE/$endpoint"
-    if !isempty(params)
-        query = join(["$k=$v" for (k, v) in params], "&")
-        url = "$url?$query"
-    end
-    resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
-    if resp.status != 200
-        @warn "API request failed" url resp.status String(resp.body)
-        return nothing
-    end
-    return JSON3.read(resp.body)
-end
 
 const SCHEDULED_PIPELINE = "julia-master-scheduled"
 # Since July 2026 Julia CI runs on the julia-ci pipeline (julia-master and
@@ -53,23 +22,11 @@ const SCHEDULED_PIPELINE = "julia-master-scheduled"
 # daily but fails at launch). See JuliaCI/julia-buildkite#544.
 const CI_PIPELINE = "julia-ci"
 
-function fetch_pipeline_builds(pipeline; branch="master", per_page=100, max_pages=30, fully_captured_below=0)
+# A failed page throws: merging a partial listing would let the next run's
+# threshold skip the builds behind the failed page for good
+function fetch_pipeline_builds(pipeline; branch="master", max_pages=30, fully_captured_below=0)
     builds = []
-    for page in 1:max_pages
-        params = Dict(
-            "branch" => branch,
-            "per_page" => per_page,
-            "page" => page
-        )
-        data = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds"; params)
-        if data === nothing
-            # Merging a partial listing would let the next run's threshold skip
-            # the builds behind the failed page for good; try again next run
-            @warn "Page $page of $pipeline failed; skipping this pipeline for this run"
-            return nothing
-        end
-        isempty(data) && break
-
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds", ["branch" => branch]; max_pages) do data, page
         new_in_page = 0
         oldest_in_page = typemax(Int)
         for build in data
@@ -85,24 +42,18 @@ function fetch_pipeline_builds(pipeline; branch="master", per_page=100, max_page
         # If we've gone past the threshold and all builds are known, we can stop
         if oldest_in_page < fully_captured_below && new_in_page == 0
             @info "Reached fully captured region, stopping early"
-            break
+            return :stop
         end
     end
     return builds
 end
 
-function parse_datetime(s::AbstractString)
-    # Buildkite returns ISO 8601 timestamps
-    return DateTime(s[1:19], dateformat"yyyy-mm-ddTHH:MM:SS")
-end
-parse_datetime(::Nothing) = nothing
-
 function job_duration_seconds(job)
     started = get(job, :started_at, nothing)
     finished = get(job, :finished_at, nothing)
     (started === nothing || finished === nothing) && return nothing
-    start_dt = parse_datetime(started)
-    end_dt = parse_datetime(finished)
+    start_dt = Store.parse_upstream(String(started))
+    end_dt = Store.parse_upstream(String(finished))
     return Dates.value(end_dt - start_dt) / 1000  # milliseconds to seconds
 end
 
@@ -261,7 +212,8 @@ function write_coverage!(db, coverage)
     seq = next_seq!(db)
     stmt = upsert_stmt(db, "coverage", ["commit_sha"], ["measured_at", "codecov", "coveralls"])
     for (sha, c) in coverage
-        upsert!(stmt, (sha, something(c["date"], missing), something(c["codecov"], missing), something(c["coveralls"], missing), seq))
+        measured_at = c["date"] === nothing ? missing : Store.iso(Store.parse_upstream(String(c["date"])))
+        upsert!(stmt, (sha, measured_at, something(c["codecov"], missing), something(c["coveralls"], missing), seq))
     end
     return length(coverage)
 end
@@ -284,7 +236,7 @@ function fetch_coverage_data(db; max_pages=20)
     try
         for page in 1:max_pages
             url = "https://coveralls.io/github/JuliaLang/julia.json?page=$page"
-            resp = HTTP.get(url; status_exception=false, read_idle_timeout=120, connect_timeout=30)
+            resp = http_get_retry(url)
             if resp.status != 200
                 @warn "Coveralls API request failed" page resp.status
                 break
@@ -328,7 +280,7 @@ function fetch_coverage_data(db; max_pages=20)
         page = 1
         while page <= max_pages
             url = "https://codecov.io/api/v2/github/JuliaLang/repos/julia/commits?branch=master&page=$page&page_size=100"
-            resp = HTTP.get(url; status_exception=false, read_idle_timeout=120, connect_timeout=30)
+            resp = http_get_retry(url)
             if resp.status != 200
                 @warn "Codecov API request failed" page resp.status
                 break
@@ -382,7 +334,6 @@ end
 # empty one that would count as success
 function list_builds(pipeline; kwargs...)
     builds = fetch_pipeline_builds(pipeline; kwargs...)
-    builds === nothing && error("listing $pipeline builds failed")
     @info "Fetched $pipeline builds" count=length(builds)
     return builds
 end

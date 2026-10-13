@@ -13,11 +13,11 @@ using CodecZstd
 using Tar
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
-const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
-# Persistent on the ingest host; the update workflow caches it
+# Persistent on the ingest host, so a run only fetches the new commits
 const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports-benchmark")
 
 # Statistics read from every new report, and the two the legacy files hold
@@ -27,18 +27,8 @@ const STATS = ("minimum", "median", "mean", "std")
 const LEGACY_STATS = ("minimum", "mean")
 
 function ensure_clone()
+    ensure_clone(CLONE_DIR; paths=["benchmark/by_date"])
     by_date = joinpath(CLONE_DIR, "benchmark", "by_date")
-    if isdir(joinpath(CLONE_DIR, ".git"))
-        @info "Updating existing clone..." dir=CLONE_DIR
-        run(`git -C $CLONE_DIR fetch --depth 1 origin`)
-        run(`git -C $CLONE_DIR reset --hard origin/master`)
-    else
-        @info "Cloning NanosoldierReports (sparse)..." dir=CLONE_DIR
-        rm(CLONE_DIR; force=true, recursive=true)
-        mkpath(dirname(CLONE_DIR))
-        run(`git clone --depth 1 --filter=blob:none --sparse $REPORTS_REPO $CLONE_DIR`)
-        run(`git -C $CLONE_DIR sparse-checkout set benchmark/by_date`)
-    end
     isdir(by_date) || error("benchmark/by_date not found after clone")
     return by_date
 end
@@ -55,11 +45,6 @@ function enumerate_report_dates(by_date_dir::String)
     end
     @info "Found $(length(dates)) benchmark reports"
     return dates
-end
-
-function date_path_to_date(path::String)
-    parts = split(path, "/")
-    "$(parts[1])-$(lpad(parts[2], 2, '0'))"
 end
 
 # --- report.md ---------------------------------------------------------------

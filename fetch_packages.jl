@@ -3,8 +3,8 @@
 # Source announced at:
 # https://discourse.julialang.org/t/announcing-package-download-stats/69073
 #
-# We consume the public rollup and write a compact local summary used by the UI:
-#   data/packages_downloads_summary.json.gz
+# The rollups, the series the site plots from them and recent Julia release tags go into
+# the database (db/); db/export.jl renders data/packages_downloads_summary.json.gz.
 
 using HTTP
 using JSON3
@@ -50,31 +50,22 @@ function is_stable_julia_tag(tag::AbstractString)
     return occursin(r"^v\d+\.\d+\.\d+$", tag)
 end
 
-function parse_github_datetime(raw::AbstractString)
-    s = strip(raw)
-    isempty(s) && return nothing
-    # GitHub uses UTC timestamps like 2026-06-01T12:34:56Z.
-    s = endswith(s, "Z") ? s[1:end-1] : s
-    try
-        return DateTime(s)
-    catch
-        return nothing
-    end
+function is_prerelease_julia_tag(tag::AbstractString)
+    s = lowercase(tag)
+    return occursin(r"^v\d+\.\d+\.\d+-(alpha|beta|rc)", s)
 end
 
-
-# The releases API allows 60 anonymous requests an hour per address, shared
-# by every hosted runner; the workflow passes its token
-function github_headers()
-    headers = ["User-Agent" => "julia-ci-timing-fetcher"]
-    token = get(ENV, "GITHUB_TOKEN", "")
-    isempty(token) || push!(headers, "Authorization" => "Bearer $token")
-    return headers
+function release_published_at(release)
+    raw = something(get(release, :published_at, nothing), "")
+    return isempty(strip(raw)) ? nothing : Store.parse_upstream(strip(raw))
 end
 
-function fetch_recent_stable_julia_tags(; years::Int=2)
+# Stable and prerelease tags published in the last `years`, from one walk of the
+# releases API, each list sorted by date
+function fetch_recent_julia_tags(; years::Int=2)
     cutoff = now(Dates.UTC) - Dates.Year(years)
-    tags = Vector{Dict{String,Any}}()
+    stable = Vector{Dict{String,Any}}()
+    prerelease = Vector{Dict{String,Any}}()
     page = 1
 
     while true
@@ -85,35 +76,33 @@ function fetch_recent_stable_julia_tags(; years::Int=2)
         isempty(releases) && break
 
         for release in releases
-            draft = get(release, :draft, false)
-            prerelease = get(release, :prerelease, false)
-            draft && continue
-            prerelease && continue
+            get(release, :draft, false) && continue
 
             tag = String(get(release, :tag_name, ""))
-            is_stable_julia_tag(tag) || continue
+            tags = if is_stable_julia_tag(tag)
+                get(release, :prerelease, false) ? nothing : stable
+            elseif is_prerelease_julia_tag(tag)
+                prerelease
+            else
+                nothing
+            end
+            tags === nothing && continue
 
-            published_raw = String(get(release, :published_at, ""))
-            isempty(published_raw) && continue
-            published_dt = parse_github_datetime(published_raw)
-            published_dt === nothing && continue
-            published_utc = DateTime(published_dt)
+            published_utc = release_published_at(release)
+            published_utc === nothing && continue
             published_utc < cutoff && continue
 
             push!(tags, Dict(
                 "tag" => tag,
                 "date" => Dates.format(Date(published_utc), dateformat"yyyy-mm-dd"),
-                "published_at" => Dates.format(published_utc, dateformat"yyyy-mm-ddTHH:MM:SS"),
+                "published_at" => Store.iso(published_utc),
                 "url" => String(get(release, :html_url, "")),
             ))
         end
 
         # Releases are returned newest-first. Once we've gone past cutoff and
         # there are no matching entries on this page, we can stop.
-        oldest_on_page = let last_release = releases[end]
-            raw = String(get(last_release, :published_at, ""))
-            parse_github_datetime(raw)
-        end
+        oldest_on_page = release_published_at(releases[end])
         if oldest_on_page !== nothing && oldest_on_page < cutoff
             break
         end
@@ -121,62 +110,9 @@ function fetch_recent_stable_julia_tags(; years::Int=2)
         page += 1
     end
 
-    sort!(tags; by = x -> x["date"])
-    return tags
-end
-
-function is_prerelease_julia_tag(tag::AbstractString)
-    s = lowercase(tag)
-    return occursin(r"^v\d+\.\d+\.\d+-(alpha|beta|rc)", s)
-end
-
-function fetch_recent_prerelease_julia_tags(; years::Int=2)
-    cutoff = now(Dates.UTC) - Dates.Year(years)
-    tags = Vector{Dict{String,Any}}()
-    page = 1
-
-    while true
-        url = JULIA_RELEASES_API * "&page=$(page)"
-        resp = http_get_retry(url, github_headers(); connect_timeout=30, read_idle_timeout=120)
-        resp.status == 200 || error("Failed to fetch Julia releases: HTTP $(resp.status)")
-        releases = JSON3.read(resp.body)
-        isempty(releases) && break
-
-        for release in releases
-            draft = get(release, :draft, false)
-            draft && continue
-
-            tag = String(get(release, :tag_name, ""))
-            is_prerelease_julia_tag(tag) || continue
-
-            published_raw = String(get(release, :published_at, ""))
-            isempty(published_raw) && continue
-            published_dt = parse_github_datetime(published_raw)
-            published_dt === nothing && continue
-            published_utc = DateTime(published_dt)
-            published_utc < cutoff && continue
-
-            push!(tags, Dict(
-                "tag" => tag,
-                "date" => Dates.format(Date(published_utc), dateformat"yyyy-mm-dd"),
-                "published_at" => Dates.format(published_utc, dateformat"yyyy-mm-ddTHH:MM:SS"),
-                "url" => String(get(release, :html_url, "")),
-            ))
-        end
-
-        oldest_on_page = let last_release = releases[end]
-            raw = String(get(last_release, :published_at, ""))
-            parse_github_datetime(raw)
-        end
-        if oldest_on_page !== nothing && oldest_on_page < cutoff
-            break
-        end
-
-        page += 1
-    end
-
-    sort!(tags; by = x -> x["date"])
-    return tags
+    sort!(stable; by = x -> x["date"])
+    sort!(prerelease; by = x -> x["date"])
+    return stable, prerelease
 end
 
 function parse_csv_line(line::AbstractString)
@@ -473,10 +409,8 @@ function ingest!(db, args)
 
     @info "Built package downloads series" points=length(series)
 
-    @info "Fetching recent stable Julia tags" years=2
-    julia_tags = fetch_recent_stable_julia_tags(; years=2)
-    @info "Fetching recent prerelease Julia tags" years=2
-    julia_prerelease_tags = fetch_recent_prerelease_julia_tags(; years=2)
+    @info "Fetching recent Julia tags" years=2
+    julia_tags, julia_prerelease_tags = fetch_recent_julia_tags(; years=2)
 
     rollup_lines = Dict{String,Any}("resource_types_by_date" => lines, "julia_versions_by_date" => version_lines)
     for name in ("julia_systems_by_date", "client_types_by_date", "package_requests_by_date")

@@ -19,23 +19,10 @@ include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
-const REPORTS_REPO = "https://github.com/JuliaCI/NanosoldierReports.git"
 const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports")
 const RAW_BASE = "https://raw.githubusercontent.com/JuliaCI/NanosoldierReports/master/pkgeval/by_date"
 const FARM_INDEX = get(ENV, "PKGEVAL_FARM_INDEX", "https://pkgeval-reports.julialang.org/daily/index.json")
 const CONCURRENCY = 20
-
-function ensure_clone()
-    if isdir(joinpath(CLONE_DIR, ".git"))
-        @info "Updating existing clone..." dir=CLONE_DIR
-        run(`git -C $CLONE_DIR fetch --depth 1 origin`)
-        run(`git -C $CLONE_DIR reset --hard origin/master`)
-    else
-        @info "Cloning NanosoldierReports (sparse, tree-only)..." dir=CLONE_DIR
-        rm(CLONE_DIR; force=true, recursive=true)
-        run(`git clone --depth 1 --filter=blob:none --sparse $REPORTS_REPO $CLONE_DIR`)
-    end
-end
 
 function enumerate_pkgeval_dates()
     @info "Enumerating pkgeval report dates..."
@@ -51,12 +38,6 @@ function enumerate_pkgeval_dates()
     @info "Found $(length(dates)) pkgeval reports"
     return dates
 end
-
-function date_path_to_date(path::String)
-    parts = split(path, "/")
-    "$(parts[1])-$(lpad(parts[2], 2, '0'))"
-end
-
 
 # The farm's dailies as date path => (summary URL, Julia version). The summaries leave
 # the version out (the index has it). Empty if the index can't be read, so a farm
@@ -200,7 +181,7 @@ end
 # The fetches run inside the source's run record too, so a failed download
 # shows on /healthz rather than leaving the last run marked ok
 function ingest!(db, args)
-    ensure_clone()
+    ensure_clone(CLONE_DIR)
 
     all_dates = enumerate_pkgeval_dates()
     # Known by path: a db.json without a date field would otherwise be new forever

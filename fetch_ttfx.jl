@@ -30,10 +30,8 @@ include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
-const BUILDKITE_ORG = "julialang"
 const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
-const API_BASE = "https://api.buildkite.com/v2"
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml), or
 # ":macos: TTFX release <triplet>" for the weekly release reference; the triplet keeps
 # the group's "Launch TTFX benchmark jobs" step from matching
@@ -44,48 +42,6 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # fetched again in case the job already recorded it, the rest are padded.
 const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated")
 const REFETCH_BUILDS = 30
-
-function get_token()
-    # An empty variable (the host exports one when the parameter is unset)
-    # counts as unset
-    token = strip(get(ENV, "BUILDKITE_API_TOKEN", ""))
-    if isempty(token)
-        token_file = joinpath(homedir(), ".buildkite_token")
-        isfile(token_file) && (token = strip(read(token_file, String)))
-    end
-    isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
-    return token
-end
-
-
-function api_get(endpoint; token=get_token(), params=Dict())
-    url = "$API_BASE/$endpoint"
-    isempty(params) || (url *= "?" * join(["$k=$v" for (k, v) in params], "&"))
-    resp = http_get_retry(url, ["Authorization" => "Bearer $token"])
-    if resp.status != 200
-        @warn "API request failed" url resp.status String(resp.body)
-        return nothing
-    end
-    return JSON3.read(resp.body)
-end
-
-# The artifact download endpoint answers with a redirect to a signed storage URL; follow
-# it by hand so the API token is not sent along to the storage host.
-function download_artifact(download_url; token=get_token())
-    resp = http_get_retry(download_url, ["Authorization" => "Bearer $token"]; redirect=false)
-    if resp.status in (301, 302, 303, 307, 308)
-        resp = http_get_retry(HTTP.header(resp, "Location"))
-    end
-    if resp.status != 200
-        @warn "Artifact download failed" download_url resp.status
-        return nothing
-    end
-    return resp.body
-end
-
-function parse_datetime(s::AbstractString)
-    return DateTime(s[1:19], dateformat"yyyy-mm-ddTHH:MM:SS")
-end
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
 # MethodInstances invalidated over the load and run phases, split by how, and the top
@@ -182,7 +138,7 @@ function build_row(build, job, results, meta)
         "triplet" => triplet,
         "kind" => kind,
         "state" => String(get(job, :state, "unknown")),
-        "date" => Dates.format(parse_datetime(String(build.created_at)), dateformat"yyyy-mm-dd HH:MM"),
+        "created_at" => Store.iso(Store.parse_upstream(String(build.created_at))),
         "commit" => commit,
         "version" => head !== nothing ? String(get(head, :version, "")) : "",
         "message" => message,
@@ -208,7 +164,7 @@ end
 # download failed, so the caller leaves the job for the next run instead of recording
 # an empty row.
 function fetch_job_artifacts(build, job; pipeline=CI_PIPELINE, paths=("ttfx/results.json", "ttfx/results-meta.json"))
-    artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$(build.number)/jobs/$(job.id)/artifacts")
+    artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$(build.number)/jobs/$(job.id)/artifacts")
     artifacts === nothing && return nothing
     function get_json(path)
         i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
@@ -233,7 +189,7 @@ end
 # one whose artifacts have expired keeps its row (returned in `expired`, so the caller
 # pads it) instead of being rewritten empty. A failed listing throws: the run is then
 # recorded as failed rather than as one that found nothing.
-function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), per_page=100, max_pages=30)
+function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), max_pages=30)
     rows = Dict{String,Any}[]
     expired = String[]
     # Everything older than the 50 newest known builds counts as captured, so
@@ -241,11 +197,7 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
     known_builds = sort!(unique(parse(Int, first(split(k, ':'))) for k in known); rev=true)
     min_known = isempty(known_builds) ? typemax(Int) : known_builds[min(50, end)]
     seen_any = false
-    for page in 1:max_pages
-        params = Dict("branch" => BRANCH, "per_page" => per_page, "page" => page)
-        builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds"; params)
-        builds === nothing && error("listing $CI_PIPELINE builds failed (page $page)")
-        isempty(builds) && break
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds", ["branch" => BRANCH]; max_pages) do builds, page
         new_in_page = 0
         ttfx_in_page = 0
         oldest = typemax(Int)
@@ -284,11 +236,11 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
         seen_any |= ttfx_in_page > 0
         if oldest < min_known && new_in_page == 0
             @info "Reached fully captured region, stopping early"
-            break
+            return :stop
         end
         if min_known == typemax(Int) && seen_any && ttfx_in_page == 0
             @info "No TTFX jobs on this page, stopping"
-            break
+            return :stop
         end
     end
     return rows, expired
@@ -307,7 +259,7 @@ const JOB_COLS = ["pipeline", "build", "triplet", "kind", "state", "build_create
 function write_row!(db, r, seq, stmts)
     uuid = r["job_id"]
     job = r["_job"]
-    upsert!(stmts.job, (uuid, CI_PIPELINE, r["build"], r["triplet"], r["kind"], r["state"], legacy_minute_to_iso(r["date"]), r["commit"],
+    upsert!(stmts.job, (uuid, CI_PIPELINE, r["build"], r["triplet"], r["kind"], r["state"], r["created_at"], r["commit"],
                         r["version"], r["message"], r["agent"], r["cpu"], r["snippets"], something(r["blocks"], missing),
                         something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
                         at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
@@ -429,7 +381,7 @@ function refresh_traces!(db; limit=TRACE_JOBS_PER_RUN)
     parsed = Any[]
     for j in jobs
         uuid = String(j.job_uuid)
-        artifacts = api_get("organizations/$BUILDKITE_ORG/pipelines/$(j.pipeline)/builds/$(j.build)/jobs/$uuid/artifacts")
+        artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$(j.pipeline)/builds/$(j.build)/jobs/$uuid/artifacts")
         artifacts === nothing && continue
         i = findfirst(a -> String(get(a, :path, "")) == TRACE_ARTIFACT && String(get(a, :state, "")) == "finished", artifacts)
         if i === nothing
@@ -476,7 +428,6 @@ end
 # request, for ranking them; nothing older is kept.
 
 const PR_PIPELINE = "julia-pr"
-const GITHUB_PULLS = "https://api.github.com/repos/JuliaLang/julia/pulls"
 # Builds listed per run: the first fill reaches back a month, later runs only need the
 # builds since the last one, with a margin for jobs still running then
 const PR_BACKFILL_DAYS = 30
@@ -485,29 +436,34 @@ const PR_COLS = ["title", "author", "draft", "pr_head_sha", "build", "job_uuid",
                  "web_url", "head_commit", "head_version", "base_commit", "base_version", "blocks", "n_tasks", "verdict",
                  "n_improvements", "n_regressions", "suite", "tasks"]
 
-# The host passes no token: anonymous, the pull request list costs about a dozen of the
-# 60 requests an hour GitHub allows an address
-function github_headers()
-    headers = ["User-Agent" => "julia-ci-timing-fetcher"]
-    token = get(ENV, "GITHUB_TOKEN", "")
-    isempty(token) || push!(headers, "Authorization" => "Bearer $token")
-    return headers
+# The open pull request list costs about a dozen requests of the 60 an hour GitHub allows
+# an anonymous address, so it is fetched at most this often and kept in meta between
+const PULLS_REFRESH = Hour(2)
+
+# The fields of a pull request used here, to keep the copy in meta small
+function pull_summary(p)
+    user = get(p, :user, nothing)
+    repo = get(p.head, :repo, nothing)
+    return Dict("number" => Int(p.number), "state" => String(p.state), "title" => String(something(get(p, :title, ""), "")),
+                "user" => user === nothing ? nothing : Dict("login" => String(user.login)), "draft" => get(p, :draft, false) === true,
+                "head" => Dict("sha" => String(p.head.sha), "ref" => String(p.head.ref),
+                               "repo" => repo === nothing ? nothing : Dict("full_name" => String(get(repo, :full_name, "")))),
+                "base" => Dict("ref" => String(p.base.ref)))
 end
 
-# Every open pull request of julia, by number. Throws rather than return part of the
-# list, which would delete the rows of the pull requests left out.
-function open_pulls()
-    pulls = Dict{Int,Any}()
-    for page in 1:50
-        resp = http_get_retry("$GITHUB_PULLS?state=open&per_page=100&page=$page", github_headers())
-        resp.status == 200 || error("listing open pull requests failed: HTTP $(resp.status)")
-        list = JSON3.read(resp.body)
-        isempty(list) && return pulls
-        for p in list
-            pulls[Int(p.number)] = p
+# The open pull requests by number, when that list was taken, and whether it was taken
+# just now (else it is the copy kept in meta, younger than PULLS_REFRESH)
+function open_pulls(db)
+    at = query(db, "SELECT value FROM meta WHERE key = 'ttfx:open_prs_at'")
+    if !isempty(at)
+        listed_at = Store.parse_upstream(String(at[1].value))
+        list = query(db, "SELECT value FROM meta WHERE key = 'ttfx:open_prs'")
+        if now(UTC) - listed_at < PULLS_REFRESH && !isempty(list)
+            return Dict{Int,Any}(Int(p.number) => p for p in JSON3.read(String(list[1].value))), listed_at, false
         end
     end
-    error("more than 5000 open pull requests")
+    listed_at = now(UTC)
+    return github_open_pulls(), listed_at, true
 end
 
 # The list is paged, and a pull request closed meanwhile moves the later
@@ -516,9 +472,8 @@ end
 function confirm_missing!(pulls, numbers)
     for n in numbers
         haskey(pulls, n) && continue
-        resp = http_get_retry("$GITHUB_PULLS/$n", github_headers())
-        resp.status == 200 || error("looking up pull request $n failed: HTTP $(resp.status)")
-        p = JSON3.read(resp.body)
+        p = github_pull(n)
+        p === nothing && error("looking up pull request $n failed")
         String(p.state) == "open" && (pulls[n] = p)
     end
     return pulls
@@ -528,11 +483,7 @@ end
 # newest first.
 function pr_ttfx_jobs(since::DateTime)
     jobs = Dict{Int,Vector{Any}}()
-    for page in 1:50
-        params = Dict("created_from" => Store.iso(since), "per_page" => 100, "page" => page)
-        builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params)
-        builds === nothing && error("listing $PR_PIPELINE builds failed (page $page)")
-        isempty(builds) && break
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds", ["created_from" => Store.iso(since)]; max_pages=50) do builds, _
         for build in builds
             pr = get(build, :pull_request, nothing)
             n = pr === nothing ? nothing : tryparse(Int, string(get(pr, :id, "")))
@@ -591,18 +542,28 @@ function pr_head_ref(pull)
 end
 
 # Bring ttfx_prs up to date: a row for every open pull request whose latest finished
-# TTFX job produced a comparison, none for closed ones.
+# TTFX job produced a comparison, none for closed ones. Closed ones are only dropped
+# when the list of open ones is fetched again, so they can linger for PULLS_REFRESH.
 function refresh_prs!(db)
     existing = Dict(Int(r.pr_number) => r for r in query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs"))
-    pulls = confirm_missing!(open_pulls(), keys(existing))
+    pulls, listed_at, fresh = open_pulls(db)
+    fresh && confirm_missing!(pulls, keys(existing))
     since = now(Dates.UTC) - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
     rows = Any[]
     for (n, list) in pr_ttfx_jobs(since)
-        pull = get(pulls, n, nothing)
-        pull === nothing && continue
         known = get(existing, n, nothing)
+        isknown(build, job) = known !== nothing && (String(job.id) == known.job_uuid || build.number < known.build)
+        isknown(list[1]...) && continue
+        pull = get(pulls, n, nothing)
+        # Opened since the kept list was taken; asked about now rather than at the next refresh
+        if pull === nothing && !fresh && Store.parse_upstream(String(list[1][1].created_at)) > listed_at
+            p = github_pull(n)
+            pull = p !== nothing && String(p.state) == "open" ? p : nothing
+            pull === nothing || (pulls[n] = pull)
+        end
+        pull === nothing && continue
         for (build, job) in list
-            known !== nothing && (String(job.id) == known.job_uuid || build.number < known.build) && break
+            isknown(build, job) && break
             fetched = fetch_job_artifacts(build, job; pipeline=PR_PIPELINE, paths=("ttfx/compare.json", "ttfx/results-meta.json"))
             if fetched === nothing
                 @warn "Could not fetch the artifacts; the job is retried next run" pr=n build=build.number
@@ -621,12 +582,19 @@ function refresh_prs!(db)
         for r in rows
             upsert!(stmt, (r..., seq))
         end
-        DBInterface.execute(db, "DELETE FROM ttfx_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
+        if fresh
+            DBInterface.execute(db, "DELETE FROM ttfx_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
+            DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs', ?)",
+                                (JSON3.write([pull_summary(pulls[n]) for n in sort!(collect(keys(pulls)))]),))
+            DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs_at', ?)", (Store.iso(listed_at),))
+        end
         meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, head_ref = ?5, base_ref = ?6, change_seq = ?7 " *
                                        "WHERE pr_number = ?8 AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4 " *
                                        "OR head_ref IS NOT ?5 OR base_ref IS NOT ?6)")
         for r in query(db, "SELECT pr_number FROM ttfx_prs")
-            p = pulls[Int(r.pr_number)]
+            # Between refreshes a row can be for a pull request opened after the kept list was taken
+            p = get(pulls, Int(r.pr_number), nothing)
+            p === nothing && continue
             user = get(p, :user, nothing)
             DBInterface.execute(meta, (String(something(get(p, :title, ""), "")), user === nothing ? "" : String(user.login),
                                        get(p, :draft, false) === true ? 1 : 0, String(p.head.sha), pr_head_ref(p), String(p.base.ref),
@@ -644,7 +612,7 @@ const CI_FINAL_STATES = ("passed", "failed", "canceled", "skipped", "not_run")
 # The newest julia-pr build of a commit as (number, state, web_url), nothing when the
 # commit has none, missing when the request failed.
 function pr_ci_build(sha::String)
-    builds = api_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params=Dict("commit" => sha, "per_page" => 1))
+    builds = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds"; params=Dict("commit" => sha, "per_page" => 1))
     builds === nothing && return missing
     isempty(builds) && return nothing
     b = builds[1]
