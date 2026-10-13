@@ -2938,8 +2938,25 @@ function updateURL() {
   } else {
     url.searchParams.delete("st");
   }
+  dropOtherCIViewParams(url);
   history.replaceState(null, "", url);
   saveToLocalStorage();
+}
+
+// The CI parameters the shown view reads. The Timing, Builds and Workers tabs
+// share their state, but each URL only carries what its view uses.
+function ciViewURLKeys() {
+  if (ciSubview === "workers") return ["wq"];
+  if (ciSubview === "builds") return ["t", "x"];
+  if (timingView === "usage") return ["jv", "jf"];
+  return ["s", "t", "x", "y", "l", "e", "st", "jq"];
+}
+
+function dropOtherCIViewParams(url) {
+  // The CI tabs read their parameters only once the job data has loaded
+  if (tabURLGroup(activeTab) !== "ci" || !jobSelectionRestored) return;
+  const keep = ciViewURLKeys();
+  for (const k of TAB_URL_KEYS.ci) if (!keep.includes(k)) url.searchParams.delete(k);
 }
 
 function saveToLocalStorage() {
@@ -5657,6 +5674,9 @@ function renderMatrixTable() {
   if (!jobSelectionRestored) {
     jobSelectionRestored = true;
     restoreJobSelection();
+    const url = new URL(window.location);
+    dropOtherCIViewParams(url);
+    history.replaceState(null, "", url);
   }
 
   const getLatestDuration = (job) => job.recent?.[0]?.duration ?? 0;
@@ -6670,8 +6690,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(tab));
   url.searchParams.delete("cv");
-  // The landing URL keeps what it carries; the tabs read it as they load
-  if (tabShown) dropOtherTabsParams(url, previousTab, tab);
+  // The other tabs have read the landing URL by now. Diff parameters on a
+  // landing elsewhere are kept for when the Diff tab is shown.
+  dropOtherTabsParams(url, tabShown ? previousTab : "perf", tab);
   tabShown = true;
   if (pushHistory && url.href !== window.location.href) {
     history.pushState(null, "", url);
@@ -6731,6 +6752,7 @@ function dropOtherTabsParams(url, from, to) {
     perfURLParams = null;
   }
   if (to === "commit" && commitRef) url.searchParams.set("c", commitRef);
+  dropOtherCIViewParams(url);
 }
 
 
@@ -6875,8 +6897,8 @@ function updateBenchURL() {
   } else {
     url.searchParams.delete("bm");
   }
-  // Noisy view min latency (ns)
-  if (benchNoisyMinNs !== BENCH_NOISY_DEFAULT_MIN_NS) {
+  // Noisy view min latency (ns), kept in the URL only while that view is shown
+  if (benchTableView === "noisy" && benchNoisyMinNs !== BENCH_NOISY_DEFAULT_MIN_NS) {
     url.searchParams.set("bn", benchNoisyMinNs);
   } else {
     url.searchParams.delete("bn");
