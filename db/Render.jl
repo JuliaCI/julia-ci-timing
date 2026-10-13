@@ -1051,21 +1051,33 @@ function sizes(db; since="", metrics=String[], source="", all_metrics=size_metri
         end
     end
     return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => all_metrics,
-                       series..., "markers" => markers, "release" => isempty(source) ? size_release(db, wanted) : nothing)
+                       series..., "markers" => markers, size_releases(db, wanted, isempty(source))...)
 end
 
-# The newest measured stable release, a reference for master: its commit,
-# version, publication and the `wanted` metrics it has
-function size_release(db, wanted)
-    r = rows(db, "SELECT id, commit_sha, merged_at, version FROM size_builds WHERE source = 'release' AND triplet = ? " *
-                 "ORDER BY merged_at DESC LIMIT 1", (SIZE_TRIPLET,))
-    isempty(r) && return nothing
-    values = OrderedDict{String,Any}(m => nothing for m in wanted)
-    for v in rows(db, "SELECT metric, value FROM size_metrics WHERE size_build_id = ?", (r[1].id,))
-        haskey(values, String(v.metric)) && (values[String(v.metric)] = Int(v.value))
+# The long-term support release series, which the Sizes tab draws apart from the newest
+# release
+const SIZE_LTS = "1.10"
+
+# Every measured stable release in publication order, a reference for master: its
+# commit, version, publication and the `wanted` metrics it has. `release` is the
+# newest by version.
+function size_releases(db, wanted, include)
+    include || return ("releases" => Any[], "release" => nothing, "lts" => SIZE_LTS)
+    bs = rows(db, "SELECT id, commit_sha, merged_at, version FROM size_builds WHERE source = 'release' AND triplet = ? " *
+                  "ORDER BY merged_at", (SIZE_TRIPLET,))
+    index = Dict(Int(b.id) => i for (i, b) in enumerate(bs))
+    out = [OrderedDict{String,Any}("commit" => String(b.commit_sha), "published_at" => String(b.merged_at),
+                                   "version" => String(b.version), "values" => OrderedDict{String,Any}(m => nothing for m in wanted))
+           for b in bs]
+    if !isempty(bs)
+        for r in rows(db, "SELECT size_build_id AS id, metric, value FROM size_metrics " *
+                          "WHERE size_build_id IN (SELECT value FROM json_each(?)) AND metric IN (SELECT value FROM json_each(?))",
+                      (JSON3.write(collect(keys(index))), JSON3.write(wanted)))
+            out[index[Int(r.id)]]["values"][String(r.metric)] = Int(r.value)
+        end
     end
-    return OrderedDict("commit" => String(r[1].commit_sha), "published_at" => String(r[1].merged_at),
-                       "version" => String(r[1].version), "values" => values)
+    newest = isempty(out) ? nothing : out[argmax([something(tryparse(VersionNumber, r["version"]), v"0") for r in out])]
+    return ("releases" => out, "release" => newest, "lts" => SIZE_LTS)
 end
 
 # Every metric of measurement `id` next to measurement `before`'s (0 for none),

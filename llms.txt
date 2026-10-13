@@ -31,7 +31,7 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 - `/api/ttfx/summary?since=`: TTFX per task on every master build (times, invalidations and recompiled methods), and (`releases`) on the weekly runs of the newest stable release
 - `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master, with whether CI passes on their head
 - `/api/ttfx/job/<job_id>?task=`: one TTFX job's recompiled methods (from its trace logs) and invalidations with their top causes, per task
-- `/api/sizes/summary?since=`: size of the linux-x86_64 distribution (total, sys.so, pkgimages, runtime libraries) of master commits, back to 2020, and of the newest stable release
+- `/api/sizes/summary?since=`: size of the linux-x86_64 distribution (total, sys.so, pkgimages, runtime libraries) of master commits, back to 2020, and of every stable release since 1.10
 - `/api/sizes/prs`: the size of each open pull request's latest build against the master commit it branched from
 - `/api/downloads/package/<Name>`: one package's daily downloads
 - `/api/agents/backlog?since=`: per agent pool, the julia-pr and julia-ci jobs waiting for an agent and running over time

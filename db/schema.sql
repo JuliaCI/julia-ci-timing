@@ -437,7 +437,7 @@ CREATE TABLE IF NOT EXISTS raw_ttfx (
 -- rebuild from the manyjulias store, imported once by db/import_sizes.jl to
 -- seed the history back to 2020. Source 'pr' is the latest julia-pr build of
 -- an open pull request (size_prs). Source 'release' is the official tarball of
--- the newest stable release, as a reference. Compare within a source: those rebuilds have
+-- every stable release since 1.10, as a reference. Compare within a source: those rebuilds have
 -- three CPU targets where CI has had four since March 2024 (the code and DWARF
 -- of sys.so and the pkgimages are about a fifth smaller), and lack share/doc
 -- and share/man.

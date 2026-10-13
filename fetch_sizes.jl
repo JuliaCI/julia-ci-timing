@@ -22,8 +22,9 @@
 # gives each new build's merge-base. Anonymously, which the host is, that stays well
 # within the hourly quota fetch_ttfx.jl shares.
 #
-# The newest stable release, the one the weekly TTFX release job measures, is measured
-# once from its tarball on julialang-s3 as source `release`, as a reference for master.
+# Every stable release since RELEASES_SINCE is measured once from its official tarball
+# (listed in julialang-s3's versions.json) as source `release`, newest first, as a
+# reference for master.
 
 using HTTP
 using JSON3
@@ -57,7 +58,11 @@ const JOB_TARBALL = r"^julia-[0-9a-f]+-linux-x86_64\.tar\.gz$"
 # not measured
 const PR_LOOKBACK_DAYS = 14
 const PULLS_REFRESH = Hour(2)
-const RELEASE_BUCKET = "https://julialang-s3.julialang.org/bin/linux/x64"
+const RELEASE_VERSIONS = "https://julialang-s3.julialang.org/bin/versions.json"
+const RELEASES_SINCE = v"1.10.0"
+# Releases measured at once: unpacking and measuring a tarball is most of its time, so
+# this only helps with as many threads
+const RELEASE_WORKERS = 4
 
 function github_get(path)
     resp = http_get_retry("$GITHUB_REPO/$path", github_headers())
@@ -111,8 +116,16 @@ function measure_tarball(download)
         length(tops) == 1 && isdir(tops[1]) && (root = tops[1])
         metrics, files = SizeMeasure.measure(root)
         metrics["tarball"] = filesize(tgz)
-        return SizeMeasure.version(root), metrics, files
+        return SizeMeasure.version(root), metrics, files, git_commit(root)
     end
+end
+
+# The commit a distribution was built from, "" when it does not say
+function git_commit(root)
+    g = joinpath(root, "share", "julia", "base", "version_git.jl")
+    isfile(g) || return ""
+    m = match(r"GitVersionInfo\(\s*\"([0-9a-f]{40})\"", read(g, String))
+    return m === nothing ? "" : String(m.captures[1])
 end
 
 const BUILD_COLS = ["merged_at", "version", "build", "message", "measured_at"]
@@ -222,26 +235,61 @@ function measure_master!(db, bucket; deadline)
     return n
 end
 
-# The newest release the TTFX release job has measured, unless it is measured already.
-# Dated by its tag's publication when the tag is known. Whether it was measured.
-function measure_release!(db)
-    r = query(db, "SELECT version, commit_sha, build_created_at FROM ttfx_jobs " *
-                  "WHERE kind = 'release' AND version != '' AND commit_sha != '' ORDER BY build_created_at DESC LIMIT 1")
-    isempty(r) && return false
-    version, commit = String(r[1].version), String(r[1].commit_sha)
-    m = match(r"^(\d+\.\d+)\.\d+$", version)
-    m === nothing && return false
-    isempty(query(db, "SELECT 1 FROM size_builds WHERE source = 'release' AND triplet = ? AND commit_sha = ?", (TRIPLET, commit))) || return false
-    tag = query(db, "SELECT published_at FROM julia_tags WHERE tag = ?", ("v" * version,))
-    merged_at = isempty(tag) ? String(r[1].build_created_at) : Store.iso(Store.parse_upstream(String(tag[1].published_at)))
-    url = "$RELEASE_BUCKET/$(m.captures[1])/julia-$version-linux-x86_64.tar.gz"
-    measured_version, metrics, files = measure_tarball(io -> HTTP.get(url; response_stream=io, retry=true, read_idle_timeout=120))
-    row = (merged_at, version=measured_version, build=nothing, message="v" * version, measured_at=iso_now())
-    transaction(db) do
-        write_measurement!(db, "release", TRIPLET, commit, row, metrics, files; seq=next_seq!(db))
+# The stable releases since RELEASES_SINCE not measured yet, newest first, until
+# `deadline`. Each is dated by its tag's publication when the tag is known, else by
+# when its tarball was uploaded. How many were measured.
+function measure_releases!(db; deadline)
+    resp = http_get_retry(RELEASE_VERSIONS, Pair{String,String}[]; connect_timeout=30, read_idle_timeout=120)
+    resp.status == 200 || error("Failed to list the releases: HTTP $(resp.status)")
+    measured = Set(String(r.version) for r in query(db, "SELECT version FROM size_builds WHERE source = 'release' AND triplet = ?", (TRIPLET,)))
+    pending = Tuple{VersionNumber,String}[]
+    for (v, info) in pairs(JSON3.read(resp.body))
+        version = tryparse(VersionNumber, String(v))
+        (version === nothing || !get(info, :stable, false) || !isempty(version.prerelease) || version < RELEASES_SINCE) && continue
+        string(version) in measured && continue
+        i = findfirst(f -> get(f, :triplet, "") == TRIPLET && get(f, :kind, "") == "archive", collect(info.files))
+        i === nothing || push!(pending, (version, String(info.files[i].url)))
     end
-    @info "Measured the release" version total=metrics["total"] sysimg=metrics["sysimg"]
-    return true
+    sort!(pending; rev=true)
+    @info "Releases without a size measurement" pending=length(pending)
+    queue = Channel{Tuple{VersionNumber,String}}(length(pending))
+    foreach(p -> put!(queue, p), pending)
+    close(queue)
+    # The database is used by one worker at a time
+    dblock = ReentrantLock()
+    n = Threads.Atomic{Int}(0)
+    function measure_one(version, url)
+        uploaded = Ref{String}("")
+        download = io -> begin
+            r = HTTP.get(url; response_stream=io, retry=true, read_idle_timeout=120)
+            uploaded[] = HTTP.header(r, "Last-Modified", "")
+        end
+        measured_version, metrics, files, commit = measure_tarball(download)
+        isempty(commit) && error("no commit in the tarball")
+        lock(dblock) do
+            tag = query(db, "SELECT published_at FROM julia_tags WHERE tag = ?", ("v$version",))
+            merged_at = !isempty(tag) ? Store.iso(Store.parse_upstream(String(tag[1].published_at))) :
+                        Store.iso(DateTime(uploaded[], dateformat"e, d u y H:M:S \G\M\T"))
+            row = (merged_at, version=measured_version, build=nothing, message="v$version", measured_at=iso_now())
+            transaction(db) do
+                write_measurement!(db, "release", TRIPLET, commit, row, metrics, files; seq=next_seq!(db))
+            end
+        end
+        @info "Measured the release" version total=metrics["total"] sysimg=metrics["sysimg"]
+        Threads.atomic_add!(n, 1)
+    end
+    workers = map(1:min(RELEASE_WORKERS, length(pending))) do _
+        Threads.@spawn for (version, url) in queue
+            now(UTC) > deadline && break
+            try
+                measure_one(version, url)
+            catch e
+                @error "Measuring the release failed" version exception=(e, catch_backtrace())
+            end
+        end
+    end
+    foreach(wait, workers)
+    return n[]
 end
 
 # --- pull requests -------------------------------------------------------------
@@ -404,9 +452,9 @@ function run!(db)
     bucket = bucket_tarballs()
     n = measure_master!(db, bucket; deadline=now(UTC) + TIME_BUDGET)
     try
-        measure_release!(db) && (n += 1)
+        n += measure_releases!(db; deadline=now(UTC) + TIME_BUDGET)
     catch e
-        @error "Measuring the release failed" exception=(e, catch_backtrace())
+        @error "Listing the releases failed" exception=(e, catch_backtrace())
     end
     # A failing GitHub or julia-pr listing leaves the pull requests as they were rather
     # than failing the master measurements with it

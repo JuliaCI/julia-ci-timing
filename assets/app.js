@@ -13108,6 +13108,71 @@ function resetSizesZoom() {
 
 // One line per selected metric. A point carries its index in the series so
 // a click finds the commit.
+// The newest release is solid but faded, so it stays apart from the metric's own line
+let sizesReleaseNoteShown = false;
+
+// The release level within a few pixels of (x, y) on `chart`: its dataset,
+// release and value, or null
+function sizesReleaseLineAt(chart, x, y) {
+  const xs = chart.scales.x;
+  const ys = chart.scales.y;
+  let best = null;
+  chart.data.datasets.forEach((ds, k) => {
+    if (!ds._release || !chart.isDatasetVisible(k)) return;
+    for (let j = 0; j + 1 < ds.data.length; j++) {
+      const a = ds.data[j];
+      const b = ds.data[j + 1];
+      if (!a.release || a.release !== b.release) continue;
+      if (x < xs.getPixelForValue(a.x) || x > xs.getPixelForValue(b.x)) continue;
+      const d = Math.abs(ys.getPixelForValue(a.y) - y);
+      if (d <= 4 && (!best || d < best.d)) best = { d, ds, release: a.release, y: a.y };
+    }
+  });
+  return best;
+}
+
+const SIZES_RELEASE_DASH = { latest: [], lts: [2, 3] };
+const SIZES_RELEASE_ALPHA = { latest: 0.55, lts: 1 };
+
+function sizesVersionKey(v) {
+  return v.split(".").map(Number);
+}
+function sizesVersionAfter(a, b) {
+  const x = sizesVersionKey(a);
+  const y = sizesVersionKey(b);
+  for (let k = 0; k < Math.max(x.length, y.length); k++) {
+    if ((x[k] || 0) !== (y[k] || 0)) return (x[k] || 0) > (y[k] || 0);
+  }
+  return false;
+}
+
+// The stretches of [from, to] each release covers: `latest` the release that
+// was the newest stable version at the time, `lts` the long-term support
+// series once a newer series has taken over, each patch until the next
+function sizesReleaseSegments(from, to) {
+  const releases = (sizesData.releases || [])
+    .map((r) => ({ release: r, t: Date.parse(r.published_at) }))
+    .sort((a, b) => a.t - b.t);
+  const latest = [];
+  for (const r of releases) {
+    const cur = latest[latest.length - 1];
+    if (cur && !sizesVersionAfter(r.release.version, cur.release.version)) continue;
+    if (cur) cur.to = r.t;
+    latest.push({ release: r.release, from: r.t, to: Infinity });
+  }
+  const isLts = (r) => sizesData.lts && r.version.startsWith(sizesData.lts + ".");
+  const supersededAt = latest.find((s) => !isLts(s.release))?.from ?? Infinity;
+  const ltsReleases = releases.filter((r) => isLts(r.release));
+  const lts = ltsReleases.map((r, k) => ({
+    release: r.release,
+    from: Math.max(r.t, supersededAt),
+    to: k + 1 < ltsReleases.length ? ltsReleases[k + 1].t : Infinity,
+  }));
+  const clip = (segs) =>
+    segs.map((s) => ({ ...s, from: Math.max(s.from, from), to: Math.min(s.to, to) })).filter((s) => s.from < s.to);
+  return { latest: clip(latest), lts: clip(lts) };
+}
+
 function updateSizesChart() {
   if (!sizesData) return;
   const canvas = document.getElementById("sizes-chart");
@@ -13144,30 +13209,36 @@ function updateSizesChart() {
       stepped: "before",
       _metric: m,
     });
-    // The newest release's size as a dashed level from its publication, as % of
-    // the same first point in % mode
-    const release = sizesData.release;
-    const rv = release && release.values[m];
-    const start = release ? Math.max(Date.parse(release.published_at), points[0].x) : null;
-    const end = points[points.length - 1].x;
-    if (rv != null && start < end) {
-      const y = sizesNormalized ? ((rv - base) / base) * 100 : rv;
+    // The releases as levels in the metric's colour, as % of the same first
+    // point in % mode
+    const segments = sizesReleaseSegments(points[0].x, points[points.length - 1].x);
+    for (const kind of ["latest", "lts"]) {
+      const data = [];
+      for (const seg of segments[kind]) {
+        const v = seg.release.values[m];
+        if (v == null) {
+          data.push({ x: seg.from, y: null });
+          continue;
+        }
+        const y = sizesNormalized ? ((v - base) / base) * 100 : v;
+        data.push({ x: seg.from, y, release: seg.release }, { x: seg.to, y, release: seg.release });
+      }
+      if (!data.some((p) => p.release)) continue;
       datasets.push({
-        label: `${sizesMetricLabel(m)}, ${release.version}`,
-        data: [start, end].map((x) => ({ x, y, release: true })),
-        borderColor: sizesColors[m],
-        backgroundColor: sizesColors[m],
+        label: `${sizesMetricLabel(m)}, ${kind === "lts" ? "LTS" : "release"}`,
+        data,
+        borderColor: colorToRgba(sizesColors[m], SIZES_RELEASE_ALPHA[kind]),
+        backgroundColor: colorToRgba(sizesColors[m], SIZES_RELEASE_ALPHA[kind]),
         borderWidth: 1.5,
-        borderDash: [6, 4],
+        borderDash: SIZES_RELEASE_DASH[kind],
         pointRadius: 0,
         pointHoverRadius: 0,
         _metric: m,
-        _release: true,
+        _release: kind,
       });
     }
   }
-  const release = sizesData.release;
-  const hasRelease = datasets.some((d) => d._release);
+  const releaseKinds = ["latest", "lts"].filter((k) => datasets.some((d) => d._release === k));
   const fmt = (v) => (sizesNormalized ? formatSignedPct(v) : formatSizeValue(v));
   sizesChart = new Chart(canvas, {
     type: "line",
@@ -13187,6 +13258,17 @@ function updateSizesChart() {
         const el = elements.find((e) => !chart.data.datasets[e.datasetIndex]._release);
         evt.native.target.style.cursor = el ? "pointer" : "";
         highlightSizesRow(el ? chart.data.datasets[el.datasetIndex].data[el.index].i : null);
+        // A release line has its points only at the ends of each level, so the
+        // pointer is matched against the levels themselves
+        const hit = el ? null : sizesReleaseLineAt(chart, evt.x, evt.y);
+        if (hit) {
+          const v = sizesNormalized ? fmt(hit.y) : formatSizeValue(hit.release.values[hit.ds._metric]);
+          showChartNote(chart, escapeHtml(`Julia ${hit.release.version}${hit.ds._release === "lts" ? " LTS" : ""} · ${v}`), evt);
+          sizesReleaseNoteShown = true;
+        } else if (sizesReleaseNoteShown) {
+          hideChartNote(chart);
+          sizesReleaseNoteShown = false;
+        }
       },
       plugins: {
         legend: {
@@ -13195,24 +13277,25 @@ function updateSizesChart() {
             usePointStyle: true,
             boxWidth: 8,
             boxHeight: 8,
-            // The release levels share one entry, drawn as a dashed line
+            // The release levels share an entry per kind, drawn as their dash
             generateLabels: (chart) => {
               const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
               const own = items.filter((item) => !chart.data.datasets[item.datasetIndex]._release);
-              if (!hasRelease) return own;
-              const members = chart.data.datasets.map((d, k) => (d._release ? k : -1)).filter((k) => k >= 0);
               return [
                 ...own,
-                {
-                  text: `Julia ${release.version} release`,
-                  fontColor: textColor,
-                  strokeStyle: textColor,
-                  lineDash: [4, 3],
-                  lineWidth: 1.5,
-                  pointStyle: "line",
-                  hidden: members.every((k) => !chart.isDatasetVisible(k)),
-                  _release: members,
-                },
+                ...releaseKinds.map((kind) => {
+                  const members = chart.data.datasets.map((d, k) => (d._release === kind ? k : -1)).filter((k) => k >= 0);
+                  return {
+                    text: kind === "lts" ? `LTS (${sizesData.lts}.x)` : "Newest release",
+                    fontColor: textColor,
+                    strokeStyle: textColor,
+                    lineDash: SIZES_RELEASE_DASH[kind],
+                    lineWidth: 1.5,
+                    pointStyle: "line",
+                    hidden: members.every((k) => !chart.isDatasetVisible(k)),
+                    _release: members,
+                  };
+                }),
               ];
             },
           },
@@ -13231,17 +13314,16 @@ function updateSizesChart() {
         tooltip: {
           usePointStyle: true,
           boxPadding: 4,
+          filter: (item) => !item.dataset._release,
           callbacks: {
             title: (items) => {
               if (!items.length) return "";
-              if (items[0].raw.release) return `Julia ${release.version} release, published ${formatUtc(release.published_at)}`;
               const i = items[0].raw.i;
               const d = sizesData;
               return `${formatUtc(d.merged_at[i])}  ${d.commits[i].slice(0, 10)}${d.versions[i] ? "  " + d.versions[i] : ""}`;
             },
             label: (ctx) => {
               const ds = ctx.dataset;
-              if (ctx.raw.release) return ` ${ds.label}: ${sizesNormalized ? fmt(ctx.raw.y) : formatSizeValue(release.values[ds._metric])}`;
               const vals = sizesData.values[ds._metric];
               const i = ctx.raw.i;
               const prev = sizesPrevious(vals, i);
@@ -13250,7 +13332,6 @@ function updateSizesChart() {
             },
             footer: (items) => {
               if (!items.length) return "";
-              if (items[0].raw.release) return ["The official tarball of the newest stable release"];
               const i = items[0].raw.i;
               const d = sizesData;
               const lines = [d.sources[i] === "ci" ? `build ${d.builds[i]}, CI tarball` : "manyjulias build"];
@@ -13304,6 +13385,42 @@ function buildSizesMarkers(isDark) {
         color: chartTheme().text,
         font: { size: 11 },
         padding: { x: 5, y: 3 },
+      },
+    };
+  });
+  // Where the newest release changes: a faint line, labelled with the version
+  // for every x.y.0 release and for a patch release when its neighbours leave room
+  const changes = sizesReleaseSegments(-Infinity, Infinity).latest.map((s) => ({ x: s.from, version: s.release.version }));
+  const roomPx = 48;
+  const hasRoom = (chart, k) => {
+    const s = chart.scales.x;
+    const px = (j) => (j >= 0 && j < changes.length ? s.getPixelForValue(changes[j].x) : null);
+    const here = px(k);
+    return [px(k - 1), px(k + 1)].every((p) => p == null || Math.abs(p - here) >= roomPx);
+  };
+  changes.forEach((c, k) => {
+    const major = c.version.endsWith(".0");
+    out[`release-${k}`] = {
+      enter: ({ chart }, event) => showChartNote(chart, escapeHtml(`Julia ${c.version} released: the newest stable release from here`), event),
+      leave: ({ chart }) => hideChartNote(chart),
+      type: "line",
+      xMin: c.x,
+      xMax: c.x,
+      display: ({ chart }) => {
+        const s = chart.scales.x;
+        return !!s && c.x >= s.min && c.x <= s.max;
+      },
+      borderColor: isDark ? "rgba(240,246,252,0.2)" : "rgba(31,35,40,0.2)",
+      borderWidth: 1,
+      borderDash: [2, 3],
+      label: {
+        display: ({ chart }) => !PHONE_WIDTH.matches && (major || hasRoom(chart, k)),
+        content: c.version,
+        position: "end",
+        backgroundColor: isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)",
+        color: chartTheme().text,
+        font: { size: 10, weight: major ? "bold" : "normal" },
+        padding: { x: 4, y: 2 },
       },
     };
   });

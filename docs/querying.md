@@ -92,7 +92,7 @@ only the files that changed. `AGENTS.md` describes their shapes.
 - **Sizes.** `size_builds` (one measurement of the unpacked linux-x86_64 distribution of a
   commit: source `ci` for the tarballs of julia-ci master builds, `manyjulias` for the
   imported history back to 2020, `pr` for open pull requests' latest julia-pr builds,
-  `release` for the official tarball of the newest stable release),
+  `release` for the official tarball of every stable release since 1.10),
   `size_metrics` (its sizes in bytes: total, per directory, sys.so and the runtime
   libraries by ELF section, the stdlib pkgimages), `size_files` (every file of at least
   1 MiB), `size_prs` (each open pull request's measured build and the master commit to
