@@ -2343,6 +2343,26 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   margin: 0 0 8px;
 }
+.pkgeval-panel-toggle {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+.pkgeval-panel-toggle .btn {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.pkgeval-failures-filter {
+  width: 220px;
+  max-width: 100%;
+  margin: 0 0 8px;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-canvas-default);
+  color: var(--color-fg-default);
+}
 .package-panel-chart {
   position: relative;
   height: 220px;

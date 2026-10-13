@@ -360,25 +360,36 @@ function failing_runs(db, names)
     return out
 end
 
-function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
-    reports = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
-                       "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2")
-    isempty(reports) && return nothing
+# The newest two daily reports with package rows, newest first
+pkgeval_latest_reports(db) = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
+                                      "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2")
+
+# Downloads per registry package name over the last `days` days of rollups,
+# ranked by the client's downloads, with the window; nothing without rollups.
+# Summing the window's rollups is the slow part, so callers run it once.
+function pkgeval_ranking(db, days, client)
     last = rows(db, "SELECT MAX(date) AS d FROM dl_packages")
     (isempty(last) || last[1].d === missing) && return nothing
     until = String(last[1].d)
     since = Dates.format(Date(until) - Day(days - 1), dateformat"yyyy-mm-dd")
     metric = client == "all" ? "total" : client
-    report_id = Int(reports[1].id)
-    # Downloads per registry package name over the window, ranked. Summing the
-    # window's rollups is the slow part, so it runs once and the queries below
-    # read the ranking back as a JSON parameter.
     ranking = rows(db, "WITH dl AS (SELECT g.name, SUM(d.request_count) AS total, " *
                        "SUM(CASE WHEN d.client_type = 'user' THEN d.request_count ELSE 0 END) AS user, " *
                        "SUM(CASE WHEN d.client_type = 'ci' THEN d.request_count ELSE 0 END) AS ci " *
                        "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id JOIN registry_packages g ON g.uuid = u.uuid " *
                        "WHERE d.date >= ? AND d.date <= ? GROUP BY g.name) " *
                        "SELECT name, total, user, ci, RANK() OVER (ORDER BY $metric DESC) AS rank FROM dl ORDER BY rank", (since, until))
+    return (; since, until, metric, ranking)
+end
+
+function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
+    reports = pkgeval_latest_reports(db)
+    isempty(reports) && return nothing
+    r = pkgeval_ranking(db, days, client)
+    r === nothing && return nothing
+    (; since, until, metric, ranking) = r
+    report_id = Int(reports[1].id)
+    # The queries below read the ranking back as a JSON parameter
     ranked_json(n=length(ranking)) = JSON3.write([(String(r.name), Int(r.total), Int(r.user), Int(r.ci), Int(r.rank)) for r in ranking if r.rank <= n])
     all_ranked = ranked_json()
     dl = "WITH ranked AS (SELECT value ->> 0 AS name, value ->> 1 AS total, value ->> 2 AS user, value ->> 3 AS ci, " *
@@ -429,6 +440,35 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
                        "top_n" => PKGEVAL_TOP_N, "top_tested" => Int(top.tested), "top_not_ok" => top.not_ok === missing ? 0 : Int(top.not_ok),
                        "weight_n" => PKGEVAL_WEIGHT_N, "weighted_pass_pct" => pass_pct(w), "history" => history,
                        "previous_date" => previous, "newly_broken" => newly_broken)
+end
+
+# Every package that failed the newest report with `reason` (precompile,
+# test_errors, ...), by download rank; packages without downloads in the
+# window come last, by name. Each carries how long it has been failing.
+function pkgeval_failures(db; reason, days=30, client="user")
+    reports = pkgeval_latest_reports(db)
+    isempty(reports) && return nothing
+    r = pkgeval_ranking(db, days, client)
+    r === nothing && return nothing
+    report_id = Int(reports[1].id)
+    ranked = Dict(String(x.name) => x for x in r.ranking)
+    packages = OrderedDict{String,Any}[]
+    for x in rows(db, "SELECT k.name, p.status, p.reason, p.version FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
+                      "WHERE p.report_id = ? AND p.status = 'fail' AND p.reason = ?", (report_id, reason))
+        name = String(x.name)
+        d = get(ranked, name, nothing)
+        push!(packages, OrderedDict("rank" => d === nothing ? nothing : Int(d.rank), "name" => name, "status" => String(x.status),
+                                    "reason" => js(x.reason), "version" => js(x.version),
+                                    "all" => d === nothing ? 0 : Int(d.total), "user" => d === nothing ? 0 : Int(d.user),
+                                    "ci" => d === nothing ? 0 : Int(d.ci)))
+    end
+    sort!(packages; by=p -> (p["rank"] === nothing, something(p["rank"], 0), p["name"]))
+    runs = failing_runs(db, [p["name"] for p in packages])
+    for p in packages
+        merge!(p, get(runs, p["name"], Dict("failing_since" => nothing, "failing_reports" => 0, "last_passed" => nothing)))
+    end
+    return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)), "reason" => reason,
+                       "days" => days, "since" => r.since, "until" => r.until, "client" => client, "packages" => packages)
 end
 
 function pkgeval(db)
