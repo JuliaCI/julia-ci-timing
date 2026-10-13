@@ -11770,7 +11770,7 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
 
 // The weekly runs of the newest stable release, as the suite geomean over the
 // same tasks: a reference next to the master line, rebased in % mode to its
-// first point `base`. Diamonds on a dashed line in a neutral colour; the
+// first point `base`. Diamonds on a solid line in its version's colour; the
 // version of each point is in the tooltip. `_release` holds the task count.
 const TTFX_RELEASE_LABEL = "Latest release";
 // Each minor series of releases has its own hue, and the shade alternates
@@ -11795,7 +11795,6 @@ function ttfxReleaseStyle(color) {
     backgroundColor: color,
     _color: color,
     borderWidth: 1.5,
-    borderDash: [5, 4],
     pointStyle: "rectRot",
     pointRadius: window.innerWidth <= 600 ? 3 : 4.5,
   };
