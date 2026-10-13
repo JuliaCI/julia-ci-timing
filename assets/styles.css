@@ -667,23 +667,53 @@ a {
   position: sticky;
   top: 0;
 }
-.stats-bar th.sortable {
+/* Sortable headers, in every table that has them: the whole cell is a
+   button, and only the sorted column shows its arrow, the others a faint
+   one on hover */
+th.sortable {
   cursor: pointer;
   user-select: none;
 }
-.stats-bar th.sortable:hover {
+th.sortable:hover {
   background: var(--color-neutral-muted);
   color: var(--color-fg-default);
 }
-.stats-bar th .sort-indicator {
-  margin-left: 4px;
-  opacity: 0.3;
+th.sorted {
+  color: var(--color-fg-default);
 }
-.stats-bar th.sorted .sort-indicator {
+.th-sort {
+  all: unset;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  cursor: pointer;
+}
+th.num .th-sort {
+  flex-direction: row-reverse;
+}
+.th-sort:focus-visible,
+tr[tabindex]:focus-visible,
+li[tabindex]:focus-visible {
+  outline: 2px solid var(--color-accent-fg);
+  outline-offset: -2px;
+}
+.sort-indicator {
+  font-size: 0.85em;
+  opacity: 0;
+}
+th.sortable:hover .sort-indicator,
+.th-sort:focus-visible .sort-indicator {
+  opacity: 0.35;
+}
+th.sorted .sort-indicator {
   opacity: 1;
 }
-.stats-bar th.sorted {
-  color: var(--color-fg-default);
+#stats-phone-list {
+  display: none;
+}
+.stats-bar td.num,
+.stats-bar th.num {
+  text-align: right;
 }
 .stats-bar td {
   font-family:
@@ -1960,13 +1990,9 @@ a {
   font-size: 11px;
   position: sticky;
   top: 0;
-  cursor: pointer;
-  user-select: none;
-}
-.benchmarks-stats th:hover {
-  background: var(--color-neutral-muted);
 }
 .benchmarks-stats td {
+
   font-family:
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
@@ -2450,9 +2476,11 @@ a {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-#builds-table tr[data-url] {
+#builds-table tr[data-url],
+.package-panel tr[data-name] {
   cursor: pointer;
 }
+
 #builds-table tr[data-url]:hover td {
   background: var(--color-canvas-subtle);
 }
@@ -3718,6 +3746,17 @@ a {
   .m-list code {
     font-size: 11px;
   }
+  #stats-phone-list {
+    display: block;
+    width: 100%;
+    padding: 0 8px;
+  }
+  /* The Builds chart gets the height the TTFX charts have on a phone */
+  .commits-chart-container {
+    flex: none;
+    height: 300px;
+  }
+
 
   /* Surfaces: translucent bars over the content, sections as rounded
      cards on the page background, and long explanations cut to two lines

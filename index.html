@@ -746,78 +746,11 @@
             aria-label="Resize stats panel"
           ></div>
           <div class="stats-bar">
-            <table role="table" aria-label="Job statistics">
-              <thead id="stats-thead">
-                <tr>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="job"
-                    onclick="handleStatsTableSort('job')"
-                  >
-                    Job/Report <span class="sort-indicator">▲</span>
-                  </th>
-                  <th scope="col">Hosts</th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="passRate"
-                    title="Pass rate in last 14 days"
-                    onclick="handleStatsTableSort('passRate')"
-                  >
-                    Pass Rate <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="trend"
-                    title="Linear trend over the selected range, fitted to one point per build (the median of its passed runs). Starred when p < 0.05 and R² > 10%; indicative only, since CI runs are not independent samples."
-                    onclick="handleStatsTableSort('trend')"
-                  >
-                    Trend <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="median"
-                    onclick="handleStatsTableSort('median')"
-                  >
-                    Median <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="min"
-                    onclick="handleStatsTableSort('min')"
-                  >
-                    Min <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="max"
-                    onclick="handleStatsTableSort('max')"
-                  >
-                    Max <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="std"
-                    onclick="handleStatsTableSort('std')"
-                  >
-                    σ <span class="sort-indicator">▲</span>
-                  </th>
-                  <th
-                    scope="col"
-                    class="sortable"
-                    data-sort="n"
-                    onclick="handleStatsTableSort('n')"
-                  >
-                    n <span class="sort-indicator">▲</span>
-                  </th>
-                </tr>
-              </thead>
+            <div id="stats-phone-list"></div>
+            <table class="m-desktop-only" role="table" aria-label="Job statistics">
+              <!-- Filled with the sortable headers on the first render -->
+              <thead id="stats-thead"></thead>
+
               <tbody id="stats-tbody">
                 <tr>
                   <td colspan="9" class="loading">Loading...</td>

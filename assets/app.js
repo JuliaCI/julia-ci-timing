@@ -121,7 +121,7 @@ const boxZoomMode = () => (boxZooming ? "xy" : "x");
 // table's click handlers can be bound to the items too.
 function phoneListHtml(items) {
   const item = (it) =>
-    `<li ${it.attrs || ""}>` +
+    `<li ${it.attrs ? `${it.attrs} tabindex="0"` : ""}>` +
     (it.lead != null ? `<span class="m-item-rank">${it.lead}</span>` : "") +
     `<div class="m-item-main"><div class="m-item-title">${it.title}</div>` +
     (it.meta ? `<div class="m-item-meta">${it.meta}</div>` : "") +
@@ -130,6 +130,55 @@ function phoneListHtml(items) {
     "</li>";
   return `<ul class="m-list m-phone-only">${items.map(item).join("")}</ul>`;
 }
+// A sortable table's header row: each column a button, the sorted one with
+// its arrow and aria-sort. `cols` are [key, label, class, title]; a null key
+// is a column that does not sort. `sort` is { col, asc }.
+function sortableHeaderRow(cols, sort) {
+  const cells = cols.map(([key, label, cls = "", title = ""]) => {
+    const t = title ? ` title="${escapeHtml(title)}"` : "";
+    if (key == null) return `<th scope="col" class="${cls}"${t}>${label}</th>`;
+    const on = key === sort.col;
+    const aria = on ? ` aria-sort="${sort.asc ? "ascending" : "descending"}"` : "";
+    const arrow = on && !sort.asc ? "▼" : "▲";
+    return `<th scope="col" class="sortable${on ? " sorted" : ""} ${cls}"${aria}${t}><button type="button" class="th-sort" data-sort="${key}">${label}<span class="sort-indicator" aria-hidden="true">${arrow}</span></button></th>`;
+  });
+  return `<tr>${cells.join("")}</tr>`;
+}
+
+// Clicks and keys on the header buttons call `onSort(key)`
+function bindSortHeaders(thead, onSort) {
+  thead.querySelectorAll("button[data-sort]").forEach((btn) => {
+    btn.onclick = () => onSort(btn.dataset.sort);
+  });
+}
+
+// The next { col, asc } after a click on `col`: the same column flips, a new
+// one starts ascending when `ascFirst(col)` says so and descending otherwise
+function nextSort(sort, col, ascFirst = () => false) {
+  return sort.col === col ? { col, asc: !sort.asc } : { col, asc: ascFirst(col) };
+}
+
+// Sorts rows on `col` with missing values last in either direction, then on
+// `tiebreak` ascending
+function sortRows(rows, { col, asc }, tiebreak) {
+  const cmp = (va, vb) => (typeof va === "string" ? va.localeCompare(vb) : va - vb);
+  return rows.sort((a, b) => {
+    const va = a[col];
+    const vb = b[col];
+    let c = 0;
+    if (va == null || vb == null) c = va == null && vb == null ? 0 : va == null ? 1 : -1;
+    else c = asc ? cmp(va, vb) : -cmp(va, vb);
+    return c || (tiebreak ? cmp(a[tiebreak] ?? "", b[tiebreak] ?? "") : 0);
+  });
+}
+
+// A clickable row reached with Tab opens with Enter, as a click would
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const row = e.target.closest?.("tr[tabindex], li[tabindex]");
+  if (row && row === e.target) row.click();
+});
+
 const compactNumber = (n) =>
   n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
@@ -696,6 +745,7 @@ async function renderBuildsView() {
 }
 
 const buildkiteBuildUrl = (b) => b.url || `https://buildkite.com/julialang/${b.pipeline}/builds/${b.build}`;
+const buildRunning = (b) => !b.finished_at;
 
 function drawBuildsView() {
   const canvas = document.getElementById("builds-chart");
@@ -714,13 +764,15 @@ function drawBuildsView() {
   const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
   const point = (b, y) => ({ x: Date.parse(b.created_at), y, build: b });
   const minutes = (s) => (s == null ? null : s / 60);
+  // A phone fits a build into a pixel or two; full-size markers merge
+  const radius = PHONE_WIDTH.matches ? 1.5 : 3;
   const datasets = [
     {
       label: "Wall time",
       data: builds.filter((b) => b.wall_s != null).map((b) => point(b, minutes(b.wall_s))),
       borderColor: colors.build,
       backgroundColor: colors.build,
-      pointRadius: 3,
+      pointRadius: radius,
       pointHoverRadius: 5,
       borderWidth: 1.5,
       tension: 0.1,
@@ -731,7 +783,7 @@ function drawBuildsView() {
       data: builds.filter((b) => b.queue_median_s != null).map((b) => point(b, minutes(b.queue_median_s))),
       borderColor: colors.test,
       backgroundColor: colors.test,
-      pointRadius: 3,
+      pointRadius: radius,
       pointHoverRadius: 5,
       borderWidth: 1.5,
       tension: 0.1,
@@ -742,7 +794,8 @@ function drawBuildsView() {
       data: builds.filter((b) => b.run_total_s != null).map((b) => point(b, b.run_total_s / 3600)),
       borderColor: colors.regression,
       backgroundColor: colors.regression,
-      pointRadius: 2,
+      pointRadius: (radius * 2) / 3,
+
       pointHoverRadius: 5,
       borderWidth: 1,
       borderDash: [4, 3],
@@ -752,16 +805,15 @@ function drawBuildsView() {
   ];
   // A build still running has partial job time and queue waits: its points
   // are hollow and faded, and so are the lines to them
-  const running = (b) => !b.finished_at;
   for (const ds of datasets) {
     const color = ds.borderColor;
     const faded = colorToRgba(color, 0.3);
-    ds.pointBackgroundColor = (ctx) => (ctx.raw && running(ctx.raw.build) ? "transparent" : color);
-    ds.pointBorderColor = (ctx) => (ctx.raw && running(ctx.raw.build) ? faded : color);
+    ds.pointBackgroundColor = (ctx) => (ctx.raw && buildRunning(ctx.raw.build) ? "transparent" : color);
+    ds.pointBorderColor = (ctx) => (ctx.raw && buildRunning(ctx.raw.build) ? faded : color);
     ds.segment = {
       borderColor: (ctx) => {
         const data = ctx.chart.data.datasets[ctx.datasetIndex].data;
-        return running(data[ctx.p0DataIndex].build) || running(data[ctx.p1DataIndex].build) ? faded : undefined;
+        return buildRunning(data[ctx.p0DataIndex].build) || buildRunning(data[ctx.p1DataIndex].build) ? faded : undefined;
       },
     };
   }
@@ -783,7 +835,7 @@ function drawBuildsView() {
             },
             label: (ctx) => {
               const b = ctx.raw.build;
-              const partial = running(b) ? " so far, still running" : "";
+              const partial = buildRunning(b) ? " so far, still running" : "";
               if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs${partial}`];
               const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
               if (ctx.datasetIndex === 0) {
@@ -819,12 +871,22 @@ function drawBuildsView() {
       },
     },
   });
+  renderBuildsTable(builds);
+}
 
-  const recent = builds.slice().reverse().slice(0, 100);
+// The builds under the chart, newest first until a header is clicked; at
+// most BUILDS_TABLE_ROWS of them
+const BUILDS_TABLE_ROWS = 100;
+let buildsTableSort = { col: "created_at", asc: false };
+
+function renderBuildsTable(builds) {
+  const tableEl = document.getElementById("builds-table");
+  const recent = sortRows(builds.slice(), buildsTableSort, "created_at").slice(0, BUILDS_TABLE_ROWS);
+  const sortedBy = buildsTableSort.col === "created_at" && !buildsTableSort.asc ? "newest first" : "sorted";
   const rows = recent
     .map((b) => {
       const url = escapeHtml(buildkiteBuildUrl(b));
-      return `<tr data-url="${url}"${running(b) ? ' class="builds-running"' : ""}>
+      return `<tr tabindex="0" data-url="${url}"${buildRunning(b) ? ' class="builds-running"' : ""}>
         <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
         <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
         <td class="commits-reg-msg"><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
@@ -847,12 +909,30 @@ function drawBuildsView() {
     })),
   );
   tableEl.innerHTML = `
-    <h3 class="commits-reg-title">Builds (newest first${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
+    <h3 class="commits-reg-title">Builds (${sortedBy}${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
     ${list}
     <table class="commits-reg-table m-desktop-only">
-      <thead><tr><th>Created</th><th>Build</th><th>Commit</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num">Jobs</th><th class="num" title="Sum of the jobs' durations">Job time</th><th class="num" title="Median wait from runnable to started across the build's jobs">Queue (median)</th><th class="num">Queue (max)</th></tr></thead>
+      <thead>${sortableHeaderRow(
+        [
+          ["created_at", "Created"],
+          ["build", "Build"],
+          ["commit", "Commit"],
+          ["state", "State"],
+          ["wall_s", "Wall", "num", "First job started to last job finished"],
+          ["jobs", "Jobs", "num"],
+          ["run_total_s", "Job time", "num", "Sum of the jobs' durations"],
+          ["queue_median_s", "Queue (median)", "num", "Median wait from runnable to started across the build's jobs"],
+          ["queue_max_s", "Queue (max)", "num"],
+        ],
+        buildsTableSort,
+      )}</thead>
       <tbody>${rows}</tbody>
     </table>`;
+  bindSortHeaders(tableEl.querySelector("thead"), (col) => {
+    buildsTableSort = nextSort(buildsTableSort, col, (c) => c === "commit" || c === "state");
+    renderBuildsTable(builds);
+  });
+
   tableEl.querySelectorAll("[data-url]").forEach((tr) => {
     tr.onclick = (e) => {
       if (e.target.closest("a")) return;
@@ -4733,20 +4813,26 @@ function updateStatsTableHeader() {
   const thead = document.getElementById("stats-thead");
   if (!thead) return;
 
-  const baseHeaders = `
-                <th scope="col" class="sortable" data-sort="job" onclick="handleStatsTableSort('job')">Job/Report <span class="sort-indicator">▲</span></th>
-                <th scope="col">Hosts</th>
-                <th scope="col" class="sortable" data-sort="passRate" title="Pass rate in last 14 days" onclick="handleStatsTableSort('passRate')">Pass Rate <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="trend" title="Linear trend over the selected range, fitted to one point per build (the median of its passed runs). Starred when p < 0.05 and R² > 10%; indicative only, since CI runs are not independent samples." onclick="handleStatsTableSort('trend')">Trend <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="median" onclick="handleStatsTableSort('median')">Median <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="min" onclick="handleStatsTableSort('min')">Min <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="max" onclick="handleStatsTableSort('max')">Max <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="std" onclick="handleStatsTableSort('std')">σ <span class="sort-indicator">▲</span></th>
-                <th scope="col" class="sortable" data-sort="n" onclick="handleStatsTableSort('n')">n <span class="sort-indicator">▲</span></th>
-            `;
-
-  thead.innerHTML = `<tr>${baseHeaders}</tr>`;
-  updateSortIndicators();
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["job", "Job/Report"],
+      [null, "Hosts"],
+      ["passRate", "Pass Rate", "num", "Pass rate over the selected range, every state"],
+      [
+        "trend",
+        "Trend",
+        "",
+        "Linear trend over the selected range, fitted to one point per build (the median of its passed runs). Starred when p < 0.05 and R² > 10%; indicative only, since CI runs are not independent samples.",
+      ],
+      ["median", "Median", "num"],
+      ["min", "Min", "num"],
+      ["max", "Max", "num"],
+      ["std", "σ", "num"],
+      ["n", "n", "num"],
+    ],
+    { col: statsTableSortColumn, asc: statsTableSortAsc },
+  );
+  bindSortHeaders(thead, handleStatsTableSort);
 }
 
 function updateStatsTable() {
@@ -4758,8 +4844,9 @@ function updateStatsTable() {
   const colSpan = 10;
   if (selectedJobs.size === 0) {
     tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">Select jobs to see statistics</td></tr>`;
-    updateSortIndicators();
+    document.getElementById("stats-phone-list").innerHTML = '<p class="loading m-phone-only">Select jobs to see statistics</p>';
     return;
+
   }
 
   const { min: rangeMin, max: rangeMax } = getVisibleTimeRange();
@@ -4853,7 +4940,7 @@ function updateStatsTable() {
         cmp = a.n - b.n;
         break;
     }
-    return statsTableSortAsc ? cmp : -cmp;
+    return (statsTableSortAsc ? cmp : -cmp) || a.jobName.localeCompare(b.jobName);
   });
 
   // Render rows
@@ -4948,13 +5035,13 @@ function updateStatsTable() {
     aggRow.innerHTML = `
                     <td>All (${jobStats.length} jobs)</td>
                     <td></td>
-                    <td>${aggPassRateHtml}</td>
+                    <td class="num">${aggPassRateHtml}</td>
                     <td>${aggTrendResult.html}</td>
                     <td></td>
                     <td></td>
                     <td></td>
                     <td></td>
-                    <td>${allN}</td>
+                    <td class="num">${allN}</td>
                 `;
     tbody.appendChild(aggRow);
   }
@@ -5005,6 +5092,7 @@ function updateStatsTable() {
     row.dataset.job = jobName;
     if (hasMultipleHosts) {
       row.className = `expandable${isExpanded ? " expanded" : ""}`;
+      row.tabIndex = 0;
       row.onclick = () => toggleJobExpand(jobName);
     }
     row.onmouseenter = () => highlightChartDataset(color);
@@ -5017,13 +5105,13 @@ function updateStatsTable() {
     row.innerHTML = `
                     <td><span class="color-dot" style="background: ${color}"></span> ${convertEmoji(jobName)}</td>
                     <td>${hostsHtml}</td>
-                    <td>${passRateHtml}</td>
+                    <td class="num">${passRateHtml}</td>
                     ${trendCell}
-                    <td class="duration">${formatDuration(median)}</td>
-                    <td class="duration">${formatDuration(min)}</td>
-                    <td class="duration">${formatDuration(max)}</td>
-                    <td class="duration">${std != null ? "±" + formatDuration(std) : formatDuration(null)}</td>
-                    <td>${n}</td>
+                    <td class="duration num">${formatDuration(median)}</td>
+                    <td class="duration num">${formatDuration(min)}</td>
+                    <td class="duration num">${formatDuration(max)}</td>
+                    <td class="duration num">${std != null ? "±" + formatDuration(std) : formatDuration(null)}</td>
+                    <td class="num">${n}</td>
                 `;
     tbody.appendChild(row);
 
@@ -5073,13 +5161,13 @@ function updateStatsTable() {
         hostRow.innerHTML = `
                             <td><span class="color-dot" style="background: ${hostColor}"></span> ${escapeHtml(agent)}</td>
                             <td></td>
-                            <td>${hostPrHtml}</td>
+                            <td class="num">${hostPrHtml}</td>
                             ${hostTrendCell}
-                            <td class="duration">${formatDuration(hostMedian)}</td>
-                            <td class="duration">${formatDuration(hostMin)}</td>
-                            <td class="duration">${formatDuration(hostMax)}</td>
-                            <td class="duration">${hostStd != null ? "±" + formatDuration(hostStd) : formatDuration(null)}</td>
-                            <td>${hostN}</td>
+                            <td class="duration num">${formatDuration(hostMedian)}</td>
+                            <td class="duration num">${formatDuration(hostMin)}</td>
+                            <td class="duration num">${formatDuration(hostMax)}</td>
+                            <td class="duration num">${hostStd != null ? "±" + formatDuration(hostStd) : formatDuration(null)}</td>
+                            <td class="num">${hostN}</td>
                         `;
         tbody.appendChild(hostRow);
       }
@@ -5152,11 +5240,11 @@ function updateStatsTable() {
                         <td><span class="text-muted">—</span></td>
                         <td><span class="text-muted">—</span></td>
                         ${trendCell}
-                        <td>${coverallsStats.median.toFixed(2)}%</td>
-                        <td>${coverallsStats.min.toFixed(2)}%</td>
-                        <td>${coverallsStats.max.toFixed(2)}%</td>
-                        <td>±${coverallsStats.std.toFixed(2)}%</td>
-                        <td>${coverallsStats.n}</td>
+                        <td class="num">${coverallsStats.median.toFixed(2)}%</td>
+                        <td class="num">${coverallsStats.min.toFixed(2)}%</td>
+                        <td class="num">${coverallsStats.max.toFixed(2)}%</td>
+                        <td class="num">±${coverallsStats.std.toFixed(2)}%</td>
+                        <td class="num">${coverallsStats.n}</td>
                     `;
       tbody.appendChild(row);
     }
@@ -5182,17 +5270,30 @@ function updateStatsTable() {
                         <td><span class="text-muted">—</span></td>
                         <td><span class="text-muted">—</span></td>
                         ${trendCell}
-                        <td>${codecovStats.median.toFixed(2)}%</td>
-                        <td>${codecovStats.min.toFixed(2)}%</td>
-                        <td>${codecovStats.max.toFixed(2)}%</td>
-                        <td>±${codecovStats.std.toFixed(2)}%</td>
-                        <td>${codecovStats.n}</td>
+                        <td class="num">${codecovStats.median.toFixed(2)}%</td>
+                        <td class="num">${codecovStats.min.toFixed(2)}%</td>
+                        <td class="num">${codecovStats.max.toFixed(2)}%</td>
+                        <td class="num">±${codecovStats.std.toFixed(2)}%</td>
+                        <td class="num">${codecovStats.n}</td>
                     `;
       tbody.appendChild(row);
     }
   }
 
-  updateSortIndicators();
+  document.getElementById("stats-phone-list").innerHTML = phoneListHtml(
+    jobStats.map((st) => ({
+      attrs: `data-job="${escapeHtml(st.jobName)}"`,
+      title: `<span class="color-dot" style="background: ${st.color}"></span> ${convertEmoji(st.jobName)}`,
+      meta: [
+        st.pr ? passRateSpan(st.pr, hasRecentFailure(data.jobs[st.jobName]), jobBreakages[st.jobName]) + " passed" : "",
+        formatTrend(st.trend).html,
+        `${st.n} runs`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      value: formatDuration(st.median),
+    })),
+  );
 }
 
 function toggleJobExpand(jobName) {
@@ -5205,30 +5306,14 @@ function toggleJobExpand(jobName) {
   updateURL();
 }
 
-function updateSortIndicators() {
-  const headers = document.querySelectorAll(".stats-bar th.sortable");
-  headers.forEach((th) => {
-    const col = th.dataset.sort;
-    const indicator = th.querySelector(".sort-indicator");
-    if (col === statsTableSortColumn) {
-      th.classList.add("sorted");
-      indicator.textContent = statsTableSortAsc ? "▲" : "▼";
-    } else {
-      th.classList.remove("sorted");
-      indicator.textContent = "▲";
-    }
-  });
-}
-
 function handleStatsTableSort(column) {
-  if (statsTableSortColumn === column) {
-    statsTableSortAsc = !statsTableSortAsc;
-  } else {
-    statsTableSortColumn = column;
-    statsTableSortAsc = column === "job"; // Job defaults to ascending, others to descending
-  }
+  // Job defaults to ascending, others to descending
+  const next = nextSort({ col: statsTableSortColumn, asc: statsTableSortAsc }, column, (c) => c === "job");
+  statsTableSortColumn = next.col;
+  statsTableSortAsc = next.asc;
   updateStatsTable();
 }
+
 
 function toggleJobItem(item, jobName) {
   if (selectedJobs.has(jobName)) {
@@ -7964,20 +8049,22 @@ function renderBenchRunsTable() {
   const thead = document.getElementById("bench-stats-thead");
   const tbody = document.getElementById("bench-stats-tbody");
 
-  const arrow = (col) =>
-    benchSortCol === col ? (benchSortAsc ? " ▲" : " ▼") : "";
-  thead.innerHTML = `<tr>
-                <th onclick="sortBenchTable('date')">Date${arrow("date")}</th>
-                <th onclick="sortBenchTable('commit')">Commit${arrow("commit")}</th>
-                <th title="Nanosoldier benchmark report">Report</th>
-                <th title="Compare this commit against its baseline on perf.julialang.org">Comparison</th>
-                <th class="bench-time-header" onclick="sortBenchTable('geomeanMin')">Geomean (min)${arrow("geomeanMin")}</th>
-                <th class="bench-delta-header" onclick="sortBenchTable('deltaMin')" title="Min geomean change vs previous run in selected range">Δ${arrow("deltaMin")}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('geomeanMean')">Geomean (mean)${arrow("geomeanMean")}</th>
-                <th class="bench-delta-header" onclick="sortBenchTable('deltaMean')" title="Mean geomean change vs previous run in selected range">Δ${arrow("deltaMean")}</th>
-                <th onclick="sortBenchTable('improved')" title="Improvements reported by Nanosoldier">Improved${arrow("improved")}</th>
-                <th onclick="sortBenchTable('regressed')" title="Regressions reported by Nanosoldier">Regressed${arrow("regressed")}</th>
-            </tr>`;
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Date"],
+      ["commit", "Commit"],
+      [null, "Report", "", "Nanosoldier benchmark report"],
+      [null, "Comparison", "", "Compare this commit against its baseline on perf.julialang.org"],
+      ["geomeanMin", "Geomean (min)", "num bench-time-header"],
+      ["deltaMin", "Δ", "bench-delta-header", "Min geomean change vs previous run in selected range"],
+      ["geomeanMean", "Geomean (mean)", "num bench-time-header"],
+      ["deltaMean", "Δ", "bench-delta-header", "Mean geomean change vs previous run in selected range"],
+      ["improved", "Improved", "", "Improvements reported by Nanosoldier"],
+      ["regressed", "Regressed", "", "Regressions reported by Nanosoldier"],
+    ],
+    { col: benchSortCol, asc: benchSortAsc },
+  );
+  bindSortHeaders(thead, sortBenchTable);
 
   if (reports.length === 0) {
     tbody.innerHTML = '<tr><td colspan="10">No data in selected range</td></tr>';
@@ -8044,15 +8131,7 @@ function renderBenchRunsTable() {
     };
   });
 
-  rows.sort((a, b) => {
-    const va = a[benchSortCol];
-    const vb = b[benchSortCol];
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
-    return benchSortAsc ? cmp : -cmp;
-  });
+  sortRows(rows, { col: benchSortCol, asc: benchSortAsc }, "date");
 
   const fmtCount = (n, cls) =>
     n == null ? "—" : n > 0 ? `<span class="${cls}">${n}</span>` : "0";
@@ -8264,16 +8343,18 @@ async function renderBenchNoisyTable() {
   const thead = document.getElementById("bench-stats-thead");
   const tbody = document.getElementById("bench-stats-tbody");
 
-  const arrow = (col) =>
-    benchNoisySortCol === col ? (benchNoisySortAsc ? " ▲" : " ▼") : "";
-  thead.innerHTML = `<tr>
-                <th onclick="sortBenchNoisyTable('group')">Group${arrow("group")}</th>
-                <th onclick="sortBenchNoisyTable('name')">Benchmark${arrow("name")}</th>
-                <th class="bench-time-header" onclick="sortBenchNoisyTable('latest')">Latest${arrow("latest")}</th>
-                <th class="bench-noise-header" onclick="sortBenchNoisyTable('noise')" title="Median |Δ%| between consecutive runs in selected range">Noise${arrow("noise")}</th>
-                <th onclick="sortBenchNoisyTable('samples')" title="Number of consecutive run pairs used">Samples${arrow("samples")}</th>
-                <th class="bench-notes-header" title="Methodology changes affecting this benchmark">Notes</th>
-            </tr>`;
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["group", "Group"],
+      ["name", "Benchmark"],
+      ["latest", "Latest", "num bench-time-header"],
+      ["noise", "Noise", "bench-noise-header", "Median |Δ%| between consecutive runs in selected range"],
+      ["samples", "Samples", "", "Number of consecutive run pairs used"],
+      [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
+    ],
+    { col: benchNoisySortCol, asc: benchNoisySortAsc },
+  );
+  bindSortHeaders(thead, sortBenchNoisyTable);
 
   if (benchSelectedGroups.size === 0) {
     tbody.innerHTML = '<tr><td colspan="6">No groups selected</td></tr>';
@@ -8341,15 +8422,7 @@ async function renderBenchNoisyTable() {
     }
   }
 
-  rows.sort((a, b) => {
-    const va = a[benchNoisySortCol];
-    const vb = b[benchNoisySortCol];
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
-    return benchNoisySortAsc ? cmp : -cmp;
-  });
+  sortRows(rows, { col: benchNoisySortCol, asc: benchNoisySortAsc }, "name");
 
   if (rows.length === 0) {
     const minNote = minNs > 0 ? ` with median ≥ ${minNs} ns` : "";
@@ -8385,7 +8458,7 @@ async function renderBenchNoisyTable() {
   }
   for (const row of displayRows) {
     const label = row.group + "/" + row.name;
-    html += `<tr class="bench-detail-row" data-bench-label="${escapeHtml(label)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(row.name)}" style="cursor: pointer;" title="${escapeHtml(label)}">`;
+    html += `<tr class="bench-detail-row" tabindex="0" data-bench-label="${escapeHtml(label)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(row.name)}" style="cursor: pointer;" title="${escapeHtml(label)}">`;
     const noisyNotes = getNotesForBenchmark(row.group, row.name);
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td>${escapeHtml(row.name)}</td>`;
@@ -8410,19 +8483,22 @@ function renderBenchGroupsTable() {
   const thead = document.getElementById("bench-stats-thead");
   const tbody = document.getElementById("bench-stats-tbody");
 
-  const arrow = (col) =>
-    benchSortCol === col ? (benchSortAsc ? " ▲" : " ▼") : "";
-  thead.innerHTML = `<tr>
-                <th onclick="sortBenchTable('group')">Group${arrow("group")}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('latest')">Latest${arrow("latest")}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('avg')">Average${arrow("avg")}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('min')">Min${arrow("min")}</th>
-                <th class="bench-time-header" onclick="sortBenchTable('max')">Max${arrow("max")}</th>
-                <th class="bench-trend-header" onclick="sortBenchTable('trendAbs')" title="Percent change from first to last value in the selected range; sorted by magnitude">Trend${arrow("trendAbs")}</th>
-                <th onclick="sortBenchTable('count')">Benchmarks${arrow("count")}</th>
-                <th class="bench-noise-header" title="Median |Δ%| between consecutive runs (per-benchmark, expand to see)">Noise</th>
-                <th class="bench-notes-header" title="Methodology changes affecting this benchmark">Notes</th>
-            </tr>`;
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["group", "Group"],
+      ["latest", "Latest", "num bench-time-header"],
+      ["avg", "Average", "num bench-time-header"],
+      ["min", "Min", "num bench-time-header"],
+      ["max", "Max", "num bench-time-header"],
+      ["trendAbs", "Trend", "bench-trend-header", "Percent change from first to last value in the selected range; sorted by magnitude"],
+      ["count", "Benchmarks"],
+      [null, "Noise", "bench-noise-header", "Median |Δ%| between consecutive runs (per-benchmark, expand to see)"],
+      [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
+    ],
+    { col: benchSortCol, asc: benchSortAsc },
+  );
+  bindSortHeaders(thead, sortBenchTable);
+
 
   if (reports.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9">No data in selected range</td></tr>';
@@ -8523,7 +8599,7 @@ function renderBenchGroupsTable() {
     const isExpanded = benchExpandedGroups.has(row.group);
     const expandClass = isExpanded ? "expandable expanded" : "expandable";
     const groupNotes = getNotesForGroup(row.group);
-    html += `<tr class="${expandClass}" data-bench-group="${escapeHtml(row.group)}">`;
+    html += `<tr class="${expandClass}" tabindex="0" data-bench-group="${escapeHtml(row.group)}">`;
     html += `<td><span class="color-dot" style="background: ${benchGroupColors[row.group] || "#888"}"></span> ${escapeHtml(row.group)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(row.latest)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(row.avg)}</td>`;
@@ -8584,7 +8660,7 @@ function renderBenchGroupsTable() {
           const detailClass = isHidden
             ? "bench-detail-row bench-hidden"
             : "bench-detail-row";
-          html += `<tr class="${detailClass}" data-bench-label="${escapeHtml(row.group + "/" + b.name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(b.name)}" style="cursor: pointer;" title="${escapeHtml(b.name)}">`;
+          html += `<tr class="${detailClass}" tabindex="0" data-bench-label="${escapeHtml(row.group + "/" + b.name)}" data-bench-group-name="${escapeHtml(row.group)}" data-bench-item-name="${escapeHtml(b.name)}" style="cursor: pointer;" title="${escapeHtml(b.name)}">`;
           const benchNotes = getNotesForBenchmark(b.group, b.name);
           html += `<td>${escapeHtml(b.name)}</td>`;
           html += `<td class="bench-time">${formatBenchValue(b.latest)}</td>`;
@@ -9008,10 +9084,28 @@ async function loadPackagesTop() {
   // The client type changed while this was loading; its own request draws
   if (client !== (packagesClientType === "all" ? "all" : packagesClientType)) return;
   if (!d.packages || d.packages.length === 0) return;
-  const rows = d.packages
+  d.packages.forEach((p, i) => {
+    p.rank = i + 1;
+    p.label = p.name || p.uuid;
+  });
+  packagesTop = d;
+  renderPackagesTop();
+  panel.classList.remove("view-hidden");
+  document.getElementById("packages-top-handle")?.classList.remove("view-hidden");
+}
+
+// The most requested packages, ranked by all requests until a header is clicked
+let packagesTop = null;
+let packagesTopSort = { col: "rank", asc: true };
+
+function renderPackagesTop() {
+  const panel = document.getElementById("packages-top");
+  const d = packagesTop;
+  const packages = sortRows(d.packages.slice(), packagesTopSort, "rank");
+  const rows = packages
     .map(
-      (p, i) => `<tr class="clickable" data-name="${escapeHtml(p.name || "")}">
-        <td class="num">${i + 1}</td>
+      (p) => `<tr class="clickable" tabindex="0" data-name="${escapeHtml(p.name || "")}">
+        <td class="num">${p.rank}</td>
         <td>${p.name ? escapeHtml(p.name) : `<code title="not in General">${escapeHtml(p.uuid)}</code>`}</td>
         <td class="num">${p.user.toLocaleString()}</td>
         <td class="num">${p.ci.toLocaleString()}</td>
@@ -9023,24 +9117,36 @@ async function loadPackagesTop() {
     <h3>Most requested packages, ${escapeHtml(d.since)} to ${escapeHtml(d.until)} <span class="updated">by ${d.client === "all" ? "all" : d.client} clients</span></h3>
     <p class="package-panel-help">Successful package requests to the package server, per package, over the last 7 days of data. Click a row for its daily history.</p>
     ${phoneListHtml(
-      d.packages.map((p, i) => ({
+      packages.map((p) => ({
         attrs: `data-name="${escapeHtml(p.name || "")}"`,
-        lead: i + 1,
+        lead: p.rank,
         title: p.name ? escapeHtml(p.name) : `<code>${escapeHtml(p.uuid)}</code>`,
         meta: `${compactNumber(p.user)} user · ${compactNumber(p.ci)} CI`,
         value: compactNumber(p.all),
       })),
     )}
     <table class="m-desktop-only">
-      <thead><tr><th class="num">#</th><th>Package</th><th class="num">User</th><th class="num">CI</th><th class="num">All</th></tr></thead>
+      <thead>${sortableHeaderRow(
+        [
+          ["rank", "#", "num"],
+          ["label", "Package"],
+          ["user", "User", "num"],
+          ["ci", "CI", "num"],
+          ["all", "All", "num"],
+        ],
+        packagesTopSort,
+      )}</thead>
       <tbody>${rows}</tbody>
     </table>`;
+  bindSortHeaders(panel.querySelector("thead"), (col) => {
+    packagesTopSort = nextSort(packagesTopSort, col, (c) => c === "rank" || c === "label");
+    renderPackagesTop();
+  });
   panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => tr.dataset.name && setPackagesPackage(tr.dataset.name);
   });
-  panel.classList.remove("view-hidden");
-  document.getElementById("packages-top-handle")?.classList.remove("view-hidden");
 }
+
 
 async function loadPackagesDownloadsData() {
   const loadingEl = document.getElementById("packages-chart-loading");
@@ -9851,7 +9957,7 @@ function renderPkgevalPackage() {
     .slice(0, 200)
     .map((h) => {
       const url = pkgevalReportUrl(h.date_path || h.date);
-      return `<tr class="clickable" data-url="${escapeHtml(url)}">
+      return `<tr class="clickable" tabindex="0" data-url="${escapeHtml(url)}">
         <td>${escapeHtml(h.date)}</td>
         <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
         <td>${escapeHtml(h.version || "")}</td>
@@ -9889,9 +9995,26 @@ async function loadPkgevalPopular() {
     return;
   }
   if (!d || !d.packages || d.packages.length === 0 || !d.date) return;
-  const rows = d.packages
+  for (const p of d.packages) {
+    p.days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
+  }
+  pkgevalPopular = d;
+  renderPkgevalPopular();
+  panel.classList.remove("view-hidden");
+  document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
+}
+
+// The popular failing packages, by download rank until a header is clicked
+let pkgevalPopular = null;
+let pkgevalPopularSort = { col: "rank", asc: true };
+
+function renderPkgevalPopular() {
+  const panel = document.getElementById("pkgeval-popular");
+  const d = pkgevalPopular;
+  const packages = sortRows(d.packages.slice(), pkgevalPopularSort, "rank");
+  const rows = packages
     .map((p) => {
-      const days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
+      const days = p.days;
       // New on this report, or broken within the last two weeks
       const recency = p.failing_since === d.date ? "pe-row-new" : days != null && days <= PKGEVAL_RECENT_DAYS ? "pe-row-recent" : "";
       const title = p.last_passed
@@ -9904,7 +10027,7 @@ async function loadPkgevalPopular() {
         : p.failing_since === d.date
           ? "new"
           : `${p.last_passed ? "" : "≥ "}${days} day${days === 1 ? "" : "s"} <span class="col-secondary">since ${escapeHtml(p.failing_since)}</span>`;
-      return `<tr data-name="${escapeHtml(p.name)}" class="${recency}">
+      return `<tr tabindex="0" data-name="${escapeHtml(p.name)}" class="${recency}">
         <td class="num">${p.rank.toLocaleString()}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
@@ -9928,28 +10051,40 @@ async function loadPkgevalPopular() {
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
     <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
     ${phoneListHtml(
-      d.packages.map((p) => {
-        const days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
+      packages.map((p) => {
         const isNew = p.failing_since === d.date;
         return {
           attrs: `data-name="${escapeHtml(p.name)}"`,
           lead: p.rank.toLocaleString(),
           title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
           meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> · ${escapeHtml(p.reason || "(none)")} · ${compactNumber(p.user)} downloads`,
-          value: isNew ? "new" : days == null ? "" : `${p.last_passed ? "" : "≥"}${days}d`,
-          valueClass: isNew || (days != null && days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
+          value: isNew ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
+          valueClass: isNew || (p.days != null && p.days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
         };
       }),
     )}
     <table class="m-desktop-only">
-      <thead><tr><th class="num">Rank</th><th>Package</th><th class="col-secondary">Version</th><th>Status</th><th class="num" title="Days from the first failing report after the last pass to this report">Days failing</th><th>Reason</th><th class="num">Downloads</th></tr></thead>
+      <thead>${sortableHeaderRow(
+        [
+          ["rank", "Rank", "num"],
+          ["name", "Package"],
+          ["version", "Version", "col-secondary"],
+          ["status", "Status"],
+          ["days", "Days failing", "num", "Days from the first failing report after the last pass to this report"],
+          ["reason", "Reason"],
+          ["user", "Downloads", "num"],
+        ],
+        pkgevalPopularSort,
+      )}</thead>
       <tbody>${rows}</tbody>
     </table>`;
+  bindSortHeaders(panel.querySelector("thead"), (col) => {
+    pkgevalPopularSort = nextSort(pkgevalPopularSort, col, (c) => ["rank", "name", "version", "status", "reason"].includes(c));
+    renderPkgevalPopular();
+  });
   panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });
-  panel.classList.remove("view-hidden");
-  document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
 }
 
 function getPkgevalFilteredReports() {
@@ -11651,7 +11786,7 @@ function renderTtfxBuildsTable() {
       ? "Failed: " + failed.map((t) => `${t}: ${b.failed[t]}`).join("\n")
       : nRun ? "All tasks measured" : `Job ${b.state}: no results`;
     const stateClass = nRun === 0 || failed.length ? "ttfx-failed" : "";
-    html += `<tr data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
+    html += `<tr tabindex="0" data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
     html += `<td>${escapeHtml(b.date)}</td>`;
     html += `<td><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
@@ -12034,7 +12169,7 @@ function renderTtfxPrsTable() {
   ttfxPrs.prs.forEach((p, i) => {
     if (ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]))) html += ttfxPrsFlatToggleRow(cols);
     if (ttfxPrIsFlat(p) && !ttfxPrsShowFlat) return;
-    html += `<tr data-pr="${p.pr}">`;
+    html += `<tr tabindex="0" data-pr="${p.pr}">`;
     html += `<td class="num">${i + 1}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
@@ -12276,24 +12411,19 @@ function renderTtfxTasksTable() {
     ["change", "Change", "num"],
     ["n", "Builds", "num col-secondary"],
   ];
-  thead.innerHTML =
-    "<tr>" +
-    cols
-      .map(([key, label, cls]) => {
-        const arrow = ttfxTaskSortCol === key ? (ttfxTaskSortAsc ? " ▲" : " ▼") : "";
-        const title =
-          key === "change"
-            ? `Latest vs first build in range${ttfxIsCount() ? ", as the difference" : ""}`
-            : key === "gcoff"
-              ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
-              : key === "task" ? "" : `${metricLabel} over the builds in range`;
-        return `<th class="sortable ${cls}" data-col="${key}" title="${title}">${label}${arrow}</th>`;
-      })
-      .join("") +
-    "</tr>";
-  thead.querySelectorAll("th[data-col]").forEach((th) => {
-    th.onclick = () => sortTtfxTasksTable(th.dataset.col);
-  });
+  const title = (key) =>
+    key === "change"
+      ? `Latest vs first build in range${ttfxIsCount() ? ", as the difference" : ""}`
+      : key === "gcoff"
+        ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
+        : key === "task" ? "" : `${metricLabel} over the builds in range`;
+  // Sorted by GC off, then switched to precompile, which has no such column
+  if (!cols.some(([k]) => k === ttfxTaskSortCol)) ttfxTaskSortCol = "latest";
+  thead.innerHTML = sortableHeaderRow(
+    cols.map(([key, label, cls]) => [key, label, cls, title(key)]),
+    { col: ttfxTaskSortCol, asc: ttfxTaskSortAsc },
+  );
+  bindSortHeaders(thead, sortTtfxTasksTable);
 
   const rows = [];
   const latestBuild = ttfxLatestMeasured(builds);
@@ -12325,26 +12455,12 @@ function renderTtfxTasksTable() {
     tbody.innerHTML = `<tr><td colspan="${cols.length}">No data</td></tr>`;
     return;
   }
-  // Sorted by GC off, then switched to precompile, which has no such column
-  if (!cols.some(([k]) => k === ttfxTaskSortCol)) ttfxTaskSortCol = "latest";
-  const col = ttfxTaskSortCol;
-  rows.sort((a, b) => {
-    let r;
-    if (col === "task") r = a.task.localeCompare(b.task);
-    else {
-      const av = a[col], bv = b[col];
-      if (av == null && bv == null) r = 0;
-      else if (av == null) r = 1;
-      else if (bv == null) r = -1;
-      else r = av - bv;
-      if (av == null || bv == null) return r; // nulls last either way
-    }
-    return ttfxTaskSortAsc ? r : -r;
-  });
+  sortRows(rows, { col: ttfxTaskSortCol, asc: ttfxTaskSortAsc }, "task");
+
 
   let html = "";
   for (const r of rows) {
-    html += `<tr data-task="${escapeHtml(r.task)}">`;
+    html += `<tr tabindex="0" data-task="${escapeHtml(r.task)}">`;
     html += `<td><span class="color-dot" style="background:${ttfxTaskColors[r.task] || "#888"};margin-right:6px"></span>${escapeHtml(r.task)}`;
     if (r.failedMsg) html += ` <span class="ttfx-failed" title="${escapeHtml(r.failedMsg)}">fails on latest</span>`;
     html += `</td>`;
@@ -12839,7 +12955,7 @@ function renderSizesPrsTable() {
   }
   let html = "";
   for (const p of rows) {
-    html += `<tr class="clickable" data-pr="${p.number}">`;
+    html += `<tr class="clickable" tabindex="0" data-pr="${p.number}">`;
     html += `<td><a href="${githubPrURL(p.number)}" target="_blank" rel="noopener noreferrer">#${p.number}</a></td>`;
     const draft = p.draft ? '<span class="ttfx-note-badge">draft</span> ' : "";
     const stacked = p.base_ref && p.base_ref !== "master" ? `<span class="ttfx-note-badge" title="Targets ${escapeHtml(p.base_ref)}; compared with master, so the pull requests below it count too">on ${escapeHtml(p.base_ref)}</span> ` : "";
@@ -13044,7 +13160,7 @@ function renderSizesCommitsTable() {
     const i = r.i;
     const sha = d.commits[i];
     const p = sizesPrevious(d.values.total || [], i);
-    html += `<tr class="clickable" data-i="${i}">`;
+    html += `<tr class="clickable" tabindex="0" data-i="${i}">`;
     html += `<td>${escapeHtml(d.merged_at[i].slice(0, 16).replace("T", " "))}</td>`;
     // A step over several commits is theirs together: its link lists them
     const span = sizesSpan(p, i);
