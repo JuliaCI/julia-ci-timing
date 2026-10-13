@@ -567,7 +567,8 @@ function setWorkersFilter(value, { immediate = false } = {}) {
   workersFilter = (value || "").trim();
   clearTimeout(workersFilterTimer);
   const apply = () => {
-    renderWorkerPresence();
+    // The filter narrows the agents table and the grid, not the charts
+    renderWorkerPresence({ charts: false });
     updateURL();
   };
   if (immediate) apply();
@@ -598,15 +599,15 @@ async function renderBuildsView() {
     buildsLoading = apiGet("timing/builds", { since })
       .then((builds) => {
         buildsData = { since, changeSeq: timingChangeSeq, builds };
-      })
-      .catch((err) => {
-        console.error("Failed to load builds:", err);
-        buildsLoadError("Failed to load builds.");
-      })
-      .finally(() => {
         buildsLoading = null;
         // The range may have widened meanwhile: check again rather than draw
         if (ciSubview === "builds") renderBuildsView();
+      })
+      .catch((err) => {
+        // Tried again on the next refresh or range change, not at once
+        buildsLoading = null;
+        console.error("Failed to load builds:", err);
+        buildsLoadError("Failed to load builds.");
       });
     if (!buildsData) return;
   }
@@ -619,7 +620,7 @@ function drawBuildsView() {
   const canvas = document.getElementById("builds-chart");
   const tableEl = document.getElementById("builds-table");
   if (!canvas || !tableEl || !buildsData) return;
-  const cutoff = getTimeRangeCutoff();
+  const cutoff = getVisibleCutoff();
   const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
   const builds = buildsData.builds
     .filter((b) => Date.parse(b.created_at) >= cutoffMs)
@@ -1020,7 +1021,7 @@ async function renderAgentsSection() {
 // the other. The range starts at the first backlog sample, not before, so a
 // range longer than the jobs kept does not leave the charts mostly empty.
 function workersTimeRange(d) {
-  const cutoff = getTimeRangeCutoff();
+  const cutoff = getVisibleCutoff();
   const start = Date.parse(d.start);
   return { min: cutoff ? Math.max(start, cutoff.getTime()) : start, max: Date.now() };
 }
@@ -1409,10 +1410,10 @@ function renderBalanceCharts(d) {
   });
 }
 
-function renderWorkerPresence() {
+function renderWorkerPresence({ charts = true } = {}) {
   const container = document.getElementById("workers-grid");
   if (!container) return;
-  renderBacklogSection();
+  if (charts) renderBacklogSection();
   renderAgentsSection();
   if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
     container.innerHTML = '<div class="workers-empty">No data loaded yet.</div>';
@@ -1420,7 +1421,7 @@ function renderWorkerPresence() {
   }
 
   const now = new Date();
-  const cutoff = getTimeRangeCutoff(); // null = all time
+  const cutoff = getVisibleCutoff(); // null = all time
   let startDate;
   if (cutoff) {
     startDate = new Date(cutoff);
@@ -2407,7 +2408,7 @@ function hasRecentFailure(jobData) {
 
   // Check for breakage within recent period
   const breakage = detectBreakage(jobData);
-  const hasBreakage = breakage && new Date(breakage.date) >= recentCutoff;
+  const hasBreakage = breakage && runTime(breakage) >= recentCutoff.getTime();
   const tooltipBreakage = hasBreakage
     ? `Breakage detected: ${breakage.failureCount} failures since ${new Date(runTime(breakage)).toISOString().slice(0, 10)}\nCommit: ${breakage.commit.substring(0, 8)}\n${breakage.message.substring(0, 60)}${breakage.message.length > 60 ? "..." : ""}`
     : "";
@@ -2553,11 +2554,34 @@ const urlCodesReverse = Object.fromEntries(
 // Job index mapping for URL encoding (built after data loads)
 let jobIndexMap = {}; // name -> index
 let jobNameList = []; // index -> name
+let jobHashMap = {}; // URL hash -> name
+
+// The URL names individual jobs by a short hash of the name. A position in
+// the job list would point at another job as soon as a new job appears.
+function jobHash(name) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
 
 function buildJobIndex() {
   jobNameList = Object.keys(data.jobs).sort();
   jobIndexMap = {};
   jobNameList.forEach((name, i) => (jobIndexMap[name] = i));
+  jobHashMap = {};
+  for (const name of jobNameList) jobHashMap[jobHash(name)] = name;
+}
+
+// The job names a list of URL references stands for: hashes, or the
+// positions older links carry
+function jobNamesFromRefs(hashes, indices) {
+  const names = [];
+  for (const h of hashes) if (jobHashMap[h]) names.push(jobHashMap[h]);
+  for (const idx of indices) if (jobNameList[idx]) names.push(jobNameList[idx]);
+  return names;
 }
 
 /**
@@ -2588,16 +2612,12 @@ function encodeSelection() {
     }
   }
 
-  // Encode remaining individual jobs by index
-  const individualIndices = [];
+  // Encode remaining individual jobs by name hash
+  const individual = [];
   for (const name of selectedJobs) {
-    if (!coveredJobs.has(name) && jobIndexMap[name] !== undefined) {
-      individualIndices.push(jobIndexMap[name]);
-    }
+    if (!coveredJobs.has(name) && jobIndexMap[name] !== undefined) individual.push(jobHash(name));
   }
-  if (individualIndices.length > 0) {
-    parts.push("i" + individualIndices.sort((a, b) => a - b).join("_"));
-  }
+  if (individual.length > 0) parts.push("n" + individual.sort().join("_"));
 
   return parts.join(".");
 }
@@ -2605,13 +2625,16 @@ function encodeSelection() {
 /**
  * Decode job selection from URL parameter string.
  * @param {string} param - Encoded selection string from URL
- * @returns {Object|null} Object with {matrix, special, indices} arrays, or null if invalid
+ * @returns {Object|null} Object with {matrix, special, hashes, indices} arrays, or null if invalid
  */
 function decodeSelection(param) {
   if (!param) return null;
-  const selections = { matrix: [], special: [], indices: [] };
+  const selections = { matrix: [], special: [], hashes: [], indices: [] };
   for (const part of param.split(".")) {
-    if (part.startsWith("i")) {
+    if (part.startsWith("n")) {
+      // Individual jobs by name hash: nabc12_def34
+      selections.hashes.push(...part.slice(1).split("_").filter((h) => h !== ""));
+    } else if (part.startsWith("i")) {
       // Individual job indices: i0_5_12
       const indices = part
         .slice(1)
@@ -2693,12 +2716,12 @@ function updateURL() {
   }
   // Add expanded jobs if any
   if (expandedJobs.size > 0) {
-    const expandedIndices = [...expandedJobs]
-      .map((name) => jobIndexMap[name])
-      .filter((idx) => idx !== undefined)
-      .sort((a, b) => a - b);
-    if (expandedIndices.length > 0) {
-      url.searchParams.set("e", expandedIndices.join("_"));
+    const expandedHashes = [...expandedJobs]
+      .filter((name) => jobIndexMap[name] !== undefined)
+      .map(jobHash)
+      .sort();
+    if (expandedHashes.length > 0) {
+      url.searchParams.set("e", "n" + expandedHashes.join("_"));
     } else {
       url.searchParams.delete("e");
     }
@@ -2813,13 +2836,14 @@ function applyURLParams() {
   const e = params.get("e");
   if (e) {
     expandedJobs.clear();
-    const indices = e
-      .split("_")
-      .map(Number)
-      .filter((n) => !isNaN(n));
-    for (const idx of indices) {
-      if (jobNameList[idx]) expandedJobs.add(jobNameList[idx]);
-    }
+    const refs = e.startsWith("n") ? e.slice(1).split("_") : [];
+    const indices = e.startsWith("n")
+      ? []
+      : e
+          .split("_")
+          .map(Number)
+          .filter((n) => !isNaN(n));
+    for (const name of jobNamesFromRefs(refs, indices)) expandedJobs.add(name);
   }
 
   // Apply state filter
@@ -2864,12 +2888,8 @@ function applyURLParams() {
     const jobs = specialJobGroups[group] || [];
     for (const { name } of jobs) selectedJobs.add(name);
   }
-  for (const idx of sel.indices) {
-    if (jobNameList[idx]) selectedJobs.add(jobNameList[idx]);
-  }
-  return (
-    sel.matrix.length > 0 || sel.special.length > 0 || sel.indices.length > 0
-  );
+  for (const name of jobNamesFromRefs(sel.hashes, sel.indices)) selectedJobs.add(name);
+  return sel.matrix.length > 0 || sel.special.length > 0 || sel.hashes.length > 0 || sel.indices.length > 0;
 }
 
 function setTimeRange(days) {
@@ -3088,7 +3108,7 @@ function updateHostFilterUI() {
 
 function getAllHostsFromSelectedJobs() {
   const hosts = new Set();
-  const cutoff = getTimeRangeCutoff();
+  const cutoff = getVisibleCutoff();
   for (const jobName of selectedJobs) {
     const job = data?.jobs?.[jobName];
     if (!job) continue;
@@ -3118,6 +3138,12 @@ function getTimeRangeCutoff() {
 }
 
 // Get visible time range bounds for stats (respects custom zoom)
+// The start of what is on screen: the zoom's left edge, without the padding
+// that loading needs for smoothing
+function getVisibleCutoff() {
+  return customXMin !== null ? new Date(customXMin) : getTimeRangeCutoff();
+}
+
 function getVisibleTimeRange() {
   if (customXMin !== null) {
     return { min: new Date(customXMin), max: new Date(customXMax) };
@@ -3488,7 +3514,7 @@ function updateChart() {
         data: points.map((p) => ({ x: p.x, y: p.y })),
         borderColor: color,
         borderWidth: 1.5,
-        backgroundColor: color + "20",
+        backgroundColor: colorToRgba(color, 0.125),
         fill: false,
         tension: 0.2,
         pointRadius: pointRadii,
@@ -3511,7 +3537,7 @@ function updateChart() {
         data: smoothedPoints.map((p) => ({ x: p.x, y: p.y })),
         borderColor: color,
         borderWidth: 1.5,
-        backgroundColor: color + "20",
+        backgroundColor: colorToRgba(color, 0.125),
         fill: false,
         tension: 0.4,
         pointRadius: 0,
@@ -3660,6 +3686,9 @@ function updateChart() {
   // For "All time" (timeRangeDays === 0), leave undefined to auto-scale
 
   const ctx = document.getElementById("timing-chart").getContext("2d");
+  // A new chart starts with its axes in their own colours
+  yAxisHighlightActive = false;
+  yAxisHighlighted = null;
   chart = new Chart(ctx, {
     type: "line",
     data: { datasets },
@@ -4125,8 +4154,12 @@ function chartPointsWhere(chart, match) {
 
 // Y-axis only highlighting (for chart hover)
 let yAxisHighlightActive = false;
+let yAxisHighlighted = null;
 function highlightYAxis(yAxisID) {
   if (!chart) return;
+  // Hover calls this on every pointer move; redraw only when the axis changes
+  if (yAxisHighlightActive && yAxisHighlighted === yAxisID) return;
+  yAxisHighlighted = yAxisID;
 
   const mutedAxisColor = "rgba(128, 128, 128, 0.4)";
 
@@ -4178,7 +4211,7 @@ function highlightYAxis(yAxisID) {
         : mutedAxisColor;
     }
   }
-  chart.update();
+  chart.update("none");
 }
 
 function clearYAxisHighlight() {
@@ -4201,7 +4234,8 @@ function clearYAxisHighlight() {
       chart.options.scales.y2.ticks._originalColor;
   }
   yAxisHighlightActive = false;
-  chart.update();
+  yAxisHighlighted = null;
+  chart.update("none");
 }
 
 // Chart hover scrolls the linked table only once the pointer has rested on one
@@ -4657,11 +4691,13 @@ makeResizablePanel({
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    for (const id of ["popup-overlay", "shortcuts-overlay", "bench-methodology-popup-overlay", "ttfx-build-popup-overlay"]) {
+    for (const id of ["popup-overlay", "shortcuts-overlay", "ttfx-build-popup-overlay"]) {
       const el = document.getElementById(id);
       el.classList.remove("visible");
       el.setAttribute("aria-hidden", "true");
     }
+    // Its own close also takes the methodology lines off the chart
+    closeBenchMethodologyPopup();
   }
   // Keyboard shortcuts (when not typing in an input)
   if (
@@ -5262,7 +5298,7 @@ function updateStatsTable() {
 
     for (const [sha, cov] of Object.entries(data.coverage)) {
       const date = new Date(cov.date);
-      if (date < covRangeMin || date > covRangeMax) continue;
+      if ((covRangeMin && date < covRangeMin) || (covRangeMax && date > covRangeMax)) continue;
 
       if (cov.coveralls != null) {
         coverallsData.push({ date, value: cov.coveralls });
@@ -5511,6 +5547,78 @@ function buildJobMatrix() {
   }
 }
 
+let jobSelectionRestored = false;
+
+function restoreJobSelection() {
+  // Apply URL params (selection and time range) or localStorage or default
+  const hasURLSelection = applyURLParams();
+
+  // Always restore stats panel height from localStorage (independent of URL params)
+  const storedConfig = loadFromLocalStorage();
+  if (
+    storedConfig &&
+    storedConfig.statsHeight &&
+    storedConfig.statsHeight >= 50
+  ) {
+    document.getElementById("stats-wrapper").style.height =
+      storedConfig.statsHeight + "px";
+  }
+
+  if (!hasURLSelection) {
+    // Try localStorage for other settings
+    if (storedConfig) {
+      // Apply the stored time range, unless the URL has one
+      const urlParams = new URLSearchParams(window.location.search);
+      if (
+        !urlParams.has("t") &&
+        !urlParams.has("x") &&
+        storedConfig.timeRange !== undefined &&
+        [0, 7, 14, 30, 60, 90, 120, 240, 365].includes(storedConfig.timeRange)
+      ) {
+        timeRangeDays = storedConfig.timeRange;
+        document.getElementById("time-range").value = storedConfig.timeRange;
+      }
+      // Apply stored line type
+      if (
+        storedConfig.lineType &&
+        ["raw", "7", "30", "90"].includes(storedConfig.lineType)
+      ) {
+        lineType = storedConfig.lineType;
+        document.getElementById("line-type").value = storedConfig.lineType;
+      }
+      // Apply stored selection
+      const sel = decodeSelection(storedConfig.selection);
+      if (
+        sel &&
+        (sel.matrix.length > 0 ||
+          sel.special.length > 0 ||
+          sel.hashes.length > 0 ||
+          sel.indices.length > 0)
+      ) {
+        for (const { platform, type } of sel.matrix) {
+          const jobs = jobMatrix[platform]?.[type] || [];
+          for (const { name } of jobs) selectedJobs.add(name);
+        }
+        for (const group of sel.special) {
+          const jobs = specialJobGroups[group] || [];
+          for (const { name } of jobs) selectedJobs.add(name);
+        }
+        for (const name of jobNamesFromRefs(sel.hashes, sel.indices)) selectedJobs.add(name);
+      }
+    }
+    // If still nothing selected, select all platform jobs by default
+    if (selectedJobs.size === 0) {
+      for (const platform of platformOrder) {
+        for (const type of typeOrder) {
+          for (const { name } of jobMatrix[platform]?.[type] || []) {
+            selectedJobs.add(name);
+          }
+        }
+      }
+    }
+  }
+}
+
 function populateJobSelector() {
   buildJobMatrix();
   buildJobIndex();
@@ -5682,70 +5790,12 @@ function renderMatrixTable() {
   const listContainer = document.getElementById("job-list");
   listContainer.innerHTML = "";
 
-  // Apply URL params (selection and time range) or localStorage or default
-  const hasURLSelection = applyURLParams();
-
-  // Always restore stats panel height from localStorage (independent of URL params)
-  const storedConfig = loadFromLocalStorage();
-  if (
-    storedConfig &&
-    storedConfig.statsHeight &&
-    storedConfig.statsHeight >= 50
-  ) {
-    document.getElementById("stats-wrapper").style.height =
-      storedConfig.statsHeight + "px";
-  }
-
-  if (!hasURLSelection) {
-    // Try localStorage for other settings
-    if (storedConfig) {
-      // Apply stored time range
-      if (
-        storedConfig.timeRange !== undefined &&
-        [0, 7, 14, 30, 60, 90, 120, 240, 365].includes(storedConfig.timeRange)
-      ) {
-        timeRangeDays = storedConfig.timeRange;
-        document.getElementById("time-range").value = storedConfig.timeRange;
-      }
-      // Apply stored line type
-      if (
-        storedConfig.lineType &&
-        ["raw", "7", "30", "90"].includes(storedConfig.lineType)
-      ) {
-        lineType = storedConfig.lineType;
-        document.getElementById("line-type").value = storedConfig.lineType;
-      }
-      // Apply stored selection
-      const sel = decodeSelection(storedConfig.selection);
-      if (
-        sel &&
-        (sel.matrix.length > 0 ||
-          sel.special.length > 0 ||
-          sel.indices.length > 0)
-      ) {
-        for (const { platform, type } of sel.matrix) {
-          const jobs = jobMatrix[platform]?.[type] || [];
-          for (const { name } of jobs) selectedJobs.add(name);
-        }
-        for (const group of sel.special) {
-          const jobs = specialJobGroups[group] || [];
-          for (const { name } of jobs) selectedJobs.add(name);
-        }
-        for (const idx of sel.indices) {
-          if (jobNameList[idx]) selectedJobs.add(jobNameList[idx]);
-        }
-      }
-    }
-    // If still nothing selected, select all platform jobs by default
-    if (selectedJobs.size === 0) {
-      for (const platform of platformOrder) {
-        for (const type of typeOrder) {
-          for (const { name } of jobMatrix[platform]?.[type] || []) {
-            selectedJobs.add(name);
-          }
-        }
-      }
-    }
+  // The selection, range and filters come from the URL, storage or the
+  // default once, on the first build. A rebuild for new runs or a wider
+  // window keeps what the viewer has chosen since.
+  if (!jobSelectionRestored) {
+    jobSelectionRestored = true;
+    restoreJobSelection();
   }
 
   const getLatestDuration = (job) => job.recent?.[0]?.duration ?? 0;
@@ -5983,9 +6033,12 @@ function toggleSection(header) {
   }
 }
 
+// Sections can be collapsed up to this width; wider screens always show them
+const SECTION_COLLAPSE_WIDTH = 768;
+
 // Restore collapsed section states from localStorage (mobile only)
 function restoreSectionStates() {
-  const isMobile = window.innerWidth <= 768;
+  const isMobile = window.innerWidth <= SECTION_COLLAPSE_WIDTH;
   document.querySelectorAll(".section-header[id]").forEach((header) => {
     const content = header.nextElementSibling;
     if (isMobile) {
@@ -6014,7 +6067,7 @@ restoreSectionStates();
 
 // Re-check section visibility on resize
 window.addEventListener("resize", () => {
-  if (window.innerWidth > 480) {
+  if (window.innerWidth > SECTION_COLLAPSE_WIDTH) {
     // Ensure sections are expanded on larger screens
     document.querySelectorAll(".section-header[id]").forEach((header) => {
       header.classList.remove("collapsed");
@@ -6183,15 +6236,15 @@ function initialTimingCutoff() {
     const xMin = Number(x.split(".")[0]);
     if (!isNaN(xMin)) return new Date(xMin - 90 * 24 * 60 * 60 * 1000);
   }
-  // Without a selection in the URL the stored range wins over t=, as in
-  // populateJobSelector
+  // A range in the URL wins; without one, the stored range applies unless
+  // the URL has a selection, as in restoreJobSelection
   let days = DEFAULT_TIME_RANGE;
   const t = params.get("t");
   const stored = params.has("s") ? null : loadFromLocalStorage();
-  if (stored && VALID_TIME_RANGES.includes(stored.timeRange)) {
-    days = stored.timeRange;
-  } else if (t !== null && VALID_TIME_RANGES.includes(parseInt(t, 10))) {
+  if (t !== null && VALID_TIME_RANGES.includes(parseInt(t, 10))) {
     days = parseInt(t, 10);
+  } else if (stored && VALID_TIME_RANGES.includes(stored.timeRange)) {
+    days = stored.timeRange;
   }
   if (days === 0) return null;
   const cutoff = new Date();
@@ -6259,7 +6312,8 @@ function ensureTimingWindow() {
     })
     .catch((err) => {
       console.error("Failed to extend the timing window:", err);
-      timingExtending = null;
+      // A newer, wider request may be under way; leave it be
+      if (timingExtending === wanted) timingExtending = null;
     });
 }
 
@@ -6359,6 +6413,13 @@ const SOURCE_VIEWS = {
   packages: ["packages"],
   agents: ["agents", "backlog", "usage"],
 };
+
+// A tab's first load, once at a time: switching away and back before it
+// answers must not start another (TTFX would also lose the tasks the URL named)
+const tabLoads = {};
+function loadTabOnce(tab, load) {
+  tabLoads[tab] ??= Promise.resolve(load()).finally(() => delete tabLoads[tab]);
+}
 
 // Clears the mark as it reads it, so a change during the reload marks it again
 const takeStale = (view) => staleViews.delete(view);
@@ -6529,7 +6590,7 @@ const DASHBOARD_PARAMS = new Set([
   "bv", // bench table view
   "bm", // bench metric
   "bg", // bench groups
-  "bpc", // bench show pre-change data
+  "bn", // bench noisy table minimum time
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
   "pkg", // pkgeval package history
@@ -6708,21 +6769,11 @@ function switchTab(tab, { pushHistory = true } = {}) {
     renderCommitView();
   }
 
-  if (tab === "benchmarks" && !benchData) {
-    loadBenchmarkData();
-  }
-  if (tab === "pkgeval" && !pkgevalData) {
-    loadPkgevalData();
-  }
-  if (tab === "ci-ttfx" && !ttfxData) {
-    loadTtfxData();
-  }
-  if (tab === "ci-sizes" && !sizesData) {
-    loadSizesData();
-  }
-  if (tab === "packages" && !packagesDownloadsData) {
-    loadPackagesDownloadsData();
-  }
+  if (tab === "benchmarks" && !benchData) loadTabOnce(tab, loadBenchmarkData);
+  if (tab === "pkgeval" && !pkgevalData) loadTabOnce(tab, loadPkgevalData);
+  if (tab === "ci-ttfx" && !ttfxData) loadTabOnce(tab, loadTtfxData);
+  if (tab === "ci-sizes" && !sizesData) loadTabOnce(tab, loadSizesData);
+  if (tab === "packages" && !packagesDownloadsData) loadTabOnce(tab, loadPackagesDownloadsData);
   reloadStaleView(tab);
 
   updatePhoneShell(tab);
@@ -6784,6 +6835,7 @@ let benchHiddenBenchmarks = {}; // group => Set of hidden benchmark names
 let benchShowMethodologyAnnotations = false;
 let benchTableView = "groups"; // 'groups', 'runs', or 'noisy'
 let benchNoisyLoading = false;
+let benchNoisyRerender = false; // asked for while loading: drawn again after
 let benchNoisySortCol = "noise"; // 'group', 'name', 'latest', 'noise', 'samples'
 let benchNoisySortAsc = false;
 // Set of "group/name" labels currently displayed in the Noisy table — used by
@@ -7692,7 +7744,7 @@ function updateBenchChart() {
             label,
             data,
             borderColor: color,
-            backgroundColor: color + "22",
+            backgroundColor: colorToRgba(color, 0.13),
             borderWidth: 1.5,
             pointRadius: manySeries ? 0 : 2,
             pointHoverRadius: 5,
@@ -7738,7 +7790,7 @@ function updateBenchChart() {
             label: "Overall",
             data: overallData,
             borderColor: overallColor,
-            backgroundColor: overallColor + "22",
+            backgroundColor: colorToRgba(overallColor, 0.13),
             borderWidth: 2.5,
             pointRadius: 3,
             pointHoverRadius: 6,
@@ -7766,7 +7818,7 @@ function updateBenchChart() {
           label: group,
           data,
           borderColor: color,
-          backgroundColor: color + "22",
+          backgroundColor: colorToRgba(color, 0.13),
           borderWidth: 1.5,
           pointRadius: 2,
           pointHoverRadius: 5,
@@ -7817,7 +7869,7 @@ function updateBenchChart() {
               label: `${group}/${name}`,
               data,
               borderColor: color,
-              backgroundColor: color + "22",
+              backgroundColor: colorToRgba(color, 0.13),
               borderWidth: 1.5,
               pointRadius: 2,
               pointHoverRadius: 5,
@@ -8422,6 +8474,8 @@ function attachBenchRowHoverPreview(tbody) {
         return r.blob();
       })
       .then((blob) => {
+        // The pointer has moved on, to another row or off the table
+        if (currentUrl !== url) return;
         const blobUrl = URL.createObjectURL(blob);
         img.onload = () => {
           URL.revokeObjectURL(blobUrl);
@@ -8544,11 +8598,15 @@ async function renderBenchNoisyTable() {
     return;
   }
 
-  if (benchNoisyLoading) return;
+  if (benchNoisyLoading) {
+    benchNoisyRerender = true;
+    return;
+  }
   // Load any missing detail data
   const needsLoad = [...benchSelectedGroups].some((g) => !benchGroupDetail[g]);
   if (needsLoad) {
     benchNoisyLoading = true;
+    benchNoisyRerender = false;
     tbody.innerHTML =
       '<tr><td colspan="6" class="loading">Loading per-benchmark history…</td></tr>';
     try {
@@ -8557,6 +8615,11 @@ async function renderBenchNoisyTable() {
       benchNoisyLoading = false;
     }
     if (benchTableView !== "noisy") return; // user switched away
+    // The selection changed meanwhile; its groups may need loading too
+    if (benchNoisyRerender) {
+      benchNoisyRerender = false;
+      return renderBenchNoisyTable();
+    }
   }
 
   const cutoff = getBenchCutoff();
@@ -9259,13 +9322,16 @@ function renderPackagesPackage(d) {
 async function loadPackagesTop() {
   const panel = document.getElementById("packages-top");
   if (!panel) return;
+  const client = packagesClientType === "all" ? "all" : packagesClientType;
   let d;
   try {
-    d = await apiGet("downloads/top", { days: 7, client: packagesClientType === "all" ? "all" : packagesClientType });
+    d = await apiGet("downloads/top", { days: 7, client });
   } catch (err) {
     console.error("Failed to load the top packages:", err);
     return;
   }
+  // The client type changed while this was loading; its own request draws
+  if (client !== (packagesClientType === "all" ? "all" : packagesClientType)) return;
   if (!d.packages || d.packages.length === 0) return;
   const rows = d.packages
     .map(
@@ -9325,7 +9391,7 @@ async function loadPackagesDownloadsData() {
     console.error("Failed to load ecosystem packages downloads:", err);
     if (loadingEl) {
       loadingEl.innerHTML =
-        '<span class="error">Failed to load package downloads. Run <code>julia fetch_packages.jl</code> to generate data.</span>';
+        '<span class="error">Failed to load package downloads; try reloading the page.</span>';
     }
   }
 }
@@ -10251,7 +10317,7 @@ async function loadPkgevalData() {
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
     document.getElementById("pkgeval-chart-loading").innerHTML =
-      '<span class="error">Failed to load pkgeval data. Run <code>julia fetch_pkgeval.jl</code> to generate data.</span>';
+      '<span class="error">Failed to load the PkgEval data; try reloading the page.</span>';
   }
 }
 
@@ -11761,6 +11827,8 @@ function updateTtfxMetricPills() {
 
 function updateTtfxChart() {
   updateTtfxMetricPills();
+  // The charts are drawn anew, unzoomed
+  document.getElementById("ttfx-btn-reset-zoom").style.display = "none";
   // A count is never drawn as % change; the summary's time panels still are
   const normalize = document.getElementById("ttfx-btn-normalize");
   normalize.disabled = ttfxMode === "tasks" && ttfxIsCount();
@@ -12965,7 +13033,8 @@ function updateSizesChart() {
       const y = sizesNormalized ? ((v - base) / base) * 100 : v;
       points.push({ x: Date.parse(sizesData.merged_at[i]), y, i });
     }
-    if (!points.length) continue;
+    // A size that starts at 0 has no % change to draw
+    if (!points.length || (sizesNormalized && base === 0)) continue;
     datasets.push({
       label: sizesMetricLabel(m),
       data: points,
@@ -13160,7 +13229,12 @@ function renderSizesPrsTable() {
   const metrics = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m) && (sizesPrs?.metrics || []).includes(m));
   const rank = sizesPrRankMetric();
   const delta = (p, m) => (p.base_values && p.values[m] != null && p.base_values[m] != null ? p.values[m] - p.base_values[m] : null);
-  const rows = prs.slice().sort((a, b) => Math.abs(delta(b, rank) ?? -1) - Math.abs(delta(a, rank) ?? -1));
+  // Waiting pull requests (no delta yet) go last, below any change, even 0
+  const size = (p) => {
+    const d = delta(p, rank);
+    return d == null ? -1 : Math.abs(d);
+  };
+  const rows = prs.slice().sort((a, b) => size(b) - size(a));
   caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, ranked by ${escapeHtml(
     sizesMetricLabel(rank).toLowerCase(),
   )}. Click a row for details.</span>`;
@@ -13238,6 +13312,7 @@ function showSizesPrPoints(p) {
     const value = sizesData.values[m][end.i] + delta;
     const first = ds.data[0];
     const base = sizesData.values[m][first.i];
+    if (sizesNormalized && !base) return;
     const y = sizesNormalized ? ((value - base) / base) * 100 : value;
     const color = sizesColors[m];
     notes[`${SIZES_PR_POINT_PREFIX}link-${k}`] = {
@@ -13594,19 +13669,22 @@ async function loadOverviewSources() {
       console.error(`Failed to load ${route}:`, err);
       return null;
     });
+  // What another tab has loaded, unless an ingest has changed it since; the
+  // mark stays for that tab to reload when it is next shown
+  const fresh = (view, d) => (staleViews.has(view) ? null : d);
   // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
   const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
   const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog] = await Promise.all([
-    pkgevalData || quiet("pkgeval/summary"),
-    benchData || quiet("benchmarks/summary"),
-    ttfxData || quiet("ttfx/summary"),
-    ttfxPrs || quiet("ttfx/prs"),
-    sizesData || quiet("sizes/summary", { since: sparkStart }),
-    sizesPrs || quiet("sizes/prs"),
-    packagesDownloadsData || quiet("downloads/summary"),
+    fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
+    fresh("benchmarks", benchData) || quiet("benchmarks/summary"),
+    fresh("ttfx", ttfxData) || quiet("ttfx/summary"),
+    fresh("ttfx", ttfxPrs) || quiet("ttfx/prs"),
+    fresh("sizes", sizesData) || quiet("sizes/summary", { since: sparkStart }),
+    fresh("sizes", sizesPrs) || quiet("sizes/prs"),
+    fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
     quiet("agents/latest"),
     quiet("timing/builds", { since: weekAgo }),
     quiet("pkgeval/reasons"),
@@ -14853,7 +14931,24 @@ function commitLink(ref, text) {
 
 // The merge commit of a PR, from GitHub's API (unauthenticated, 60 an hour
 // per address; only asked when the server does not know the PR)
-async function githubPullRequest(number) {
+// GitHub's answer per number, kept for the page's life: anonymous requests
+// are limited to 60 an hour per address. A failed lookup is not kept, so it
+// is tried again next time.
+const githubPullCache = new Map();
+function githubPullRequest(ref) {
+  const number = Number(ref);
+  if (!githubPullCache.has(number)) {
+    const p = fetchGithubPullRequest(number);
+    githubPullCache.set(number, p);
+    p.then(
+      (pr) => pr === null && githubPullCache.delete(number),
+      () => githubPullCache.delete(number),
+    );
+  }
+  return githubPullCache.get(number);
+}
+
+async function fetchGithubPullRequest(number) {
   const resp = await fetch(`https://api.github.com/repos/JuliaLang/julia/pulls/${number}`, {
     headers: { Accept: "application/vnd.github+json" },
   });
@@ -14952,8 +15047,12 @@ async function loadOlderCommits(button) {
     const d = await apiGet("commits", { before: last.first_at, limit: COMMIT_LIST_PAGE });
     commitList.commits.push(...d.commits);
     commitList.done = d.commits.length < COMMIT_LIST_PAGE;
-  } finally {
     drawCommitList();
+  } catch (err) {
+    console.error("Failed to load older commits:", err);
+    drawCommitList();
+    const again = document.querySelector("#commit-list .commit-list-more");
+    if (again) again.textContent = "Failed to load; try again";
   }
 }
 
@@ -15674,9 +15773,6 @@ applyTheme();
 // comparison when it is on the ranked list, else what GitHub says about it.
 const PR_CARD_LINK = /^https:\/\/github\.com\/JuliaLang\/julia\/pull\/(\d+)\/?$/;
 const PR_CARD_DELAY_MS = 150;
-// GitHub's answer per number, kept for the page's life: anonymous requests
-// are limited to 60 an hour per address
-const prCardGithub = new Map();
 let prCardEl = null;
 let prCardLink = null;
 let prCardTimer = null;
@@ -15786,8 +15882,7 @@ async function showPrCard(link, number) {
   let html;
   if (i >= 0) html = prCardTtfxHtml(prs[i], i + 1, prs.length);
   else {
-    if (!prCardGithub.has(number)) prCardGithub.set(number, githubPullRequest(number).catch(() => null));
-    html = prCardGithubHtml(number, await prCardGithub.get(number));
+    html = prCardGithubHtml(number, await githubPullRequest(number).catch(() => null));
   }
   if (prCardLink !== link) return;
   prCardEl.innerHTML = html;
