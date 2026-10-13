@@ -517,6 +517,27 @@ function ttfx(db; since="")
     for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures" * windowed, params)
         get!(failures, String(r.job_uuid), Dict{String,String}())[String(r.task)] = String(r.error)
     end
+    # An optimized build's job measures the regular build of the same commit beside it,
+    # interleaved (arm `base`); its time metrics per task come from the samples, reduced
+    # as fetch_ttfx.jl reduces the head arm's into ttfx_results
+    bases = Dict{String,Dict{String,Any}}()
+    opt_where = where * (isempty(where) ? " WHERE" : " AND") * " kind = 'opt'"
+    let samples = Dict{Tuple{String,String},Vector{Any}}()
+        for r in rows(db, "SELECT job_uuid, task, precompile_s, load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s " *
+                          "FROM ttfx_samples WHERE arm = 'base' AND status = 'ok' AND job_uuid IN (SELECT job_uuid FROM ttfx_jobs$opt_where)", params)
+            push!(get!(samples, (String(r.job_uuid), String(r.task)), Any[]), r)
+        end
+        arr(x) = x === missing ? Float64[] : Float64.(JSON3.read(String(x)))
+        nanmin(v) = isempty(v) ? nothing : round(minimum(v); digits=3)
+        first_of(rs, col) = nanmin([a[1] for a in (arr(getproperty(r, col)) for r in rs) if !isempty(a)])
+        warm_of(rs, col) = nanmin([minimum(a[2:end]) for a in (arr(getproperty(r, col)) for r in rs) if length(a) >= 2])
+        for ((uuid, task), rs) in samples
+            get!(bases, uuid, Dict{String,Any}())[task] = Any[
+                nanmin([Float64(r.precompile_s) for r in rs if r.precompile_s !== missing]),
+                first_of(rs, :load_s), first_of(rs, :run_s), warm_of(rs, :total_s),
+                first_of(rs, :load_gcoff_s), first_of(rs, :run_gcoff_s), warm_of(rs, :total_gcoff_s)]
+        end
+    end
     pipeline = "julia-ci"
     function jobs(kind)
         out = Any[]
@@ -533,14 +554,16 @@ function ttfx(db; since="")
                 "snippets" => String(j.snippets), "blocks" => js(j.blocks), "n_tasks" => js(j.n_tasks),
                 "tasks" => Dict(k => task_values(v, n, get(job_traces, k, nothing)) for (k, v) in tasks),
                 "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
+            kind == "opt" && (out[end]["base"] = get(bases, String(j.job_uuid), Dict{String,Any}()))
         end
         return out
     end
     builds = jobs("master")
     releases = jobs("release")
+    opt = jobs("opt")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
-                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases)
+                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "opt" => opt)
 end
 
 # What one job recorded about compilation, per task: the statements its trace marks as

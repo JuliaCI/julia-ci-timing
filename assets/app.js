@@ -10659,15 +10659,17 @@ function ttfxBuildPr(b) {
   return m ? Number(m[1] || m[2]) : null;
 }
 
-// Per metric, a build's suite value over the selected tasks, the change from
-// the last build before it in the range, and the clicked task's own values
-function ttfxBuildSuiteRows(b, builds, tasks, task) {
-  const i = builds.indexOf(b);
+// Per metric, a build's suite value over the selected tasks (those the master
+// builds' line uses), the change from the last run before it in its `series`
+// (the master builds, or a reference series), the clicked task's own values,
+// and for an optimized build both against the regular build beside it
+function ttfxBuildSuiteRows(b, builds, series, tasks, task) {
+  const i = series.indexOf(b);
   return Object.keys(TTFX_METRICS).map((key) => {
     const common = ttfxSuiteTasks(builds, tasks, key);
     const gcoff = ttfxShowsGcOff(key);
     let prev = null;
-    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxSuiteValue(builds[j], common, key);
+    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxSuiteValue(series[j], common, key);
     const g = ttfxSuiteValue(b, common, key);
     return {
       key,
@@ -10678,6 +10680,8 @@ function ttfxBuildSuiteRows(b, builds, tasks, task) {
       change: ttfxChange(g, prev, key),
       tv: task ? ttfxValue(b, task, key) : null,
       toff: task && gcoff ? ttfxValue(b, task, key, true) : null,
+      paired: ttfxPairedRatio(b, common, key),
+      tpaired: task ? ttfxPairedRatio(b, [task], key) : null,
     };
   });
 }
@@ -10724,6 +10728,9 @@ function ttfxBuildOutliers(b, series, tasks, suiteRows) {
 function showTtfxBuildPopup(b, task) {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
+  // A reference run is compared with the run of its series before it
+  const ref = ttfxRefOf(b);
+  const series = ref ? getTtfxFilteredRefs(ref) : builds;
   const pr = ttfxBuildPr(b);
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
@@ -10749,21 +10756,27 @@ function showTtfxBuildPopup(b, task) {
 
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
   html += "<th class=\"num\" title=\"Geometric mean over the selected tasks; for a count, their total\">Suite</th><th class=\"num\">vs previous</th>";
+  const paired = !!b.base;
+  if (paired) html += '<th class="num" title="Against the regular build of the same commit, measured interleaved with it in the same job">vs regular</th>';
   if (task) html += '<th class="num">Clicked task</th>';
+  if (task && paired) html += '<th class="num">vs regular</th>';
   html += "</tr></thead><tbody>";
   const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
-  const suiteRows = ttfxBuildSuiteRows(b, builds, tasks, task);
+  const pairedCell = (p) => (p ? `<td class="num ${ttfxPctClass((p.ratio - 1) * 100)}" title="${p.n} tasks">${formatTtfxRatio(p.ratio)}</td>` : '<td class="num"></td>');
+  const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
   for (const r of suiteRows) {
     html += `<tr><th title="${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks">${escapeHtml(ttfxMetricLabel(r.key))}</th>`;
     html += `<td class="num">${formatTtfxValue(r.g, r.key)}${offHtml(r.off)}</td>`;
     html += `<td class="num ${r.change.cls}">${r.change.text}</td>`;
+    if (paired) html += pairedCell(r.paired);
     if (task) html += `<td class="num">${formatTtfxValue(r.tv, r.key)}${offHtml(r.toff)}</td>`;
+    if (task && paired) html += pairedCell(r.tpaired);
     html += "</tr>";
   }
   html += "</tbody></table>";
   if (tasks.length && Object.keys(TTFX_METRICS).some((k) => ttfxShowsGcOff(k)))
-    html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
-  const outliers = ttfxBuildOutliers(b, ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds, tasks, suiteRows);
+    html += `<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last ${ref ? "run of its series" : "build"} before it in the range.</div>`;
+  const outliers = ttfxBuildOutliers(b, series, tasks, suiteRows);
   html += '<div class="ttfx-popup-section" title="Selected tasks whose change from their previous run departs most from the suite\'s">Tasks that moved most</div>';
   if (!outliers.length) {
     html += `<div class="ttfx-popup-muted">None moved ${TTFX_OUTLIER_MIN_PCT}% and ${TTFX_OUTLIER_MIN_S}s, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
@@ -10788,16 +10801,16 @@ function showTtfxBuildPopup(b, task) {
   }
 
   openDetailPopup({
-    title: ttfxIsRelease(b) ? `TTFX release ${b.version} ${formatUtc(b.date)}` : `TTFX build ${formatUtc(b.date)}`,
+    title: ttfxRefOf(b) === "release" ? `TTFX release ${b.version} ${formatUtc(b.date)}`
+      : ttfxRefOf(b) === "opt" ? `TTFX optimized build ${formatUtc(b.date)}`
+      : `TTFX build ${formatUtc(b.date)}`,
 
     html,
     key: `ttfx-job-${b.job_id}`,
   });
   document.getElementById("ttfx-copy-report").addEventListener("click", (e) => copyToClipboard(e.currentTarget, ttfxBuildMarkdown(b, task)));
-  // The release runs are compared with the release run before them
-  const series = ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds;
-  const k = series.indexOf(b);
-  renderTtfxCompileDetails(b, k > 0 ? series[k - 1] : null, task);
+  const i = series.indexOf(b);
+  renderTtfxCompileDetails(b, i > 0 ? series[i - 1] : null, task);
 }
 
 // The popup's recompiles and invalidations as markdown, once they have loaded
@@ -10808,10 +10821,12 @@ let ttfxBuildCompileMd = { key: "", lines: [] };
 function ttfxBuildMarkdown(b, task) {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
+  const ref = ttfxRefOf(b);
+  const series = ref ? getTtfxFilteredRefs(ref) : builds;
   const pr = ttfxBuildPr(b);
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
-  const what = ttfxIsRelease(b) ? `release ${b.version}` : `build #${b.build}`;
+  const what = ref === "release" ? `release ${b.version}` : ref === "opt" ? `optimized build #${b.build}` : `build #${b.build}`;
   const lines = [
     `**TTFX** ${what} ([job](${ttfxJobUrl(b)})): \`${b.commit.slice(0, 10)}\` (${b.version || "?"}), ${formatUtc(b.date)}` +
       (pr ? `, from #${pr}` : "") + ".",
@@ -10823,16 +10838,22 @@ function ttfxBuildMarkdown(b, task) {
       `${b.agent || b.cpu ? ` on ${[b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")}` : ""}.`,
   );
   const gc = (v) => (v != null ? ` (GC off ${formatTtfxSeconds(v)})` : "");
-  const head = ["suite", "vs previous build"];
+  const paired = !!b.base;
+  const head = ["suite", ref ? "vs previous run" : "vs previous build"];
+  if (paired) head.push("vs regular build");
   if (task) head.push(task);
+  if (task && paired) head.push("vs regular build");
   lines.push("", `| | ${head.join(" | ")} |`, `|---|${head.map(() => "---").join("|")}|`);
-  const suiteRows = ttfxBuildSuiteRows(b, builds, tasks, task);
+  const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
+  const ratio = (p) => (p ? formatTtfxRatio(p.ratio) : "–");
   for (const r of suiteRows) {
     const cells = [`${formatTtfxValue(r.g, r.key)}${gc(r.off)}`, r.change.text];
+    if (paired) cells.push(ratio(r.paired));
     if (task) cells.push(`${formatTtfxValue(r.tv, r.key)}${gc(r.toff)}`);
+    if (task && paired) cells.push(ratio(r.tpaired));
     lines.push(`| ${ttfxMetricLabel(r.key)} | ${cells.join(" | ")} |`);
   }
-  const outliers = ttfxBuildOutliers(b, ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds, tasks, suiteRows);
+  const outliers = ttfxBuildOutliers(b, series, tasks, suiteRows);
   if (outliers.length) {
     lines.push("", "Tasks that moved most against their previous run, ranked by how far their change is from the suite's:", "", "| task | metric | previous | this | change |", "|---|---|---|---|---|");
     for (const o of outliers)
@@ -11185,14 +11206,19 @@ function getTtfxFilteredBuilds() {
   return ttfxData ? ttfxInTimeRange(ttfxData.builds || []) : [];
 }
 
-// The weekly runs of the newest stable release, kept apart from the master
-// builds: only the charts draw them, as a reference series
-function getTtfxFilteredReleases() {
-  return ttfxData ? ttfxInTimeRange(ttfxData.releases || []) : [];
+// The reference series, kept apart from the master builds: only the charts
+// draw them. `releases` are the weekly runs of the newest stable release,
+// `opt` the nightly optimized (PGO and ThinLTO) builds of master.
+const TTFX_REF_KEYS = { release: "releases", opt: "opt" };
+function getTtfxFilteredRefs(ref) {
+  return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
 
-function ttfxIsRelease(b) {
-  return !!ttfxData && (ttfxData.releases || []).includes(b);
+// Which reference series a run is from, or null for a master build
+function ttfxRefOf(b) {
+  if (!ttfxData) return null;
+  for (const [ref, key] of Object.entries(TTFX_REF_KEYS)) if ((ttfxData[key] || []).includes(b)) return ref;
+  return null;
 }
 
 function ttfxSelectedList() {
@@ -11229,6 +11255,28 @@ function ttfxSuiteValue(b, tasks, metric = ttfxMetric, gcoff = false) {
   }
   return s;
 }
+
+// For an optimized build's job, which measured the regular build of the same
+// commit beside it (`b.base`), the geomean over `tasks` of the optimized/regular
+// ratio of a time metric, with the number of tasks both arms measured; null
+// for any other run or a count
+function ttfxPairedRatio(b, tasks, metric = ttfxMetric, gcoff = false) {
+  const m = TTFX_METRICS[metric];
+  if (!b.base || m.count || (gcoff && m.gcoffIndex == null)) return null;
+  const i = gcoff ? m.gcoffIndex : m.index;
+  let s = 0;
+  let n = 0;
+  for (const t of tasks) {
+    const h = b.tasks && b.tasks[t] && b.tasks[t][i];
+    const r = b.base[t] && b.base[t][i];
+    if (!(h > 0 && r > 0)) continue;
+    s += Math.log(h / r);
+    n++;
+  }
+  return n ? { ratio: Math.exp(s / n), n } : null;
+}
+
+const formatTtfxRatio = (r) => formatSignedPct((r - 1) * 100);
 
 function ttfxSuiteLabel(metric = ttfxMetric) {
   return ttfxIsCount(metric) ? "Suite total" : TTFX_SUITE_LABEL;
@@ -11657,7 +11705,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           filter: (item, data) => {
             if (item._group) return true;
             const ds = data.datasets[item.datasetIndex];
-            return ds._twinOf == null || ds._common != null || ds._release;
+            return ds._twinOf == null || ds._common != null || ds._ref;
           },
           // A sample of each line, dashed or solid, with its marker; with
           // many tasks, the suite lines and a sample for each group
@@ -11682,7 +11730,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
                 : [];
             };
             return [
-              ...items.filter((item) => chart.data.datasets[item.datasetIndex]._common != null || chart.data.datasets[item.datasetIndex]._release),
+              ...items.filter((item) => chart.data.datasets[item.datasetIndex]._common != null || chart.data.datasets[item.datasetIndex]._ref),
               ...group("tasks", "Tasks", { borderColor: neutral, borderWidth: 1, pointRadius: 1.5 }),
               ...group("twins", "Tasks, GC off", ttfxTwinStyle(neutral, TTFX_TASK_TWIN_WIDTH)),
             ];
@@ -11704,13 +11752,16 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           title: (items) => {
             if (!items.length) return "";
             const b = items[0].raw.build;
-            if (items[0].dataset._release) return `${formatUtc(b.date)}  Julia ${b.version} (release)  ${b.commit.slice(0, 10)}`;
+            if (items[0].dataset._ref === "release") return `${formatUtc(b.date)}  Julia ${b.version} (release)  ${b.commit.slice(0, 10)}`;
+            if (items[0].dataset._ref === "opt") return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""} (optimized)`;
             return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
           },
           label: (item) => {
             const ds = item.dataset;
-            const label = ds._release
-              ? `Julia ${item.raw.build.version} (release${ds._twinOf != null ? ", GC off" : ""}, ${ds._release} tasks)`
+            const label = ds._ref === "release"
+              ? `Julia ${item.raw.build.version} (release${ds._twinOf != null ? ", GC off" : ""}, ${ds._refTasks} tasks)`
+              : ds._ref
+                ? `${ds.label} (${ds._refTasks} tasks)`
               : ds._common
                 ? `${ds.label} (${ds._common} tasks)`
                 : ds.label;
@@ -11729,6 +11780,10 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
             const failed = b.failed ? Object.keys(b.failed).length : 0;
             const lines = [];
             const chart = items[0].chart;
+            if (items[0].dataset._ref === "opt") {
+              const p = ttfxPairedRatio(b, items[0].dataset._refCommon, metric, items[0].dataset._twinOf != null);
+              if (p) lines.push(`vs the regular build of the same commit, measured beside it: ${formatTtfxRatio(p.ratio)} (${p.n} tasks)`);
+            }
             const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
             if (suite && !items[0].dataset._common) {
               const p = suite.data.find((q) => q.build === b);
@@ -11793,7 +11848,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
 
 // Whether `ds` is the GC-off twin of the task line `of`
 function ttfxIsTaskTwinOf(ds, of) {
-  return of._common == null && !of._release && ds._common == null && ds._twinOf != null && ds._twinOf === of.label;
+  return of._common == null && !of._ref && ds._common == null && ds._twinOf != null && ds._twinOf === of.label;
 }
 
 // The dataset indices a grouped legend entry stands for: every task line,
@@ -11801,7 +11856,7 @@ function ttfxIsTaskTwinOf(ds, of) {
 function ttfxLegendGroup(chart, key) {
   const out = [];
   chart.data.datasets.forEach((d, k) => {
-    if (d._common != null || d._release) return;
+    if (d._common != null || d._ref) return;
     if ((key === "twins") === (d._twinOf != null)) out.push(k);
   });
   return out;
@@ -11818,8 +11873,8 @@ function ttfxLegendIcon(chart, ds) {
   const width = Math.min(ds.borderWidth || 1, 2.5);
   const dash = ds.borderDash || [];
   const marker = (ds.pointRadius || 0) > 0 ? Math.min(ds.pointRadius + 1, 3.5) : 0;
-  const diamond = ds.pointStyle === "rectRot";
-  const key = [ds.borderColor, width, dash.join("-"), marker, diamond].join("|");
+  const shape = ds.pointStyle === "rectRot" || ds.pointStyle === "triangle" ? ds.pointStyle : "circle";
+  const key = [ds.borderColor, width, dash.join("-"), marker, shape].join("|");
   let img = ttfxLegendIcons.get(key);
   if (img) return img;
   const { canvas: c, ctx } = markerCanvas(TTFX_LEGEND_ICON_W, TTFX_LEGEND_ICON_H, 2);
@@ -11836,11 +11891,16 @@ function ttfxLegendIcon(chart, ds) {
     ctx.beginPath();
     const cx = TTFX_LEGEND_ICON_W / 2;
     const cy = TTFX_LEGEND_ICON_H / 2;
-    if (diamond) {
+    if (shape === "rectRot") {
       ctx.moveTo(cx, cy - marker);
       ctx.lineTo(cx + marker, cy);
       ctx.lineTo(cx, cy + marker);
       ctx.lineTo(cx - marker, cy);
+      ctx.closePath();
+    } else if (shape === "triangle") {
+      ctx.moveTo(cx, cy - marker);
+      ctx.lineTo(cx + marker, cy + marker * 0.8);
+      ctx.lineTo(cx - marker, cy + marker * 0.8);
       ctx.closePath();
     } else ctx.arc(cx, cy, marker, 0, 2 * Math.PI);
     ctx.fill();
@@ -11936,11 +11996,13 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
   return { ...ds, ...ttfxTwinStyle(suiteColor, TTFX_SUITE_TWIN_WIDTH), label: `${label}, GC off`, _twinOf: label };
 }
 
-// The weekly runs of the newest stable release, as the suite geomean over the
-// same tasks: a reference next to the master line, rebased in % mode to its
-// first point `base`. Diamonds on a solid line in its version's colour; the
-// version of each point is in the tooltip. `_release` holds the task count.
-const TTFX_RELEASE_LABEL = "Latest release";
+// The reference series, each as the suite geomean over the same tasks next to
+// the master line, rebased in % mode to the master line's first point `base`
+// so a gap between them reads as such. The release runs are diamonds on a
+// solid line in their version's colour, the version of each point in the
+// tooltip; the optimized builds triangles on a dotted line in an accent
+// colour. `_ref` names the series, `_refCommon` holds its tasks and
+// `_refTasks` their count.
 // Each minor series of releases has its own hue, and the shade alternates
 // with the patch number so a new release shows where it starts
 const TTFX_RELEASE_HUES = [28, 280, 175, 330, 210, 95];
@@ -11952,41 +12014,66 @@ function ttfxReleaseVersionColor(version) {
   const lightness = isDarkMode() ? (odd ? 80 : 55) : odd ? 62 : 34;
   return `hsl(${hue + (odd ? 15 : 0)}, 80%, ${lightness}%)`;
 }
-// The colour of the newest release, which the legend shows
-const ttfxReleaseColor = () => {
-  const releases = ttfxData?.releases || [];
-  return ttfxReleaseVersionColor(releases.length ? releases[releases.length - 1].version : null);
+// `color` is the series' colour, which the legend shows (for the releases the
+// newest one's), and `pointColor`, when set, that of each point
+const TTFX_REFS = {
+  release: {
+    label: "Latest release",
+    legend: "The newest stable release, measured weekly",
+    legendGcoff: "The release with the GC off",
+    color: () => {
+      const releases = ttfxData?.releases || [];
+      return ttfxReleaseVersionColor(releases.length ? releases[releases.length - 1].version : null);
+    },
+    pointColor: (b) => ttfxReleaseVersionColor(b?.version),
+    dash: [],
+    pointStyle: "rectRot",
+  },
+  opt: {
+    label: "Optimized nightly",
+    legend: "The nightly optimized build (PGO and ThinLTO), measured daily",
+    legendGcoff: "The optimized build with the GC off",
+    color: () => (isDarkMode() ? "#d29922" : "#9a6700"),
+    dash: [2, 3],
+    pointStyle: "triangle",
+  },
 };
-function ttfxReleaseStyle(color) {
+function ttfxRefStyle(ref) {
+  const r = TTFX_REFS[ref];
+  const color = r.color();
   return {
     borderColor: color,
     backgroundColor: color,
     _color: color,
     borderWidth: 1.5,
-    pointStyle: "rectRot",
+    borderDash: r.dash,
+    pointStyle: r.pointStyle,
     pointRadius: window.innerWidth <= 600 ? 3 : 4.5,
   };
 }
 
-function ttfxReleaseDataset(common, metric, base, { gcoff = false } = {}) {
+function ttfxRefDataset(ref, common, metric, base, { gcoff = false } = {}) {
+  const r = TTFX_REFS[ref];
   const pts = [];
-  for (const b of getTtfxFilteredReleases()) {
+  for (const b of getTtfxFilteredRefs(ref)) {
     const y = ttfxSuiteValue(b, common, metric, gcoff);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
   const ds = {
-    label: TTFX_RELEASE_LABEL,
+    label: r.label,
     data: ttfxRebase(pts, base, metric),
-    _release: common.length,
-    ...ttfxReleaseStyle(ttfxReleaseColor()),
+    _ref: ref,
+    _refTasks: common.length,
+    _refCommon: common,
+    ...ttfxRefStyle(ref),
     ...ttfxHoverPointStyle(),
     order: 0,
   };
-  // Each point and the line from it in its version's colour, unless the
-  // dataset is dimmed while another series is highlighted
+  // For the releases, each point and the line from it in its version's
+  // colour, unless the dataset is dimmed while another series is highlighted
   const alpha = gcoff ? TTFX_TWIN_ALPHA : 1;
-  const colorAt = (dataset, b) => (dataset._dimmed ? undefined : colorToRgba(ttfxReleaseVersionColor(b?.version), alpha));
-  const versionColors = {
+  const colorAt = (dataset, b) => (dataset._dimmed ? undefined : colorToRgba(r.pointColor(b), alpha));
+  const pointColors = r.pointColor && {
     pointBackgroundColor: (ctx) => colorAt(ctx.dataset, ctx.raw?.build) ?? ctx.dataset.backgroundColor,
     pointBorderColor: (ctx) => colorAt(ctx.dataset, ctx.raw?.build) ?? ctx.dataset.borderColor,
     segment: {
@@ -11996,18 +12083,18 @@ function ttfxReleaseDataset(common, metric, base, { gcoff = false } = {}) {
       },
     },
   };
-  if (!gcoff) return { ...ds, ...versionColors };
+  if (!gcoff) return { ...ds, ...pointColors };
   return {
     ...ds,
-    ...ttfxTwinStyle(ttfxReleaseColor(), TTFX_SUITE_TWIN_WIDTH),
-    ...versionColors,
-    label: `${TTFX_RELEASE_LABEL}, GC off`,
-    _twinOf: TTFX_RELEASE_LABEL,
+    ...ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH),
+    ...pointColors,
+    label: `${r.label}, GC off`,
+    _twinOf: r.label,
   };
 }
 
-// A series' normal line, when `metric` has them its GC-off twin, and the
-// release reference when any release run measured the same tasks
+// A series' normal line, when `metric` has them its GC-off twin, and each
+// reference series that measured the same tasks in the range
 function ttfxSuiteDatasets(builds, common, metric) {
   const on = ttfxSuiteDataset(builds, common, metric);
   if (!on.data.length) return [on];
@@ -12016,11 +12103,13 @@ function ttfxSuiteDatasets(builds, common, metric) {
     const off = ttfxSuiteDataset(builds, common, metric, { gcoff: true, base: on.data[0].s });
     if (off.data.length) out.push(off);
   }
-  const release = ttfxReleaseDataset(common, metric, on.data[0].s);
-  if (release.data.length) out.push(release);
-  if (release.data.length && ttfxShowsGcOff(metric)) {
-    const off = ttfxReleaseDataset(common, metric, on.data[0].s, { gcoff: true });
-    if (off.data.length) out.push(off);
+  for (const ref of Object.keys(TTFX_REFS)) {
+    const ds = ttfxRefDataset(ref, common, metric, on.data[0].s);
+    if (ds.data.length) out.push(ds);
+    if (ds.data.length && ttfxShowsGcOff(metric)) {
+      const off = ttfxRefDataset(ref, common, metric, on.data[0].s, { gcoff: true });
+      if (off.data.length) out.push(off);
+    }
   }
   return out;
 }
@@ -12089,12 +12178,12 @@ function updateTtfxChart() {
 }
 
 // The summary panels' shared legend: the suite line and, when any panel
-// draws them, its GC-off twin and the release reference, each drawn as the
+// draws them, its GC-off twin and the reference series, each drawn as the
 // sample its lines use. `ttfxSummaryHidden` holds the series switched off
 // from it.
 const ttfxSummaryHidden = new Set();
 function ttfxSummarySeriesKey(ds) {
-  if (ds._release) return ds._twinOf != null ? "release-gcoff" : "release";
+  if (ds._ref) return ds._twinOf != null ? `${ds._ref}-gcoff` : ds._ref;
   return ds._twinOf != null ? "gcoff" : "suite";
 }
 
@@ -12105,8 +12194,10 @@ function renderTtfxSummaryLegend() {
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
   const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
-  if (drawn.has("release")) entries.push(["release", "The newest stable release, measured weekly", ttfxReleaseStyle(ttfxReleaseColor())]);
-  if (drawn.has("release-gcoff")) entries.push(["release-gcoff", "The release with the GC off", ttfxTwinStyle(ttfxReleaseColor(), TTFX_SUITE_TWIN_WIDTH)]);
+  for (const [ref, r] of Object.entries(TTFX_REFS)) {
+    if (drawn.has(ref)) entries.push([ref, r.legend, ttfxRefStyle(ref)]);
+    if (drawn.has(`${ref}-gcoff`)) entries.push([`${ref}-gcoff`, r.legendGcoff, ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH)]);
+  }
   el.innerHTML = entries
     .map(([key, text, sample]) => {
       const off = ttfxSummaryHidden.has(key);
@@ -12186,8 +12277,8 @@ function updateTtfxTaskChart() {
   const datasets = [];
   const common = ttfxSuiteTasks(builds, tasks);
   const suite = ttfxSuiteDatasets(builds, common, ttfxMetric);
-  // With one task the release reference still shows, the suite line being that task
-  datasets.push(...(common.length >= 2 ? suite : suite.filter((d) => d._release)));
+  // With one task the reference series still show, the suite line being that task
+  datasets.push(...(common.length >= 2 ? suite : suite.filter((d) => d._ref)));
   const series = (t, gcoff) => {
     const pts = [];
     for (const b of builds) {
