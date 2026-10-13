@@ -253,14 +253,15 @@ const ROUTES = [
               limit = cursor(p, "limit")
               Render.pkgeval_popular(db; days=days_param(p, 30), limit=limit == 0 ? 50 : min(limit, 500), client=client_param(p))
           end),
-    Route("pkgeval/failures", ["reason" => "the failure reason, as in pkgeval/reasons (precompile, test_errors, ...); precompile by default",
+    Route("pkgeval/failures", ["reason" => "failure reasons as in pkgeval/reasons (precompile, test_errors, time_limit, ...), comma-separated; precompile by default",
                                "days" => "download window in days, 30 by default", CLIENT],
-          "Every package that failed the newest report with that reason, by download rank (packages without downloads in the window last), with its version, downloads and how long it has been failing.",
+          "Every package that did not pass the newest report for one of those reasons, by download rank (packages without downloads in the window last), with its status, reason, version, downloads and how long it has been failing.",
           (db, _, p) -> begin
-              reason = get(p, "reason", "")
-              isempty(reason) && (reason = "precompile")
-              occursin(r"^[a-z_]{1,40}$", reason) || throw(BadRequest("reason must be a reason name such as precompile"))
-              Render.pkgeval_failures(db; reason, days=days_param(p, 30), client=client_param(p))
+              reasons = sort!(unique(String[strip(r) for r in split(get(p, "reason", ""), ',') if !isempty(strip(r))]))
+              isempty(reasons) && push!(reasons, "precompile")
+              (length(reasons) <= 20 && all(r -> occursin(r"^[a-z_]{1,40}$", r), reasons)) ||
+                  throw(BadRequest("reason must be up to 20 reason names such as precompile,test_errors"))
+              Render.pkgeval_failures(db; reasons, days=days_param(p, 30), client=client_param(p))
           end),
     Route("ttfx/summary", [SINCE],
           "TTFX on every master build: per task, an array in the order of metrics: the precompile, load, run and warm seconds (and load, run and warm with the GC off), the MethodInstances the task script invalidated, and from the trace logs the methods compiled again after an invalidation and their compile seconds; null where the job did not record it. Plus failed tasks. releases holds the same for the weekly runs of the newest stable release on the same tasks and machines, each with the release's version and commit, as a reference.",

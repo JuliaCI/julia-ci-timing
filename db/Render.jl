@@ -442,10 +442,11 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
                        "previous_date" => previous, "newly_broken" => newly_broken)
 end
 
-# Every package that failed the newest report with `reason` (precompile,
-# test_errors, ...), by download rank; packages without downloads in the
-# window come last, by name. Each carries how long it has been failing.
-function pkgeval_failures(db; reason, days=30, client="user")
+# Every package that did not pass the newest report for one of `reasons`
+# (precompile, test_errors, time_limit, ...), by download rank; packages
+# without downloads in the window come last, by name. Each carries how long
+# it has been failing.
+function pkgeval_failures(db; reasons, days=30, client="user")
     reports = pkgeval_latest_reports(db)
     isempty(reports) && return nothing
     r = pkgeval_ranking(db, days, client)
@@ -454,7 +455,8 @@ function pkgeval_failures(db; reason, days=30, client="user")
     ranked = Dict(String(x.name) => x for x in r.ranking)
     packages = OrderedDict{String,Any}[]
     for x in rows(db, "SELECT k.name, p.status, p.reason, p.version FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
-                      "WHERE p.report_id = ? AND p.status = 'fail' AND p.reason = ?", (report_id, reason))
+                      "WHERE p.report_id = ? AND p.status != 'ok' AND p.reason IN (SELECT value FROM json_each(?))",
+                      (report_id, JSON3.write(reasons)))
         name = String(x.name)
         d = get(ranked, name, nothing)
         push!(packages, OrderedDict("rank" => d === nothing ? nothing : Int(d.rank), "name" => name, "status" => String(x.status),
@@ -467,7 +469,7 @@ function pkgeval_failures(db; reason, days=30, client="user")
     for p in packages
         merge!(p, get(runs, p["name"], Dict("failing_since" => nothing, "failing_reports" => 0, "last_passed" => nothing)))
     end
-    return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)), "reason" => reason,
+    return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)), "reasons" => reasons,
                        "days" => days, "since" => r.since, "until" => r.until, "client" => client, "packages" => packages)
 end
 

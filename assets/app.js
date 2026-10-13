@@ -6477,7 +6477,8 @@ const DASHBOARD_PARAMS = new Set([
   "pt", // pkgeval time range
   "pp", // pkgeval proportional toggle
   "pkg", // pkgeval package history
-  "pv", // pkgeval package list view (precompile failures)
+  "pr", // pkgeval package list reason filter
+  "pv", // legacy pkgeval list view (pv=precompile is pr=precompile)
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
@@ -6706,7 +6707,7 @@ const TAB_URL_KEYS = {
   "ci-ttfx": ["tm", "tt", "tn", "th", "tg", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
-  pkgeval: ["pt", "pp", "pkg", "pv"],
+  pkgeval: ["pt", "pp", "pkg", "pr", "pv"],
 };
 const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers" ? "ci" : tab);
 const perfOwnsKey = (k) => k === "perf" || !DASHBOARD_PARAMS.has(k);
@@ -9962,10 +9963,11 @@ function updatePkgevalURL() {
   } else {
     url.searchParams.delete("pkg");
   }
-  if (pkgevalPanelView !== "popular") {
-    url.searchParams.set("pv", pkgevalPanelView);
+  url.searchParams.delete("pv");
+  if (pkgevalReasonFilter.length) {
+    url.searchParams.set("pr", pkgevalReasonFilter.join(","));
   } else {
-    url.searchParams.delete("pv");
+    url.searchParams.delete("pr");
   }
   history.replaceState(null, "", url);
 }
@@ -9986,7 +9988,8 @@ function applyPkgevalURLParams() {
     document.getElementById("pkgeval-btn-proportional").textContent =
       "Show counts";
   }
-  if (params.get("pv") === "precompile") pkgevalPanelView = "precompile";
+  const pr = params.get("pr") ?? (params.get("pv") === "precompile" ? "precompile" : "");
+  pkgevalReasonFilter = pr.split(",").map((r) => r.trim()).filter((r) => /^[a-z_]+$/.test(r)).sort();
   const pkg = params.get("pkg");
   if (pkg) {
     pkgevalPackage = pkg.trim();
@@ -10099,7 +10102,10 @@ async function loadPkgevalPopular() {
   if (!panel) return;
   let d;
   try {
-    d = await apiGet("pkgeval/popular", { days: 30, client: "user", limit: 50 });
+    [d, pkgevalReasons] = await Promise.all([
+      apiGet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
+      apiGet("pkgeval/reasons").catch(() => null),
+    ]);
   } catch (err) {
     console.error("Failed to load the popular failing packages:", err);
     return;
@@ -10109,7 +10115,7 @@ async function loadPkgevalPopular() {
     p.days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
   }
   pkgevalPopular = d;
-  if (pkgevalPanelView === "precompile") await loadPkgevalFailures();
+  if (pkgevalReasonFilter.length) await loadPkgevalFailures();
   renderPkgevalPanel();
   panel.classList.remove("view-hidden");
   document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
@@ -10144,7 +10150,7 @@ function renderPkgevalPopular() {
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
         <td class="num" title="${escapeHtml(title)}">${since}</td>
-        <td>${escapeHtml(p.reason || "(none)")}</td>
+        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
     })
@@ -10159,9 +10165,9 @@ function renderPkgevalPopular() {
       ? `${d.top_not_ok} of the ${d.top_tested} most downloaded packages the report tested (of the top ${d.top_n}) did not pass`
       : "";
   panel.innerHTML = `
-    ${pkgevalPanelToggle()}
     <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
     <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
+    ${pkgevalReasonChips()}
     ${phoneListHtml(
       packages.map((p) => {
         const isNew = p.failing_since === d.date;
@@ -10169,7 +10175,7 @@ function renderPkgevalPopular() {
           attrs: `data-name="${escapeHtml(p.name)}"`,
           lead: p.rank.toLocaleString("en-US"),
           title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
-          meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> · ${escapeHtml(p.reason || "(none)")} · ${compactNumber(p.user)} downloads`,
+          meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> ${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
           value: isNew ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
           valueClass: isNew || (p.days != null && p.days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
         };
@@ -10199,41 +10205,67 @@ function renderPkgevalPopular() {
   });
 }
 
-// The package list under the chart shows either the most downloaded failing
-// packages or every package that failed to precompile
-let pkgevalPanelView = "popular";
+// The package list under the chart: the most downloaded packages not
+// passing, or, with reasons picked, every package failing for one of them
+let pkgevalReasons = null;
+let pkgevalReasonFilter = [];
 let pkgevalFailures = null;
 let pkgevalFailuresSort = { col: "rank", asc: true };
 let pkgevalFailuresFilter = "";
 
 function renderPkgevalPanel() {
-  if (pkgevalPanelView === "precompile" && pkgevalFailures) renderPkgevalFailures();
+  if (pkgevalReasonFilter.length && pkgevalFailures) renderPkgevalFailures();
   else if (pkgevalPopular) renderPkgevalPopular();
 }
 
-function pkgevalPanelToggle() {
-  const btn = (view, label) =>
-    `<button class="btn${pkgevalPanelView === view ? " btn-primary" : ""}" onclick="setPkgevalPanelView('${view}')">${label}</button>`;
-  return `<div class="pkgeval-panel-toggle">${btn("popular", "Most downloaded")}${btn("precompile", "Precompile failures")}</div>`;
+// A reason as a pill coloured by the kind of failure; the status colours
+// one the stylesheet has no colour for
+function pkgevalReasonPill(reason, status) {
+  const text = reason || status || "";
+  return `<span class="pe-pill pe-pill-${escapeHtml(status || "")}" data-reason="${escapeHtml(reason || "")}">${escapeHtml(text)}</span>`;
 }
 
-async function setPkgevalPanelView(view) {
-  pkgevalPanelView = view === "precompile" ? "precompile" : "popular";
+function pkgevalReasonChips() {
+  const reasons = (pkgevalReasons?.reasons || []).filter((r) => r.status !== "ok" && r.reason);
+  if (!reasons.length) return "";
+  const chip = (r) => {
+    const on = pkgevalReasonFilter.includes(r.reason);
+    return `<button class="pe-pill pe-pill-${escapeHtml(r.status)} pe-chip${on ? " selected" : ""}" data-reason="${escapeHtml(r.reason)}" aria-pressed="${on}" onclick="togglePkgevalReason('${escapeHtml(r.reason)}')">${escapeHtml(r.reason)} <span class="pe-chip-count">${r.count.toLocaleString("en-US")}</span></button>`;
+  };
+  const clear = pkgevalReasonFilter.length
+    ? `<button class="btn pe-chip-clear" onclick="setPkgevalReasons([])">Show the most downloaded</button>`
+    : "";
+  return `<div class="pe-chips" role="group" aria-label="Filter by failure reason"><span class="pe-chips-label">Failing with</span>${reasons.map(chip).join("")}${clear}</div>`;
+}
+
+function togglePkgevalReason(reason) {
+  const set = new Set(pkgevalReasonFilter);
+  if (set.has(reason)) set.delete(reason);
+  else set.add(reason);
+  setPkgevalReasons([...set]);
+}
+
+async function setPkgevalReasons(reasons) {
+  pkgevalReasonFilter = [...reasons].sort();
   updatePkgevalURL();
-  if (pkgevalPanelView === "precompile") await loadPkgevalFailures();
+  if (pkgevalReasonFilter.length) await loadPkgevalFailures();
   renderPkgevalPanel();
 }
 
 async function loadPkgevalFailures() {
-  if (pkgevalFailures && pkgevalPopular && pkgevalFailures.date === pkgevalPopular.date) return;
+  const key = pkgevalReasonFilter.join(",");
+  if (pkgevalFailures && pkgevalFailures.key === key && pkgevalFailures.date === pkgevalPopular?.date) return;
   try {
-    const d = await apiGet("pkgeval/failures", { reason: "precompile", days: 30, client: "user" });
+    const d = await apiGet("pkgeval/failures", { reason: key, days: 30, client: "user" });
+    // The filter changed while this was loading; its own request draws
+    if (key !== pkgevalReasonFilter.join(",")) return;
     for (const p of d.packages) {
       p.days = p.failing_since ? Math.round((Date.parse(d.date) - Date.parse(p.failing_since)) / 86400000) : null;
     }
+    d.key = key;
     pkgevalFailures = d;
   } catch (err) {
-    console.error("Failed to load the precompile failures:", err);
+    console.error("Failed to load the failing packages:", err);
   }
 }
 
@@ -10243,9 +10275,9 @@ function renderPkgevalFailures() {
   const url = pkgevalReportUrl(d.date_path || d.date);
   const newCount = d.packages.filter((p) => p.failing_since === d.date).length;
   panel.innerHTML = `
-    ${pkgevalPanelToggle()}
-    <h3>Packages failing to precompile on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">${d.packages.length.toLocaleString("en-US")} packages, ${newCount} new</span></h3>
-    <p class="package-panel-help">Every package whose tests failed because it did not precompile, most downloaded first (user requests over ${d.days} days, ${escapeHtml(d.since)} to ${escapeHtml(d.until)}). Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
+    <h3>Packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">${d.packages.length.toLocaleString("en-US")} packages, ${newCount} new</span></h3>
+    <p class="package-panel-help">Every package that did not pass for one of the picked reasons, most downloaded first (user requests over ${d.days} days, ${escapeHtml(d.since)} to ${escapeHtml(d.until)}). Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
+    ${pkgevalReasonChips()}
     <input type="search" class="pkgeval-failures-filter" placeholder="Filter packages" aria-label="Filter the packages" value="${escapeHtml(pkgevalFailuresFilter)}" />
     <div class="pkgeval-failures-list"></div>`;
   const input = panel.querySelector(".pkgeval-failures-filter");
@@ -10279,6 +10311,7 @@ function renderPkgevalFailuresList() {
         <td class="num">${p.rank != null ? p.rank.toLocaleString("en-US") : ""}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
+        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
         <td class="num" title="${escapeHtml(title)}">${sinceHtml(p)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
@@ -10290,7 +10323,7 @@ function renderPkgevalFailuresList() {
         attrs: `data-name="${escapeHtml(p.name)}"`,
         lead: p.rank != null ? p.rank.toLocaleString("en-US") : "",
         title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
-        meta: `${compactNumber(p.user)} downloads`,
+        meta: `${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
         value: p.failing_since === d.date ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
         valueClass: isRecent(p) ? "m-bad" : "m-muted",
       })),
@@ -10301,15 +10334,16 @@ function renderPkgevalFailuresList() {
           ["rank", "Rank", "num"],
           ["name", "Package"],
           ["version", "Version", "col-secondary"],
+          ["reason", "Reason"],
           ["days", "Days failing", "num", "Days from the first failing report after the last pass to this report"],
           ["user", "Downloads", "num"],
         ],
         pkgevalFailuresSort,
       )}</thead>
-      <tbody>${rows || '<tr><td colspan="5">No package matches the filter.</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="6">No package matches the filter.</td></tr>'}</tbody>
     </table>`;
   bindSortHeaders(list.querySelector("thead"), (col) => {
-    pkgevalFailuresSort = nextSort(pkgevalFailuresSort, col, (c) => ["rank", "name", "version"].includes(c));
+    pkgevalFailuresSort = nextSort(pkgevalFailuresSort, col, (c) => ["rank", "name", "version", "reason"].includes(c));
     renderPkgevalFailuresList();
   });
   list.querySelectorAll("[data-name]").forEach((el) => {
