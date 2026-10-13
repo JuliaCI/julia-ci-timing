@@ -26,6 +26,9 @@ snapshot_dir="$(mktemp -d "$staging_root/snapshot.XXXXXX")"
 # checkpointed file; the timeout covers an ingest holding a write transaction
 sqlite3 -cmd ".timeout 30000" "${data_root}/${db_name}" ".backup '${snapshot_dir}/${db_name}'"
 [ -d "${CI_TIMING_EXPORT_DIR}" ] && cp -a "${CI_TIMING_EXPORT_DIR}" "${snapshot_dir}/export"
+# Last week's public snapshot is in the export directory; the backup has the
+# database itself, so the copy would only double the archive
+rm -f "${snapshot_dir}/export/${db_name}.gz"
 [ -d "${CI_TIMING_CADDY_DATA_DIR}" ] && cp -a "${CI_TIMING_CADDY_DATA_DIR}" "${snapshot_dir}/caddy-data"
 printf 'timestamp=%s\nhostname=%s\nimage=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$(hostname -s)" "$CI_TIMING_IMAGE_REF" > "${snapshot_dir}/metadata.txt"
 

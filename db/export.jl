@@ -62,6 +62,7 @@ function export_benchmarks(db, out)
     for grp in groups
         write_gz_json(joinpath(out, "benchmarks", "$grp.json.gz"), Render.bench_group(db, grp))
     end
+    remove_others(joinpath(out, "benchmarks"), Set("$grp.json.gz" for grp in groups), r"\.json\.gz$")
     @info "benchmarks" reports=length(summary["reports"]) groups=length(groups)
 end
 
@@ -111,7 +112,17 @@ function export_agents(db, out)
             end
         end
     end
+    remove_others(dir, Set("history-$month.ndjson" for month in keys(by_month)), r"^history-.*\.ndjson$")
     @info "agents" agents=length(latest["agents"]) snapshots=length(snapshots) months=length(by_month)
+end
+
+# Files of a group or month the export no longer writes would otherwise be
+# served for good
+function remove_others(dir, keep, pattern)
+    isdir(dir) || return
+    for f in readdir(dir)
+        (occursin(pattern, f) && f ∉ keep) && rm(joinpath(dir, f))
+    end
 end
 
 function export_health(db, out)
@@ -128,12 +139,21 @@ function main(args)
     opts = parse_args(args)
     db = open_db(opts["db"]; create=false)
     mkpath(opts["out"])
+    # One source failing to render leaves its files as they were; the others
+    # and the health file are still written
+    failed = String[]
     for source in opts["only"]
-        t = @elapsed EXPORTERS[String(source)](db, opts["out"])
-        @info "exported $source" seconds=round(t; digits=1)
+        try
+            t = @elapsed EXPORTERS[String(source)](db, opts["out"])
+            @info "exported $source" seconds=round(t; digits=1)
+        catch e
+            @error "export of $source failed" exception=(e, catch_backtrace())
+            push!(failed, String(source))
+        end
     end
     export_health(db, opts["out"])
     close(db)
+    return isempty(failed) ? 0 : 1
 end
 
-abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)
+abspath(PROGRAM_FILE) == (@__FILE__) && exit(main(ARGS))

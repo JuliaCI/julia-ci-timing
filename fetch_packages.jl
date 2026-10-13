@@ -12,6 +12,7 @@ using Dates
 using CodecZlib: GzipDecompressor
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
@@ -61,29 +62,6 @@ function parse_github_datetime(raw::AbstractString)
     end
 end
 
-
-# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
-# when the server sends one. HTTP.jl's own retry layer never sees a status
-# code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
-    local resp
-    for attempt in 1:attempts
-        resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
-        catch e
-            attempt == attempts && rethrow()
-            @warn "Request failed, retrying" url attempt error=e
-            sleep(2.0^attempt)
-            continue
-        end
-        (resp.status == 429 || resp.status >= 500) || return resp
-        attempt == attempts && return resp
-        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
-        @warn "Retrying after HTTP $(resp.status)" url wait attempt
-        sleep(wait)
-    end
-    return resp
-end
 
 # The releases API allows 60 anonymous requests an hour per address, shared
 # by every hosted runner; the workflow passes its token
@@ -333,8 +311,9 @@ function store_package_requests!(db, lines)
     return n
 end
 
-function main(args=ARGS)
-    db = open_db(Store.db_path(args); create=false)
+# The fetches run inside the source's run record too, so a failed download
+# shows on /healthz rather than leaving the last run marked ok
+function ingest!(db, args)
 
     @info "Fetching package download rollup" url=SOURCE_URL
     lines = fetch_csv_lines(SOURCE_URL)
@@ -507,7 +486,7 @@ function main(args=ARGS)
     @info "Fetching the General registry's package names"
     registry = fetch_registry_packages()
 
-    source_run(db, "packages") do
+    n = let
         transaction(db) do
             n = 0
             for spec in ROLLUPS
@@ -540,6 +519,12 @@ function main(args=ARGS)
             n + length(series)
         end
     end
+    return n
+end
+
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
+    source_run(() -> ingest!(db, args), db, "packages")
     close(db)
     return 0
 end

@@ -15,6 +15,7 @@ using HTTP
 using Dates
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
@@ -56,29 +57,6 @@ function date_path_to_date(path::String)
     "$(parts[1])-$(lpad(parts[2], 2, '0'))"
 end
 
-
-# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
-# when the server sends one. HTTP.jl's own retry layer never sees a status
-# code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, kwargs...)
-    local resp
-    for attempt in 1:attempts
-        resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, kwargs...)
-        catch e
-            attempt == attempts && rethrow()
-            @warn "Request failed, retrying" url attempt error=e
-            sleep(2.0^attempt)
-            continue
-        end
-        (resp.status == 429 || resp.status >= 500) || return resp
-        attempt == attempts && return resp
-        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
-        @warn "Retrying after HTTP $(resp.status)" url wait attempt
-        sleep(wait)
-    end
-    return resp
-end
 
 # The farm's dailies as date path => (summary URL, Julia version). The summaries leave
 # the version out (the index has it). Empty if the index can't be read, so a farm
@@ -219,8 +197,9 @@ function backfill_count(args)
     return i < length(args) ? parse(Int, args[i+1]) : 365
 end
 
-function main(args=ARGS)
-    db = open_db(Store.db_path(args); create=false)
+# The fetches run inside the source's run record too, so a failed download
+# shows on /healthz rather than leaving the last run marked ok
+function ingest!(db, args)
     ensure_clone()
 
     all_dates = enumerate_pkgeval_dates()
@@ -268,12 +247,18 @@ function main(args=ARGS)
     close(client)
     reports = filter(!isnothing, results)
 
-    n = source_run(db, "pkgeval") do
+    n = let
         transaction(db) do
             write_reports!(db, reports)
         end
     end
     @info "Stored pkgeval reports" reports=length(reports) package_rows=n
+    return n
+end
+
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
+    source_run(() -> ingest!(db, args), db, "pkgeval")
     close(db)
     return 0
 end

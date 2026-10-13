@@ -12,13 +12,18 @@ if [ -d /data/cache ] && [ ! -e /app/.cache ]; then
   ln -s /data/cache /app/.cache
 fi
 
+# A git transfer that stalls is dropped rather than left to hang the run
+export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
+
 fetch_all() {
   # One failing source must not stop the others; the export then renders
-  # that source as it was (the same rule the Actions workflow had).
+  # that source as it was (the same rule the Actions workflow had). Each
+  # fetcher gets its own time limit (the slowest takes about 10 minutes), so
+  # one that hangs does not use up the whole run's.
   local failed=0
   for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl; do
     echo "==> $f"
-    if ! julia --color=no --project "/app/$f"; then
+    if ! timeout --kill-after=1m 30m julia --color=no --project "/app/$f"; then
       echo "!! $f failed" >&2
       failed=1
     fi
@@ -27,9 +32,11 @@ fetch_all() {
 }
 
 export_all() {
-  julia --color=no --project /app/db/export.jl --out "$export_dir" || return 1
+  local rc=0
+  julia --color=no --project /app/db/export.jl --out "$export_dir" || rc=1
   # The hand-maintained files are part of the repo, not the database
-  cp /app/data/ttfx_annotations.json /app/data/methodology_changes.json "$export_dir/"
+  cp /app/data/ttfx_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
+  return $rc
 }
 
 case "${1:-ingest}" in
@@ -46,7 +53,9 @@ case "${1:-ingest}" in
     # Everything the browser loads except data/, which the export writes
     rm -rf /site/assets /site/*.html /site/favicon.svg /site/site.webmanifest /site/llms.txt
     cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/assets /site/
-    for d in overview commit diff history timing builds commits workers ttfx sizes downloads pkgeval; do
+    # Every page directory, so a new tab needs no change here
+    for index in /app/*/index.html; do
+      d="$(basename "$(dirname "$index")")"
       rm -rf "/site/$d"; cp -r "/app/$d" "/site/$d"
     done
     commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"

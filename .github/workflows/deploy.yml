@@ -15,6 +15,7 @@ on:
     paths:
       - 'fetch_*.jl'
       - 'src/**'
+      - 'tools/**'
       - 'db/**'
       - 'index.html'
       - '*/index.html'

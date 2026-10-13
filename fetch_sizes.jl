@@ -29,6 +29,7 @@ using Tar
 using Dates
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
@@ -67,29 +68,6 @@ function get_token()
     end
     isempty(token) && error("Set BUILDKITE_API_TOKEN env var or create ~/.buildkite_token")
     return token
-end
-
-# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
-# when the server sends one. HTTP.jl's own retry layer never sees a status
-# code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, read_idle_timeout=120, connect_timeout=30, kwargs...)
-    local resp
-    for attempt in 1:attempts
-        resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, read_idle_timeout, connect_timeout, kwargs...)
-        catch e
-            attempt == attempts && rethrow()
-            @warn "Request failed, retrying" url attempt error=e
-            sleep(2.0^attempt)
-            continue
-        end
-        (resp.status == 429 || resp.status >= 500) || return resp
-        attempt == attempts && return resp
-        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
-        @warn "Retrying after HTTP $(resp.status)" url wait attempt
-        sleep(wait)
-    end
-    return resp
 end
 
 function api_get(endpoint; token=get_token(), params=Dict())
@@ -353,6 +331,11 @@ function open_prs!(db)
                     for r in query(db, "SELECT * FROM size_open_prs"))
     at = query(db, "SELECT value FROM meta WHERE key = 'sizes:open_prs_at'")
     !isempty(at) && now(UTC) - Store.parse_upstream(String(at[1].value)) < PULLS_REFRESH && return cached()
+    function summary(p)
+        u = get(p, :user, nothing)
+        return (title=String(something(get(p, :title, ""), "")), author=u === nothing ? "" : String(u.login),
+                draft=get(p, :draft, false) === true ? 1 : 0, base_ref=String(p.base.ref))
+    end
     pulls = Dict{Int,Any}()
     for page in 1:50
         list = github_get("pulls?state=open&per_page=100&page=$page")
@@ -360,10 +343,18 @@ function open_prs!(db)
         list === nothing && return cached()
         isempty(list) && break
         for p in list
-            u = get(p, :user, nothing)
-            pulls[Int(p.number)] = (title=String(something(get(p, :title, ""), "")), author=u === nothing ? "" : String(u.login),
-                                    draft=get(p, :draft, false) === true ? 1 : 0, base_ref=String(p.base.ref))
+            pulls[Int(p.number)] = summary(p)
         end
+    end
+    # A pull request closed while the list was paged moves the later pages up
+    # by one, so an open one can be missing; those with a measurement are
+    # asked about one at a time before their rows go
+    for r in query(db, "SELECT pr_number FROM size_prs")
+        n = Int(r.pr_number)
+        haskey(pulls, n) && continue
+        p = github_get("pulls/$n")
+        p === nothing && return cached()
+        String(p.state) == "open" && (pulls[n] = summary(p))
     end
     transaction(db) do
         seq = next_seq!(db)

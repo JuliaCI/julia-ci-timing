@@ -287,9 +287,10 @@ function known_reports(db)
     return known
 end
 
-function main(args=ARGS)
+# The fetches run inside the source's run record too, so a failed download
+# shows on /healthz rather than leaving the last run marked ok
+function ingest!(db, args)
     backfill_all = "--backfill-stats" in args
-    db = open_db(Store.db_path(args); create=false)
     by_date_dir = ensure_clone()
     known = known_reports(db)
     @info "Known reports" count=length(known)
@@ -300,7 +301,7 @@ function main(args=ARGS)
     @info "Reports to parse" count=length(new_dates)
 
     names = Dict{Tuple,Int}()
-    n = source_run(db, "benchmarks") do
+    n = let
         written = 0
         for (i, date_path) in enumerate(new_dates)
             @info "Parsing report $i/$(length(new_dates)): $date_path"
@@ -353,6 +354,12 @@ function main(args=ARGS)
         written
     end
     @info "Stored benchmark estimates" rows=n
+    return n
+end
+
+function main(args=ARGS)
+    db = open_db(Store.db_path(args); create=false)
+    source_run(() -> ingest!(db, args), db, "benchmarks")
     close(db)
     return 0
 end

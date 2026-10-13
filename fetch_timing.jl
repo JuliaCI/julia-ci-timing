@@ -10,6 +10,7 @@ using JSON3
 using Dates
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
@@ -31,29 +32,6 @@ function get_token()
     return token
 end
 
-
-# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
-# when the server sends one. HTTP.jl's own retry layer never sees a status
-# code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, read_idle_timeout=120, connect_timeout=30, kwargs...)
-    local resp
-    for attempt in 1:attempts
-        resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, read_idle_timeout, connect_timeout, kwargs...)
-        catch e
-            attempt == attempts && rethrow()
-            @warn "Request failed, retrying" url attempt error=e
-            sleep(2.0^attempt)
-            continue
-        end
-        (resp.status == 429 || resp.status >= 500) || return resp
-        attempt == attempts && return resp
-        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
-        @warn "Retrying after HTTP $(resp.status)" url wait attempt
-        sleep(wait)
-    end
-    return resp
-end
 
 function api_get(endpoint; token=get_token(), params=Dict())
     url = "$API_BASE/$endpoint"

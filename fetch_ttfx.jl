@@ -26,6 +26,7 @@ using CodecZlib: GzipDecompressor
 using Tar
 
 include(joinpath(@__DIR__, "db", "Store.jl"))
+include(joinpath(@__DIR__, "db", "Fetch.jl"))
 using .Store
 using SQLite, DBInterface
 
@@ -56,29 +57,6 @@ function get_token()
     return token
 end
 
-
-# GET with retries on connection errors, 429 and 5xx, honouring Retry-After
-# when the server sends one. HTTP.jl's own retry layer never sees a status
-# code once status_exception is off, so this loop covers those.
-function http_get_retry(url, headers=Pair{String,String}[]; attempts=4, read_idle_timeout=120, connect_timeout=30, kwargs...)
-    local resp
-    for attempt in 1:attempts
-        resp = try
-            HTTP.get(url, headers; status_exception=false, retry=false, read_idle_timeout, connect_timeout, kwargs...)
-        catch e
-            attempt == attempts && rethrow()
-            @warn "Request failed, retrying" url attempt error=e
-            sleep(2.0^attempt)
-            continue
-        end
-        (resp.status == 429 || resp.status >= 500) || return resp
-        attempt == attempts && return resp
-        wait = something(tryparse(Int, HTTP.header(resp, "Retry-After")), 2^attempt)
-        @warn "Retrying after HTTP $(resp.status)" url wait attempt
-        sleep(wait)
-    end
-    return resp
-end
 
 function api_get(endpoint; token=get_token(), params=Dict())
     url = "$API_BASE/$endpoint"
@@ -532,6 +510,20 @@ function open_pulls()
     error("more than 5000 open pull requests")
 end
 
+# The list is paged, and a pull request closed meanwhile moves the later
+# pages up by one, so an open one can be missing from it. Those of `numbers`
+# the list left out are asked about one at a time; the open ones are added.
+function confirm_missing!(pulls, numbers)
+    for n in numbers
+        haskey(pulls, n) && continue
+        resp = http_get_retry("$GITHUB_PULLS/$n", github_headers())
+        resp.status == 200 || error("looking up pull request $n failed: HTTP $(resp.status)")
+        p = JSON3.read(resp.body)
+        String(p.state) == "open" && (pulls[n] = p)
+    end
+    return pulls
+end
+
 # Finished TTFX jobs of julia-pr builds created since `since`, by pull request number,
 # newest first.
 function pr_ttfx_jobs(since::DateTime)
@@ -601,8 +593,8 @@ end
 # Bring ttfx_prs up to date: a row for every open pull request whose latest finished
 # TTFX job produced a comparison, none for closed ones.
 function refresh_prs!(db)
-    pulls = open_pulls()
     existing = Dict(Int(r.pr_number) => r for r in query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs"))
+    pulls = confirm_missing!(open_pulls(), keys(existing))
     since = now(Dates.UTC) - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
     rows = Any[]
     for (n, list) in pr_ttfx_jobs(since)
@@ -733,6 +725,7 @@ function run!(db)
     catch e
         @error "Updating the pull request comparisons failed" exception=(e, catch_backtrace())
     end
+    return length(new_rows)
 end
 
 if abspath(PROGRAM_FILE) == (@__FILE__)

@@ -66,7 +66,8 @@ jobs:
           role-to-assume: ${{ vars.CI_TIMING_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Latest backup under a day old
+      # The backup runs weekly (Sundays 01:00 UTC); a day's slack for a late run
+      - name: Latest backup under eight days old
         if: always()
         shell: bash
         run: |
@@ -74,4 +75,4 @@ jobs:
             --prefix runtime/latest.tar.gz --query 'Contents[0].LastModified' --output text)
           age=$(( $(date -u +%s) - $(date -u -d "$modified" +%s) ))
           echo "latest backup: $modified ($((age / 3600)) h ago)"
-          [ "$age" -lt 86400 ] || { echo "::error::backup older than a day"; exit 1; }
+          [ "$age" -lt $((8 * 86400)) ] || { echo "::error::backup older than eight days"; exit 1; }
