@@ -130,7 +130,97 @@ function phoneListHtml(items) {
     "</li>";
   return `<ul class="m-list m-phone-only">${items.map(item).join("")}</ul>`;
 }
-const compactNumber = (n) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
+const compactNumber = (n) =>
+  n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
+
+// "+1.2%", "-0.4%"; `minAbs` turns a change that rounds to nothing into ""
+function formatSignedPct(p, { digits = 1, minAbs = 0 } = {}) {
+  if (p == null || !isFinite(p)) return "–";
+  if (Math.abs(p) < minAbs) return "";
+  return `${p > 0 ? "+" : ""}${p.toFixed(digits)}%`;
+}
+
+// The colours and options every chart shares, for the current theme
+function chartTheme() {
+  const isDark = isDarkMode();
+  return {
+    isDark,
+    text: isDark ? "#8b949e" : "#656d76",
+    grid: isDark ? "#30363d" : "#d0d7de",
+    zoomFill: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
+  };
+}
+
+const baseChartOptions = () => ({ responsive: true, maintainAspectRatio: false, animation: false });
+
+// Pan and wheel or pinch zoom on time, box zoom by dragging; `onChange`
+// runs after each
+function zoomOptions(onChange) {
+  return {
+    pan: { enabled: true, mode: "x", onPanComplete: onChange },
+    zoom: {
+      wheel: { enabled: true },
+      pinch: { enabled: true },
+      drag: { enabled: !IS_TOUCH, backgroundColor: chartTheme().zoomFill },
+      mode: boxZoomMode,
+      onZoomComplete: onChange,
+    },
+  };
+}
+
+// Legend buttons beside a chart that hide and show its datasets; each button
+// carries its dataset's index, and `chartOf(button)` finds its chart
+function bindDatasetToggles(container, chartOf) {
+  container.querySelectorAll("button[data-index]").forEach((btn) => {
+    btn.onclick = () => {
+      const chart = chartOf(btn);
+      const i = Number(btn.dataset.index);
+      const shown = !chart.isDatasetVisible(i);
+      chart.setDatasetVisibility(i, shown);
+      btn.setAttribute("aria-pressed", String(shown));
+      chart.update("none");
+    };
+  });
+}
+
+// A canvas of `width` by `height` CSS pixels drawn at the screen's density
+function markerCanvas(width, height = width, scale = window.devicePixelRatio || 2) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+  return { canvas, ctx };
+}
+
+// Floats `el` beside `anchor`: a point { x, y } puts it below right of the
+// point, an element's rect puts it under the element; either way it flips
+// to the other side when it would leave the `width` by `height` area
+function placeFloating(el, anchor, { width = window.innerWidth, height = window.innerHeight, gap = 12 } = {}) {
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  let left, top;
+  if (anchor.bottom != null) {
+    left = Math.max(8, Math.min(anchor.left, width - w - 8));
+    top = anchor.bottom + gap + h <= height - 8 ? anchor.bottom + gap : Math.max(8, anchor.top - h - gap);
+  } else {
+    left = anchor.x + gap + w > width - gap ? Math.max(0, anchor.x - gap - w) : anchor.x + gap;
+    top = anchor.y + gap + h > height - gap ? Math.max(0, anchor.y - gap - h) : anchor.y + gap;
+  }
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+const githubCommitURL = (sha) => `https://github.com/JuliaLang/julia/commit/${sha}`;
+const githubPrURL = (n) => `https://github.com/JuliaLang/julia/pull/${n}`;
+const githubCompareURL = (from, to) => `https://github.com/JuliaLang/julia/compare/${from}...${to}`;
+
+// A link that opens in a new tab; `html` is inserted as is
+function extLink(url, html, attrs = "") {
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"${attrs ? " " + attrs : ""}>${html}</a>`;
+}
 
 // On a touchscreen the first tap on a chart point shows its tooltip and a
 // second tap on the same point opens it, so looking at a point does not
@@ -554,15 +644,6 @@ document.addEventListener("click", (e) => {
 let workersFilter = "";
 let workersFilterTimer = null;
 
-function workersFilterTerms() {
-  return workersFilter.toLowerCase().split(/\s+/).filter(Boolean);
-}
-
-function workersFilterMatches(text) {
-  const haystack = text.toLowerCase();
-  return workersFilterTerms().every((term) => haystack.includes(term));
-}
-
 function setWorkersFilter(value, { immediate = false } = {}) {
   workersFilter = (value || "").trim();
   clearTimeout(workersFilterTimer);
@@ -629,10 +710,8 @@ function drawBuildsView() {
     buildsLoadError("No builds with timestamps in the selected time range.");
     return;
   }
-  const isDark = isDarkMode();
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
-  const textColor = isDark ? "#8b949e" : "#656d76";
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
   const point = (b, y) => ({ x: Date.parse(b.created_at), y, build: b });
   const minutes = (s) => (s == null ? null : s / 60);
   const datasets = [
@@ -691,9 +770,7 @@ function drawBuildsView() {
     type: "line",
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: { mode: "near", intersect: false },
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
@@ -750,7 +827,7 @@ function drawBuildsView() {
       return `<tr data-url="${url}"${running(b) ? ' class="builds-running"' : ""}>
         <td>${escapeHtml(b.created_at.replace("T", " ").slice(0, 16))}</td>
         <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
-        <td class="commits-reg-msg"><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
+        <td class="commits-reg-msg"><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer"><code>${escapeHtml(b.commit)}</code></a> ${escapeHtml(b.message || "")}</td>
         <td>${escapeHtml(b.state)}</td>
         <td class="num">${formatDuration(b.wall_s)}</td>
         <td class="num">${b.jobs}</td>
@@ -905,10 +982,6 @@ async function renderAgentsSection() {
   }
   section.classList.remove("agents-section-empty");
   const agents = agentsData.agents || {};
-  const queueOf = (name) => {
-    const q = agents[name] && agents[name].queue;
-    return q === "build" || q === "test" || q === "launch" ? q : "other";
-  };
 
   const latest = snapshots[snapshots.length - 1];
   const latestMs = Date.parse(latest.time);
@@ -961,7 +1034,7 @@ async function renderAgentsSection() {
     "<th>Agent</th><th>Host</th><th>Queue</th><th>OS / arch</th><th>Status</th><th>Current job</th><th>Since</th>",
   );
   parts.push("</tr></thead><tbody>");
-  const filtering = workersFilterTerms().length > 0;
+  const filtering = workersFilter !== "";
   let shown = 0;
   let openQueue = null;
   for (const row of rows) {
@@ -985,7 +1058,7 @@ async function renderAgentsSection() {
     }
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
-    if (filtering && !workersFilterMatches(`${name} ${rec.hostname || ""}`)) continue;
+    if (filtering && !matchesSearchWords(`${name} ${rec.hostname || ""}`, workersFilter)) continue;
     shown++;
     const q = rawQueue(row);
     if (q !== openQueue) {
@@ -1132,10 +1205,8 @@ async function renderBacklogSection() {
 function renderBacklogChart(d) {
   const canvas = document.getElementById("backlog-chart");
   if (!canvas || typeof Chart === "undefined") return;
-  const isDark = isDarkMode();
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
   const t0 = Date.parse(d.start);
   const stepMs = d.step_s * 1000;
   const metric = backlogMetric;
@@ -1171,9 +1242,7 @@ function renderBacklogChart(d) {
     type: "line",
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: { mode: "near", axis: "x", intersect: false },
       plugins: {
         legend: { display: false },
@@ -1221,15 +1290,7 @@ function renderBacklogChart(d) {
           `<li><button type="button" data-index="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${ds.borderColor}"></span>${escapeHtml(ds.label)}</button></li>`,
       )
       .join("");
-    legendEl.querySelectorAll("button").forEach((btn) => {
-      btn.onclick = () => {
-        const i = Number(btn.dataset.index);
-        const shown = !backlogChart.isDatasetVisible(i);
-        backlogChart.setDatasetVisibility(i, shown);
-        btn.setAttribute("aria-pressed", String(shown));
-        backlogChart.update("none");
-      };
-    });
+    bindDatasetToggles(legendEl, () => backlogChart);
   }
 }
 
@@ -1285,11 +1346,9 @@ function renderBalanceCharts(d) {
     container.innerHTML = `<div class="workers-empty">${d?.error ? "Could not load the pools." : "No pools share hosts."}</div>`;
     return;
   }
-  const isDark = isDarkMode();
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const queueColors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
   const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
   const t0 = Date.parse(d.start);
   const stepMs = d.step_s * 1000;
   const range = workersTimeRange(d);
@@ -1357,9 +1416,7 @@ function renderBalanceCharts(d) {
         type: "line",
         data: { datasets },
         options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
+          ...baseChartOptions(),
           interaction: { mode: "nearest", axis: "x", intersect: false },
           plugins: {
             legend: { display: false },
@@ -1398,16 +1455,7 @@ function renderBalanceCharts(d) {
       }),
     );
   });
-  container.querySelectorAll("button[data-chart]").forEach((btn) => {
-    btn.onclick = () => {
-      const chart = balanceCharts[Number(btn.dataset.chart)];
-      const i = Number(btn.dataset.index);
-      const shown = !chart.isDatasetVisible(i);
-      chart.setDatasetVisibility(i, shown);
-      btn.setAttribute("aria-pressed", String(shown));
-      chart.update("none");
-    };
-  });
+  bindDatasetToggles(container, (btn) => balanceCharts[Number(btn.dataset.chart)]);
 }
 
 function renderWorkerPresence({ charts = true } = {}) {
@@ -1489,7 +1537,7 @@ function renderWorkerPresence({ charts = true } = {}) {
 
   // Busiest hosts first
   const agents = [...agentDays.keys()]
-    .filter((name) => workersFilterMatches(name))
+    .filter((name) => matchesSearchWords(name, workersFilter))
     .sort((a, b) => (agentTotal.get(b) || 0) - (agentTotal.get(a) || 0) || a.localeCompare(b));
   if (agents.length === 0) {
     container.innerHTML = `<div class="workers-empty">No hosts match "${escapeHtml(workersFilter)}"</div>`;
@@ -1566,6 +1614,36 @@ function median(values) {
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Median, mean, extremes and population standard deviation, or null for none
+function summarize(values) {
+  if (values.length === 0) return null;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length;
+  return {
+    median: median(values),
+    mean,
+    min: Math.min(...values),
+    max: Math.max(...values),
+    std: Math.sqrt(variance),
+    n: values.length,
+  };
+}
+
+// How many runs ended in each state, the retries among them and the pass rate
+function countStates(runs) {
+  const c = { total: runs.length, passed: 0, failed: 0, timedOut: 0, canceled: 0, retries: 0 };
+  for (const r of runs) {
+    const state = getRunState(r);
+    if (state === "passed") c.passed++;
+    else if (state === "failed") c.failed++;
+    else if (state === "timed_out") c.timedOut++;
+    else if (state === "canceled") c.canceled++;
+    if (r.retry > 0) c.retries++;
+  }
+  c.rate = c.total > 0 ? c.passed / c.total : 1;
+  return c;
 }
 
 function toggleJobsSelection(jobs) {
@@ -1739,6 +1817,31 @@ function getHueFromColor(color) {
   return hslMatch ? parseInt(hslMatch[1]) : 0;
 }
 
+// A job's agents in the visible range, every state and the shown hosts, as
+// [agent, runs] busiest first. The chart and the stats table both colour
+// agents in this order, so a host's dot matches its points.
+function jobAgents(job) {
+  const { min, max } = getVisibleTimeRange();
+  const counts = new Map();
+  for (const r of job.recent) {
+    const date = new Date(runTime(r));
+    if ((min && date < min) || (max && date > max) || !r.agent || excludedHosts.has(r.agent)) continue;
+    counts.set(r.agent, (counts.get(r.agent) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+// The hue shift of each agent's points around the job's colour, spread
+// evenly over a range that greens need wider to look distinct
+function agentHueShifts(color, agents) {
+  const maxShift = 20 * getPerceptualHueMultiplier(getHueFromColor(color));
+  const shifts = new Map();
+  agents.forEach((agent, i) => {
+    shifts.set(agent, agents.length > 1 ? -maxShift + (2 * maxShift * i) / (agents.length - 1) : 0);
+  });
+  return shifts;
+}
+
 function formatDuration(seconds) {
   if (seconds == null) return '<span class="text-muted">—</span>';
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
@@ -1834,12 +1937,7 @@ function pad2(v) {
 // options: textColor, gridColor, minorGridColor, tooltipFormat, plus any
 // Chart.js scale options to merge on top (min, max, grid.display, ...)
 function timeAxis({ textColor, gridColor, minorGridColor, tooltipFormat = "yyyy-MM-dd HH:mm", ...overrides } = {}) {
-  if (!minorGridColor && gridColor) {
-    // Half the alpha of the major grid; gridColor is hex or rgba()
-    minorGridColor = gridColor.startsWith("rgba(")
-      ? gridColor.replace(/,\s*([\d.]+)\)$/, (m, a) => `, ${parseFloat(a) / 2})`)
-      : fadeColor(gridColor, 0.5);
-  }
+  if (!minorGridColor && gridColor) minorGridColor = colorToRgba(gridColor, 0.5);
   let step = TIME_TICK_STEPS[TIME_TICK_STEPS.length - 1];
 
   function buildTicks(axis) {
@@ -2002,7 +2100,6 @@ function computeTrend(runs) {
 
   return {
     slope, // seconds per day
-    slopePerDay: slope,
     pValue,
     rSquared,
     significant: isSignificant,
@@ -2296,41 +2393,13 @@ function filterRunsByState(runs, cutoff, maxCutoff = null, filterHosts = true) {
 function getJobPassRate(jobData) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - PASS_RATE_DAYS);
-
-  let total = 0,
-    passed = 0,
-    failed = 0,
-    timedOut = 0,
-    canceled = 0,
-    retries = 0;
-  for (const run of jobData.recent) {
-    const date = new Date(runTime(run));
-    if (date < cutoff) continue;
-    total++;
-    const state = run.state || "passed";
-    if (state === "passed") passed++;
-    else if (state === "failed") failed++;
-    else if (state === "timed_out") timedOut++;
-    else if (state === "canceled") canceled++;
-    // Count retries (retry > 0 means this is a retry attempt)
-    if (run.retry > 0) retries++;
-  }
-  return {
-    total,
-    passed,
-    failed,
-    timedOut,
-    canceled,
-    retries,
-    rate: total > 0 ? passed / total : 1,
-  };
+  return countStates(jobData.recent.filter((run) => new Date(runTime(run)) >= cutoff));
 }
 
 // Check if a job has recent failures or timeouts
 // Returns object with: { hasFailure, hasTimeout, failedCount, timedOutCount, totalCount, tooltipFailure, tooltipTimeout }
-// Shows issues if:
-// 1. There was a failure/timeout in the last 24 hours, OR
-// 2. There was a failure/timeout in the last 3 runs AND at least one run is within PASS_RATE_DAYS
+// Shows issues if there was a failure/timeout in the last 3 runs and at least
+// one of them is within PASS_RATE_DAYS
 function hasRecentFailure(jobData) {
   if (!jobData.recent || jobData.recent.length === 0) {
     return {
@@ -2344,8 +2413,6 @@ function hasRecentFailure(jobData) {
     };
   }
 
-  const now = new Date();
-  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const recentCutoff = new Date();
   recentCutoff.setDate(recentCutoff.getDate() - PASS_RATE_DAYS);
 
@@ -2384,18 +2451,12 @@ function hasRecentFailure(jobData) {
     // Check if this run failed
     if (state === "failed") {
       failedCount++;
-      // Show warning if within 24h OR if this is in the last 3 runs and recent enough
-      if (runDate >= last24h || runDate >= recentCutoff) {
-        hasFailure = true;
-      }
+      if (runDate >= recentCutoff) hasFailure = true;
     }
     // Check if this run timed out
     else if (state === "timed_out") {
       timedOutCount++;
-      // Show warning if within 24h OR if this is in the last 3 runs and recent enough
-      if (runDate >= last24h || runDate >= recentCutoff) {
-        hasTimeout = true;
-      }
+      if (runDate >= recentCutoff) hasTimeout = true;
     }
   }
 
@@ -2424,6 +2485,30 @@ function hasRecentFailure(jobData) {
     tooltipTimeout,
     tooltipBreakage,
   };
+}
+
+// A stats table's pass rate: green at 100%, amber from the threshold, red
+// below, with icons for recent failures, timeouts and retries and the
+// breakdown in its tooltip
+function passRateSpan(pr, issueInfo, breakage) {
+  const color =
+    pr.rate >= 1 ? "var(--color-success-fg)" : pr.rate >= PASS_RATE_THRESHOLD ? "var(--color-attention-fg)" : "var(--color-danger-fg)";
+  let icons = "";
+  if (issueInfo.hasFailure) icons += "⚠️";
+  if (issueInfo.hasTimeout) icons += "⏳";
+  if (pr.retries > 0) icons += "🔄";
+  const parts = [];
+  if (pr.failed > 0) parts.push(`${pr.failed} failed`);
+  if (pr.timedOut > 0) parts.push(`${pr.timedOut} timed out`);
+  if (pr.canceled > 0) parts.push(`${pr.canceled} canceled`);
+  if (pr.retries > 0) parts.push(`${pr.retries} retries`);
+  let breakdown = parts.length > 0 ? parts.join(", ") : "all passed";
+  if (issueInfo.hasFailure) {
+    breakdown += `\n${issueInfo.tooltipFailure}${breakage ? ` ⚡ broke at ${breakage.commit.substring(0, 8)}` : ""}`;
+  }
+  if (issueInfo.hasTimeout) breakdown += `\n${issueInfo.tooltipTimeout}`;
+  const title = `${breakdown} out of ${pr.total} in selected range`;
+  return `<span style="color: ${color}" title="${escapeHtml(title)}">${Math.round(pr.rate * 100)}%${icons ? " " + icons : ""}</span>`;
 }
 
 /**
@@ -3362,16 +3447,9 @@ function updateChart() {
 
     // Create custom canvas for timed_out marker (⤒) at high DPI
     const createTimedOutMarker = (fillColor, markerSize = null) => {
-      const scale = window.devicePixelRatio || 2;
       // Use smaller markers on narrow screens
       const size = markerSize ?? (window.innerWidth <= 480 ? 7 : 10);
-      const canvas = document.createElement("canvas");
-      canvas.width = size * scale;
-      canvas.height = size * scale;
-      canvas.style.width = size + "px";
-      canvas.style.height = size + "px";
-      const ctx = canvas.getContext("2d");
-      ctx.scale(scale, scale);
+      const { canvas, ctx } = markerCanvas(size);
       ctx.strokeStyle = fillColor;
       ctx.fillStyle = fillColor;
       ctx.lineWidth = size <= 7 ? 0.8 : 1.0;
@@ -3403,15 +3481,8 @@ function updateChart() {
 
     // Create breakage marker (cross/X with circle around it to indicate breakage)
     const createBreakageMarker = (fillColor, markerSize = null) => {
-      const scale = window.devicePixelRatio || 2;
       const size = markerSize ?? (window.innerWidth <= 480 ? 7 : 10);
-      const canvas = document.createElement("canvas");
-      canvas.width = size * scale;
-      canvas.height = size * scale;
-      canvas.style.width = size + "px";
-      canvas.style.height = size + "px";
-      const ctx = canvas.getContext("2d");
-      ctx.scale(scale, scale);
+      const { canvas, ctx } = markerCanvas(size);
 
       const cx = size / 2;
       const cy = size / 2;
@@ -3439,22 +3510,9 @@ function updateChart() {
       return canvas;
     };
 
-    // Generate per-point colors with perceptually-adjusted hue shifts per agent
-    const uniqueAgents = [...new Set(points.map((p) => p.meta.agent || ""))];
-    const agentHueShifts = {};
-    const baseShift = 20; // Base ±20 degrees range
-    const baseHue = getHueFromColor(color);
-    const maxShift = baseShift * getPerceptualHueMultiplier(baseHue);
-    uniqueAgents.forEach((agent, i) => {
-      // Distribute shifts evenly across the perceptually-adjusted range
-      agentHueShifts[agent] =
-        uniqueAgents.length > 1
-          ? -maxShift + (2 * maxShift * i) / (uniqueAgents.length - 1)
-          : 0;
-    });
-    const pointColors = points.map((p) =>
-      shiftHue(color, agentHueShifts[p.meta.agent || ""]),
-    );
+    // Points outside the visible range keep the job's own colour
+    const hueShifts = agentHueShifts(color, jobAgents(jobData).map(([agent]) => agent));
+    const pointColors = points.map((p) => shiftHue(color, hueShifts.get(p.meta.agent) || 0));
 
     // Cache timeout markers per color
     const timedOutMarkerCache = {};
@@ -3670,9 +3728,7 @@ function updateChart() {
   if (chart) chart.destroy();
   highlightActive = false; // Reset highlight state when chart is recreated
 
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
 
   // Calculate x-axis bounds based on time range or custom zoom
   let xMin, xMax;
@@ -3693,9 +3749,7 @@ function updateChart() {
     type: "line",
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: {
         mode: "near",
         intersect: false,
@@ -3798,7 +3852,6 @@ function updateChart() {
         x: timeAxis({
           textColor,
           gridColor,
-          minorGridColor: isDark ? "rgba(48, 54, 61, 0.5)" : "rgba(208, 215, 222, 0.5)",
           min: xMin,
           max: xMax,
         }),
@@ -3906,9 +3959,8 @@ function showPopup(meta) {
     const fullCommit = getFullCommitSha(meta.commit);
 
     document.getElementById("popup-github-link").href =
-      `https://github.com/JuliaLang/julia/commit/${fullCommit}`;
-    document.getElementById("popup-buildkite-link").href =
-      `https://buildkite.com/julialang/julia-master-scheduled/builds/${meta.build}`;
+      githubCommitURL(fullCommit);
+    document.getElementById("popup-buildkite-link").href = buildkiteBuildUrl({ pipeline: "julia-master-scheduled", build: meta.build });
 
     // Show coverage links
     coverageLinksEl.style.display = "";
@@ -3958,7 +4010,7 @@ function showPopup(meta) {
     document.getElementById("popup-build").textContent = `#${meta.build}`;
 
     document.getElementById("popup-github-link").href =
-      `https://github.com/JuliaLang/julia/commit/${meta.commit}`;
+      githubCommitURL(meta.commit);
 
     // Use stored pipeline, with fallback heuristic for old data
     const pipeline =
@@ -3967,8 +4019,7 @@ function showPopup(meta) {
       meta.job.toLowerCase().includes("srcassert")
         ? "julia-master-scheduled"
         : "julia-master");
-    document.getElementById("popup-buildkite-link").href =
-      `https://buildkite.com/julialang/${pipeline}/builds/${meta.build}`;
+    document.getElementById("popup-buildkite-link").href = buildkiteBuildUrl({ pipeline, build: meta.build });
 
     // Hide coverage links for regular jobs
     coverageLinksEl.style.display = "none";
@@ -4065,16 +4116,9 @@ function colorToRgba(color, alpha) {
 
 // Create smaller timeout marker for de-emphasized state
 function createSmallTimedOutMarker(fillColor) {
-  const scale = window.devicePixelRatio || 2;
   // Smaller on narrow screens: 3.5px vs 5px
   const size = window.innerWidth <= 480 ? 3.5 : 5;
-  const canvas = document.createElement("canvas");
-  canvas.width = size * scale;
-  canvas.height = size * scale;
-  canvas.style.width = size + "px";
-  canvas.style.height = size + "px";
-  const ctx = canvas.getContext("2d");
-  ctx.scale(scale, scale);
+  const { canvas, ctx } = markerCanvas(size);
   ctx.strokeStyle = fillColor;
   ctx.fillStyle = fillColor;
   ctx.lineWidth = size <= 4 ? 0.4 : 0.5;
@@ -4522,91 +4566,34 @@ function clearChartHighlight() {
   chart.update();
 }
 
-// Resizable stats panel
-(function () {
-  const handle = document.getElementById("resize-handle");
-  const wrapper = document.getElementById("stats-wrapper");
-  let startY, startHeight;
-
-  handle.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    startY = e.clientY;
-    startHeight = wrapper.offsetHeight;
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-    document.body.style.cursor = "ns-resize";
-    document.body.style.userSelect = "none";
-  });
-
-  function onMouseMove(e) {
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(
-      50,
-      Math.min(window.innerHeight * 0.7, startHeight + delta),
-    );
-    wrapper.style.height = newHeight + "px";
-  }
-
-  function onMouseUp() {
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mouseup", onMouseUp);
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    // Save to localStorage
-    saveToLocalStorage();
-  }
-
-  // Touch support
-  handle.addEventListener("touchstart", (e) => {
-    const touch = e.touches[0];
-    startY = touch.clientY;
-    startHeight = wrapper.offsetHeight;
-    document.addEventListener("touchmove", onTouchMove);
-    document.addEventListener("touchend", onTouchEnd);
-  });
-
-  function onTouchMove(e) {
-    const touch = e.touches[0];
-    const delta = startY - touch.clientY;
-    const newHeight = Math.max(
-      50,
-      Math.min(window.innerHeight * 0.7, startHeight + delta),
-    );
-    wrapper.style.height = newHeight + "px";
-  }
-
-  function onTouchEnd() {
-    document.removeEventListener("touchmove", onTouchMove);
-    document.removeEventListener("touchend", onTouchEnd);
-    saveToLocalStorage();
-  }
-})();
-
 // Generic resizable panel: drag the handle to resize the target panel above/below.
-// Heights persist in localStorage under the given key. Direction "up" means the
-// target sits below the handle (dragging up enlarges it); "down" is reversed.
-function makeResizablePanel({ handleId, targetId, storageKey, direction = "up", defaultHeight = 280 }) {
+// Heights persist in localStorage under the given key, or through `onEnd`
+// without one. Direction "up" means the target sits below the handle
+// (dragging up enlarges it); "down" is reversed.
+function makeResizablePanel({ handleId, targetId, storageKey = null, direction = "up", defaultHeight = 280, maxShare = 0.8, onEnd = null }) {
   const handle = document.getElementById(handleId);
   const target = document.getElementById(targetId);
   if (!handle || !target) return;
 
   // Restore saved height
-  try {
-    const saved = parseInt(localStorage.getItem(storageKey), 10);
-    if (!isNaN(saved) && saved >= 50) {
-      target.style.height = saved + "px";
-    } else {
+  if (storageKey) {
+    try {
+      const saved = parseInt(localStorage.getItem(storageKey), 10);
+      if (!isNaN(saved) && saved >= 50) {
+        target.style.height = saved + "px";
+      } else {
+        target.style.height = defaultHeight + "px";
+      }
+    } catch (e) {
       target.style.height = defaultHeight + "px";
     }
-  } catch (e) {
-    target.style.height = defaultHeight + "px";
   }
 
   let startY = 0;
   let startHeight = 0;
 
   function clampHeight(h) {
-    return Math.max(50, Math.min(window.innerHeight * 0.8, h));
+    return Math.max(50, Math.min(window.innerHeight * maxShare, h));
   }
 
   function beginDrag(clientY) {
@@ -4620,6 +4607,8 @@ function makeResizablePanel({ handleId, targetId, storageKey, direction = "up", 
   }
 
   function persist() {
+    if (onEnd) onEnd();
+    if (!storageKey) return;
     try {
       localStorage.setItem(storageKey, String(target.offsetHeight));
     } catch (e) {}
@@ -4655,6 +4644,12 @@ function makeResizablePanel({ handleId, targetId, storageKey, direction = "up", 
   });
 }
 
+makeResizablePanel({
+  handleId: "resize-handle",
+  targetId: "stats-wrapper",
+  maxShare: 0.7,
+  onEnd: () => saveToLocalStorage(),
+});
 makeResizablePanel({
   handleId: "bench-resize-handle",
   targetId: "bench-stats",
@@ -4778,7 +4773,6 @@ function updateStatsTable() {
     const filtered = filterRunsByState(job.recent, rangeMin, rangeMax);
     if (filtered.length === 0) continue;
 
-    // Collect agent counts from all runs in range (not just filtered by state)
     const allRunsInRange = job.recent.filter((r) => {
       const date = new Date(runTime(r));
       return (
@@ -4787,61 +4781,13 @@ function updateStatsTable() {
         (excludedHosts.size === 0 || !excludedHosts.has(r.agent))
       );
     });
-    const agentCounts = {};
-    for (const r of allRunsInRange) {
-      const agent = r.agent || "";
-      if (agent) agentCounts[agent] = (agentCounts[agent] || 0) + 1;
-    }
-    const agents = Object.entries(agentCounts).sort((a, b) => b[1] - a[1]); // Sort by count desc
+    const agents = jobAgents(job);
 
     // Calculate pass rate from all runs in range (ignoring state filter)
-    let prPassed = 0,
-      prFailed = 0,
-      prTimedOut = 0,
-      prCanceled = 0,
-      prRetries = 0;
-    for (const r of allRunsInRange) {
-      const state = r.state || "passed";
-      if (state === "passed") prPassed++;
-      else if (state === "failed") prFailed++;
-      else if (state === "timed_out") prTimedOut++;
-      else if (state === "canceled") prCanceled++;
-      if (r.retry > 0) prRetries++;
-    }
-    const prTotal = allRunsInRange.length;
-    const pr =
-      prTotal > 0
-        ? {
-            total: prTotal,
-            passed: prPassed,
-            failed: prFailed,
-            timedOut: prTimedOut,
-            canceled: prCanceled,
-            retries: prRetries,
-            rate: prPassed / prTotal,
-          }
-        : null;
+    const pr = allRunsInRange.length > 0 ? countStates(allRunsInRange) : null;
 
     // Duration stats from all visible runs (respects state filter)
-    let median = null,
-      mean = null,
-      min = null,
-      max = null,
-      std = null,
-      trend = null;
-    if (filtered.length > 0) {
-      const durations = filtered.map((r) => r.duration);
-      const sorted = [...durations].sort((a, b) => a - b);
-      median = sorted[Math.floor(sorted.length / 2)];
-      mean = durations.reduce((a, b) => a + b, 0) / durations.length;
-      min = Math.min(...durations);
-      max = Math.max(...durations);
-      const variance =
-        durations.reduce((sum, d) => sum + (d - mean) ** 2, 0) /
-        durations.length;
-      std = Math.sqrt(variance);
-      trend = computeTrend(filtered);
-    }
+    const { median, mean, min, max, std } = summarize(filtered.map((r) => r.duration));
 
     jobStats.push({
       jobName,
@@ -4852,7 +4798,7 @@ function updateStatsTable() {
       min,
       max,
       std,
-      trend,
+      trend: computeTrend(filtered),
       pr,
       n: filtered.length,
     });
@@ -5028,85 +4974,29 @@ function updateStatsTable() {
       n,
     } = stat;
 
-    // Build hosts HTML with perceptually-adjusted hue-shifted colors
+    // Hosts as dots in their chart colours, the busiest ten
     let hostsHtml = "";
+    const hueShifts = agentHueShifts(color, agents.map(([agent]) => agent));
     if (agents.length > 0) {
-      const baseShift = 20;
-      const baseHue = getHueFromColor(color);
-      const maxShift = baseShift * getPerceptualHueMultiplier(baseHue);
       const maxDotsShown = 10;
-      const displayAgents =
-        agents.length > maxDotsShown ? agents.slice(0, maxDotsShown) : agents;
-      const hostDots = displayAgents
-        .map(([agent, count], i) => {
-          const hueShift =
-            displayAgents.length > 1
-              ? -maxShift + (2 * maxShift * i) / (displayAgents.length - 1)
-              : 0;
-          const hostColor = shiftHue(color, hueShift);
+      hostsHtml = agents
+        .slice(0, maxDotsShown)
+        .map(([agent, count]) => {
+          const hostColor = shiftHue(color, hueShifts.get(agent));
           return `<span class="color-dot" style="background: ${hostColor}" title="${escapeHtml(agent)}: ${count} runs"></span>`;
         })
         .join("");
       if (agents.length > maxDotsShown) {
-        const hiddenCount = agents.length - maxDotsShown;
         const hiddenAgents = agents
           .slice(maxDotsShown)
           .map(([a, c]) => `${a}: ${c} runs`)
           .join("\n");
-        hostsHtml =
-          hostDots +
-          `<span class="text-muted" title="${escapeHtml(hiddenAgents)}">+${hiddenCount}</span>`;
-      } else {
-        hostsHtml = hostDots;
+        hostsHtml += `<span class="text-muted" title="${escapeHtml(hiddenAgents)}">+${agents.length - maxDotsShown}</span>`;
       }
     }
 
-    let passRateHtml = '<span class="text-muted">—</span>';
-    if (pr && pr.total > 0) {
-      const pct = Math.round(pr.rate * 100);
-      // Color: green=100%, yellow>=90%, red<90%
-      const prColor =
-        pr.rate >= 1
-          ? "var(--color-success-fg)"
-          : pr.rate >= PASS_RATE_THRESHOLD
-            ? "var(--color-attention-fg)"
-            : "var(--color-danger-fg)";
-      // Check for recent failures and timeouts
-      const job = data.jobs[jobName];
-      const issueInfo = job
-        ? hasRecentFailure(job)
-        : {
-            hasFailure: false,
-            hasTimeout: false,
-            hasBreakage: false,
-            tooltipFailure: "",
-            tooltipTimeout: "",
-            tooltipBreakage: "",
-          };
-      // Icons: ⚠️ if recent failure, ⏳ if recent timeout, 🔄 if retries present
-      let icons = "";
-      if (issueInfo.hasFailure) icons += "⚠️";
-      if (issueInfo.hasTimeout) icons += "⏳";
-      if (pr.retries > 0) icons += "🔄";
-      const parts = [];
-      if (pr.failed > 0) parts.push(`${pr.failed} failed`);
-      if (pr.timedOut > 0) parts.push(`${pr.timedOut} timed out`);
-      if (pr.canceled > 0) parts.push(`${pr.canceled} canceled`);
-      if (pr.retries > 0) parts.push(`${pr.retries} retries`);
-      let breakdown = parts.length > 0 ? parts.join(", ") : "all passed";
-      if (issueInfo.hasFailure) {
-        const breakageInfo = jobBreakages[jobName];
-        if (breakageInfo) {
-          breakdown += `\n${issueInfo.tooltipFailure} ⚡ broke at ${breakageInfo.commit.substring(0, 8)}`;
-        } else {
-          breakdown += `\n${issueInfo.tooltipFailure}`;
-        }
-      }
-      if (issueInfo.hasTimeout) {
-        breakdown += `\n${issueInfo.tooltipTimeout}`;
-      }
-      passRateHtml = `<span style="color: ${prColor}" title="${escapeHtml(breakdown + " out of " + pr.total + " in selected range")}">${pct}%${icons ? " " + icons : ""}</span>`;
-    }
+    const passRateHtml =
+      pr && pr.total > 0 ? passRateSpan(pr, hasRecentFailure(data.jobs[jobName]), jobBreakages[jobName]) : '<span class="text-muted">—</span>';
 
     const isExpanded = expandedJobs.has(jobName);
     const hasMultipleHosts = agents.length > 1;
@@ -5140,17 +5030,9 @@ function updateStatsTable() {
     // Add host detail rows if expanded
     if (isExpanded && hasMultipleHosts) {
       const job = data.jobs[jobName];
-      const baseShift = 20;
-      const baseHue = getHueFromColor(color);
-      const maxShift = baseShift * getPerceptualHueMultiplier(baseHue);
 
-      for (let i = 0; i < agents.length; i++) {
-        const [agent, count] = agents[i];
-        const hueShift =
-          agents.length > 1
-            ? -maxShift + (2 * maxShift * i) / (agents.length - 1)
-            : 0;
-        const hostColor = shiftHue(color, hueShift);
+      for (const [agent] of agents) {
+        const hostColor = shiftHue(color, hueShifts.get(agent));
 
         // Calculate stats for this host only (respects state filter)
         const allHostRuns = job.recent.filter((r) => {
@@ -5163,104 +5045,20 @@ function updateStatsTable() {
           const runState = getRunState(r);
           return excludedStates.size === 0 || !excludedStates.has(runState);
         });
-        const hostDurations = hostFilteredRuns.map((r) => r.duration);
-        const hostSorted = [...hostDurations].sort((a, b) => a - b);
-        const hostMedian =
-          hostDurations.length > 0
-            ? hostSorted[Math.floor(hostDurations.length / 2)]
-            : 0;
-        const hostMean =
-          hostDurations.length > 0
-            ? hostDurations.reduce((a, b) => a + b, 0) / hostDurations.length
-            : 0;
-        const hostMin =
-          hostDurations.length > 0 ? Math.min(...hostDurations) : 0;
-        const hostMax =
-          hostDurations.length > 0 ? Math.max(...hostDurations) : 0;
-        const hostVariance =
-          hostDurations.length > 0
-            ? hostDurations.reduce((sum, d) => sum + (d - hostMean) ** 2, 0) /
-              hostDurations.length
-            : 0;
-        const hostStd = Math.sqrt(hostVariance);
+        const {
+          median: hostMedian,
+          min: hostMin,
+          max: hostMax,
+          std: hostStd,
+        } = summarize(hostFilteredRuns.map((r) => r.duration)) || {};
         const hostTrend = computeTrend(hostFilteredRuns);
         const hostN = hostFilteredRuns.length;
 
-        // Calculate pass rate for this host from all runs in time range
-        let hostPrHtml = '<span class="text-muted">—</span>';
-        const hostTotal = allHostRuns.length;
-        if (hostTotal > 0) {
-          let hostPassed = 0,
-            hostFailed = 0,
-            hostTimedOut = 0,
-            hostCanceled = 0,
-            hostRetries = 0;
-          for (const run of allHostRuns) {
-            const state = run.state || "passed";
-            if (state === "passed") hostPassed++;
-            else if (state === "failed") hostFailed++;
-            else if (state === "timed_out") hostTimedOut++;
-            else if (state === "canceled") hostCanceled++;
-            if (run.retry > 0) hostRetries++;
-          }
-          const hostRate = hostPassed / hostTotal;
-          const hostPct = Math.round(hostRate * 100);
-          // Color: green=100%, yellow>=90%, red<90%
-          const hostPrColor =
-            hostRate >= 1
-              ? "var(--color-success-fg)"
-              : hostRate >= PASS_RATE_THRESHOLD
-                ? "var(--color-attention-fg)"
-                : "var(--color-danger-fg)";
-
-          // Check for recent failures/timeouts using same logic as hasRecentFailure
-          const now = new Date();
-          const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-          const hostLastThree = allHostRuns.slice(
-            0,
-            Math.min(3, allHostRuns.length),
-          );
-          let hostHasFailure = false,
-            hostHasTimeout = false;
-          let hostRecentFailed = 0,
-            hostRecentTimedOut = 0;
-          for (const run of hostLastThree) {
-            const runDate = new Date(runTime(run));
-            const state = run.state || "passed";
-            if (state === "failed") {
-              hostRecentFailed++;
-              if (runDate >= last24h) hostHasFailure = true;
-            } else if (state === "timed_out") {
-              hostRecentTimedOut++;
-              if (runDate >= last24h) hostHasTimeout = true;
-            }
-          }
-          if (hostRecentFailed > 0) hostHasFailure = true;
-          if (hostRecentTimedOut > 0) hostHasTimeout = true;
-
-          // Icons: ⚠️ if recent failure, ⏳ if recent timeout, 🔄 if retries present
-          let hostIcons = "";
-          if (hostHasFailure) hostIcons += "⚠️";
-          if (hostHasTimeout) hostIcons += "⏳";
-          if (hostRetries > 0) hostIcons += "🔄";
-          const parts = [];
-          if (hostFailed > 0) parts.push(`${hostFailed} failed`);
-          if (hostTimedOut > 0) parts.push(`${hostTimedOut} timed out`);
-          if (hostCanceled > 0) parts.push(`${hostCanceled} canceled`);
-          if (hostRetries > 0) parts.push(`${hostRetries} retries`);
-          let breakdown = parts.length > 0 ? parts.join(", ") : "all passed";
-          if (hostHasFailure) {
-            const breakageInfo = jobBreakages[jobName];
-            if (breakageInfo) {
-              breakdown += `\nCurrently failing: ${hostRecentFailed}/${hostLastThree.length} recent runs failed ⚡ broke at ${breakageInfo.commit.substring(0, 8)}`;
-            } else {
-              breakdown += `\nCurrently failing: ${hostRecentFailed}/${hostLastThree.length} recent runs failed`;
-            }
-          }
-          if (hostHasTimeout)
-            breakdown += `\nCurrently timing out: ${hostRecentTimedOut}/${hostLastThree.length} recent runs timed-out`;
-          hostPrHtml = `<span style="color: ${hostPrColor}" title="${escapeHtml(breakdown + " out of " + hostTotal + " in selected range")}">${hostPct}%${hostIcons ? " " + hostIcons : ""}</span>`;
-        }
+        // Pass rate for this host from all runs in time range
+        const hostPrHtml =
+          allHostRuns.length > 0
+            ? passRateSpan(countStates(allHostRuns), hasRecentFailure({ recent: allHostRuns }), jobBreakages[jobName])
+            : '<span class="text-muted">—</span>';
 
         const hostRow = document.createElement("tr");
         hostRow.className = "host-row";
@@ -5280,7 +5078,7 @@ function updateStatsTable() {
                             <td class="duration">${formatDuration(hostMedian)}</td>
                             <td class="duration">${formatDuration(hostMin)}</td>
                             <td class="duration">${formatDuration(hostMax)}</td>
-                            <td class="duration">±${formatDuration(hostStd)}</td>
+                            <td class="duration">${hostStd != null ? "±" + formatDuration(hostStd) : formatDuration(null)}</td>
                             <td>${hostN}</td>
                         `;
         tbody.appendChild(hostRow);
@@ -5311,16 +5109,6 @@ function updateStatsTable() {
     // Helper to compute coverage stats
     function computeCoverageStats(dataPoints) {
       if (dataPoints.length === 0) return null;
-      const values = dataPoints.map((d) => d.value);
-      const sorted = [...values].sort((a, b) => a - b);
-      const median = sorted[Math.floor(sorted.length / 2)];
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      const variance =
-        values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length;
-      const std = Math.sqrt(variance);
-
       // Compute trend
       const sortedByDate = [...dataPoints].sort(
         (a, b) => runTime(a) - runTime(b),
@@ -5332,7 +5120,7 @@ function updateStatsTable() {
             )
           : null;
 
-      return { median, mean, min, max, std, trend, n: values.length };
+      return { ...summarize(dataPoints.map((d) => d.value)), trend };
     }
 
     // Add separator row before coverage reports
@@ -5638,6 +5426,40 @@ function populateJobSelector() {
   renderMatrixTable();
 }
 
+// Which of `jobs` are failing, timing out or broken now, with a tooltip line
+// for each
+function collectIssues(jobs) {
+  const out = {
+    hasFailure: false,
+    hasTimeout: false,
+    hasBreakage: false,
+    failureTooltips: [],
+    timeoutTooltips: [],
+    breakageTooltips: [],
+  };
+  for (const { name } of jobs) {
+    const job = data.jobs[name];
+    if (!job) continue;
+    const issueInfo = hasRecentFailure(job);
+    if (issueInfo.hasFailure) {
+      const breakageInfo = jobBreakages[name];
+      out.failureTooltips.push(
+        `${name}: ${issueInfo.failedCount}/${issueInfo.totalCount}${breakageInfo ? ` ⚡ broke at ${breakageInfo.commit.substring(0, 8)}` : ""}`,
+      );
+      out.hasFailure = true;
+    }
+    if (issueInfo.hasTimeout) {
+      out.timeoutTooltips.push(`${name}: ${issueInfo.timedOutCount}/${issueInfo.totalCount}`);
+      out.hasTimeout = true;
+    }
+    if (issueInfo.hasBreakage) {
+      out.breakageTooltips.push(name);
+      out.hasBreakage = true;
+    }
+  }
+  return out;
+}
+
 function renderMatrixTable() {
   const matrixContainer = document.getElementById("job-matrix");
   let html = '<table class="matrix-table">';
@@ -5656,43 +5478,7 @@ function renderMatrixTable() {
     for (const type of typeOrder) {
       const jobs = jobMatrix[platform][type];
       const count = jobs.length;
-      // Check if any job in this cell has recent failures/timeouts/breakages
-      let failureTooltips = [];
-      let timeoutTooltips = [];
-      let breakageTooltips = [];
-      let hasFailure = false;
-      let hasTimeout = false;
-      let hasBreakage = false;
-
-      for (const { name } of jobs) {
-        const job = data.jobs[name];
-        if (job) {
-          const issueInfo = hasRecentFailure(job);
-          if (issueInfo.hasFailure) {
-            const breakageInfo = jobBreakages[name];
-            if (breakageInfo) {
-              failureTooltips.push(
-                `${name}: ${issueInfo.failedCount}/${issueInfo.totalCount} ⚡ broke at ${breakageInfo.commit.substring(0, 8)}`,
-              );
-            } else {
-              failureTooltips.push(
-                `${name}: ${issueInfo.failedCount}/${issueInfo.totalCount}`,
-              );
-            }
-            hasFailure = true;
-          }
-          if (issueInfo.hasTimeout) {
-            timeoutTooltips.push(
-              `${name}: ${issueInfo.timedOutCount}/${issueInfo.totalCount}`,
-            );
-            hasTimeout = true;
-          }
-          if (issueInfo.hasBreakage) {
-            breakageTooltips.push(name);
-            hasBreakage = true;
-          }
-        }
-      }
+      const { hasFailure, hasTimeout, hasBreakage, failureTooltips, timeoutTooltips, breakageTooltips } = collectIssues(jobs);
 
       html += `<td class="matrix-cell" data-platform="${platform}" data-type="${type}" onclick="toggleMatrixCell('${platform}', '${type}')">`;
       if (count > 0) {
@@ -5725,42 +5511,7 @@ function renderMatrixTable() {
   for (const group of specialGroups) {
     const jobs = specialJobGroups[group];
     if (jobs.length > 0) {
-      let failureTooltips = [];
-      let timeoutTooltips = [];
-      let breakageTooltips = [];
-      let hasFailure = false;
-      let hasTimeout = false;
-      let hasBreakage = false;
-
-      for (const { name } of jobs) {
-        const job = data.jobs[name];
-        if (job) {
-          const issueInfo = hasRecentFailure(job);
-          if (issueInfo.hasFailure) {
-            const breakageInfo = jobBreakages[name];
-            if (breakageInfo) {
-              failureTooltips.push(
-                `${name}: ${issueInfo.failedCount}/${issueInfo.totalCount} ⚡ broke at ${breakageInfo.commit.substring(0, 8)}`,
-              );
-            } else {
-              failureTooltips.push(
-                `${name}: ${issueInfo.failedCount}/${issueInfo.totalCount}`,
-              );
-            }
-            hasFailure = true;
-          }
-          if (issueInfo.hasTimeout) {
-            timeoutTooltips.push(
-              `${name}: ${issueInfo.timedOutCount}/${issueInfo.totalCount}`,
-            );
-            hasTimeout = true;
-          }
-          if (issueInfo.hasBreakage) {
-            breakageTooltips.push(name);
-            hasBreakage = true;
-          }
-        }
-      }
+      const { hasFailure, hasTimeout, hasBreakage, failureTooltips, timeoutTooltips, breakageTooltips } = collectIssues(jobs);
 
       let warnIcons = "";
       if (hasBreakage) warnIcons += " ⚡";
@@ -6881,14 +6632,8 @@ function computeBenchNoise(values, dates, cutoff) {
   for (let i = 1; i < filtered.length; i++) {
     ratios.push(Math.abs(Math.log(filtered[i] / filtered[i - 1])));
   }
-  ratios.sort((a, b) => a - b);
-  const mid = Math.floor(ratios.length / 2);
-  const medianLog =
-    ratios.length % 2 === 0
-      ? (ratios[mid - 1] + ratios[mid]) / 2
-      : ratios[mid];
   return {
-    noisePct: (Math.exp(medianLog) - 1) * 100,
+    noisePct: (Math.exp(median(ratios)) - 1) * 100,
     samples: ratios.length,
   };
 }
@@ -7093,8 +6838,8 @@ function getBenchCutoff() {
   return d;
 }
 
-// Returns the earliest date whose data is valid for this benchmark, or null.
 function openBenchMethodologyPopup() {
+
   setBenchMethodologyHighlight(true);
   const body = document.getElementById("bench-methodology-popup-body");
   if (body) {
@@ -7105,7 +6850,7 @@ function openBenchMethodologyPopup() {
       html += `<div><span class="label">Description:</span> ${escapeHtml(change.description)}</div>`;
       // Only link http(s) URLs (blocks javascript: etc. from the data file)
       const safeUrl = /^https?:\/\//i.test(change.url || "") ? change.url : null;
-      html += `<div><span class="label">Reference:</span> ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">${escapeHtml(safeUrl)}</a>` : escapeHtml(change.url || "")}</div>`;
+      html += `<div><span class="label">Reference:</span> ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safeUrl)}</a>` : escapeHtml(change.url || "")}</div>`;
       html += `<div style="margin-top:6px"><span class="label">Affected benchmarks (${change.benchmarks.size}):</span><ul style="margin:4px 0 0 16px;padding:0;font-size:9px;white-space:nowrap">`;
       for (const bench of [...change.benchmarks].sort()) {
         html += `<li><code>${escapeHtml(bench)}</code></li>`;
@@ -7259,12 +7004,6 @@ function ensureBenchGroupDetailLoaded(group) {
   benchGroupDetailLoading[group] = request;
 }
 
-// Returns the time-range cutoff for a benchmark. Kept as a thin wrapper so
-// downstream callers don't need to know the methodology registry no longer
-// affects what's plotted.
-function effectiveBenchCutoff(_group, _bench) {
-  return getBenchCutoff();
-}
 
 function getFilteredReports() {
   if (!benchData?.reports) return [];
@@ -7641,26 +7380,12 @@ function benchNotesFadeTs(notes) {
   return ts;
 }
 
-// Semi-transparent variant of a color; handles the hsl() strings from
-// generateColors and the hex colors used elsewhere.
-function fadeColor(color, alpha) {
-  if (color.startsWith("hsl(")) {
-    return color.replace("hsl(", "hsla(").replace(")", `, ${alpha})`);
-  }
-  return (
-    color +
-    Math.round(alpha * 255)
-      .toString(16)
-      .padStart(2, "0")
-  );
-}
-
 // Fade the portion of a dataset before the latest methodology change that
 // affects it, so pre-change history reads as not directly comparable.
 function applyBenchNoteFade(dataset, color, notes) {
   const ts = benchNotesFadeTs(notes);
   if (ts == null) return dataset;
-  const faded = fadeColor(color, 0.3);
+  const faded = colorToRgba(color, 0.3);
   dataset.segment = {
     borderColor: (ctx) => (ctx.p0.parsed.x < ts ? faded : undefined),
   };
@@ -7679,9 +7404,7 @@ function updateBenchChart() {
     return;
   }
 
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const key = benchKey();
   const statLabel = benchStatType === "minimum" ? "Min" : "Mean";
   const multiGroup = benchSelectedGroups.size > 1;
@@ -7897,9 +7620,8 @@ function updateBenchChart() {
       text: `% Change from Start`,
       color: textColor,
     };
-    yAxis.ticks.callback = function (value) {
-      return (value >= 0 ? "+" : "") + value.toFixed(0) + "%";
-    };
+    yAxis.ticks.callback = (value) => formatSignedPct(value, { digits: 0 });
+
   } else {
     const yLabel =
       expandedWithDetail.length > 0 || noisyView
@@ -7952,32 +7674,14 @@ function updateBenchChart() {
             label: (item) => {
               const raw = item.raw;
               const abs = formatBenchValue(raw.yRaw);
-              if (multiSeries) {
-                const sign = raw.y >= 0 ? "+" : "";
-                return `${item.dataset.label}: ${sign}${raw.y.toFixed(1)}% (${abs})`;
-              }
+              if (multiSeries) return `${item.dataset.label}: ${formatSignedPct(raw.y)} (${abs})`;
               return `${item.dataset.label}: ${abs}`;
             },
           },
         },
-        zoom: {
-          pan: { enabled: true, mode: "x" },
-          zoom: {
-            wheel: { enabled: true },
-            pinch: { enabled: true },
-            drag: {
-              enabled: !IS_TOUCH,
-              backgroundColor: isDark
-                ? "rgba(56,139,253,0.15)"
-                : "rgba(31,111,235,0.1)",
-            },
-            mode: boxZoomMode,
-            onZoomComplete: () => {
-              document.getElementById("bench-btn-reset-zoom").style.display =
-                "";
-            },
-          },
-        },
+        zoom: zoomOptions(() => {
+          document.getElementById("bench-btn-reset-zoom").style.display = "";
+        }),
         annotation: {
           annotations: benchShowMethodologyAnnotations
             ? buildBenchMethodologyAnnotations(isDark)
@@ -7991,6 +7695,7 @@ function updateBenchChart() {
             window.open(
               nanosoldierReportUrl("benchmark", raw.date_path || raw.x),
               "_blank",
+              "noopener",
             );
           }
         }
@@ -8039,9 +7744,8 @@ function computeTrendPct(values) {
 
 function formatTrendPct(pct) {
   if (pct == null || !isFinite(pct)) return "—";
-  const sign = pct > 0 ? "+" : "";
   const cls = pct > 0 ? "trend-up" : pct < 0 ? "trend-down" : "";
-  return `<span class="${cls}">${sign}${pct.toFixed(1)}%</span>`;
+  return `<span class="${cls}">${formatSignedPct(pct)}</span>`;
 }
 
 // Build a comparator for benchmark group/detail rows that respects the
@@ -8171,7 +7875,7 @@ function renderBenchVerdictsTable() {
     const pct = (r - 1) * 100;
     const cls = pct > 0 ? "bench-delta-pos" : pct < 0 ? "bench-delta-neg" : "";
     const title = tol != null ? ` title="tolerance ±${(tol * 100).toFixed(0)}%"` : "";
-    return `<span class="${cls}"${title}>${r.toFixed(2)}× (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`;
+    return `<span class="${cls}"${title}>${r.toFixed(2)}× (${formatSignedPct(pct)})</span>`;
   };
   let html = "";
   for (const v of rows.slice(0, 500)) {
@@ -8223,16 +7927,7 @@ function buildNotesTooltipHtml(changes) {
 
 function positionNotesTooltip(x, y) {
   const tooltip = document.getElementById("bench-notes-tooltip");
-  if (!tooltip) return;
-  const pad = 12;
-  const tw = tooltip.offsetWidth || 280;
-  const th = tooltip.offsetHeight || 80;
-  let px = x + pad;
-  let py = y + pad;
-  if (px + tw > window.innerWidth - pad) px = x - tw - pad;
-  if (py + th > window.innerHeight - pad) py = y - th - pad;
-  tooltip.style.left = px + "px";
-  tooltip.style.top = py + "px";
+  if (tooltip) placeFloating(tooltip, { x, y });
 }
 
 function attachBenchNotesBadgeHandlers(tbody) {
@@ -8258,9 +7953,7 @@ function attachBenchNotesBadgeHandlers(tbody) {
 
 function formatBenchDelta(d) {
   if (d == null) return "—";
-  const pct = d * 100;
-  const sign = d > 0 ? "+" : "";
-  const text = `${sign}${pct.toFixed(2)}%`;
+  const text = formatSignedPct(d * 100, { digits: 2 });
   const cls =
     Math.abs(d) < 0.005 ? "" : d > 0 ? "bench-delta-pos" : "bench-delta-neg";
   return cls ? `<span class="${cls}">${text}</span>` : text;
@@ -8366,11 +8059,8 @@ function renderBenchRunsTable() {
 
   let html = "";
   for (const row of rows) {
-    const reportUrl = row.date_path
-      ? `https://github.com/JuliaCI/NanosoldierReports/blob/master/benchmark/by_date/${row.date_path.split("/").map(encodeURIComponent).join("/")}/report.md`
-      : null;
-    const reportDisplay = reportUrl
-      ? `<a class="bench-runs-link" href="${reportUrl}" target="_blank" rel="noopener">report</a>`
+    const reportDisplay = row.date_path
+      ? extLink(nanosoldierReportUrl("benchmark", row.date_path), "report", 'class="bench-runs-link"')
       : "—";
     const comparisonUrl =
       row.commit && row.baselineCommit
@@ -8380,7 +8070,7 @@ function renderBenchRunsTable() {
       ? `<a class="bench-runs-link" href="${comparisonUrl}">compare</a>`
       : "—";
     const commitDisplay = row.commit
-      ? `<a class="bench-runs-link" href="https://github.com/JuliaLang/julia/commit/${encodeURIComponent(row.commit)}" target="_blank" rel="noopener">${escapeHtml(row.commit.slice(0, 8))}</a>`
+      ? `<a class="bench-runs-link" href="${githubCommitURL(encodeURIComponent(row.commit))}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.commit.slice(0, 8))}</a>`
       : "—";
     const baselineDisplay = row.baseline ? escapeHtml(row.baseline) : "—";
     const summaryUrl = row.date_path
@@ -8439,15 +8129,7 @@ function attachBenchRowHoverPreview(tbody) {
   let activePreview = false;
 
   function positionPreview(x, y) {
-    const pad = 16;
-    const pw = preview.offsetWidth;
-    const ph = preview.offsetHeight;
-    let px = x + pad;
-    let py = y + pad;
-    if (px + pw > window.innerWidth - pad) px = x - pw - pad;
-    if (py + ph > window.innerHeight - pad) py = y - ph - pad;
-    preview.style.left = px + "px";
-    preview.style.top = py + "px";
+    placeFloating(preview, { x, y }, { gap: 16 });
   }
 
   function cancelPending() {
@@ -8632,7 +8314,7 @@ async function renderBenchNoisyTable() {
     const benchNames = Object.keys(statData.benchmarks);
     for (const name of benchNames) {
       const vals = statData.benchmarks[name];
-      const effCutoff = effectiveBenchCutoff(group, name);
+      const effCutoff = getBenchCutoff();
       const noise = computeBenchNoise(vals, statData.dates, effCutoff);
       if (!noise) continue;
       if (noise.noisePct < BENCH_NOISY_TABLE_MIN_PCT) continue;
@@ -8648,15 +8330,7 @@ async function renderBenchNoisyTable() {
         if (latestVal == null) latestVal = vals[i];
         inRange.push(vals[i]);
       }
-      if (minNs > 0 && inRange.length > 0) {
-        const sorted = inRange.slice().sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        const median =
-          sorted.length % 2 === 0
-            ? (sorted[mid - 1] + sorted[mid]) / 2
-            : sorted[mid];
-        if (median < minNs) continue;
-      }
+      if (minNs > 0 && inRange.length > 0 && median(inRange) < minNs) continue;
       rows.push({
         group,
         name,
@@ -8871,7 +8545,7 @@ function renderBenchGroupsTable() {
         for (const name of benchNames) {
           const vals = statData.benchmarks[name];
           const filtered = [];
-          const effCutoff = effectiveBenchCutoff(row.group, name);
+          const effCutoff = getBenchCutoff();
           for (let i = 0; i < statData.dates.length; i++) {
             if (vals[i] == null || vals[i] === 0) continue;
             const d = new Date(statData.dates[i]);
@@ -9224,21 +8898,26 @@ function getPackagesFilteredSeries() {
 // === Per-package downloads (API only) ===
 let packagesPackage = ""; // the package whose requests are shown, "" for none
 let packagesPackageChart = null;
-let packagesSuggestTimer = null;
 
-function suggestPackagesPackages(value) {
-  clearTimeout(packagesSuggestTimer);
+// Datalist suggestions for a package box from the API `route`, debounced
+const packageSuggestTimers = {};
+function suggestPackageNames(route, listId, value) {
+  clearTimeout(packageSuggestTimers[listId]);
   const q = (value || "").trim();
   if (q.length < 2) return;
-  packagesSuggestTimer = setTimeout(async () => {
+  packageSuggestTimers[listId] = setTimeout(async () => {
     try {
-      const names = await apiGet("downloads/packages", { q });
-      const list = document.getElementById("packages-package-list");
+      const names = await apiGet(route, { q });
+      const list = document.getElementById(listId);
       if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
     } catch (err) {
       console.error("Package suggestions failed:", err);
     }
   }, 150);
+}
+
+function suggestPackagesPackages(value) {
+  suggestPackageNames("downloads/packages", "packages-package-list", value);
 }
 
 async function setPackagesPackage(name) {
@@ -9284,9 +8963,7 @@ function renderPackagesPackage(d) {
     tableEl.innerHTML = `<p class="package-panel-help">No successful requests recorded for ${escapeHtml(d.name)}. Per-package requests are kept from the day the database started (the upstream rollup only holds the last few days).</p>`;
     return;
   }
-  const isDark = isDarkMode();
-  const textColor = isDark ? "#8b949e" : "#656d76";
-  const gridColor = isDark ? "#30363d" : "#d0d7de";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
   const toPoints = (key) => series.map((s) => ({ x: Date.parse(s.date), y: s[key] }));
   packagesPackageChart = new Chart(canvas.getContext("2d"), {
@@ -9298,9 +8975,7 @@ function renderPackagesPackage(d) {
       ],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
@@ -9410,9 +9085,7 @@ function updatePackagesDownloadsChart() {
 
   // Release labels collide on a phone-width chart; the lines stay
   const showTagLabels = window.innerWidth > 600;
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const lineColor = isDark ? "#58a6ff" : "#0969da";
 
   const values = rows.map((r) => {
@@ -9702,9 +9375,7 @@ function updatePackagesDownloadsChart() {
         datasets: displayDatasets,
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
+        ...baseChartOptions(),
         interaction: { mode: "nearIndex", intersect: false },
         plugins: {
           legend: {
@@ -9981,9 +9652,7 @@ function updatePackagesDownloadsChart() {
       datasets: displayDatasets,
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: {
@@ -10113,22 +9782,9 @@ function applyPkgevalURLParams() {
 // === Per-package PkgEval history and failure reasons (API only) ===
 let pkgevalPackage = ""; // the package whose history is shown, "" for none
 let pkgevalPackageData = null; // api/pkgeval/package/<name>
-let pkgevalSuggestTimer = null;
 
-// Datalist suggestions for the package box, debounced
 function suggestPkgevalPackages(value) {
-  clearTimeout(pkgevalSuggestTimer);
-  const q = (value || "").trim();
-  if (q.length < 2) return;
-  pkgevalSuggestTimer = setTimeout(async () => {
-    try {
-      const names = await apiGet("pkgeval/packages", { q });
-      const list = document.getElementById("pkgeval-package-list");
-      if (list) list.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
-    } catch (err) {
-      console.error("Package suggestions failed:", err);
-    }
-  }, 150);
+  suggestPackageNames("pkgeval/packages", "pkgeval-package-list", value);
 }
 
 async function setPkgevalPackage(name) {
@@ -10332,9 +9988,7 @@ function updatePkgevalChart() {
     return;
   }
 
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
 
   const dates = reports.map((r) => r.date);
   const toData = (key) =>
@@ -10411,9 +10065,7 @@ function updatePkgevalChart() {
       })),
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       interaction: { mode: "nearIndex", intersect: false },
       plugins: {
         legend: {
@@ -10455,24 +10107,9 @@ function updatePkgevalChart() {
             },
           },
         },
-        zoom: {
-          pan: { enabled: true, mode: "x" },
-          zoom: {
-            wheel: { enabled: true },
-            pinch: { enabled: true },
-            drag: {
-              enabled: !IS_TOUCH,
-              backgroundColor: isDark
-                ? "rgba(56,139,253,0.15)"
-                : "rgba(31,111,235,0.1)",
-            },
-            mode: boxZoomMode,
-            onZoom: () => {
-              document.getElementById("pkgeval-btn-reset-zoom").style.display =
-                "";
-            },
-          },
-        },
+        zoom: zoomOptions(() => {
+          document.getElementById("pkgeval-btn-reset-zoom").style.display = "";
+        }),
       },
       onClick: tapAgainToOpen((evt, elements) => {
         if (elements.length > 0) {
@@ -10482,6 +10119,7 @@ function updatePkgevalChart() {
             window.open(
               pkgevalReportUrl(r.date_path || r.date),
               "_blank",
+              "noopener",
             );
           }
         }
@@ -10578,7 +10216,7 @@ const TTFX_MIN_Y_SPAN_REL = 0.2;
 const TTFX_MIN_Y_SPAN_PCT = 20;
 
 function ttfxJobUrl(b) {
-  return `https://buildkite.com/julialang/julia-ci/builds/${b.build}#${b.job_id}`;
+  return `${buildkiteBuildUrl({ pipeline: "julia-ci", build: b.build })}#${b.job_id}`;
 }
 
 // The pull request a master commit merged, from its subject ("... (#123)" or
@@ -10601,9 +10239,9 @@ function showTtfxBuildPopup(b, task) {
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
 
   let html = '<div class="ttfx-popup-actions">';
-  html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener">Buildkite job</a>`;
-  if (pr) html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${pr}" target="_blank" rel="noopener">GitHub PR #${pr}</a>`;
-  html += `<a class="btn" href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener">Commit</a>`;
+  html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
+  if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
+  html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">Commit</a>`;
   html += "</div>";
   html += row("Title", escapeHtml(b.message || ""));
   html += row(
@@ -10643,24 +10281,18 @@ function showTtfxBuildPopup(b, task) {
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
 
   for (const a of ttfxAnnotationsFor(b)) html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}</div>`;
-  html += `<div class="ttfx-popup-compile" id="ttfx-popup-compile" data-job="${escapeHtml(b.job_id)}"><div class="ttfx-popup-muted">Loading recompiles and invalidations…</div></div>`;
+  html += '<div class="ttfx-popup-compile" id="ttfx-popup-compile"><div class="ttfx-popup-muted">Loading recompiles and invalidations…</div></div>';
   if (failed.length) {
     html += `<details class="ttfx-popup-failed"><summary>${failed.length} failed task${failed.length > 1 ? "s" : ""}</summary><ul>`;
     for (const t of failed) html += `<li><b>${escapeHtml(t)}</b>: ${escapeHtml(b.failed[t])}</li>`;
     html += "</ul></details>";
   }
 
-  document.getElementById("ttfx-build-popup-title").textContent = ttfxIsRelease(b)
-    ? `TTFX release ${b.version} ${b.date}`
-    : `TTFX build ${b.date}`;
-  const body = document.getElementById("ttfx-build-popup-body");
-  body.parentElement.classList.remove("ttfx-pr-popup");
-  body.innerHTML = html;
-  // The commit page replaces the tab under the popup
-  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
-  const overlay = document.getElementById("ttfx-build-popup-overlay");
-  overlay.classList.add("visible");
-  overlay.setAttribute("aria-hidden", "false");
+  openDetailPopup({
+    title: ttfxIsRelease(b) ? `TTFX release ${b.version} ${b.date}` : `TTFX build ${b.date}`,
+    html,
+    key: `ttfx-job-${b.job_id}`,
+  });
   // The release runs are compared with the release run before them
   const series = ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds;
   const k = series.indexOf(b);
@@ -10684,7 +10316,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
   }
   // The popup may show another build by now
   const el = document.getElementById("ttfx-popup-compile");
-  if (!el || el.dataset.job !== b.job_id) return;
+  if (!el || !detailPopupShows(`ttfx-job-${b.job_id}`)) return;
   if (!cur) {
     el.innerHTML = '<div class="ttfx-popup-muted">Could not load the recompiles and invalidations.</div>';
     return;
@@ -10765,6 +10397,27 @@ async function renderTtfxCompileDetails(b, prev, task) {
   el.innerHTML = html;
 }
 
+// The TTFX and Sizes tabs' details popup. `key` names what it shows, so an
+// answer that arrives after it moved on to something else is dropped.
+// `wide` gives the room a pull request's tables need.
+function openDetailPopup({ title, html, wide = false, key = "" }) {
+  document.getElementById("ttfx-build-popup-title").textContent = title;
+  const body = document.getElementById("ttfx-build-popup-body");
+  body.parentElement.classList.toggle("ttfx-pr-popup", wide);
+  body.innerHTML = html;
+  body.dataset.key = key;
+  // The commit page replaces the tab under the popup
+  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function detailPopupShows(key) {
+  const overlay = document.getElementById("ttfx-build-popup-overlay");
+  return overlay.classList.contains("visible") && document.getElementById("ttfx-build-popup-body").dataset.key === key;
+}
+
 function closeTtfxBuildPopup() {
   const overlay = document.getElementById("ttfx-build-popup-overlay");
   overlay.classList.remove("visible");
@@ -10783,9 +10436,9 @@ function ttfxAnnotationTitle(notes) {
   return notes.map(ttfxAnnotationText).join("\n") + "\n\n" + TTFX_ANNOTATION_HINT;
 }
 
-// The full text of the annotation under the pointer, floated beside it in the
+// The full text of an annotation under the pointer, floated beside it in the
 // chart's wrapper: the chart label only has room for the short form
-function showTtfxAnnotationNote(chart, a, event) {
+function showChartNote(chart, html, event) {
   const wrap = chart.canvas.parentElement;
   let el = wrap.querySelector(".ttfx-note-popup");
   if (!el) {
@@ -10793,15 +10446,12 @@ function showTtfxAnnotationNote(chart, a, event) {
     el.className = "ttfx-note-popup";
     wrap.appendChild(el);
   }
-  el.innerHTML = `${escapeHtml(ttfxAnnotationText(a))}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`;
+  el.innerHTML = html;
   el.style.display = "block";
-  // Right of the pointer, or left of it near the right edge
-  const x = event.x + 14;
-  el.style.left = `${x + el.offsetWidth > wrap.clientWidth ? Math.max(0, event.x - 14 - el.offsetWidth) : x}px`;
-  el.style.top = `${Math.max(0, Math.min(event.y + 14, wrap.clientHeight - el.offsetHeight))}px`;
+  placeFloating(el, { x: event.x, y: event.y }, { width: wrap.clientWidth, height: wrap.clientHeight, gap: 14 });
 }
 
-function hideTtfxAnnotationNote(chart) {
+function hideChartNote(chart) {
   const el = chart.canvas.parentElement.querySelector(".ttfx-note-popup");
   if (el) el.style.display = "none";
 }
@@ -10812,7 +10462,7 @@ function hideTtfxAnnotationNote(chart) {
 function buildTtfxAnnotations(builds, isDark) {
   const color = isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)";
   const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
-  const labelColor = isDark ? "#8b949e" : "#656d76";
+  const labelColor = chartTheme().text;
   const out = {};
   // Labels of notes close together in pixels are stepped down so they do not
   // cover each other; roughly a label's width, since the plugin does not
@@ -10826,8 +10476,9 @@ function buildTtfxAnnotations(builds, isDark) {
       const before = earlier.slice();
       earlier.push(x);
       out[`note-${b.job_id}-${i}`] = {
-        enter: ({ chart }, event) => showTtfxAnnotationNote(chart, a, event),
-        leave: ({ chart }) => hideTtfxAnnotationNote(chart),
+        enter: ({ chart }, event) =>
+          showChartNote(chart, `${escapeHtml(ttfxAnnotationText(a))}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`, event),
+        leave: ({ chart }) => hideChartNote(chart),
         type: "line",
         xMin: x,
         xMax: x,
@@ -10896,11 +10547,6 @@ const TTFX_JUMP_WINDOW = 5;
 function computeTtfxJumpScales() {
   ttfxJumpScales = new Map();
   const builds = (ttfxData && ttfxData.builds) || [];
-  const median = (xs) => {
-    const s = [...xs].sort((a, b) => a - b);
-    const k = s.length >> 1;
-    return s.length % 2 ? s[k] : (s[k - 1] + s[k]) / 2;
-  };
   // Up to TTFX_JUMP_WINDOW measured values of one task and index, walking from `from` by `step`
   const near = (from, step, task, i) => {
     const out = [];
@@ -11024,7 +10670,7 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
   if (v == null || prev == null) return { text: "–", cls: "" };
   if (!ttfxIsCount(metric)) {
     const p = (v / prev - 1) * 100;
-    return { text: formatTtfxPct(p), cls: ttfxPctClass(p) };
+    return { text: formatSignedPct(p), cls: ttfxPctClass(p) };
   }
   const d = v - prev;
   return { text: (d > 0 ? "+" : "") + d.toLocaleString("en-US"), cls: d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "" };
@@ -11061,10 +10707,7 @@ function formatTtfxSeconds(s) {
   return s.toFixed(2) + "s";
 }
 
-function formatTtfxPct(p) {
-  if (p == null || !isFinite(p)) return "–";
-  return (p > 0 ? "+" : "") + p.toFixed(1) + "%";
-}
+
 
 // A pull request's score as a background tint, green for faster and red for
 // slower, full strength at 3% since few scores go beyond that
@@ -11229,13 +10872,8 @@ function applyTtfxURLParams() {
 
 async function loadTtfxData() {
   try {
-    [ttfxData, ttfxAnnotations] = await Promise.all([
-      apiGet("ttfx/summary"),
-      fetch("data/ttfx_annotations.json")
-        .then((r) => (r.ok ? r.json() : { annotations: [] }))
-        .then((d) => d.annotations || [])
-        .catch(() => []),
-    ]);
+    [ttfxData, ttfxAnnotations] = await Promise.all([apiGet("ttfx/summary"), loadTtfxAnnotations()]);
+
 
     setUpdatedLabels();
     computeTtfxJumpScales();
@@ -11269,11 +10907,19 @@ async function loadTtfxData() {
   }
 }
 
+// The hand-written notes on TTFX jobs; none when the file cannot be read
+function loadTtfxAnnotations() {
+  return fetch("data/ttfx_annotations.json", { cache: "no-cache" })
+    .then((r) => (r.ok ? r.json() : { annotations: [] }))
+    .then((d) => d.annotations || [])
+    .catch(() => []);
+}
+
 // After an ingest: keeps the task selection, and selects tasks new to the list
 async function reloadTtfxData() {
   let summary;
   try {
-    summary = await apiGet("ttfx/summary");
+    [summary, ttfxAnnotations] = await Promise.all([apiGet("ttfx/summary"), loadTtfxAnnotations()]);
   } catch (err) {
     console.error("Failed to reload the TTFX data:", err);
     return;
@@ -11358,7 +11004,7 @@ function highlightTtfxDataset(label) {
     // A task's GC-off twin goes with the task
     const own = ds._twinOf != null && ds._common == null ? ds._twinOf : ds.label;
     const on = label === null || own === label;
-    ds.borderColor = on ? (ds._alpha ? fadeColor(ds._color, ds._alpha) : ds._color) : fadeColor(ds._color, 0.12);
+    ds.borderColor = on ? (ds._alpha ? colorToRgba(ds._color, ds._alpha) : ds._color) : colorToRgba(ds._color, 0.12);
     ds.backgroundColor = ds.borderColor;
   }
   ttfxChart.update("none");
@@ -11390,16 +11036,12 @@ function highlightTtfxRow(build) {
 // `normalized` series are % change from the first build in range.
 // `legendSummary`: group the tasks' lines in the legend (see TTFX_LEGEND_TASKS_MAX)
 function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const normalized = ttfxNormalizedFor(metric);
   const count = ttfxIsCount(metric);
-  const fmt = normalized ? formatTtfxPct : (v) => formatTtfxValue(v, metric);
+  const fmt = normalized ? formatSignedPct : (v) => formatTtfxValue(v, metric);
   return {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: false,
+    ...baseChartOptions(),
     parsing: false,
     normalized: true,
     // One point at a time, and only when the pointer is near it: with every
@@ -11516,19 +11158,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           },
         },
       },
-      zoom: {
-        pan: { enabled: true, mode: "x", onPanComplete: onZoomChange },
-        zoom: {
-          wheel: { enabled: true },
-          pinch: { enabled: true },
-          drag: {
-            enabled: !IS_TOUCH,
-            backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
-          },
-          mode: boxZoomMode,
-          onZoomComplete: onZoomChange,
-        },
-      },
+      zoom: zoomOptions(onZoomChange),
       annotation: {
         // Enter and leave only on the line or its label, not the nearest one
         interaction: { mode: "nearest", intersect: true },
@@ -11563,7 +11193,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
         ticks: {
           color: textColor,
           precision: count ? 0 : undefined,
-          callback: (v) => (normalized ? formatTtfxPct(v) : count ? formatTtfxValue(v, metric) : parseFloat(v.toFixed(4)) + "s"),
+          callback: (v) => (normalized ? formatSignedPct(v) : count ? formatTtfxValue(v, metric) : parseFloat(v.toFixed(4)) + "s"),
         },
         title: {
           display: true,
@@ -11608,12 +11238,7 @@ function ttfxLegendIcon(chart, ds) {
   const key = [ds.borderColor, width, dash.join("-"), marker, diamond].join("|");
   let img = ttfxLegendIcons.get(key);
   if (img) return img;
-  const scale = 2;
-  const c = document.createElement("canvas");
-  c.width = TTFX_LEGEND_ICON_W * scale;
-  c.height = TTFX_LEGEND_ICON_H * scale;
-  const ctx = c.getContext("2d");
-  ctx.scale(scale, scale);
+  const { canvas: c, ctx } = markerCanvas(TTFX_LEGEND_ICON_W, TTFX_LEGEND_ICON_H, 2);
   ctx.strokeStyle = ds.borderColor;
   ctx.fillStyle = ds.borderColor;
   ctx.lineWidth = width;
@@ -11675,8 +11300,8 @@ const TTFX_SUITE_TWIN_WIDTH = 1;
 const TTFX_TASK_TWIN_WIDTH = 0.75;
 function ttfxTwinStyle(color, width) {
   return {
-    borderColor: fadeColor(color, TTFX_TWIN_ALPHA),
-    backgroundColor: fadeColor(color, TTFX_TWIN_ALPHA),
+    borderColor: colorToRgba(color, TTFX_TWIN_ALPHA),
+    backgroundColor: colorToRgba(color, TTFX_TWIN_ALPHA),
     _color: color,
     _alpha: TTFX_TWIN_ALPHA,
     borderWidth: width,
@@ -12028,7 +11653,7 @@ function renderTtfxBuildsTable() {
     const stateClass = nRun === 0 || failed.length ? "ttfx-failed" : "";
     html += `<tr data-build="${b.build}" data-job-url="${escapeHtml(ttfxJobUrl(b))}">`;
     html += `<td>${escapeHtml(b.date)}</td>`;
-    html += `<td><a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(b.commit)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
+    html += `<td><a href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${escapeHtml(b.commit.slice(0, 10))}</a></td>`;
     html += `<td class="col-secondary">${escapeHtml(b.version || "")}</td>`;
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const key of metricCols) {
@@ -12084,7 +11709,29 @@ function ttfxPrCi(p) {
 }
 
 function ttfxScorePct(score) {
-  return score == null ? "–" : formatTtfxPct((score - 1) * 100);
+  return score == null ? "–" : formatSignedPct((score - 1) * 100);
+}
+
+// A suite or task ratio, head against base, as a % change
+const ttfxRatioPct = (g) => formatSignedPct((g - 1) * 100);
+
+// One verdict from a metric's GC-on and GC-off results: a regression in
+// either outweighs an improvement
+function ttfxVerdict(...verdicts) {
+  return verdicts.includes("regression") ? "regression" : verdicts.includes("improvement") ? "improvement" : "same";
+}
+
+const ttfxVerdictClass = (v) => (v === "regression" ? "ttfx-up" : v === "improvement" ? "ttfx-down" : "");
+
+// A task's robust changes of the metrics `kinds`, as "load +3.1%, +2.9%; run -1.0%"
+function ttfxTaskChanges(t, kinds) {
+  return kinds
+    .map((k) => {
+      const m = t.metrics[k];
+      const r = m && (m.ratios || m.gcoff_ratios);
+      return r ? `${k} ${r.map(ttfxRatioPct).join(", ")}` : k;
+    })
+    .join("; ");
 }
 
 // A stacked pull request is measured against the branch it targets; the server
@@ -12111,8 +11758,7 @@ function ttfxPrStackBadge(p) {
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
 // stacked one it adds the estimate of the whole stack against master.
 function ttfxPrMarkdown(p) {
-  const pct = (g) => formatTtfxPct((g - 1) * 100);
-  const blocks = (x) => x.geomeans.map(pct).join(", ");
+  const blocks = (x) => x.geomeans.map(ttfxRatioPct).join(", ");
   const st = p.stack;
   const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `\`${st.base_ref}\``) : "master";
   const chained = st && st.complete ? st.suite : null;
@@ -12138,19 +11784,10 @@ function ttfxPrMarkdown(p) {
     const on = p.suite[m];
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];
-    const verdicts = [on.verdict, off && off.verdict];
-    const verdict = verdicts.includes("regression") ? "regression" : verdicts.includes("improvement") ? "improvement" : null;
-    const own = verdict ? `**${blocks(on)}** (${verdict})` : blocks(on);
+    const verdict = ttfxVerdict(on.verdict, off && off.verdict);
+    const own = verdict !== "same" ? `**${blocks(on)}** (${verdict})` : blocks(on);
     lines.push(`| ${ttfxMetricLabel(m)} | ${own} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "–"} |` : ""}`);
   }
-  const describe = (t, kinds) =>
-    kinds
-      .map((k) => {
-        const m = t.metrics[k];
-        const r = m && (m.ratios || m.gcoff_ratios);
-        return r ? `${k} ${r.map(pct).join(", ")}` : k;
-      })
-      .join("; ");
   const scope = st ? ` against ${parent}` : "";
   for (const [key, label] of [
     ["regressions", "Robust regressions"],
@@ -12162,7 +11799,7 @@ function ttfxPrMarkdown(p) {
       continue;
     }
     lines.push("", `<details><summary>${label}${scope} (${ts.length} tasks)</summary>`, "");
-    for (const t of ts) lines.push(`- ${t.name}: ${describe(t, t[key])}`);
+    for (const t of ts) lines.push(`- ${t.name}: ${ttfxTaskChanges(t, t[key])}`);
     lines.push("", "</details>");
   }
   return lines.join("\n") + "\n";
@@ -12199,8 +11836,7 @@ document.addEventListener(
 // every metric (and the stack's estimate against master), then the tasks
 // with a robust change
 function showTtfxPrPopup(p) {
-  const pct = (g) => formatTtfxPct((g - 1) * 100);
-  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(pct).join(", ") : "–");
+  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "–");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const st = p.stack;
@@ -12209,17 +11845,17 @@ function showTtfxPrPopup(p) {
   const ci = ttfxPrCi(p);
   const sha = (c) => `<code>${escapeHtml(c.commit.slice(0, 10))}</code>`;
   const ghCommit = (c, text) =>
-    `<a href="https://github.com/JuliaLang/julia/commit/${escapeHtml(c.commit)}" target="_blank" rel="noopener">${text}</a>`;
+    `<a href="${githubCommitURL(escapeHtml(c.commit))}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 
   let html = '<div class="ttfx-popup-actions">';
-  html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener">GitHub PR #${p.pr}</a>`;
-  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Buildkite job</a>`;
+  html += `<a class="btn" href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${p.pr}</a>`;
+  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   html += `<button type="button" class="btn" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
   const ciText = escapeHtml(ci.title.replace(/^CI: /, ""));
-  html += row("CI", `${ci.dot} ${ci.url ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener">${ciText}</a>` : ciText}`);
+  html += row("CI", `${ci.dot} ${ci.url ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener noreferrer">${ciText}</a>` : ciText}`);
   html += row("Head", `${ghCommit(p.head, sha(p.head))} (${escapeHtml(p.head.version)})`);
   html += row(
     "Base",
@@ -12234,11 +11870,6 @@ function showTtfxPrPopup(p) {
   if (p.outdated) html += '<div class="ttfx-popup-note">Note: measured on an older commit; the pull request has newer commits.</div>';
   if (st) html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(ttfxPrStackTitle(p))}</div>`;
 
-  const verdictOf = (on, off) => {
-    const vs = [on && on.verdict, off && off.verdict];
-    return vs.includes("regression") ? "regression" : vs.includes("improvement") ? "improvement" : "same";
-  };
-  const verdictClass = (v) => (v === "regression" ? "ttfx-up" : v === "improvement" ? "ttfx-down" : "");
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
   html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
   if (chained) html += '<th class="num">Stack vs master (est.)</th>';
@@ -12246,10 +11877,10 @@ function showTtfxPrPopup(p) {
   for (const m of ttfxPrs.metrics) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
-    const v = verdictOf(on, off);
+    const v = ttfxVerdict(on && on.verdict, off && off.verdict);
     html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks">${escapeHtml(ttfxMetricLabel(m))}</th>`;
-    html += `<td class="num ${verdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
-    html += `<td class="${verdictClass(v)}">${v}</td>`;
+    html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
+    html += `<td class="${ttfxVerdictClass(v)}">${v}</td>`;
     if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
     html += "</tr>";
   }
@@ -12271,8 +11902,8 @@ function showTtfxPrPopup(p) {
       for (const m of ttfxPrs.metrics) {
         const r = t.metrics[m];
         const cls = t.regressions.includes(m) ? "ttfx-up" : t.improvements.includes(m) ? "ttfx-down" : "";
-        html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(pct).join(", ") : "–"}${
-          r && r.gcoff_ratios ? ` <span class="ttfx-popup-muted" title="GC off">${r.gcoff_ratios.map(pct).join(", ")}</span>` : ""
+        html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(ttfxRatioPct).join(", ") : "–"}${
+          r && r.gcoff_ratios ? ` <span class="ttfx-popup-muted" title="GC off">${r.gcoff_ratios.map(ttfxRatioPct).join(", ")}</span>` : ""
         }</td>`;
       }
       html += "</tr>";
@@ -12282,15 +11913,7 @@ function showTtfxPrPopup(p) {
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">No task has a robust change.</div>';
   }
 
-  document.getElementById("ttfx-build-popup-title").textContent = `TTFX of pull request #${p.pr}`;
-  const body = document.getElementById("ttfx-build-popup-body");
-  body.parentElement.classList.add("ttfx-pr-popup");
-  body.innerHTML = html;
-  // The commit page replaces the tab under the popup
-  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
-  const overlay = document.getElementById("ttfx-build-popup-overlay");
-  overlay.classList.add("visible");
-  overlay.setAttribute("aria-hidden", "false");
+  openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html, wide: true, key: `ttfx-pr-${p.pr}` });
 }
 
 // Hovering a stacked pull request's row lights up the rows of the ones below it,
@@ -12363,7 +11986,7 @@ function renderTtfxPrsList() {
           <div class="m-item-title"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
           <div class="m-item-meta">${meta.join(" · ")}</div>
         </div>
-        <span class="m-item-value ttfx-pr-score"${ttfxScoreStyle(change)}>${change == null ? "–" : formatTtfxPct(change)}</span>
+        <span class="m-item-value ttfx-pr-score"${ttfxScoreStyle(change)}>${change == null ? "–" : formatSignedPct(change)}</span>
       </div></td></tr>`;
     })
     .join("");
@@ -12407,9 +12030,6 @@ function renderTtfxPrsTable() {
     return;
   }
   document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
-  const pct = (g) => formatTtfxPct((g - 1) * 100);
-  const verdictClass = (...vs) =>
-    vs.includes("regression") ? "ttfx-up" : vs.includes("improvement") ? "ttfx-down" : "";
   let html = "";
   ttfxPrs.prs.forEach((p, i) => {
     if (ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]))) html += ttfxPrsFlatToggleRow(cols);
@@ -12424,12 +12044,12 @@ function renderTtfxPrsTable() {
       ttfxPrStackBadge(p);
     const ci = ttfxPrCi(p);
     const ciDot = ci.url
-      ? `<a class="ttfx-pr-ci" href="${escapeHtml(ci.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${ci.dot}</a>`
+      ? `<a class="ttfx-pr-ci" href="${escapeHtml(ci.url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${ci.dot}</a>`
       : `<span class="ttfx-pr-ci">${ci.dot}</span>`;
-    html += `<td class="msg">${ciDot} <a href="https://github.com/JuliaLang/julia/pull/${p.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
+    html += `<td class="msg">${ciDot} <a href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     const scoreTitle = p.stack ? ` title="${escapeHtml(ttfxPrStackTitle(p))}"` : "";
-    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "–" : pct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
+    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "–" : ttfxRatioPct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
     for (const m of metrics) {
       const on = p.suite[m];
       const off = p.suite[m + "_gcoff"];
@@ -12438,24 +12058,15 @@ function renderTtfxPrsTable() {
         continue;
       }
       const title = off
-        ? `GC off: ${off.geomeans.map(pct).join(", ")} (${off.verdict})`
+        ? `GC off: ${off.geomeans.map(ttfxRatioPct).join(", ")} (${off.verdict})`
         : `${on.n_tasks} tasks`;
-      html += `<td class="num ${verdictClass(on.verdict, off && off.verdict)}" title="${escapeHtml(title)}">${on.geomeans.map(pct).join(", ")}</td>`;
+      html += `<td class="num ${ttfxVerdictClass(ttfxVerdict(on.verdict, off && off.verdict))}" title="${escapeHtml(title)}">${on.geomeans.map(ttfxRatioPct).join(", ")}</td>`;
     }
     const better = p.tasks.filter((t) => t.improvements.length);
     const worse = p.tasks.filter((t) => t.regressions.length);
-    const describe = (t, kinds) =>
-      `${t.name}: ` +
-      kinds
-        .map((k) => {
-          const m = t.metrics[k];
-          const r = m && (m.ratios || m.gcoff_ratios);
-          return r ? `${k} ${r.map(pct).join(", ")}` : k;
-        })
-        .join("; ");
     const tasksTitle = [
-      ...better.map((t) => "+ " + describe(t, t.improvements)),
-      ...worse.map((t) => "- " + describe(t, t.regressions)),
+      ...better.map((t) => `+ ${t.name}: ${ttfxTaskChanges(t, t.improvements)}`),
+      ...worse.map((t) => `- ${t.name}: ${ttfxTaskChanges(t, t.regressions)}`),
     ].join("\n");
     html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
     html += `<td class="col-secondary" title="${escapeHtml(`${p.date}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
@@ -12533,10 +12144,7 @@ function showTtfxPrPoints(p) {
     const fits = (TTFX_PR_POINT_MAX_SHARE * xs.width - TTFX_PR_POINT_MARGIN) / layers.length;
     const spacing = Math.min(wanted, Math.max(fits, TTFX_PR_POINT_SPACING));
     const used = (TTFX_PR_POINT_MARGIN + layers.length * spacing) / xs.width;
-    const need = xs.min + (last.x - xs.min) / Math.max(1 - used, 1 - TTFX_PR_POINT_MAX_SHARE);
-    if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
-    if (xs.max < need) chart.options.scales.x.max = need;
-    const step = (spacing / xs.width) * (Math.max(xs.max, need) - xs.min);
+    const step = (spacing / xs.width) * widenForProjection(chart, last.x, Math.min(used, TTFX_PR_POINT_MAX_SHARE));
     const notes = chart.options.plugins.annotation.annotations;
     const toY = (seconds) => (ttfxNormalized ? (seconds / first.s - 1) * 100 : seconds);
     let prev = { x: last.x, y: last.y };
@@ -12545,7 +12153,7 @@ function showTtfxPrPoints(p) {
       const y = toY(last.s * ratios[i]);
       const x = last.x + (i + 1) * step;
       const own = q === p;
-      const label = [`#${q.pr}`, `~${formatTtfxPct((ratios[i] - 1) * 100)}`];
+      const label = [`#${q.pr}`, `~${formatSignedPct((ratios[i] - 1) * 100)}`];
       if (offLast) {
         const yOff = toY(offLast.s * offRatios[i]);
         notes[`${TTFX_PR_POINT_PREFIX}offlink-${i}`] = {
@@ -12567,7 +12175,7 @@ function showTtfxPrPoints(p) {
           borderColor: isDark ? "#f0f6fc" : "#1f2328",
           borderWidth: 0.75,
         };
-        label.push(`GC off ${formatTtfxPct((offRatios[i] - 1) * 100)}`);
+        label.push(`GC off ${formatSignedPct((offRatios[i] - 1) * 100)}`);
         prevOff = { x, y: yOff };
       }
       notes[`${TTFX_PR_POINT_PREFIX}link-${i}`] = {
@@ -12608,14 +12216,30 @@ function showTtfxPrPoints(p) {
 }
 
 function hideTtfxPrPoints() {
-  for (const chart of Object.values(ttfxSummaryCharts)) {
-    if (!("_prMax" in chart)) continue;
-    const notes = chart.options.plugins.annotation.annotations;
-    for (const k of Object.keys(notes)) if (k.startsWith(TTFX_PR_POINT_PREFIX)) delete notes[k];
-    chart.options.scales.x.max = chart._prMax;
-    delete chart._prMax;
-    chart.update("none");
-  }
+  for (const chart of Object.values(ttfxSummaryCharts)) clearProjectedPoints(chart, TTFX_PR_POINT_PREFIX);
+}
+
+// A hovered pull request's points sit past the latest build, where the axis
+// ends. It is widened until they and their labels, `used` of its width,
+// fit; the span returned is the widened axis's. The old end is kept for
+// clearing them.
+function widenForProjection(chart, lastX, used) {
+  const xs = chart.scales.x;
+  if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
+  const need = xs.min + (lastX - xs.min) / (1 - used);
+  if (xs.max < need) chart.options.scales.x.max = need;
+  return Math.max(xs.max, need) - xs.min;
+}
+
+// Takes the annotations named with `prefix` off the chart and gives the axis
+// its own end back
+function clearProjectedPoints(chart, prefix) {
+  if (!chart || !("_prMax" in chart)) return;
+  const notes = chart.options.plugins.annotation.annotations;
+  for (const k of Object.keys(notes)) if (k.startsWith(prefix)) delete notes[k];
+  chart.options.scales.x.max = chart._prMax;
+  delete chart._prMax;
+  chart.update("none");
 }
 
 // Light up build `build` on the per-task chart or on every summary panel
@@ -12683,14 +12307,15 @@ function renderTtfxTasksTable() {
     if (!vals.length && !failedMsg) continue;
     let gcoff = null;
     for (let i = builds.length - 1; i >= 0 && gcoff == null; i--) gcoff = ttfxValue(builds[i], t, ttfxMetric, true);
-    const sorted = vals.slice().sort((a, b) => a - b);
+    const stats = summarize(vals);
     rows.push({
       task: t,
       latest: vals.length ? vals[vals.length - 1] : null,
       gcoff,
-      median: vals.length ? sorted[Math.floor(sorted.length / 2)] : null,
-      min: vals.length ? sorted[0] : null,
-      max: vals.length ? sorted[sorted.length - 1] : null,
+      median: stats ? stats.median : null,
+      min: stats ? stats.min : null,
+      max: stats ? stats.max : null,
+
       change: vals.length < 2 ? null : ttfxIsCount() ? vals[vals.length - 1] - vals[0] : (vals[vals.length - 1] / vals[0] - 1) * 100,
       n: vals.length,
       failedMsg,
@@ -12726,7 +12351,7 @@ function renderTtfxTasksTable() {
     for (const k of ["latest", ...(ttfxShowsGcOff() ? ["gcoff"] : []), "median", "min", "max"]) {
       html += `<td class="num ${k === "latest" ? "" : "col-secondary"}">${formatTtfxValue(r[k])}</td>`;
     }
-    const change = ttfxIsCount() ? ttfxChange(r.change, 0) : { text: formatTtfxPct(r.change), cls: ttfxPctClass(r.change) };
+    const change = ttfxIsCount() ? ttfxChange(r.change, 0) : { text: formatSignedPct(r.change), cls: ttfxPctClass(r.change) };
     html += `<td class="num ${change.cls}">${change.text}</td>`;
     html += `<td class="num col-secondary">${r.n}</td>`;
     html += "</tr>";
@@ -12778,8 +12403,6 @@ let sizesPrs = null;
 let sizesPrsLoading = null;
 
 const sizesMetricLabel = (m) => SIZES_METRICS[m] || m;
-const githubCommitURL = (sha) => `https://github.com/JuliaLang/julia/commit/${sha}`;
-
 function formatSizeDelta(d, isCount = false) {
   if (d == null) return "";
   if (d === 0) return "0";
@@ -12790,8 +12413,8 @@ function formatSizeDelta(d, isCount = false) {
 // A change as a percentage of `before`, for after a byte delta; empty when it
 // rounds to nothing
 function formatSizePct(delta, before) {
-  const pct = (delta / before) * 100;
-  return Math.abs(pct) < 0.05 ? "" : ` <small>${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</small>`;
+  const pct = formatSignedPct((delta / before) * 100, { minAbs: 0.05 });
+  return pct && ` <small>${pct}</small>`;
 }
 
 // Unlike the shared byte formatter, a size of 0 reads 0: here a dash means
@@ -12841,8 +12464,6 @@ function sizesSpan(p, i) {
 function sizesSpanText(n) {
   return `${n} commits since the previous measured one, not measured one by one: the change can come from any of them`;
 }
-
-const githubCompareURL = (from, to) => `https://github.com/JuliaLang/julia/compare/${from}...${to}`;
 
 function applySizesURLParams() {
   const params = new URLSearchParams(window.location.search);
@@ -12953,7 +12574,7 @@ function highlightSizesDataset(metric) {
   if (!sizesChart) return;
   for (const ds of sizesChart.data.datasets) {
     const on = metric === null || ds._metric === metric;
-    ds.borderColor = on ? sizesColors[ds._metric] : fadeColor(sizesColors[ds._metric], 0.12);
+    ds.borderColor = on ? sizesColors[ds._metric] : colorToRgba(sizesColors[ds._metric], 0.12);
     ds.backgroundColor = ds.pointBackgroundColor = ds.pointBorderColor = ds.borderColor;
   }
   // Not update("none"): that keeps the points' resolved colours
@@ -13016,9 +12637,7 @@ function updateSizesChart() {
     sizesChart = null;
   }
   document.getElementById("sizes-btn-reset-zoom").style.display = "none";
-  const isDark = isDarkMode();
-  const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
-  const textColor = isDark ? "#8b949e" : "#656d76";
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const idx = sizesIndicesInRange();
   const datasets = [];
   for (const m of Object.keys(SIZES_METRICS)) {
@@ -13047,14 +12666,12 @@ function updateSizesChart() {
       _metric: m,
     });
   }
-  const fmt = (v) => (sizesNormalized ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : formatSizeValue(v));
+  const fmt = (v) => (sizesNormalized ? formatSignedPct(v) : formatSizeValue(v));
   sizesChart = new Chart(canvas, {
     type: "line",
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       parsing: false,
       normalized: true,
       interaction: { mode: "near", intersect: false },
@@ -13073,19 +12690,7 @@ function updateSizesChart() {
           interaction: { mode: "nearest", intersect: true },
           annotations: buildSizesMarkers(isDark),
         },
-        zoom: {
-          pan: { enabled: true, mode: "x", onPanComplete: showSizesResetZoom },
-          zoom: {
-            wheel: { enabled: true },
-            pinch: { enabled: true },
-            drag: {
-              enabled: !IS_TOUCH,
-              backgroundColor: isDark ? "rgba(56,139,253,0.15)" : "rgba(31,111,235,0.1)",
-            },
-            mode: boxZoomMode,
-            onZoomComplete: showSizesResetZoom,
-          },
-        },
+        zoom: zoomOptions(showSizesResetZoom),
         tooltip: {
           usePointStyle: true,
           boxPadding: 4,
@@ -13138,8 +12743,8 @@ function buildSizesMarkers(isDark) {
   (sizesData.markers || []).forEach((a, k) => {
     const x = Date.parse(a.at);
     out[`marker-${k}`] = {
-      enter: ({ chart }, event) => showSizesMarkerNote(chart, a, event),
-      leave: ({ chart }) => hideTtfxAnnotationNote(chart),
+      enter: ({ chart }, event) => showChartNote(chart, escapeHtml(`${a.label}: ${a.description}`), event),
+      leave: ({ chart }) => hideChartNote(chart),
       type: "line",
       xMin: x,
       xMax: x,
@@ -13155,7 +12760,7 @@ function buildSizesMarkers(isDark) {
         content: a.label,
         position: "start",
         backgroundColor: isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)",
-        color: isDark ? "#8b949e" : "#656d76",
+        color: chartTheme().text,
         font: { size: 11 },
         padding: { x: 5, y: 3 },
       },
@@ -13164,20 +12769,6 @@ function buildSizesMarkers(isDark) {
   return out;
 }
 
-function showSizesMarkerNote(chart, a, event) {
-  const wrap = chart.canvas.parentElement;
-  let el = wrap.querySelector(".ttfx-note-popup");
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "ttfx-note-popup";
-    wrap.appendChild(el);
-  }
-  el.textContent = `${a.label}: ${a.description}`;
-  el.style.display = "block";
-  const x = event.x + 14;
-  el.style.left = `${x + el.offsetWidth > wrap.clientWidth ? Math.max(0, event.x - 14 - el.offsetWidth) : x}px`;
-  el.style.top = `${Math.max(0, Math.min(event.y + 14, wrap.clientHeight - el.offsetHeight))}px`;
-}
 
 function showSizesResetZoom() {
   document.getElementById("sizes-btn-reset-zoom").style.display = "";
@@ -13249,7 +12840,7 @@ function renderSizesPrsTable() {
   let html = "";
   for (const p of rows) {
     html += `<tr class="clickable" data-pr="${p.number}">`;
-    html += `<td><a href="https://github.com/JuliaLang/julia/pull/${p.number}" target="_blank" rel="noopener">#${p.number}</a></td>`;
+    html += `<td><a href="${githubPrURL(p.number)}" target="_blank" rel="noopener noreferrer">#${p.number}</a></td>`;
     const draft = p.draft ? '<span class="ttfx-note-badge">draft</span> ' : "";
     const stacked = p.base_ref && p.base_ref !== "master" ? `<span class="ttfx-note-badge" title="Targets ${escapeHtml(p.base_ref)}; compared with master, so the pull requests below it count too">on ${escapeHtml(p.base_ref)}</span> ` : "";
     html += `<td class="msg" title="${escapeHtml(p.title)}">${draft}${stacked}${escapeHtml(p.title)}</td>`;
@@ -13264,7 +12855,7 @@ function renderSizesPrsTable() {
       html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
     }
     html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
-    html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener">${p.build}</a></td>`;
+    html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener noreferrer">${p.build}</a></td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;
@@ -13292,16 +12883,11 @@ function showSizesPrPoints(p) {
   if (!chart || !p.base_values) return;
   const isDark = isDarkMode();
   const xs = chart.scales.x;
-  // The axis ends at the data; widened to fit the point and its label until the
-  // row is left
-  if (!("_prMax" in chart)) chart._prMax = chart.options.scales.x.max;
   let last = -Infinity;
   for (const ds of chart.data.datasets) if (ds.data.length) last = Math.max(last, ds.data[ds.data.length - 1].x);
   if (!isFinite(last)) return;
   const share = (SIZES_PR_POINT_SPACING + SIZES_PR_POINT_MARGIN) / xs.width;
-  const need = xs.min + (last - xs.min) / (1 - share);
-  if (xs.max < need) chart.options.scales.x.max = need;
-  const x = last + (SIZES_PR_POINT_SPACING / xs.width) * (Math.max(xs.max, need) - xs.min);
+  const x = last + (SIZES_PR_POINT_SPACING / xs.width) * widenForProjection(chart, last, share);
   const notes = chart.options.plugins.annotation.annotations;
   chart.data.datasets.forEach((ds, k) => {
     const m = ds._metric;
@@ -13332,14 +12918,9 @@ function showSizesPrPoints(p) {
 }
 
 function hideSizesPrPoints() {
-  const chart = sizesChart;
-  if (!chart || !("_prMax" in chart)) return;
-  const notes = chart.options.plugins.annotation.annotations;
-  for (const k of Object.keys(notes)) if (k.startsWith(SIZES_PR_POINT_PREFIX)) delete notes[k];
-  chart.options.scales.x.max = chart._prMax;
-  delete chart._prMax;
-  chart.update("none");
+  clearProjectedPoints(sizesChart, SIZES_PR_POINT_PREFIX);
 }
+
 
 function sizesPrBaseText(p) {
   return p.base
@@ -13360,9 +12941,9 @@ async function showSizesPrPopup(n) {
   if (!p) return;
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   let html = '<div class="ttfx-popup-actions">';
-  html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${n}" target="_blank" rel="noopener">GitHub PR #${n}</a>`;
-  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Buildkite build</a>`;
-  html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener" title="The pull request's commits since its merge-base">Commits</a>`;
+  html += `<a class="btn" href="${githubPrURL(n)}" target="_blank" rel="noopener noreferrer">GitHub PR #${n}</a>`;
+  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite build</a>`;
+  html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener noreferrer" title="The pull request's commits since its merge-base">Commits</a>`;
   html += "</div>";
   html += row("Title", escapeHtml(p.title));
   html += row("Author", escapeHtml(p.author));
@@ -13371,14 +12952,7 @@ async function showSizesPrPopup(n) {
   html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
   html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading...</div>';
-  document.getElementById("ttfx-build-popup-title").textContent = `Size of #${n}`;
-  const body = document.getElementById("ttfx-build-popup-body");
-  body.parentElement.classList.remove("ttfx-pr-popup");
-  body.innerHTML = html;
-  body.dataset.commit = `pr-${n}`;
-  const overlay = document.getElementById("ttfx-build-popup-overlay");
-  overlay.classList.add("visible");
-  overlay.setAttribute("aria-hidden", "false");
+  openDetailPopup({ title: `Size of #${n}`, html, key: `sizes-pr-${n}` });
   let d;
   try {
     d = await apiGet(`sizes/pr/${n}`);
@@ -13386,7 +12960,7 @@ async function showSizesPrPopup(n) {
     d = null;
   }
   const el = document.getElementById("sizes-popup-files");
-  if (!el || !sizesPopupTitleIs(`pr-${n}`)) return;
+  if (!el || !detailPopupShows(`sizes-pr-${n}`)) return;
   if (!d) {
     el.textContent = "Could not load the measurement.";
     return;
@@ -13476,8 +13050,8 @@ function renderSizesCommitsTable() {
     const span = sizesSpan(p, i);
     const multi = span > 1 && p != null;
     html += multi
-      ? `<td><a href="${githubCompareURL(d.commits[p], sha)}" target="_blank" rel="noopener" title="${escapeHtml(sizesSpanText(span))}">${span} commits</a></td>`
-      : `<td><a href="${githubCommitURL(sha)}" target="_blank" rel="noopener">${escapeHtml(sha.slice(0, 10))}</a></td>`;
+      ? `<td><a href="${githubCompareURL(d.commits[p], sha)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(sizesSpanText(span))}">${span} commits</a></td>`
+      : `<td><a href="${githubCommitURL(sha)}" target="_blank" rel="noopener noreferrer">${escapeHtml(sha.slice(0, 10))}</a></td>`;
     html += `<td class="col-secondary">${escapeHtml(d.versions[i] || "")}</td>`;
     for (const m of metrics) {
       const c = r.deltas[m];
@@ -13531,12 +13105,12 @@ function showSizesCommitPopup(i, metric) {
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
 
   let html = '<div class="ttfx-popup-actions">';
-  if (ci && d.builds[i]) html += `<a class="btn" href="https://buildkite.com/julialang/julia-ci/builds/${d.builds[i]}" target="_blank" rel="noopener">Buildkite build</a>`;
+  if (ci && d.builds[i]) html += extLink(buildkiteBuildUrl({ pipeline: "julia-ci", build: d.builds[i] }), "Buildkite build", 'class="btn"');
   if (multi) {
-    html += `<a class="btn" href="${githubCompareURL(prevSha, sha)}" target="_blank" rel="noopener">The ${span} commits</a>`;
+    html += `<a class="btn" href="${githubCompareURL(prevSha, sha)}" target="_blank" rel="noopener noreferrer">The ${span} commits</a>`;
   } else {
-    if (pr) html += `<a class="btn" href="https://github.com/JuliaLang/julia/pull/${pr}" target="_blank" rel="noopener">GitHub PR #${pr}</a>`;
-    html += `<a class="btn" href="${githubCommitURL(sha)}" target="_blank" rel="noopener">Commit</a>`;
+    if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
+    html += `<a class="btn" href="${githubCommitURL(sha)}" target="_blank" rel="noopener noreferrer">Commit</a>`;
   }
   html += "</div>";
   if (multi) {
@@ -13566,20 +13140,12 @@ function showSizesCommitPopup(i, metric) {
   html += "</tbody></table>";
   html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading the files that changed...</div>';
 
-  document.getElementById("ttfx-build-popup-title").textContent = multi ? `Size change over ${span} commits` : `Size of ${sha.slice(0, 10)}`;
-  const body = document.getElementById("ttfx-build-popup-body");
-  body.parentElement.classList.remove("ttfx-pr-popup");
-  body.innerHTML = html;
-  body.dataset.commit = sha;
-  body.querySelectorAll("a[onclick]").forEach((a) => a.addEventListener("click", closeTtfxBuildPopup));
-  const overlay = document.getElementById("ttfx-build-popup-overlay");
-  overlay.classList.add("visible");
-  overlay.setAttribute("aria-hidden", "false");
+  openDetailPopup({
+    title: multi ? `Size change over ${span} commits` : `Size of ${sha.slice(0, 10)}`,
+    html,
+    key: `sizes-commit-${sha}`,
+  });
   loadSizesPopupFiles(sha, d.sources[i]);
-}
-
-function sizesPopupTitleIs(sha) {
-  return document.getElementById("ttfx-build-popup-body").dataset.commit === sha;
 }
 
 async function loadSizesPopupFiles(sha, source) {
@@ -13591,7 +13157,8 @@ async function loadSizesPopupFiles(sha, source) {
   }
   const el = document.getElementById("sizes-popup-files");
   // The popup was closed or shows another commit by now
-  if (!el || !sizesPopupTitleIs(sha)) return;
+  if (!el || !detailPopupShows(`sizes-commit-${sha}`)) return;
+
   const c = r?.sources?.[source];
   if (!c) {
     el.textContent = "Could not load the files.";
@@ -13751,13 +13318,6 @@ function overviewCadence(dates) {
   return { typical, since, limit, overdue: since > limit };
 }
 
-function overviewCompact(n) {
-  if (n == null || isNaN(n)) return "—";
-  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return String(n);
-}
 
 function overviewSigned(n, digits = 0) {
   const s = n.toFixed(digits);
@@ -13769,8 +13329,9 @@ function overviewTabLink(tab, text) {
 }
 
 function overviewExtLink(url, text) {
-  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+  return extLink(url, escapeHtml(text));
 }
+
 
 function overviewList(names, limit = OVERVIEW_LIST_LIMIT) {
   const shown = names.slice(0, limit).map(escapeHtml).join(", ");
@@ -14065,8 +13626,8 @@ function overviewPkgevalReasons() {
   const notOk = d.reasons.filter((r) => r.status !== "ok");
   const total = notOk.reduce((n, r) => n + r.count, 0);
   if (!total) return "";
-  const top = notOk.slice(0, 4).map((r) => `${escapeHtml(r.reason || r.status)} ${overviewCompact(r.count)}`);
-  return `${overviewTabLink("pkgeval", `${overviewCompact(total)} not ok on ${escapeHtml(d.date)}`)}: ${top.join(", ")}${notOk.length > 4 ? ", …" : ""}`;
+  const top = notOk.slice(0, 4).map((r) => `${escapeHtml(r.reason || r.status)} ${compactNumber(r.count)}`);
+  return `${overviewTabLink("pkgeval", `${compactNumber(total)} not ok on ${escapeHtml(d.date)}`)}: ${top.join(", ")}${notOk.length > 4 ? ", …" : ""}`;
 }
 
 function overviewBenchCard(src) {
@@ -14114,7 +13675,7 @@ function overviewBenchCard(src) {
     donut,
     rows: [
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
-      ["Commit", last.commit ? overviewExtLink(`https://github.com/JuliaLang/julia/commit/${last.commit}`, last.commit.slice(0, 10)) : ""],
+      ["Commit", last.commit ? overviewExtLink(githubCommitURL(last.commit), last.commit.slice(0, 10)) : ""],
       ["Groups", groups ? `${groups} benchmark groups` : ""],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
@@ -14189,8 +13750,8 @@ function overviewCICard() {
     for (const j of latest.jobs) counts[j.state] = (counts[j.state] || 0) + 1;
     failedNames = latest.jobs.filter((j) => isFail(j.state)).map((j) => overviewJobLabel(j.name));
     const r = latest.run;
-    const buildLink = overviewExtLink(`https://buildkite.com/julialang/julia-ci/builds/${latest.build}`, `#${latest.build}`);
-    const commitLink = r.commit ? overviewExtLink(`https://github.com/JuliaLang/julia/commit/${r.commit}`, r.commit) : "";
+    const buildLink = overviewExtLink(buildkiteBuildUrl({ pipeline: "julia-ci", build: latest.build }), `#${latest.build}`);
+    const commitLink = r.commit ? overviewExtLink(githubCommitURL(r.commit), r.commit) : "";
     rows.push(["Latest build", `${buildLink} (${overviewAgo(new Date(latest.runMs).toISOString())}) ${commitLink} ${escapeHtml(r.message || "")}`]);
     rows.push(["Latest build jobs", `${latest.jobs.length}: ${counts.passed} passed${counts.failed ? `, ${counts.failed} failed` : ""}${counts.timed_out ? `, ${counts.timed_out} timed out` : ""}${counts.canceled ? `, ${counts.canceled} canceled` : ""}`]);
     if (failedNames.length) rows.push(["Failed in latest", overviewList(failedNames)]);
@@ -14334,7 +13895,7 @@ function overviewTtfxCard(src, prs) {
 function overviewTtfxPrs(prs) {
   const best = ((prs && prs.prs) || []).filter((p) => p.score != null && p.score < 1).slice(0, 5);
   return best
-    .map((p) => `${overviewExtLink(`https://github.com/JuliaLang/julia/pull/${p.pr}`, `#${p.pr}`)} ${formatTtfxPct((p.score - 1) * 100)}`)
+    .map((p) => `${overviewExtLink(githubPrURL(p.pr), `#${p.pr}`)} ${formatSignedPct((p.score - 1) * 100)}`)
     .join(", ");
 }
 
@@ -14420,7 +13981,7 @@ function overviewSizesPrs(prs) {
     .filter(({ d }) => d)
     .sort((a, b) => Math.abs(b.d) - Math.abs(a.d))
     .slice(0, 5)
-    .map(({ p, d }) => `${overviewExtLink(`https://github.com/JuliaLang/julia/pull/${p.number}`, `#${p.number}`)} <span class="${d > 0 ? "ttfx-up" : "ttfx-down"}">${formatSizeDelta(d)}</span>`)
+    .map(({ p, d }) => `${overviewExtLink(githubPrURL(p.number), `#${p.number}`)} <span class="${d > 0 ? "ttfx-up" : "ttfx-down"}">${formatSizeDelta(d)}</span>`)
     .join(", ");
 }
 
@@ -14474,7 +14035,7 @@ function overviewPackagesCard(src) {
   const maxDate = src.maxDate || series[series.length - 1].date;
   const lagDays = overviewDays(maxDate);
   const week = overviewWeekSums(series, maxDate, 7);
-  let weekText = `${overviewCompact(week.user)} user, ${overviewCompact(week.ci)} CI`;
+  let weekText = `${compactNumber(week.user)} user, ${compactNumber(week.ci)} CI`;
   if (week.days < 7) weekText += `, ${week.days} of 7 days reported`;
   const weekDetail = `7 days to ${maxDate} against the 7 days to ${overviewDateAdd(maxDate, -7)}`;
   const delta = week.prev
@@ -14520,7 +14081,7 @@ function overviewPackagesCard(src) {
   const sparkFrom = overviewDateAdd(maxDate, 1 - OVERVIEW_SPARK_DAYS);
   const spark = overviewSpark(
     series.filter((r) => r.date >= sparkFrom).map((r) => ({ x: Date.parse(r.date), y: r.all })),
-    { color: colors.accent, label: "Downloads per day", format: overviewCompact, zero: true },
+    { color: colors.accent, label: "Downloads per day", format: compactNumber, zero: true },
   );
   return overviewCard({
     tab: "packages",
@@ -14528,7 +14089,7 @@ function overviewPackagesCard(src) {
     status,
     description:
       "Package installs served by pkg.julialang.org, by client type and Julia version.",
-    headline: overviewCompact(week.all),
+    headline: compactNumber(week.all),
     headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(maxDate)}`,
     delta,
     spark,
@@ -14536,7 +14097,7 @@ function overviewPackagesCard(src) {
     rows: [
       ["This week", weekText],
       ["Biggest shift", biggestShift],
-      ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${overviewCompact(series[series.length - 1].all)} downloads`],
+      ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${compactNumber(series[series.length - 1].all)} downloads`],
       ["Most requested", overviewTopPackages()],
       ["Data updated", src.generated_at ? `<span title="${escapeHtml(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
     ],
@@ -14547,7 +14108,7 @@ function overviewPackagesCard(src) {
 function overviewTopPackages() {
   const d = overviewSources && overviewSources.top;
   if (!d || !d.packages || !d.packages.length) return "";
-  const names = d.packages.filter((p) => p.name).slice(0, 5).map((p) => `${escapeHtml(p.name)} ${overviewCompact(p.user)}`);
+  const names = d.packages.filter((p) => p.name).slice(0, 5).map((p) => `${escapeHtml(p.name)} ${compactNumber(p.user)}`);
   return `${overviewTabLink("packages", "by users this week")}: ${names.join(", ")}`;
 }
 
@@ -14708,9 +14269,7 @@ function overviewDonutChart(canvas, donut) {
     },
     options: {
       cutout: "68%",
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       onClick: donut.onClick && ((_, els) => els.length && donut.onClick(els[0].index)),
       onHover: donut.onClick && ((e, els) => (e.native.target.style.cursor = els.length ? "pointer" : "")),
       plugins: {
@@ -14747,9 +14306,7 @@ function overviewSparkChart(canvas, spark) {
       })),
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       layout: { padding: { top: 4, bottom: 2 } },
       interaction: { mode: "nearIndex", intersect: false },
       scales: {
@@ -14785,9 +14342,7 @@ function overviewBarsChart(canvas, bars) {
     type: "bar",
     data: { datasets: [bar(bars.upLabel, bars.upColor, 1), bar(bars.downLabel, bars.downColor, -1)] },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
+      ...baseChartOptions(),
       layout: { padding: { top: 4, bottom: 2 } },
       interaction: { mode: "nearIndex", intersect: false },
       scales: {
@@ -15129,7 +14684,7 @@ function commitPct(now, base) {
 function commitPctHtml(pct, threshold = COMMIT_CHANGE_PCT) {
   if (pct == null || isNaN(pct)) return '<span class="text-muted">—</span>';
   const cls = pct >= threshold ? "commit-worse" : pct <= -threshold ? "commit-better" : "";
-  return `<span class="${cls}">${overviewSigned(pct, 1)}%</span>`;
+  return `<span class="${cls}">${formatSignedPct(pct)}</span>`;
 }
 
 function commitSeconds(s) {
@@ -15202,9 +14757,9 @@ function commitHeaderHtml(data, pr) {
   const id = c.sha || c.prefix;
   const prNumber = c.pr ?? pr?.number;
   const meta = [
-    overviewExtLink(`https://github.com/JuliaLang/julia/commit/${id}`, id),
+    overviewExtLink(githubCommitURL(id), id),
     c.author ? escapeHtml(c.author) : "",
-    prNumber ? overviewExtLink(`https://github.com/JuliaLang/julia/pull/${prNumber}`, `#${prNumber}`) : "",
+    prNumber ? overviewExtLink(githubPrURL(prNumber), `#${prNumber}`) : "",
     c.created_at ? `first built ${escapeHtml(c.created_at.replace("T", " ").slice(0, 16))} UTC (${escapeHtml(timeAgo(c.created_at))})` : "",
   ].filter(Boolean);
   const older = data.previous
@@ -15353,7 +14908,7 @@ function commitBenchHtml(data) {
   if (b.baseline_commit) {
     links.push(
       `<a href="?tab=${tabToURLValue("perf")}&start=${encodeURIComponent(b.baseline_commit)}&end=${encodeURIComponent(b.commit)}&stat=min-wall-time">Diff</a>`,
-      overviewExtLink(`https://github.com/JuliaLang/julia/compare/${b.baseline_commit}...${b.commit}`, "Commits"),
+      overviewExtLink(githubCompareURL(b.baseline_commit, b.commit), "Commits"),
     );
   }
   let text = commitRelationHtml(b, "daily report");
@@ -15778,8 +15333,8 @@ let prCardLink = null;
 let prCardTimer = null;
 
 function prCardMetricsTable(p) {
-  const pct = (g) => formatTtfxPct((g - 1) * 100);
-  const cls = (...vs) => (vs.includes("regression") ? "pr-card-up" : vs.includes("improvement") ? "pr-card-down" : "");
+  const cls = (v) => ({ regression: "pr-card-up", improvement: "pr-card-down" })[ttfxVerdict(v)] || "";
+
   const blocks = Math.max(...Object.values(p.suite).map((s) => s.geomeans.length), 0);
   let html = "<table><thead><tr><th></th>";
   for (let i = 1; i <= blocks; i++) html += `<th>Block ${i}</th>`;
@@ -15789,8 +15344,8 @@ function prCardMetricsTable(p) {
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];
     html += `<tr><th>${escapeHtml(ttfxMetricLabel(m))}</th>`;
-    html += on.geomeans.map((g) => `<td class="${cls(on.verdict)}">${pct(g)}</td>`).join("");
-    html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(pct).join(", ") : "–"}</td></tr>`;
+    html += on.geomeans.map((g) => `<td class="${cls(on.verdict)}">${ttfxRatioPct(g)}</td>`).join("");
+    html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(ttfxRatioPct).join(", ") : "–"}</td></tr>`;
   }
   return html + "</tbody></table>";
 }
@@ -15799,7 +15354,7 @@ function prCardMetricsTable(p) {
 // did not follow
 function prCardOpenLink(number) {
   return IS_TOUCH
-    ? `<div><a href="https://github.com/JuliaLang/julia/pull/${number}" target="_blank" rel="noopener">Open #${number} on GitHub</a></div>`
+    ? `<div><a href="${githubPrURL(number)}" target="_blank" rel="noopener noreferrer">Open #${number} on GitHub</a></div>`
     : "";
 }
 
@@ -15828,7 +15383,7 @@ function prCardTtfxHtml(p, rank, total) {
     ${p.stack ? `<div class="pr-card-muted">${escapeHtml(ttfxPrStackTitle(p))}</div>` : ""}
     <div><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}">Copy summary for GitHub</button></div>
     ${prCardOpenLink(p.pr)}
-    ${IS_TOUCH && p.web_url ? `<div><a href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener">Open the TTFX job on Buildkite</a></div>` : ""}`;
+    ${IS_TOUCH && p.web_url ? `<div><a href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Open the TTFX job on Buildkite</a></div>` : ""}`;
 }
 
 function prCardGithubHtml(number, gh) {
@@ -15855,15 +15410,7 @@ function prCardGithubHtml(number, gh) {
 }
 
 function placePrCard(link) {
-  const r = link.getBoundingClientRect();
-  const el = prCardEl;
-  const w = el.offsetWidth;
-  const h = el.offsetHeight;
-  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
-  const below = r.bottom + 6;
-  const top = below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 6);
-  el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
+  placeFloating(prCardEl, link.getBoundingClientRect(), { gap: 6 });
 }
 
 async function showPrCard(link, number) {
@@ -15968,11 +15515,8 @@ if (IS_TOUCH) {
     tapTipEl.textContent = el.title;
     tapTipEl.dataset.for = el.title;
     tapTipEl.hidden = false;
-    const r = el.getBoundingClientRect();
-    const w = tapTipEl.offsetWidth;
-    const h = tapTipEl.offsetHeight;
-    tapTipEl.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
-    tapTipEl.style.top = `${r.bottom + 6 + h <= window.innerHeight - 8 ? r.bottom + 6 : Math.max(8, r.top - h - 6)}px`;
+    placeFloating(tapTipEl, el.getBoundingClientRect(), { gap: 6 });
+
   });
   window.addEventListener("scroll", () => tapTipEl && (tapTipEl.hidden = true), true);
 }
