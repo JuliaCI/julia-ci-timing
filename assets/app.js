@@ -2,11 +2,21 @@
 
 // === Constants ===
 const FAILED_STATES = ["failed", "timed_out", "canceled"];
-const VALID_TIME_RANGES = [0, 7, 14, 30, 60, 90, 120, 240, 365];
+// The time range options every tab offers, in days; 0 is all time
+const TIME_RANGES = [7, 14, 30, 60, 90, 180, 365, 730, 0];
 const VALID_LINE_TYPES = ["raw", "7", "30", "90"];
 const DEFAULT_TIME_RANGE = 30;
 const DEFAULT_LINE_TYPE = "7";
 const STORAGE_KEY = "julia-ci-timing-config";
+
+// The option nearest a range from a URL or stored settings, which may hold
+// one no longer offered (15, 120, 240); null when it is not a range
+function nearestTimeRange(value) {
+  const days = parseInt(value, 10);
+  if (isNaN(days) || days < 0) return null;
+  if (days === 0) return 0;
+  return TIME_RANGES.filter((d) => d > 0).reduce((a, b) => (Math.abs(b - days) < Math.abs(a - days) ? b : a));
+}
 const DATA_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const AGO_UPDATE_INTERVAL = 60 * 1000; // 1 minute
 
@@ -2942,8 +2952,8 @@ function applyURLParams() {
   // Apply time range
   const t = params.get("t");
   if (t !== null) {
-    const days = parseInt(t, 10);
-    if (!isNaN(days) && VALID_TIME_RANGES.includes(days)) {
+    const days = nearestTimeRange(t);
+    if (days !== null) {
       timeRangeDays = days;
       document.getElementById("time-range").value = days;
     }
@@ -5450,11 +5460,10 @@ function restoreJobSelection() {
       if (
         !urlParams.has("t") &&
         !urlParams.has("x") &&
-        storedConfig.timeRange !== undefined &&
-        [0, 7, 14, 30, 60, 90, 120, 240, 365].includes(storedConfig.timeRange)
+        nearestTimeRange(storedConfig.timeRange) !== null
       ) {
-        timeRangeDays = storedConfig.timeRange;
-        document.getElementById("time-range").value = storedConfig.timeRange;
+        timeRangeDays = nearestTimeRange(storedConfig.timeRange);
+        document.getElementById("time-range").value = timeRangeDays;
       }
       // Apply stored line type
       if (
@@ -6097,10 +6106,10 @@ function initialTimingCutoff() {
   let days = DEFAULT_TIME_RANGE;
   const t = params.get("t");
   const stored = params.has("s") ? null : loadFromLocalStorage();
-  if (t !== null && VALID_TIME_RANGES.includes(parseInt(t, 10))) {
-    days = parseInt(t, 10);
-  } else if (stored && VALID_TIME_RANGES.includes(stored.timeRange)) {
-    days = stored.timeRange;
+  if (t !== null && nearestTimeRange(t) !== null) {
+    days = nearestTimeRange(t);
+  } else if (stored && nearestTimeRange(stored.timeRange) !== null) {
+    days = nearestTimeRange(stored.timeRange);
   }
   if (days === 0) return null;
   const cutoff = new Date();
@@ -6293,11 +6302,17 @@ function reloadStaleView(tab) {
   if (tab === "ci-timing" && timingView === "usage" && staleViews.has("usage")) renderUsageView();
 }
 
-const UPDATED_LABELS = {
-  timing: "last-updated",
-  pkgeval: "pkgeval-last-updated",
-  ttfx: "ttfx-last-updated",
-  sizes: "sizes-last-updated",
+// The source behind each tab, whose update time the header shows. The
+// Overview and Commit tabs draw on all of them and say so themselves.
+const TAB_SOURCES = {
+  "ci-timing": "timing",
+  "ci-builds": "timing",
+  "ci-workers": "agents",
+  "ci-ttfx": "ttfx",
+  "ci-sizes": "sizes",
+  benchmarks: "benchmarks",
+  packages: "packages",
+  pkgeval: "pkgeval",
 };
 
 // A body's own generated_at can be older than the last ingest: its ETag only
@@ -6308,14 +6323,15 @@ function setUpdatedLabels() {
     pkgeval: pkgevalData?.generated_at,
     ttfx: ttfxData?.generated_at,
     sizes: sizesData?.generated_at,
+    benchmarks: benchData?.generated_at,
+    packages: packagesDownloadsData?.generated_at,
+    agents: agentsData?.generated_at,
   };
-  for (const [source, id] of Object.entries(UPDATED_LABELS)) {
-    const at = sourceTimes[source] || fallback[source];
-    const el = document.getElementById(id);
-    if (!el || !at) continue;
-    el.textContent = `Updated ${timeAgo(at)}`;
-    el.title = formatUtc(at);
-  }
+  const source = TAB_SOURCES[activeTab];
+  const at = source && (sourceTimes[source] || fallback[source]);
+  const el = document.getElementById("last-updated");
+  el.textContent = at ? `Updated ${timeAgo(at)}` : "";
+  el.title = at ? formatUtc(at) : "";
 }
 
 let refreshController = null;
@@ -6540,6 +6556,7 @@ window.addEventListener("message", (event) => {
 // browser's back button returns to the previous tab; the startup switch and
 // the one that answers a back or forward navigation only reflect the URL
 function switchTab(tab, { pushHistory = true } = {}) {
+  const previousTab = activeTab;
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
   } else if (tab === "ci-builds") {
@@ -6633,18 +6650,76 @@ function switchTab(tab, { pushHistory = true } = {}) {
   reloadStaleView(tab);
 
   updatePhoneShell(tab);
+  setUpdatedLabels();
+
 
   // Update tab in URL
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(tab));
   url.searchParams.delete("cv");
+  // The landing URL keeps what it carries; the tabs read it as they load
+  if (tabShown) dropOtherTabsParams(url, previousTab, tab);
+  tabShown = true;
   if (pushHistory && url.href !== window.location.href) {
     history.pushState(null, "", url);
   } else {
     history.replaceState(null, "", url);
   }
+  // The tab's own parameters, from its state when it has been shown before
+  if (tabURLGroup(tab) === "ci" && jobSelectionRestored) updateURL();
+  if (tab === "benchmarks" && benchData) updateBenchURL();
+  if (tab === "ci-ttfx" && ttfxData) updateTtfxURL();
+  if (tab === "ci-sizes") updateSizesURL();
+  if (tab === "packages") updatePackagesURL();
+  if (tab === "pkgeval") updatePkgevalURL();
+  document.title = tabTitle(tab);
   trackPageView(tab);
 }
+
+// "Julia Performance Tracking: CI: Timing", as the tab's short path page
+// has it
+function tabTitle(tab) {
+  const btn = document.getElementById("tab-" + tab);
+  const group = btn.closest(".tab-group")?.querySelector(".tab-group-label")?.textContent;
+  return `Julia Performance Tracking: ${group ? group + ": " : ""}${btn.textContent.trim()}`;
+}
+
+// The URL parameters each tab owns, by the group of tabs that share them.
+// The Diff tab owns every parameter the dashboard does not, which it passes
+// to the julia-perf site in its frame.
+const TAB_URL_KEYS = {
+  ci: ["s", "t", "x", "y", "l", "e", "st", "jv", "jf", "jq", "wq"],
+  commit: ["c"],
+  benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
+  "ci-ttfx": ["tm", "tt", "tn", "th", "tg", "tk", "tq", "tx", "tv", "ts"],
+  "ci-sizes": ["zt", "zn", "zm", "zv"],
+  packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
+  pkgeval: ["pt", "pp", "pkg"],
+};
+const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers" ? "ci" : tab);
+const perfOwnsKey = (k) => k === "perf" || !DASHBOARD_PARAMS.has(k);
+let tabShown = false;
+// The Diff tab's parameters while another tab is shown, to put back on return
+let perfURLParams = null;
+
+// Takes the parameters of every other tab off `url`, so a tab's URL only
+// says what that tab shows
+function dropOtherTabsParams(url, from, to) {
+  const group = tabURLGroup(to);
+  if (from === "perf" && to !== "perf") {
+    perfURLParams = [...url.searchParams].filter(([k]) => perfOwnsKey(k));
+  }
+  for (const k of [...url.searchParams.keys()]) {
+    const owner = perfOwnsKey(k) ? "perf" : Object.keys(TAB_URL_KEYS).find((g) => TAB_URL_KEYS[g].includes(k));
+    if (owner && owner !== group) url.searchParams.delete(k);
+  }
+  if (to === "perf" && perfURLParams) {
+    for (const [k, v] of perfURLParams) url.searchParams.append(k, v);
+    perfURLParams = null;
+  }
+  if (to === "commit" && commitRef) url.searchParams.set("c", commitRef);
+}
+
 
 // The tab a URL names, or null; old links used tab=ci-timing&cv=workers
 function tabFromLocation() {
@@ -6666,7 +6741,7 @@ window.addEventListener("popstate", () => {
 let benchData = null;
 let benchChart = null;
 let benchSelectedGroups = new Set();
-let benchTimeRangeDays = 15;
+let benchTimeRangeDays = 14;
 let benchStatType = "minimum";
 // Which estimate the API serves: time (the only one the files have), gctime,
 // memory or allocs
@@ -6762,8 +6837,9 @@ function updateBenchURL() {
   const url = new URL(window.location);
   // Tab
   url.searchParams.set("tab", tabToURLValue(activeTab));
-  // Benchmark time range (default 365)
-  if (benchTimeRangeDays !== 15) {
+  // Benchmark time range (default 14)
+  if (benchTimeRangeDays !== 14) {
+
     url.searchParams.set("bt", benchTimeRangeDays);
   } else {
     url.searchParams.delete("bt");
@@ -6816,8 +6892,8 @@ function applyBenchURLParams() {
 
   const bt = params.get("bt");
   if (bt !== null) {
-    const days = parseInt(bt, 10);
-    if (!isNaN(days) && [15, 30, 60, 90, 180, 365, 730, 0].includes(days)) {
+    const days = nearestTimeRange(bt);
+    if (days !== null) {
       benchTimeRangeDays = days;
       const sel = document.getElementById("bench-time-range");
       if (sel) sel.value = days;
@@ -7237,7 +7313,10 @@ async function loadBenchmarkData() {
     populateBenchGroupList(groupList);
     updateBenchChart();
     updateBenchTable();
+    // The group selection needs the group list, so the URL waits for it
+    if (activeTab === "benchmarks") updateBenchURL();
   } catch (err) {
+
     console.error("Failed to load benchmark data:", err);
     document.getElementById("bench-chart-loading").innerHTML =
       '<span class="error">Failed to load benchmark data. Run <code>julia fetch_benchmarks.jl</code> to generate data.</span>';
@@ -8936,8 +9015,8 @@ function applyPackagesURLParams() {
   const params = new URLSearchParams(window.location.search);
   const edt = params.get("edt");
   if (edt !== null) {
-    const days = parseInt(edt, 10);
-    if (!isNaN(days) && [90, 180, 365, 730, 0].includes(days)) {
+    const days = nearestTimeRange(edt);
+    if (days !== null) {
       packagesTimeRangeDays = days;
       const sel = document.getElementById("packages-time-range");
       if (sel) sel.value = days;
@@ -9177,11 +9256,7 @@ async function loadPackagesDownloadsData() {
       packagesDownloadsData.maxDate ||
       (series.length ? series[series.length - 1].date : null);
 
-    const updatedEl = document.getElementById("packages-last-updated");
-    if (updatedEl) {
-      updatedEl.textContent = "";
-      updatedEl.title = "";
-    }
+    setUpdatedLabels();
 
     if (loadingEl) loadingEl.style.display = "none";
     populatePackagesMinorFilterOptions();
@@ -9840,7 +9915,6 @@ function updatePackagesDownloadsChart() {
 // === PkgEval State ===
 let pkgevalData = null;
 let pkgevalChart = null;
-const PKGEVAL_TIME_RANGES = [7, 14, 30, 90, 180, 365, 730, 0];
 let pkgevalTimeRangeDays = 0;
 let pkgevalProportional = false;
 
@@ -9883,8 +9957,8 @@ function applyPkgevalURLParams() {
   const params = new URLSearchParams(window.location.search);
   const pt = params.get("pt");
   if (pt !== null) {
-    const days = parseInt(pt, 10);
-    if (PKGEVAL_TIME_RANGES.includes(days)) {
+    const days = nearestTimeRange(pt);
+    if (days !== null) {
       pkgevalTimeRangeDays = days;
       const sel = document.getElementById("pkgeval-time-range");
       if (sel) sel.value = days;
@@ -10356,7 +10430,6 @@ const TTFX_METRICS = {
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", index: 7, count: true },
 };
-const TTFX_TIME_RANGES = [7, 14, 30, 90, 180, 365, 0];
 const TTFX_SUITE_LABEL = "Suite geomean";
 // Up to this many tasks, the per-task chart's legend lists each one; above
 // it, one entry for all the tasks' lines and one for their GC-off twins
@@ -10994,8 +11067,8 @@ function applyTtfxURLParams() {
   }
   const tt = params.get("tt");
   if (tt !== null) {
-    const days = parseInt(tt, 10);
-    if (TTFX_TIME_RANGES.includes(days)) {
+    const days = nearestTimeRange(tt);
+    if (days !== null) {
       ttfxTimeRangeDays = days;
       document.getElementById("ttfx-time-range").value = days;
     }
@@ -11049,6 +11122,8 @@ async function loadTtfxData() {
     populateTtfxTaskList();
     updateTtfxChart();
     updateTtfxTable();
+    // The task selection needs the task list, so the URL waits for it
+    if (activeTab === "ci-ttfx") updateTtfxURL();
   } catch (err) {
     console.error("Failed to load TTFX data:", err);
     document.getElementById("ttfx-chart-loading").innerHTML =
@@ -12501,7 +12576,6 @@ function renderTtfxTasksTable() {
 // tarball CI built from the first commit measured that way, with a marker at
 // the switch (the API merges them; see Render.sizes).
 
-const SIZES_TIME_RANGES = [30, 90, 365, 730, 0];
 // The summary metrics the API returns, in sidebar order; counts are left to
 // the commit table
 const SIZES_METRICS = {
@@ -12623,8 +12697,8 @@ function applySizesURLParams() {
   const params = new URLSearchParams(window.location.search);
   const zt = params.get("zt");
   if (zt !== null) {
-    const days = parseInt(zt, 10);
-    if (SIZES_TIME_RANGES.includes(days)) {
+    const days = nearestTimeRange(zt);
+    if (days !== null) {
       sizesTimeRangeDays = days;
       document.getElementById("sizes-time-range").value = days;
     }
@@ -14062,7 +14136,7 @@ function overviewSizesCard(src, prs) {
   const totals = (src && src.values && src.values.total) || [];
   let i = totals.length - 1;
   while (i >= 0 && totals[i] == null) i--;
-  if (i < 0) return overviewMissingCard("ci-sizes", "Size", "The size summary");
+  if (i < 0) return overviewMissingCard("ci-sizes", "Sizes", "The size summary");
   const colors = overviewColors();
   const at = (m) => (src.values[m] ? src.values[m][i] : null);
   const timeOf = (k) => Date.parse(src.merged_at[k]);
@@ -14110,7 +14184,7 @@ function overviewSizesCard(src, prs) {
   const ci = src.sources[i] === "ci";
   return overviewCard({
     tab: "ci-sizes",
-    title: "Size",
+    title: "Sizes",
     status,
     description: `Size of the unpacked ${escapeHtml(src.triplet || "linux-x86_64")} distribution, measured from the tarball of every master build.`,
     headline: formatBytes(totals[i]),
