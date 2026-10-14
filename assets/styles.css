@@ -2670,7 +2670,7 @@ th.sorted .sort-indicator {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 4px 18px;
+  gap: 2px 12px;
 }
 .ttfx-summary-legend:empty {
   display: none;
@@ -3641,6 +3641,14 @@ th.sorted .sort-indicator {
   }
   .ttfx-summary-legend {
     padding: 2px 0;
+    gap: 0 8px;
+  }
+  .ttfx-legend-item {
+    gap: 4px;
+    font-size: 11px;
+  }
+  .ttfx-legend-item img {
+    width: 18px;
   }
   .ttfx-panel {
     height: 210px;

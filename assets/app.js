@@ -12019,6 +12019,7 @@ function ttfxReleaseVersionColor(version) {
 const TTFX_REFS = {
   release: {
     label: "Latest release",
+    short: "Release",
     legend: "The newest stable release, measured weekly",
     legendGcoff: "The release with the GC off",
     color: () => {
@@ -12031,6 +12032,7 @@ const TTFX_REFS = {
   },
   opt: {
     label: "Optimized nightly",
+    short: "Optimized",
     legend: "The nightly optimized build (PGO and ThinLTO), measured daily",
     legendGcoff: "The optimized build with the GC off",
     color: () => (isDarkMode() ? "#d29922" : "#9a6700"),
@@ -12192,17 +12194,19 @@ function renderTtfxSummaryLegend() {
   const color = ttfxSuiteColor();
   const drawn = new Set();
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
-  const entries = [["suite", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
-  if (drawn.has("gcoff")) entries.push(["gcoff", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
+  // Short labels keep the row to a line or two on phones; the full
+  // description is the entry's tooltip
+  const entries = [["suite", "Geomean", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
+  if (drawn.has("gcoff")) entries.push(["gcoff", "GC off", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   for (const [ref, r] of Object.entries(TTFX_REFS)) {
-    if (drawn.has(ref)) entries.push([ref, r.legend, ttfxRefStyle(ref)]);
-    if (drawn.has(`${ref}-gcoff`)) entries.push([`${ref}-gcoff`, r.legendGcoff, ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH)]);
+    if (drawn.has(ref)) entries.push([ref, r.short, r.legend, ttfxRefStyle(ref)]);
+    if (drawn.has(`${ref}-gcoff`)) entries.push([`${ref}-gcoff`, `${r.short}, GC off`, r.legendGcoff, ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH)]);
   }
   el.innerHTML = entries
-    .map(([key, text, sample]) => {
+    .map(([key, text, long, sample]) => {
       const off = ttfxSummaryHidden.has(key);
       const icon = ttfxLegendIcon(null, sample);
-      return `<button type="button" class="ttfx-legend-item${off ? " off" : ""}" aria-pressed="${!off}" onclick="toggleTtfxSummarySeries('${key}')"><img src="${icon.src}" width="${TTFX_LEGEND_ICON_W}" height="${TTFX_LEGEND_ICON_H}" alt="">${escapeHtml(text)}</button>`;
+      return `<button type="button" class="ttfx-legend-item${off ? " off" : ""}" aria-pressed="${!off}" title="${escapeHtml(long)}" onclick="toggleTtfxSummarySeries('${key}')"><img src="${icon.src}" width="${TTFX_LEGEND_ICON_W}" height="${TTFX_LEGEND_ICON_H}" alt="">${escapeHtml(text)}</button>`;
     })
     .join("");
 }
