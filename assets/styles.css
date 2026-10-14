@@ -3504,6 +3504,10 @@ th.sorted .sort-indicator {
   .overview-card-top {
     flex-direction: column;
   }
+  /* In a column the desktop flex basis would become a 220px height */
+  .overview-headline-figure {
+    flex: none;
+  }
 }
 
 /* Hover card for links to julia pull requests */
