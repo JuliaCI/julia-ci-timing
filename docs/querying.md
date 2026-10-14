@@ -80,7 +80,9 @@ only the files that changed. `AGENTS.md` describes their shapes.
   `pkgeval_results` (report and package: status, reason, version, duration_s),
   `pkgeval_reasons` (counts per status and reason).
 - **TTFX.** `ttfx_jobs` (one per master build's TTFX job; `kind` is `release` for the
-  weekly reference run of the newest stable release), `ttfx_results` (job and task:
+  weekly reference run of the newest stable release, `opt` for the nightly optimized
+  build, whose job also measures the regular build of the same commit: its samples have
+  `arm = 'base'` in `ttfx_samples`), `ttfx_results` (job and task:
   precompile, load, run, warm, and load, run and warm with the GC off, in seconds, and
   the MethodInstances the task script invalidated), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the

@@ -89,6 +89,13 @@ the same shape for the weekly `TTFX release` job, which measures the
 newest stable release on the same tasks and machines as a reference;
 its `version` and `commit` are the release's. The site draws it as a
 separate series and computes nothing else from it.
+`opt` is a third array of the same shape for the `TTFX opt` job of the daily
+schedule, which measures the nightly optimized build (PGO and ThinLTO) against
+the regular master build of the same commit, interleaved in the same job. Each
+entry adds `base`, the regular build's times per task (the time metrics only,
+from the job's `base` samples), so `tasks[t][i] / base[t][i]` is the paired
+effect of the optimizations. The site draws the optimized build as a separate
+series and shows the paired difference in its tooltip and details.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base
