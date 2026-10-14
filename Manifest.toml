@@ -79,10 +79,10 @@ version = "1.0.7"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "Dates", "EnumX", "Logging", "PrecompileTools", "Random", "Reseau", "SHA", "URIs", "UUIDs", "Zlib_jll"]
-git-tree-sha1 = "16ea62e9964138ad04e12408077a9ed0389b0495"
+git-tree-sha1 = "ed18c529d170d8431c9d91537520b6d3dec052ca"
 registries = "General"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "2.7.1"
+version = "2.9.0"
 
 [[deps.InlineStrings]]
 git-tree-sha1 = "06b65886c7577a3784d616e29f1302c2e36e389d"
