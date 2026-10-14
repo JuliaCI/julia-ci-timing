@@ -10659,13 +10659,71 @@ function ttfxBuildPr(b) {
   return m ? Number(m[1] || m[2]) : null;
 }
 
+// Per metric, a build's suite value over the selected tasks, the change from
+// the last build before it in the range, and the clicked task's own values
+function ttfxBuildSuiteRows(b, builds, tasks, task) {
+  const i = builds.indexOf(b);
+  return Object.keys(TTFX_METRICS).map((key) => {
+    const common = ttfxSuiteTasks(builds, tasks, key);
+    const gcoff = ttfxShowsGcOff(key);
+    let prev = null;
+    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxSuiteValue(builds[j], common, key);
+    const g = ttfxSuiteValue(b, common, key);
+    return {
+      key,
+      n: common.length,
+      g,
+      prev,
+      off: gcoff ? ttfxSuiteValue(b, common, key, true) : null,
+      change: ttfxChange(g, prev, key),
+      tv: task ? ttfxValue(b, task, key) : null,
+      toff: task && gcoff ? ttfxValue(b, task, key, true) : null,
+    };
+  });
+}
+
+// A task stands out when its time moved this much from its last run before,
+// in % and in seconds, so the short and noisy runs do not fill the list
+const TTFX_OUTLIER_MIN_PCT = 10;
+const TTFX_OUTLIER_MIN_S = 0.05;
+const TTFX_OUTLIER_MIN_COUNT = 10;
+const TTFX_OUTLIER_ROWS = 10;
+
+// The selected tasks whose change from their last run before `b` in `series`
+// departs most from the suite's change, per metric: times first, ranked by how
+// far the task's ratio is from the suite's, then counts by their difference
+function ttfxBuildOutliers(b, series, tasks, suiteRows) {
+  const i = series.indexOf(b);
+  if (i <= 0) return [];
+  const suiteLog = {};
+  for (const r of suiteRows) suiteLog[r.key] = r.g && r.prev && !ttfxIsCount(r.key) ? Math.log(r.g / r.prev) : 0;
+  const times = [];
+  const counts = [];
+  for (const key of Object.keys(TTFX_METRICS)) {
+    for (const t of tasks) {
+      const v = ttfxValue(b, t, key);
+      if (v == null) continue;
+      let prev = null;
+      for (let j = i - 1; j >= 0 && prev == null; j--) prev = ttfxValue(series[j], t, key);
+      if (prev == null) continue;
+      const row = { task: t, key, v, prev, change: ttfxChange(v, prev, key) };
+      if (ttfxIsCount(key)) {
+        if (Math.abs(v - prev) >= TTFX_OUTLIER_MIN_COUNT) counts.push({ ...row, score: Math.abs(v - prev) });
+      } else if (prev > 0 && Math.abs(v / prev - 1) * 100 >= TTFX_OUTLIER_MIN_PCT && Math.abs(v - prev) >= TTFX_OUTLIER_MIN_S) {
+        times.push({ ...row, score: Math.abs(Math.log(v / prev) - suiteLog[key]) });
+      }
+    }
+  }
+  const top = (rows, n) => rows.sort((p, q) => q.score - p.score).slice(0, n);
+  return [...top(times, TTFX_OUTLIER_ROWS), ...top(counts, TTFX_OUTLIER_ROWS / 2)];
+}
+
 // Details of the build behind a clicked chart point: its links, the suite
 // geomeans of every metric with the change from the build before, the clicked
 // task's own values, failures and notes
 function showTtfxBuildPopup(b, task) {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
-  const i = builds.indexOf(b);
   const pr = ttfxBuildPr(b);
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
@@ -10675,6 +10733,7 @@ function showTtfxBuildPopup(b, task) {
   html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
   html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">GitHub commit</a>`;
+  html += '<button type="button" class="btn" id="ttfx-copy-report" title="Copy a markdown report of this build to paste on GitHub">Copy TTFX report</button>';
   html += "</div>";
   html += row("Title", escapeHtml(b.message || ""));
   html += row(
@@ -10692,26 +10751,31 @@ function showTtfxBuildPopup(b, task) {
   html += "<th class=\"num\" title=\"Geometric mean over the selected tasks; for a count, their total\">Suite</th><th class=\"num\">vs previous</th>";
   if (task) html += '<th class="num">Clicked task</th>';
   html += "</tr></thead><tbody>";
-  for (const key of Object.keys(TTFX_METRICS)) {
-    const common = ttfxSuiteTasks(builds, tasks, key);
-    const g = ttfxSuiteValue(b, common, key);
-    const off = ttfxShowsGcOff(key) ? ttfxSuiteValue(b, common, key, true) : null;
-    let prev = null;
-    for (let j = i - 1; i >= 0 && j >= 0 && prev == null; j--) prev = ttfxSuiteValue(builds[j], common, key);
-    const change = ttfxChange(g, prev, key);
-    const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
-    html += `<tr><th title="${ttfxIsCount(key) ? "Total" : "Geometric mean"} over ${common.length} tasks">${escapeHtml(ttfxMetricLabel(key))}</th>`;
-    html += `<td class="num">${formatTtfxValue(g, key)}${offHtml(off)}</td>`;
-    html += `<td class="num ${change.cls}">${change.text}</td>`;
-    if (task) {
-      const off = ttfxShowsGcOff(key) ? ttfxValue(b, task, key, true) : null;
-      html += `<td class="num">${formatTtfxValue(ttfxValue(b, task, key), key)}${offHtml(off)}</td>`;
-    }
+  const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
+  const suiteRows = ttfxBuildSuiteRows(b, builds, tasks, task);
+  for (const r of suiteRows) {
+    html += `<tr><th title="${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks">${escapeHtml(ttfxMetricLabel(r.key))}</th>`;
+    html += `<td class="num">${formatTtfxValue(r.g, r.key)}${offHtml(r.off)}</td>`;
+    html += `<td class="num ${r.change.cls}">${r.change.text}</td>`;
+    if (task) html += `<td class="num">${formatTtfxValue(r.tv, r.key)}${offHtml(r.toff)}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
   if (tasks.length && Object.keys(TTFX_METRICS).some((k) => ttfxShowsGcOff(k)))
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">Muted: the same with the GC off. Previous: the last build before it in the range.</div>';
+  const outliers = ttfxBuildOutliers(b, ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds, tasks, suiteRows);
+  html += '<div class="ttfx-popup-section" title="Selected tasks whose change from their previous run departs most from the suite\'s">Tasks that moved most</div>';
+  if (!outliers.length) {
+    html += `<div class="ttfx-popup-muted">None moved ${TTFX_OUTLIER_MIN_PCT}% and ${TTFX_OUTLIER_MIN_S}s, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
+  } else {
+    html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th></tr></thead><tbody>';
+    for (const o of outliers) {
+      html += `<tr><td class="ttfx-compile-stmt">${escapeHtml(o.task)}</td><td class="ttfx-outlier-metric">${escapeHtml(ttfxMetricLabel(o.key))}</td>`;
+      html += `<td class="num">${formatTtfxValue(o.prev, o.key)}</td><td class="num">${formatTtfxValue(o.v, o.key)}</td><td class="num ${o.change.cls}">${o.change.text}</td></tr>`;
+    }
+    html += "</tbody></table>";
+    html += '<div class="ttfx-popup-muted ttfx-popup-hint">Ranked by how far each task\'s change is from the suite\'s.</div>';
+  }
 
   for (const a of ttfxAnnotationsFor(b)) {
     html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}${a.url ? ` (${ttfxAnnotationLink(a)})` : ""}</div>`;
@@ -10729,10 +10793,61 @@ function showTtfxBuildPopup(b, task) {
     html,
     key: `ttfx-job-${b.job_id}`,
   });
+  document.getElementById("ttfx-copy-report").addEventListener("click", (e) => copyToClipboard(e.currentTarget, ttfxBuildMarkdown(b, task)));
   // The release runs are compared with the release run before them
   const series = ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds;
   const k = series.indexOf(b);
   renderTtfxCompileDetails(b, k > 0 ? series[k - 1] : null, task);
+}
+
+// The popup's recompiles and invalidations as markdown, once they have loaded
+let ttfxBuildCompileMd = { key: "", lines: [] };
+
+// A markdown report of the build in the popup to paste on GitHub: the same
+// suite table, notes, recompiles, invalidations and failures
+function ttfxBuildMarkdown(b, task) {
+  const builds = getTtfxFilteredBuilds();
+  const tasks = ttfxSelectedList();
+  const pr = ttfxBuildPr(b);
+  const failed = b.failed ? Object.keys(b.failed).sort() : [];
+  const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
+  const what = ttfxIsRelease(b) ? `release ${b.version}` : `build #${b.build}`;
+  const lines = [
+    `**TTFX** ${what} ([job](${ttfxJobUrl(b)})): \`${b.commit.slice(0, 10)}\` (${b.version || "?"}), ${formatUtc(b.date)}` +
+      (pr ? `, from #${pr}` : "") + ".",
+  ];
+  if (b.message) lines.push("", `> ${b.message.split("\n")[0]}`);
+  lines.push(
+    "",
+    `${nOk} tasks measured${failed.length ? `, ${failed.length} failed` : ""}` +
+      `${b.agent || b.cpu ? ` on ${[b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")}` : ""}.`,
+  );
+  const gc = (v) => (v != null ? ` (GC off ${formatTtfxSeconds(v)})` : "");
+  const head = ["suite", "vs previous build"];
+  if (task) head.push(task);
+  lines.push("", `| | ${head.join(" | ")} |`, `|---|${head.map(() => "---").join("|")}|`);
+  const suiteRows = ttfxBuildSuiteRows(b, builds, tasks, task);
+  for (const r of suiteRows) {
+    const cells = [`${formatTtfxValue(r.g, r.key)}${gc(r.off)}`, r.change.text];
+    if (task) cells.push(`${formatTtfxValue(r.tv, r.key)}${gc(r.toff)}`);
+    lines.push(`| ${ttfxMetricLabel(r.key)} | ${cells.join(" | ")} |`);
+  }
+  const outliers = ttfxBuildOutliers(b, ttfxIsRelease(b) ? getTtfxFilteredReleases() : builds, tasks, suiteRows);
+  if (outliers.length) {
+    lines.push("", "Tasks that moved most against their previous run, ranked by how far their change is from the suite's:", "", "| task | metric | previous | this | change |", "|---|---|---|---|---|");
+    for (const o of outliers)
+      lines.push(`| ${o.task} | ${ttfxMetricLabel(o.key)} | ${formatTtfxValue(o.prev, o.key)} | ${formatTtfxValue(o.v, o.key)} | **${o.change.text}** |`);
+  } else {
+    lines.push("", "No task moved much against its previous run.");
+  }
+  for (const a of ttfxAnnotationsFor(b)) lines.push("", `Note: ${ttfxAnnotationText(a)}${a.url ? ` (${a.url})` : ""}`);
+  if (ttfxBuildCompileMd.key === `${b.job_id}|${task || ""}`) lines.push(...ttfxBuildCompileMd.lines);
+  if (failed.length) {
+    lines.push("", `<details><summary>${failed.length} failed task${failed.length > 1 ? "s" : ""}</summary>`, "");
+    for (const t of failed) lines.push(`- ${t}: ${b.failed[t]}`);
+    lines.push("", "</details>");
+  }
+  return lines.join("\n") + "\n";
 }
 
 // Below the popup's table, from api/ttfx/job: the methods the job's trace logs
@@ -10761,6 +10876,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
   const entries = (d) => (d ? Object.entries(d.tasks).filter(([t]) => wanted.has(t)) : []);
   const scope = task ? "" : ` (the ${wanted.size} selected tasks)`;
   const tasksTitle = (ts) => escapeHtml(ts.slice().sort().join("\n"));
+  const md = [];
   let html = `<div class="ttfx-popup-section">Recompiled methods${scope}</div>`;
   if (cur.trace !== "ok") {
     html += `<div class="ttfx-popup-muted">${cur.trace === "none" ? "The job has no trace logs, or they have expired." : "The trace logs have not been fetched yet."}</div>`;
@@ -10798,6 +10914,14 @@ async function renderTtfxCompileDetails(b, prev, task) {
       }
       html += "</tbody></table>";
       if (rows.length > TTFX_POPUP_ROWS) html += `<div class="ttfx-popup-muted ttfx-popup-hint">and ${rows.length - TTFX_POPUP_ROWS} more</div>`;
+      md.push("", `<details><summary>Recompiled methods${scope}: ${rows.filter((r) => !r.gone).length}</summary>`, "");
+      md.push(`| method | tasks | ms |${was ? " vs previous |" : ""}`, `|---|---|---|${was ? "---|" : ""}`);
+      for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
+        const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
+        md.push(`| \`${r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1")}\` | ${r.gone ? "gone" : r.x.tasks.length} | ${r.gone ? "–" : r.x.ms.toFixed(1)} |${was ? ` ${delta} |` : ""}`);
+      }
+      if (rows.length > TTFX_POPUP_ROWS) md.push("", `and ${rows.length - TTFX_POPUP_ROWS} more`);
+      md.push("", "</details>");
     }
   }
 
@@ -10807,8 +10931,10 @@ async function renderTtfxCompileDetails(b, prev, task) {
     html += '<div class="ttfx-popup-muted">Not recorded: the job ran before the TTFX driver logged invalidations.</div>';
   } else {
     const sum = (k) => inv.reduce((n, [, e]) => n + (e[k] || 0), 0);
-    html += `<div>${sum("invalidated").toLocaleString("en-US")} MethodInstances: ${sum("invalidated_by_definition").toLocaleString("en-US")} by method definitions, ` +
-      `${sum("invalidated_rejected").toLocaleString("en-US")} package-image code rejected on load</div>`;
+    const total = `${sum("invalidated").toLocaleString("en-US")} MethodInstances: ${sum("invalidated_by_definition").toLocaleString("en-US")} by method definitions, ` +
+      `${sum("invalidated_rejected").toLocaleString("en-US")} package-image code rejected on load`;
+    html += `<div>${total}</div>`;
+    md.push("", `<details><summary>Invalidations${scope}: ${total}</summary>`);
     // The causes over the tasks: a method definition, or the root of the package
     // code rejected on load, with the MethodInstances it cost and in how many tasks
     for (const [kind, title] of [["definition", "Method definitions invalidating the most"], ["rejected", "Rejected on load, by the method behind it"]]) {
@@ -10823,13 +10949,17 @@ async function renderTtfxCompileDetails(b, prev, task) {
           }
       if (!m.size) continue;
       html += `<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>${title}</th><th class="num">Tasks</th><th class="num" title="MethodInstances invalidated">Count</th></tr></thead><tbody>`;
+      md.push("", `| ${title} | tasks | count |`, "|---|---|---|");
       for (const [cause, x] of [...m].sort((p, q) => q[1].n - p[1].n).slice(0, TTFX_POPUP_ROWS / 2)) {
         html += `<tr><td class="ttfx-compile-stmt" title="${escapeHtml(cause)}">${escapeHtml(cause)}</td><td class="num" title="${tasksTitle([...x.tasks])}">${x.tasks.size}</td><td class="num">${x.n.toLocaleString("en-US")}</td></tr>`;
+        md.push(`| \`${cause}\` | ${x.tasks.size} | ${x.n.toLocaleString("en-US")} |`);
       }
       html += "</tbody></table>";
     }
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">The job keeps the top five causes of each kind per task and phase.</div>';
+    md.push("", "</details>");
   }
+  ttfxBuildCompileMd = { key: `${b.job_id}|${task || ""}`, lines: md };
   el.innerHTML = html;
 }
 
@@ -12301,18 +12431,22 @@ function ttfxPrMarkdown(p) {
   return lines.join("\n") + "\n";
 }
 
-function copyTtfxPrSummary(button) {
-  const p = ttfxPrs && ttfxPrs.prs.find((x) => x.pr === Number(button.dataset.copyPr));
-  if (!p) return;
+// Copies `text`, and says on `button` for a moment whether that worked
+function copyToClipboard(button, text) {
   const label = button.textContent;
-  const done = (text) => {
-    button.textContent = text;
+  const done = (msg) => {
+    button.textContent = msg;
     setTimeout(() => (button.textContent = label), 1500);
   };
-  navigator.clipboard.writeText(ttfxPrMarkdown(p)).then(
+  navigator.clipboard.writeText(text).then(
     () => done("Copied"),
     () => done("Failed"),
   );
+}
+
+function copyTtfxPrSummary(button) {
+  const p = ttfxPrs && ttfxPrs.prs.find((x) => x.pr === Number(button.dataset.copyPr));
+  if (p) copyToClipboard(button, ttfxPrMarkdown(p));
 }
 
 // Captured so the click does not also reach the row, which opens the popup

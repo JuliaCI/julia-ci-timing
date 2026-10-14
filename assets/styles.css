@@ -2901,6 +2901,9 @@ th.sorted .sort-indicator {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+.ttfx-compile-table .ttfx-outlier-metric {
+  white-space: nowrap;
+}
 .ttfx-compile-table .ttfx-compile-gone .ttfx-compile-stmt {
   color: var(--color-fg-muted);
   text-decoration: line-through;
