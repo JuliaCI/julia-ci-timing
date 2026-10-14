@@ -11145,10 +11145,16 @@ const TTFX_JUMP_WINDOW = 5;
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
 // and earlier ones move, so the numbers of the current master stay real.
-// An annotation with `tasks` only adjusts those tasks.
+// An annotation with `tasks` only adjusts those tasks. A reference run gets
+// the factor of its date: the steps at the annotated jobs after it, as
+// measured on master.
 function computeTtfxJumpScales() {
   ttfxJumpScales = new Map();
   const builds = (ttfxData && ttfxData.builds) || [];
+  const refs = Object.values(TTFX_REF_KEYS)
+    .flatMap((key) => (ttfxData && ttfxData[key]) || [])
+    .sort((a, b) => ttfxBuildTime(b) - ttfxBuildTime(a));
+  let r = 0;
   // Up to TTFX_JUMP_WINDOW measured values of one task and index, walking from `from` by `step`
   const near = (from, step, task, i) => {
     const out = [];
@@ -11159,11 +11165,15 @@ function computeTtfxJumpScales() {
     return out;
   };
   const cumulative = {};
-  for (let j = builds.length - 1; j >= 0; j--) {
-    const b = builds[j];
+  const current = () => {
     const own = {};
     for (const t in cumulative) own[t] = cumulative[t].slice();
-    ttfxJumpScales.set(b, own);
+    return own;
+  };
+  for (let j = builds.length - 1; j >= 0; j--) {
+    const b = builds[j];
+    while (r < refs.length && ttfxBuildTime(refs[r]) >= ttfxBuildTime(b)) ttfxJumpScales.set(refs[r++], current());
+    ttfxJumpScales.set(b, current());
     for (const a of ttfxAnnotationsFor(b)) {
       for (const t of a.tasks || ttfxAllTasks()) {
         const scale = cumulative[t] || (cumulative[t] = new Array(7).fill(1));
@@ -11175,6 +11185,7 @@ function computeTtfxJumpScales() {
       }
     }
   }
+  while (r < refs.length) ttfxJumpScales.set(refs[r++], current());
 }
 
 function ttfxMetricLabel(metric = ttfxMetric) {
