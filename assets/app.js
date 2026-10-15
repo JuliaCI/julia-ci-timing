@@ -12254,8 +12254,8 @@ const TTFX_REFS = {
     pointStyle: "rect",
   },
   opt: {
-    label: "Optimized nightly",
-    short: "Optimized",
+    label: "Nightly Optimized",
+    short: "Nightly Optimized",
     legend: "The nightly optimized build (PGO and ThinLTO), measured daily",
     legendGcoff: "The optimized build with the GC off",
     color: () => (isDarkMode() ? "#d29922" : "#9a6700"),
