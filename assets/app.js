@@ -10608,8 +10608,9 @@ let ttfxHideJumps = false;
 let ttfxJumpScales = new Map();
 // Load, run and warm also come from repeats with the GC disabled, drawn as
 // a thin twin of each line (the gap is what the GC cost); whether any
-// build in the data has them
+// build in the data has them, and whether the charts draw the twins
 let ttfxHasGcOff = false;
+let ttfxGcOffDrawn = false;
 let ttfxSelectedTasks = new Set();
 let ttfxTaskColors = {};
 let ttfxTableView = "prs"; // "prs" | "builds" | "tasks"
@@ -11197,6 +11198,10 @@ function ttfxShowsGcOff(metric = ttfxMetric) {
   return ttfxHasGcOff && TTFX_METRICS[metric].gcoffIndex != null;
 }
 
+function ttfxDrawsGcOff(metric = ttfxMetric) {
+  return ttfxGcOffDrawn && ttfxShowsGcOff(metric);
+}
+
 function ttfxAllTasks() {
   return ttfxData ? ttfxData.tasks || [] : [];
 }
@@ -11383,6 +11388,13 @@ function setTtfxTimeRange(val) {
   updateTtfxURL();
 }
 
+function toggleTtfxGcOff() {
+  ttfxGcOffDrawn = !ttfxGcOffDrawn;
+  document.getElementById("ttfx-btn-gcoff").classList.toggle("btn-primary", ttfxGcOffDrawn);
+  updateTtfxChart();
+  updateTtfxURL();
+}
+
 function toggleTtfxHideJumps() {
   ttfxHideJumps = !ttfxHideJumps;
   document.getElementById("ttfx-btn-hide-jumps").classList.toggle("btn-primary", ttfxHideJumps);
@@ -11453,8 +11465,7 @@ function updateTtfxURL() {
   setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
   setOrDelete("tn", "1", !ttfxNormalized);
   setOrDelete("th", "1", !ttfxHideJumps);
-  // The GC-off toggle's parameter, from before both were drawn together
-  url.searchParams.delete("tg");
+  setOrDelete("tg", "1", !ttfxGcOffDrawn);
   setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
   setOrDelete("tq", ttfxTaskFilter, !ttfxTaskFilter);
@@ -11497,6 +11508,10 @@ function applyTtfxURLParams() {
     ttfxHideJumps = true;
     document.getElementById("ttfx-btn-hide-jumps").classList.add("btn-primary");
   }
+  if (params.get("tg") === "1") {
+    ttfxGcOffDrawn = true;
+    document.getElementById("ttfx-btn-gcoff").classList.add("btn-primary");
+  }
   // A count has no summary panel
   if (params.get("ts") === "tasks" || ttfxIsCount()) applyTtfxMode("tasks");
   const tv = params.get("tv");
@@ -11521,6 +11536,7 @@ async function loadTtfxData() {
 
     const tasks = ttfxAllTasks();
     ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
+    document.getElementById("ttfx-btn-gcoff").hidden = !ttfxHasGcOff;
     const colors = generateColors(tasks.length);
     ttfxTaskColors = {};
     tasks.forEach((t, i) => (ttfxTaskColors[t] = colors[i]));
@@ -11573,6 +11589,7 @@ async function reloadTtfxData() {
   computeTtfxJumpScales();
   const tasks = ttfxAllTasks();
   ttfxHasGcOff = (ttfxData.builds || []).some(ttfxHasGcOffValues);
+  document.getElementById("ttfx-btn-gcoff").hidden = !ttfxHasGcOff;
   if (tasks.some((t) => !before.has(t))) {
     const colors = generateColors(tasks.length);
     ttfxTaskColors = {};
@@ -12128,14 +12145,14 @@ function ttfxSuiteDatasets(builds, common, metric) {
   const on = ttfxSuiteDataset(builds, common, metric);
   if (!on.data.length) return [on];
   const out = [on];
-  if (ttfxShowsGcOff(metric)) {
+  if (ttfxDrawsGcOff(metric)) {
     const off = ttfxSuiteDataset(builds, common, metric, { gcoff: true, base: on.data[0].s });
     if (off.data.length) out.push(off);
   }
   for (const ref of Object.keys(TTFX_REFS)) {
     const ds = ttfxRefDataset(ref, common, metric, on.data[0].s);
     if (ds.data.length) out.push(ds);
-    if (ds.data.length && ttfxShowsGcOff(metric)) {
+    if (ds.data.length && ttfxDrawsGcOff(metric)) {
       const off = ttfxRefDataset(ref, common, metric, on.data[0].s, { gcoff: true });
       if (off.data.length) out.push(off);
     }
@@ -12334,7 +12351,7 @@ function updateTtfxTaskChart() {
       order: 1,
     };
     datasets.push(on);
-    if (!ttfxShowsGcOff()) continue;
+    if (!ttfxDrawsGcOff()) continue;
     const off = series(t, true);
     if (!off.length) continue;
     datasets.push({
