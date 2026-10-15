@@ -560,10 +560,11 @@ function ttfx(db; since="")
     end
     builds = jobs("master")
     releases = jobs("release")
+    lts = jobs("lts")
     opt = jobs("opt")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
-                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "opt" => opt)
+                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts, "opt" => opt)
 end
 
 # What one job recorded about compilation, per task: the statements its trace marks as

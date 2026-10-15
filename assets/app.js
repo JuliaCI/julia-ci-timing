@@ -10801,7 +10801,7 @@ function showTtfxBuildPopup(b, task) {
   }
 
   openDetailPopup({
-    title: ttfxRefOf(b) === "release" ? `TTFX release ${b.version} ${formatUtc(b.date)}`
+    title: TTFX_REFS[ttfxRefOf(b)]?.versioned ? `TTFX ${TTFX_REFS[ttfxRefOf(b)].versioned} ${b.version} ${formatUtc(b.date)}`
       : ttfxRefOf(b) === "opt" ? `TTFX optimized build ${formatUtc(b.date)}`
       : `TTFX build ${formatUtc(b.date)}`,
 
@@ -10826,7 +10826,7 @@ function ttfxBuildMarkdown(b, task) {
   const pr = ttfxBuildPr(b);
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
-  const what = ref === "release" ? `release ${b.version}` : ref === "opt" ? `optimized build #${b.build}` : `build #${b.build}`;
+  const what = TTFX_REFS[ref]?.versioned ? `${TTFX_REFS[ref].versioned} ${b.version}` : ref === "opt" ? `optimized build #${b.build}` : `build #${b.build}`;
   const lines = [
     `**TTFX** ${what} ([job](${ttfxJobUrl(b)})): \`${b.commit.slice(0, 10)}\` (${b.version || "?"}), ${formatUtc(b.date)}` +
       (pr ? `, from #${pr}` : "") + ".",
@@ -11219,8 +11219,9 @@ function getTtfxFilteredBuilds() {
 
 // The reference series, kept apart from the master builds: only the charts
 // draw them. `releases` are the weekly runs of the newest stable release,
-// `opt` the nightly optimized (PGO and ThinLTO) builds of master.
-const TTFX_REF_KEYS = { release: "releases", opt: "opt" };
+// `lts` those of the newest LTS release, `opt` the nightly optimized (PGO and
+// ThinLTO) builds of master.
+const TTFX_REF_KEYS = { release: "releases", lts: "lts", opt: "opt" };
 function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
@@ -11763,14 +11764,15 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
           title: (items) => {
             if (!items.length) return "";
             const b = items[0].raw.build;
-            if (items[0].dataset._ref === "release") return `${formatUtc(b.date)}  Julia ${b.version} (release)  ${b.commit.slice(0, 10)}`;
+            const versioned = TTFX_REFS[items[0].dataset._ref]?.versioned;
+            if (versioned) return `${formatUtc(b.date)}  Julia ${b.version} (${versioned})  ${b.commit.slice(0, 10)}`;
             if (items[0].dataset._ref === "opt") return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""} (optimized)`;
             return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
           },
           label: (item) => {
             const ds = item.dataset;
-            const label = ds._ref === "release"
-              ? `Julia ${item.raw.build.version} (release${ds._twinOf != null ? ", GC off" : ""}, ${ds._refTasks} tasks)`
+            const label = TTFX_REFS[ds._ref]?.versioned
+              ? `Julia ${item.raw.build.version} (${TTFX_REFS[ds._ref].versioned}${ds._twinOf != null ? ", GC off" : ""}, ${ds._refTasks} tasks)`
               : ds._ref
                 ? `${ds.label} (${ds._refTasks} tasks)`
               : ds._common
@@ -12026,20 +12028,34 @@ function ttfxReleaseVersionColor(version) {
   return `hsl(${hue + (odd ? 15 : 0)}, 80%, ${lightness}%)`;
 }
 // `color` is the series' colour, which the legend shows (for the releases the
-// newest one's), and `pointColor`, when set, that of each point
+// newest one's), and `pointColor`, when set, that of each point. `versioned`
+// names a series of published releases, whose points are told by version.
+const ttfxNewestVersionColor = (key) => () => {
+  const runs = ttfxData?.[key] || [];
+  return ttfxReleaseVersionColor(runs.length ? runs[runs.length - 1].version : null);
+};
 const TTFX_REFS = {
   release: {
     label: "Latest release",
     short: "Release",
     legend: "The newest stable release, measured weekly",
     legendGcoff: "The release with the GC off",
-    color: () => {
-      const releases = ttfxData?.releases || [];
-      return ttfxReleaseVersionColor(releases.length ? releases[releases.length - 1].version : null);
-    },
+    versioned: "release",
+    color: ttfxNewestVersionColor("releases"),
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
     dash: [],
     pointStyle: "rectRot",
+  },
+  lts: {
+    label: "LTS",
+    short: "LTS",
+    legend: "The newest release of the long-term support series, measured weekly",
+    legendGcoff: "The LTS with the GC off",
+    versioned: "LTS",
+    color: ttfxNewestVersionColor("lts"),
+    pointColor: (b) => ttfxReleaseVersionColor(b?.version),
+    dash: [6, 3],
+    pointStyle: "rect",
   },
   opt: {
     label: "Optimized nightly",

@@ -12,7 +12,8 @@
 # job repeats each task script with the GC disabled as well; those give the load, run
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
 # A weekly job measures the newest stable release on the same tasks and machines, as a
-# reference; its rows have kind 'release' and the release's version and commit.
+# reference; its rows have kind 'release' and the release's version and commit. A second
+# weekly job does the same for the newest patch release of the LTS series (kind 'lts').
 # The nightly schedule's optimized build (PGO and ThinLTO, JULIA_CI_BUILD_MODE=opt) is
 # measured too; its rows have kind 'opt'.
 # Jobs whose driver logs invalidations add, per task, how many MethodInstances the task
@@ -35,10 +36,11 @@ using SQLite, DBInterface
 const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml),
-# ":macos: TTFX release <triplet>" for the weekly release reference, or
+# ":macos: TTFX release <triplet>" and ":macos: TTFX lts <triplet>" for the weekly
+# release and LTS references, or
 # ":macos: TTFX opt <triplet>" for the nightly optimized build; the triplet keeps the
 # group's "Launch TTFX benchmark jobs" step from matching
-const TTFX_JOB = r"\bTTFX\s+(?:(release|opt)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
+const TTFX_JOB = r"\bTTFX\s+(?:(release|lts|opt)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
