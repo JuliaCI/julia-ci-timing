@@ -15081,7 +15081,8 @@ function overviewTtfxCard(src, prs) {
       ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
-      overviewTtfxRelease(src, latest),
+      overviewTtfxRelease(src, latest, src.releases),
+      overviewTtfxRelease(src, latest, src.lts, " (LTS)"),
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -15098,11 +15099,10 @@ const overviewReleaseClass = (pct) =>
 const overviewReleaseRowClass = (tones) =>
   tones.includes("overview-delta-bad") ? "overview-delta-bad" : tones.includes("overview-delta-good") ? "overview-delta-good" : "";
 
-// The latest build against the newest release's latest weekly run, per time
-// metric over the snippets both measured
-function overviewTtfxRelease(src, latest) {
-  const releases = (src && src.releases) || [];
-  const rel = releases[releases.length - 1];
+// The latest build against the latest weekly run of a release series, per
+// time metric over the snippets both measured
+function overviewTtfxRelease(src, latest, runs, suffix = "") {
+  const rel = runs && runs[runs.length - 1];
   if (!rel) return ["Against release", ""];
   const parts = [];
   const tones = [];
@@ -15117,7 +15117,7 @@ function overviewTtfxRelease(src, latest) {
       `${TTFX_PILL_LABELS[m]} <span class="${overviewReleaseClass(pct)}" title="${formatTtfxSeconds(a)} against ${formatTtfxSeconds(b)}, geomean over ${tasks.length} snippets">${formatSignedPct(pct)}</span>`,
     );
   }
-  return [`Against ${rel.version}`, parts.join(", "), overviewReleaseRowClass(tones)];
+  return [`Against ${rel.version}${suffix}`, parts.join(", "), overviewReleaseRowClass(tones)];
 }
 
 // The five best-ranked open pull requests that come out faster, with their score
