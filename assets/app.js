@@ -12210,10 +12210,9 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
 
 // The reference series, each as the suite geomean over the same tasks next to
 // the master line, rebased in % mode to the master line's first point `base`
-// so a gap between them reads as such. The release runs are diamonds on a
-// solid line in their version's colour, the version of each point in the
-// tooltip; the optimized builds triangles on a dotted line in an accent
-// colour. `_ref` names the series, `_refCommon` holds its tasks and
+// so a gap between them reads as such. The release runs are diamonds in
+// their version's colour, the version of each point in the tooltip; the
+// optimized builds triangles in an accent colour. `_ref` names the series, `_refCommon` holds its tasks and
 // `_refTasks` their count.
 // Each minor series of releases has its own hue, and the shade alternates
 // with the patch number so a new release shows where it starts
@@ -12242,7 +12241,6 @@ const TTFX_REFS = {
     versioned: "release",
     color: ttfxNewestVersionColor("releases"),
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
-    dash: [],
     pointStyle: "rectRot",
   },
   lts: {
@@ -12253,7 +12251,6 @@ const TTFX_REFS = {
     versioned: "LTS",
     color: ttfxNewestVersionColor("lts"),
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
-    dash: [6, 3],
     pointStyle: "rect",
   },
   opt: {
@@ -12262,7 +12259,6 @@ const TTFX_REFS = {
     legend: "The nightly optimized build (PGO and ThinLTO), measured daily",
     legendGcoff: "The optimized build with the GC off",
     color: () => (isDarkMode() ? "#d29922" : "#9a6700"),
-    dash: [2, 3],
     pointStyle: "triangle",
   },
 };
@@ -12274,7 +12270,6 @@ function ttfxRefStyle(ref) {
     backgroundColor: color,
     _color: color,
     borderWidth: 1.5,
-    borderDash: r.dash,
     pointStyle: r.pointStyle,
     pointRadius: window.innerWidth <= 600 ? 2.5 : 3.5,
   };
