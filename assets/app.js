@@ -10648,6 +10648,10 @@ const TTFX_LEGEND_TASKS_MAX = 10;
 // +-10% of the midpoint in seconds mode, +-10 points in % mode
 const TTFX_MIN_Y_SPAN_REL = 0.2;
 const TTFX_MIN_Y_SPAN_PCT = 20;
+// Room around the data, as a share of the span: more above it, where the
+// annotation labels sit
+const TTFX_Y_PAD_BELOW = 0.05;
+const TTFX_Y_PAD_ABOVE = 0.15;
 
 function ttfxJobUrl(b) {
   return `${buildkiteBuildUrl({ pipeline: "julia-ci", build: b.build })}#${b.job_id}`;
@@ -11984,9 +11988,14 @@ function ttfxEnforceMinYSpan(axis) {
   if (!isFinite(axis.min) || !isFinite(axis.max)) return;
   const mid = (axis.min + axis.max) / 2;
   const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
-  if (axis.max - axis.min >= minSpan) return;
-  axis.min = mid - minSpan / 2;
-  axis.max = mid + minSpan / 2;
+  if (axis.max - axis.min < minSpan) {
+    axis.min = mid - minSpan / 2;
+    axis.max = mid + minSpan / 2;
+  }
+  const span = axis.max - axis.min;
+  // Seconds never go below zero
+  axis.min = ttfxNormalized ? axis.min - span * TTFX_Y_PAD_BELOW : Math.max(0, axis.min - span * TTFX_Y_PAD_BELOW);
+  axis.max += span * TTFX_Y_PAD_ABOVE;
 }
 
 // In % mode every series of a time is rebased to its first point in range; a
