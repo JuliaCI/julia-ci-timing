@@ -11353,6 +11353,15 @@ function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
 
+// How many of the selected tasks one series alone measured in every one of
+// its runs in range: the reference series `ref`, or the master builds
+function ttfxSeriesTasksText(ref, metric, gcoff = false) {
+  const tasks = ttfxSelectedList();
+  const runs = ref ? getTtfxFilteredRefs(ref) : getTtfxFilteredBuilds();
+  const n = ttfxCommonTasks(runs, tasks, metric, gcoff).length;
+  return `${n} of ${tasks.length} selected tasks measured in every run in range`;
+}
+
 function ttfxShownRefs() {
   return Object.keys(TTFX_REFS).filter((ref) => !ttfxSummaryHidden.has(ref));
 }
@@ -11859,6 +11868,12 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
         display: legendDisplay,
         // A task's entry hides and shows its GC-off twin with it; a group's
         // entry every line in the group
+        onHover: (e, item, legend) => {
+          const ds = legend.chart.data.datasets[item.datasetIndex];
+          if (item._group || !ds || (ds._common == null && !ds._ref)) return;
+          showChartNote(legend.chart, escapeHtml(ttfxSeriesTasksText(ds._ref, metric, ds._twinOf != null)), e);
+        },
+        onLeave: (e, item, legend) => hideChartNote(legend.chart),
         onClick: (e, item, legend) => {
           const chart = legend.chart;
           const clicked = chart.data.datasets[item.datasetIndex];
@@ -12425,16 +12440,18 @@ function renderTtfxSummaryLegend() {
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
   // Short labels keep the row to a line or two on phones; the full
   // description is the entry's tooltip
-  const entries = [["suite", "Nightly", "Geomean of the selected tasks on every master build", { borderColor: color, borderWidth: 2.5, pointRadius: 1.75 }]];
-  if (drawn.has("gcoff")) entries.push(["gcoff", "GC off", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
+  const entries = [["suite", "Nightly", "Geomean of the selected tasks on every master build", { borderColor: color, borderWidth: 2.5, pointRadius: 1.75 }, null, false]];
+  if (drawn.has("gcoff")) entries.push(["gcoff", "GC off", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH), null, true]);
   for (const [ref, r] of Object.entries(TTFX_REFS)) {
-    if (drawn.has(ref)) entries.push([ref, r.short, r.legend, ttfxRefStyle(ref)]);
-    if (drawn.has(`${ref}-gcoff`)) entries.push([`${ref}-gcoff`, `${r.short}, GC off`, r.legendGcoff, ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH)]);
+    if (drawn.has(ref)) entries.push([ref, r.short, r.legend, ttfxRefStyle(ref), ref, false]);
+    if (drawn.has(`${ref}-gcoff`)) entries.push([`${ref}-gcoff`, `${r.short}, GC off`, r.legendGcoff, ttfxTwinStyle(r.color(), TTFX_SUITE_TWIN_WIDTH), ref, true]);
   }
   el.innerHTML = entries
-    .map(([key, text, long, sample]) => {
+    .map(([key, text, long, sample, ref, gcoff]) => {
       const off = ttfxSummaryHidden.has(key);
       const icon = ttfxLegendIcon(null, sample);
+      // Counted on precompile, which a failed task does not have; a GC-off twin on load, as precompile has none
+      long += "\n" + ttfxSeriesTasksText(ref, gcoff ? "load" : "precompile", gcoff);
       return `<button type="button" class="ttfx-legend-item${off ? " off" : ""}" aria-pressed="${!off}" title="${escapeHtml(long)}" onclick="toggleTtfxSummarySeries('${key}')"><img src="${icon.src}" width="${TTFX_LEGEND_ICON_W}" height="${TTFX_LEGEND_ICON_H}" alt="">${escapeHtml(text)}</button>`;
     })
     .join("");
