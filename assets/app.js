@@ -11662,7 +11662,16 @@ function populateTtfxTaskList() {
   const tasks = ttfxAllTasks();
   const shown = tasks.filter(ttfxTaskMatches);
   const latest = ttfxLatestMeasured(getTtfxFilteredBuilds());
-  const metricLabel = ttfxMetricLabel().toLowerCase();
+  // The summary has no one metric, so each task shows what a user waits for
+  // in all: precompiling, then loading and running it warm
+  const summary = ttfxMode === "summary";
+  const metricLabel = summary ? "precompile + warm load and run" : ttfxMetricLabel().toLowerCase();
+  const valueOf = (t) => {
+    if (!summary) return ttfxValue(latest, t);
+    const p = ttfxValue(latest, t, "precompile");
+    const w = ttfxValue(latest, t, "warm");
+    return p == null || w == null ? null : p + w;
+  };
 
   document.getElementById("ttfx-task-header").textContent =
     `Tasks (${ttfxSelectedTasks.size}/${tasks.length}${ttfxTaskFilter ? `, ${shown.length} match` : ""})`;
@@ -11670,11 +11679,12 @@ function populateTtfxTaskList() {
   for (const t of shown) {
     const selected = ttfxSelectedTasks.has(t);
     const failedMsg = latest && latest.failed && latest.failed[t];
-    const v = latest ? ttfxValue(latest, t) : null;
-    const latestLabel = failedMsg ? "failed" : v == null ? "" : formatTtfxValue(v);
+    const v = latest ? valueOf(t) : null;
+    const fmt = (x) => (summary ? formatTtfxValue(x, "precompile") : formatTtfxValue(x));
+    const latestLabel = failedMsg ? "failed" : v == null ? "" : fmt(v);
     const title = failedMsg
       ? `${t}: fails on the latest build: ${failedMsg}`
-      : `${t}${v != null ? `: ${metricLabel} ${formatTtfxValue(v)} on the latest build` : ""}`;
+      : `${t}${v != null ? `: ${metricLabel} ${fmt(v)} on the latest build` : ""}`;
     // data-task + delegated listener: see populateBenchGroupList
     html += `<div class="group-item ${selected ? "selected" : ""} ${failedMsg ? "failed" : ""}" data-task="${escapeHtml(t)}" title="${escapeHtml(title)}">`;
     html += `<span class="color-dot" style="background: ${ttfxTaskColors[t] || "#888"}"></span>`;
@@ -12227,6 +12237,8 @@ function applyTtfxMode(mode) {
   }
   document.getElementById("ttfx-summary-grid").hidden = ttfxMode !== "summary";
   document.getElementById("ttfx-single").hidden = ttfxMode !== "tasks";
+  // The summary draws every time metric, so the picker only serves the per-task chart
+  document.getElementById("ttfx-metric").classList.toggle("view-hidden", ttfxMode === "summary");
   destroyTtfxCharts();
 }
 
@@ -12234,6 +12246,7 @@ function setTtfxMode(mode) {
   applyTtfxMode(mode);
   // The summary has no panel for a count
   if (ttfxMode === "summary" && ttfxIsCount()) return setTtfxMetric("precompile");
+  populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxURL();
 }
