@@ -11087,6 +11087,7 @@ function ttfxNoteRows(chart) {
   const key = s ? `${s.min}|${s.max}|${s.left}|${s.right}|${PHONE_WIDTH.matches}` : "";
   if (chart.$ttfxNotes && chart.$ttfxNotes.key === key) return chart.$ttfxNotes;
   const rows = {};
+  const labels = [];
   const ends = []; // the right edge of the last label in each row
   const notes = chart.config.options.plugins?.annotation?.annotations || {};
   if (s && !PHONE_WIDTH.matches) {
@@ -11108,26 +11109,54 @@ function ttfxNoteRows(chart) {
       if (r < 0) r = ends.push(n.right) - 1;
       else ends[r] = n.right;
       rows[n.id] = r;
+      n.row = r;
     }
+    labels.push(...placed);
   }
-  chart.$ttfxNotes = { key, rows, count: ends.length };
+  chart.$ttfxNotes = { key, rows, labels, count: ends.length };
   return chart.$ttfxNotes;
 }
 
-// Keeps the top of a TTFX chart clear of data for its note labels. The rows
-// are only known once an update has laid out the x axis, so when they need
-// a different band than the y axis left, the chart is updated once more.
+// What each label needs of the y axis: the highest value drawn under it, and
+// how far below the plot's top its bottom edge sits, in pixels. A label with
+// nothing under it needs nothing.
+function ttfxNoteClearances(chart) {
+  const needs = [];
+  for (const l of ttfxNoteRows(chart).labels) {
+    let v = -Infinity;
+    chart.data.datasets.forEach((ds, i) => {
+      if (!chart.isDatasetVisible(i)) return;
+      const pts = chart.getDatasetMeta(i).data;
+      ds.data.forEach((p, j) => {
+        const x = pts[j]?.x;
+        if (x != null && x >= l.left - TTFX_NOTE_GAP_X_PX && x <= l.right + TTFX_NOTE_GAP_X_PX && p.y > v) v = p.y;
+      });
+    });
+    if (v > -Infinity) needs.push({ v, below: (l.row + 1) * TTFX_NOTE_ROW_PX + TTFX_NOTE_GAP_Y_PX });
+  }
+  return needs;
+}
+
+// Keeps the data on a TTFX chart out from under its note labels. Where the
+// labels and the points fall is only known once an update has laid out the
+// axes, so when the labels need a different y axis, the chart is updated once
+// more.
 Chart.register({
   id: "ttfxNoteBand",
   afterUpdate(chart) {
     if (!chart.config.options.ttfxNotes || chart.$ttfxSettling) return;
-    const n = ttfxNoteRows(chart).count;
-    const band = n ? n * TTFX_NOTE_ROW_PX + TTFX_NOTE_GAP_Y_PX : 0;
-    if (band === (chart.$ttfxNoteBand ?? 0)) return;
-    chart.$ttfxNoteBand = band;
     chart.$ttfxSettling = true;
     try {
-      chart.update("none");
+      // A new y axis can change the width of its labels and so move the
+      // points a little; a few passes settle it
+      for (let pass = 0; pass < 3; pass++) {
+        const needs = ttfxNoteClearances(chart);
+        const key = needs.map((n) => `${n.v}@${n.below}`).join("|");
+        if (key === (chart.$ttfxNoteKey ?? "")) break;
+        chart.$ttfxNoteKey = key;
+        chart.$ttfxNoteNeeds = needs;
+        chart.update("none");
+      }
     } finally {
       chart.$ttfxSettling = false;
     }
@@ -12084,12 +12113,19 @@ function ttfxFitYAxis(axis, count) {
     // Seconds never go below zero
     axis.min = ttfxNormalized ? axis.min - span * TTFX_Y_PAD : Math.max(0, axis.min - span * TTFX_Y_PAD);
   }
-  // The share of the plot's height the labels' band takes, as room above
-  // the data: `share` of the axis is the band when the data fills the rest
+  let max = axis.max + (axis.max - axis.min) * TTFX_Y_PAD;
+  // Each label's highest point under it sits below the label: a value `v`
+  // is drawn `below` pixels under the top when (max - v) / (max - min) is
+  // `below` as a share of the plot's height
   const area = axis.chart.chartArea;
   const height = area ? area.bottom - area.top : 0;
-  const share = height > 0 ? Math.min((axis.chart.$ttfxNoteBand || 0) / height, 0.6) : 0;
-  axis.max += (axis.max - axis.min) * Math.max(TTFX_Y_PAD, share / (1 - share));
+  if (height > 0) {
+    for (const { v, below } of axis.chart.$ttfxNoteNeeds || []) {
+      const share = Math.min(below / height, 0.6);
+      max = Math.max(max, (v - share * axis.min) / (1 - share));
+    }
+  }
+  axis.max = max;
 }
 
 // In % mode every series of a time is rebased to its first point in range; a
