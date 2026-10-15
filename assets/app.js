@@ -11353,6 +11353,10 @@ function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
 
+function ttfxShownRefs() {
+  return Object.keys(TTFX_REFS).filter((ref) => !ttfxSummaryHidden.has(ref));
+}
+
 // Which reference series a run is from, or null for a master build
 function ttfxRefOf(b) {
   if (!ttfxData) return null;
@@ -11457,13 +11461,17 @@ function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, gcoff = false) {
   return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric, gcoff) != null));
 }
 
-// The tasks the suite lines of `metric` average: with a GC-off twin, those
-// common to both (over the builds that have GC-off repeats, for the twin),
-// so the gap between the lines compares the same tasks
+// The tasks the suite lines of `metric` average: those measured by every run
+// in range of the master builds and of each shown reference series, so the
+// lines compare the same tasks. Hiding a series whose runs missed tasks lets
+// the set grow. With a GC-off twin, those common to both (over the runs that
+// have GC-off repeats, for the twin), so the gap between them compares the
+// same tasks too.
 function ttfxSuiteTasks(builds, tasks, metric = ttfxMetric) {
-  const on = ttfxCommonTasks(builds, tasks, metric);
+  const runs = builds.concat(...ttfxShownRefs().map(getTtfxFilteredRefs));
+  const on = ttfxCommonTasks(runs, tasks, metric);
   if (!ttfxShowsGcOff(metric)) return on;
-  const off = new Set(ttfxCommonTasks(builds, tasks, metric, true));
+  const off = new Set(ttfxCommonTasks(runs, tasks, metric, true));
   const both = on.filter((t) => off.has(t));
   return both.length ? both : on;
 }
@@ -11853,6 +11861,8 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
         // entry every line in the group
         onClick: (e, item, legend) => {
           const chart = legend.chart;
+          const clicked = chart.data.datasets[item.datasetIndex];
+          if (!item._group && clicked._ref && clicked._twinOf == null) return toggleTtfxSummarySeries(clicked._ref);
           const members = item._group
             ? ttfxLegendGroup(chart, item._group)
             : chart.data.datasets
@@ -12322,6 +12332,11 @@ function ttfxSuiteDatasets(builds, common, metric) {
     if (off.data.length) out.push(off);
   }
   for (const ref of Object.keys(TTFX_REFS)) {
+    if (ttfxSummaryHidden.has(ref)) {
+      // Kept, empty, for its legend entry: the tasks were chosen without it
+      if (getTtfxFilteredRefs(ref).length) out.push({ ...ttfxRefDataset(ref, [], metric, on.data[0].s), hidden: true });
+      continue;
+    }
     const ds = ttfxRefDataset(ref, common, metric, on.data[0].s);
     if (ds.data.length) out.push(ds);
     if (ds.data.length && ttfxDrawsGcOff(metric)) {
@@ -12401,7 +12416,7 @@ function updateTtfxChart() {
 // The summary panels' shared legend: the suite line and, when any panel
 // draws them, its GC-off twin and the reference series, each drawn as the
 // sample its lines use. `ttfxSummaryHidden` holds the series switched off
-// from it.
+// from it, or for a reference series from the task chart's legend too.
 const ttfxSummaryHidden = new Set();
 function ttfxSummarySeriesKey(ds) {
   if (ds._ref) return ds._twinOf != null ? `${ds._ref}-gcoff` : ds._ref;
@@ -12433,6 +12448,12 @@ function renderTtfxSummaryLegend() {
 function toggleTtfxSummarySeries(key) {
   if (ttfxSummaryHidden.has(key)) ttfxSummaryHidden.delete(key);
   else ttfxSummaryHidden.add(key);
+  // A reference series changes the tasks every suite value averages
+  if (TTFX_REFS[key]) {
+    updateTtfxChart();
+    updateTtfxTable();
+    return;
+  }
   const show = !ttfxSummaryHidden.has(key);
   for (const chart of Object.values(ttfxSummaryCharts)) {
     chart.data.datasets.forEach((d, k) => {
