@@ -11146,9 +11146,9 @@ const TTFX_JUMP_WINDOW = 5;
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
 // and earlier ones move, so the numbers of the current master stay real.
-// An annotation with `tasks` only adjusts those tasks. A reference run gets
-// the factor of its date: the steps at the annotated jobs after it, as
-// measured on master.
+// An annotation with `tasks` only adjusts those tasks, and one with `versions`
+// only the runs of those Julia versions. A reference run gets the factor of
+// its date: the steps at the annotated jobs after it, as measured on master.
 function computeTtfxJumpScales() {
   ttfxJumpScales = new Map();
   const builds = (ttfxData && ttfxData.builds) || [];
@@ -11165,28 +11165,57 @@ function computeTtfxJumpScales() {
     }
     return out;
   };
-  const cumulative = {};
-  const current = () => {
+  // The steps at the annotated jobs passed so far, each kept apart so a run
+  // takes only those of the annotations that cover its version
+  const steps = [];
+  const current = (run) => {
     const own = {};
-    for (const t in cumulative) own[t] = cumulative[t].slice();
+    for (const { a, scales } of steps) {
+      if (!ttfxAnnotationCovers(a, run.version)) continue;
+      for (const t in scales) {
+        const s = own[t] || (own[t] = new Array(7).fill(1));
+        scales[t].forEach((f, i) => (s[i] *= f));
+      }
+    }
     return own;
   };
   for (let j = builds.length - 1; j >= 0; j--) {
     const b = builds[j];
-    while (r < refs.length && ttfxBuildTime(refs[r]) >= ttfxBuildTime(b)) ttfxJumpScales.set(refs[r++], current());
-    ttfxJumpScales.set(b, current());
+    while (r < refs.length && ttfxBuildTime(refs[r]) >= ttfxBuildTime(b)) ttfxJumpScales.set(refs[r], current(refs[r++]));
+    ttfxJumpScales.set(b, current(b));
     for (const a of ttfxAnnotationsFor(b)) {
+      const scales = {};
       for (const t of a.tasks || ttfxAllTasks()) {
-        const scale = cumulative[t] || (cumulative[t] = new Array(7).fill(1));
+        const scale = (scales[t] = new Array(7).fill(1));
         for (let i = 0; i < scale.length; i++) {
           const after = near(j, 1, t, i);
           const before = near(j - 1, -1, t, i);
-          if (after.length >= 2 && before.length >= 2) scale[i] *= median(after) / median(before);
+          if (after.length >= 2 && before.length >= 2) scale[i] = median(after) / median(before);
         }
       }
+      steps.push({ a, scales });
     }
   }
-  while (r < refs.length) ttfxJumpScales.set(refs[r++], current());
+  while (r < refs.length) ttfxJumpScales.set(refs[r], current(refs[r++]));
+}
+
+// Whether an annotated change reached a run of Julia `version`. An optional
+// `versions` range ({ min, max }, both inclusive, such as "1.14" or "1.13.2")
+// limits it; a bound compares only as many parts as it has, and a prerelease
+// counts as its release.
+function ttfxAnnotationCovers(a, version) {
+  if (!a.versions) return true;
+  const parts = (s) => (/^(\d+)\.(\d+)(?:\.(\d+))?/.exec(s || "") || []).slice(1).filter((x) => x != null).map(Number);
+  const v = parts(version);
+  if (!v.length) return true;
+  while (v.length < 3) v.push(0);
+  const cmp = (bound) => {
+    const p = parts(bound);
+    for (let i = 0; i < p.length; i++) if (v[i] !== p[i]) return v[i] - p[i];
+    return 0;
+  };
+  const { min, max } = a.versions;
+  return (!min || cmp(min) >= 0) && (!max || cmp(max) <= 0);
 }
 
 function ttfxMetricLabel(metric = ttfxMetric) {

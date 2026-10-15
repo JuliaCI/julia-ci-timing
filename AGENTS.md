@@ -121,6 +121,11 @@ links it and clicking the line opens it.
 An optional `tasks` list names the tasks the change affected. The TTFX tab's
 "Hide annotated jumps" toggle (`th=1`) scales each series before an annotated
 job by the step it measures there, over all tasks or just the listed ones.
+An optional `versions` range, `{ "min": "1.14" }` with `max` too if needed
+(both inclusive; a bound such as `1.14` covers every 1.14 patch and
+prerelease), limits that to the runs of those Julia versions. Use it for a
+change that only some versions see, so the release and LTS series are not
+scaled by a step they never had: the object cache, for one, is 1.14 and later.
 
 Agent snapshots (the CI → Workers tab) live under `data/agents/`, rendered
 from what `fetch_agents.jl` records from the Buildkite agents API on every
