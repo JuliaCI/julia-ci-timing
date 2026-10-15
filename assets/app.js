@@ -11546,7 +11546,7 @@ function applyTtfxURLParams() {
     document.getElementById("ttfx-btn-gcoff").classList.add("btn-primary");
   }
   // A count has no summary panel
-  if (params.get("ts") === "tasks" || ttfxIsCount()) applyTtfxMode("tasks");
+  applyTtfxMode(params.get("ts") === "tasks" || ttfxIsCount() ? "tasks" : "summary");
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
