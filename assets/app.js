@@ -12018,7 +12018,7 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
     backgroundColor: suiteColor,
     borderWidth: 2.5,
     // On a phone a build is a pixel or two apart; full-size markers merge
-    pointRadius: window.innerWidth <= 600 ? 1 : 2.5,
+    pointRadius: window.innerWidth <= 600 ? 1 : 1.75,
     ...ttfxHoverPointStyle(),
     order: 0,
   };
@@ -12094,7 +12094,7 @@ function ttfxRefStyle(ref) {
     borderWidth: 1.5,
     borderDash: r.dash,
     pointStyle: r.pointStyle,
-    pointRadius: window.innerWidth <= 600 ? 3 : 4.5,
+    pointRadius: window.innerWidth <= 600 ? 2.5 : 3.5,
   };
 }
 
@@ -12240,7 +12240,7 @@ function renderTtfxSummaryLegend() {
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
   // Short labels keep the row to a line or two on phones; the full
   // description is the entry's tooltip
-  const entries = [["suite", "Geomean", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 2.5 }]];
+  const entries = [["suite", "Geomean", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 1.75 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "GC off", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   for (const [ref, r] of Object.entries(TTFX_REFS)) {
     if (drawn.has(ref)) entries.push([ref, r.short, r.legend, ttfxRefStyle(ref)]);
