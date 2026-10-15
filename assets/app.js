@@ -10641,7 +10641,7 @@ const TTFX_METRICS = {
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", index: 7, count: true },
 };
-const TTFX_SUITE_LABEL = "Suite geomean";
+const TTFX_SUITE_LABEL = "Nightly";
 // Up to this many tasks, the per-task chart's legend lists each one; above
 // it, one entry for all the tasks' lines and one for their GC-off twins
 const TTFX_LEGEND_TASKS_MAX = 10;
@@ -11422,7 +11422,7 @@ function ttfxPairedRatio(b, tasks, metric = ttfxMetric, gcoff = false) {
 const formatTtfxRatio = (r) => formatSignedPct((r - 1) * 100);
 
 function ttfxSuiteLabel(metric = ttfxMetric) {
-  return ttfxIsCount(metric) ? "Suite total" : TTFX_SUITE_LABEL;
+  return ttfxIsCount(metric) ? "Nightly, total" : TTFX_SUITE_LABEL;
 }
 
 // Whether `metric` is drawn as % change from the first build: a count is
@@ -12425,7 +12425,7 @@ function renderTtfxSummaryLegend() {
   for (const c of Object.values(ttfxSummaryCharts)) c.data.datasets.forEach((d) => drawn.add(ttfxSummarySeriesKey(d)));
   // Short labels keep the row to a line or two on phones; the full
   // description is the entry's tooltip
-  const entries = [["suite", "Geomean", "Geomean of the selected tasks", { borderColor: color, borderWidth: 2.5, pointRadius: 1.75 }]];
+  const entries = [["suite", "Nightly", "Geomean of the selected tasks on every master build", { borderColor: color, borderWidth: 2.5, pointRadius: 1.75 }]];
   if (drawn.has("gcoff")) entries.push(["gcoff", "GC off", "The same with the GC off", ttfxTwinStyle(color, TTFX_SUITE_TWIN_WIDTH)]);
   for (const [ref, r] of Object.entries(TTFX_REFS)) {
     if (drawn.has(ref)) entries.push([ref, r.short, r.legend, ttfxRefStyle(ref)]);
