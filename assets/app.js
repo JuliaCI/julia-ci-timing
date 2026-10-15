@@ -11903,7 +11903,7 @@ function ttfxLegendIcon(chart, ds) {
   const width = Math.min(ds.borderWidth || 1, 2.5);
   const dash = ds.borderDash || [];
   const marker = (ds.pointRadius || 0) > 0 ? Math.min(ds.pointRadius + 1, 3.5) : 0;
-  const shape = ds.pointStyle === "rectRot" || ds.pointStyle === "triangle" ? ds.pointStyle : "circle";
+  const shape = ["rectRot", "triangle", "rect"].includes(ds.pointStyle) ? ds.pointStyle : "circle";
   const key = [ds.borderColor, width, dash.join("-"), marker, shape].join("|");
   let img = ttfxLegendIcons.get(key);
   if (img) return img;
@@ -11932,6 +11932,10 @@ function ttfxLegendIcon(chart, ds) {
       ctx.lineTo(cx + marker, cy + marker * 0.8);
       ctx.lineTo(cx - marker, cy + marker * 0.8);
       ctx.closePath();
+    } else if (shape === "rect") {
+      // Chart.js sizes a square to fit the circle of the same radius
+      const half = marker / Math.SQRT2;
+      ctx.rect(cx - half, cy - half, 2 * half, 2 * half);
     } else ctx.arc(cx, cy, marker, 0, 2 * Math.PI);
     ctx.fill();
   }
