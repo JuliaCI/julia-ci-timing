@@ -6,7 +6,8 @@
 # GET /api/ lists every route with its parameters, from the route table
 # below that the router matches against.
 #
-# Every response but /api/status and /api/ready carries an ETag from its
+# Every response but /api/status, /api/ready and /api/notes/<name> (the
+# hand-maintained files, tagged by their content) carries an ETag from its
 # source's change sequence (the last commit that changed that source's
 # rows) and the build, so a browser's revalidation costs nothing until an
 # ingest changes that source or a deploy changes what a route renders.
@@ -213,6 +214,8 @@ end
 const ROUTES = [
     Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, and the server's time. Never cached, so it is the cheap thing to poll.",
           (db, _, _) -> status(db)),
+    Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
+          (_, a, _) -> JSON3.read(note_file(a[1]))),
     Route("ready", [], "Whether this server has finished warming up: 200 once the routes the site loads on landing are rendered into its cache, 503 before. A deploy starts the new server beside the old one and switches to it when this answers 200.",
           (db, _, _) -> Dict("ready" => true)),
     Route("timing/runs",
@@ -550,8 +553,27 @@ function split_target(target)
     return key, segments, Dict{String,String}(known)
 end
 
+# The hand-maintained files in data/. They ship with the code, so they are
+# served from it rather than from the ingest's export, which a run started
+# before a deploy would write from the old code.
+const NOTE_FILES = Set(["ttfx_annotations", "methodology_changes"])
+function note_file(name)
+    name in NOTE_FILES || throw(BadRequest("notes are ttfx_annotations or methodology_changes"))
+    return read(joinpath(dirname(@__DIR__), "data", name * ".json"))
+end
+
+function note_response(req::HTTP.Request, name)
+    body = note_file(name)
+    tag = "\"" * string(hash(body); base=16) * "\""
+    headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => tag, "Cache-Control" => "no-cache"]
+    HTTP.header(req, "If-None-Match", "") == tag && return HTTP.Response(304, headers)
+    return HTTP.Response(200, headers, body)
+end
+
 function api(s::Server, req::HTTP.Request)
     key, segments, params = split_target(req.target)
+    # Read from the code, not the database, and never cached
+    length(segments) == 2 && segments[1] == "notes" && return note_response(req, segments[2])
     # A deploy and the proxy's health checks ask; answered before anything
     # touches the database or the cache
     if segments == ["ready"]

@@ -34,7 +34,10 @@ fetch_all() {
 export_all() {
   local rc=0
   julia --color=no --project /app/db/export.jl --out "$export_dir" || rc=1
-  # The hand-maintained files are part of the repo, not the database
+  # The hand-maintained files are part of the repo, not the database. The site
+  # reads them from the API (api/notes/<name>), which always has the deployed
+  # code's; these copies, from whatever image this run started on, are for
+  # readers of /data/ and can lag a deploy by a run.
   cp /app/data/ttfx_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
   return $rc
 }

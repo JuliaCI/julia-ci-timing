@@ -40,7 +40,8 @@ const TREND_METHOD_NOTE =
 // Benchmark methodology-change registry + cutoff/series helpers live in
 // assets/bench-core.js so they can be shared with the offline analysis CLI
 // (tools/inspect-bench.mjs). That module attaches a `BenchCore` global. The
-// registry is loaded asynchronously from data/methodology_changes.json; use
+// registry is loaded asynchronously from data/methodology_changes.json (through
+// the API's notes route); use
 // BenchCore.getMethodologyChanges() at call time to read the current value.
 
 // === Chart hover modes ===
@@ -7336,7 +7337,7 @@ async function loadBenchmarkData() {
   try {
     // Load methodology-change registry first so cutoff helpers have data
     // before the chart computes anything.
-    await BenchCore.loadMethodologyChanges();
+    await BenchCore.loadMethodologyChanges(`${API_BASE}/notes/methodology_changes`);
     updateBenchMethodologyNotesCount();
     benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
     benchDetailSince = apiSince(getBenchCutoff());
@@ -11660,7 +11661,7 @@ async function loadTtfxData() {
 
 // The hand-written notes on TTFX jobs; none when the file cannot be read
 function loadTtfxAnnotations() {
-  return fetch("data/ttfx_annotations.json", { cache: "no-cache" })
+  return fetch(`${API_BASE}/notes/ttfx_annotations`, { cache: "no-cache" })
     .then((r) => (r.ok ? r.json() : { annotations: [] }))
     .then((d) => d.annotations || [])
     .catch(() => []);

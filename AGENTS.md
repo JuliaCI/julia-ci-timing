@@ -108,7 +108,9 @@ anonymously, which makes it the largest user of the 60 requests an hour GitHub
 allows the host (`GITHUB_TOKEN` is used if set).
 
 Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
-(not touched by `fetch_ttfx.jl`): each entry names a `job_id` from the summary
+(not touched by `fetch_ttfx.jl`; the site reads it, and
+`data/methodology_changes.json`, from `api/notes/<name>`, served from the
+deployed code, so an edit is live as soon as the deploy is): each entry names a `job_id` from the summary
 plus a short `label` and a fuller `description`. The site draws a dashed line
 with the label at that job on every TTFX chart, shows the full text while the
 pointer is over the line or label, adds it to the build's tooltip, and flags
