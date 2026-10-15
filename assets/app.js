@@ -11055,6 +11055,20 @@ function hideChartNote(chart) {
   if (el) el.style.display = "none";
 }
 
+// Each kind of note in its own muted hue, clear of the series' colours (the
+// optimized build's amber, the releases' version hues); a note without a
+// known kind stays grey
+const TTFX_NOTE_KIND_HUES = { runner: 195, driver: 345, packages: 280 };
+function ttfxNoteColors(kind, isDark) {
+  const hue = TTFX_NOTE_KIND_HUES[kind];
+  if (hue == null) {
+    return { line: isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)", text: chartTheme().text };
+  }
+  return isDark
+    ? { line: `hsla(${hue}, 30%, 65%, 0.6)`, text: `hsl(${hue}, 40%, 72%)` }
+    : { line: `hsla(${hue}, 30%, 40%, 0.55)`, text: `hsl(${hue}, 40%, 35%)` };
+}
+
 // The note labels, and the gaps kept between them and above the data
 const TTFX_NOTE_FONT_PX = 10;
 const TTFX_NOTE_PAD_PX = 3;
@@ -11123,14 +11137,13 @@ Chart.register({
 // job in `builds`, with its short label at the top and the full text while
 // the pointer is over the line or the label
 function buildTtfxAnnotations(builds, isDark) {
-  const color = isDark ? "rgba(240,246,252,0.45)" : "rgba(31,35,40,0.45)";
   const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
-  const labelColor = chartTheme().text;
   const out = {};
   for (const b of builds) {
     ttfxAnnotationsFor(b).forEach((a, i) => {
       const x = ttfxBuildTime(b);
       const id = `note-${b.job_id}-${i}`;
+      const { line: color, text: labelColor } = ttfxNoteColors(a.kind, isDark);
       out[id] = {
         enter: ({ chart }, event) => {
           const open = a.url ? `<div class="ttfx-note-hint">Click to open ${escapeHtml(ttfxAnnotationLinkText(a))}</div>` : "";

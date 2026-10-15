@@ -3,28 +3,33 @@
   "annotations": [
     {
       "job_id": "01a0a5f4-b3b5-4cc8-b804-f297aab2d905",
+      "kind": "runner",
       "label": "macOS 26.6 → 27",
       "description": "macOS runners were updated from macOS 26.6 to 27, and from then on did not use the object cache until JuliaCI/sandboxed-buildkite-agent#176",
       "versions": { "min": "1.14" }
     },
     {
       "job_id": "01a0b354-167f-4e7b-ab68-d422cc2fc46f",
+      "kind": "driver",
       "label": "TTFX driver #634",
       "description": "The TTFX driver instruments the task script for per-phase gc and compile stats and repeats it with the GC off (julia-buildkite#634). Its added statements cost about a millisecond of run on every task until julia-buildkite#635."
     },
     {
       "job_id": "01a0b7a2-b032-4f9d-bfe4-43bfbbe72d94",
+      "kind": "driver",
       "label": "TTFX driver #635",
       "description": "The TTFX driver keeps its instrumentation out of the timed windows (julia-buildkite#635), removing the fixed cost of about a millisecond of run per task that julia-buildkite#634 had added."
     },
     {
       "job_id": "01a11520-e09f-4360-902b-7ba45dd0ca5e",
+      "kind": "packages",
       "label": "GPUArrays 12 / JLArrays 0.4",
       "tasks": ["JLArrays/Matrix-Multiplication-On-Gpu-Like-Arrays"],
       "description": "The JLArrays task resolved the newly registered GPUArrays v12.0.0 and JLArrays v0.4.0. Its load went from 0.9 s to 8.4 s (1.8 GB allocated, no extra compile time) and its precompile from 17.5 s to 27.2 s. The other tasks did not change, so this is not a Julia regression."
     },
     {
       "job_id": "01a135a3-bf66-4b65-a818-2ab8715224c3",
+      "kind": "runner",
       "label": "macOS object cache",
       "description": "The macOS agents use the object cache again, which they had stopped using with the update to macOS 27. The warm runs are about a third faster from this job on, the suite geomean going from about 0.61 s to 0.40 s.",
       "url": "https://github.com/JuliaCI/sandboxed-buildkite-agent/pull/176",
@@ -32,6 +37,7 @@
     },
     {
       "job_id": "01a13eff-769b-4cc0-8c15-b40162e5e89e",
+      "kind": "driver",
       "label": "TTFX driver #664",
       "description": "The TTFX driver loads freshly precompiled packages once in an untimed process before measuring, so load no longer includes a cost paid once per precompile. The load suite geomean went from about 0.38 s to 0.23 s, level with the GC-off repeats, which never paid it.",
       "url": "https://github.com/JuliaCI/julia-buildkite/pull/664"

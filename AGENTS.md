@@ -116,6 +116,10 @@ the row in the builds table. Use it for changes to the runners or to the
 benchmark itself that shift the numbers without a Julia commit being
 responsible: a macOS update on the agents, a change to how the driver runs the
 task scripts.
+An optional `kind` colours the line and its label by what changed: `runner`
+(the CI machines: an OS update, the object cache), `driver` (how the TTFX job
+measures) or `packages` (a package release a task resolved); a note without
+one is grey.
 An optional `url` links the change (a pull request, say): the build's popup
 links it and clicking the line opens it.
 An optional `tasks` list names the tasks the change affected. The TTFX tab's
