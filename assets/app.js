@@ -10648,10 +10648,9 @@ const TTFX_LEGEND_TASKS_MAX = 10;
 // +-10% of the midpoint in seconds mode, +-10 points in % mode
 const TTFX_MIN_Y_SPAN_REL = 0.2;
 const TTFX_MIN_Y_SPAN_PCT = 20;
-// Room around the data, as a share of the span: more above it, where the
-// annotation labels sit
-const TTFX_Y_PAD_BELOW = 0.05;
-const TTFX_Y_PAD_ABOVE = 0.15;
+// Room around the data, as a share of the span; above it, at least the
+// band the note labels need
+const TTFX_Y_PAD = 0.05;
 
 function ttfxJobUrl(b) {
   return `${buildkiteBuildUrl({ pipeline: "julia-ci", build: b.build })}#${b.job_id}`;
@@ -11056,6 +11055,70 @@ function hideChartNote(chart) {
   if (el) el.style.display = "none";
 }
 
+// The note labels, and the gaps kept between them and above the data
+const TTFX_NOTE_FONT_PX = 10;
+const TTFX_NOTE_PAD_PX = 3;
+const TTFX_NOTE_GAP_X_PX = 6;
+const TTFX_NOTE_GAP_Y_PX = 3;
+const TTFX_NOTE_ROW_PX = TTFX_NOTE_FONT_PX * 1.2 + 2 * TTFX_NOTE_PAD_PX + TTFX_NOTE_GAP_Y_PX;
+
+// Which row, from the top, each note label in view on `chart` takes, and how
+// many rows that makes. Labels are laid out left to right, each in the first
+// row where it clears the label before it, so none overlap. Each is centred
+// on its line, or shifted inside the plot near an edge, as the plugin draws
+// it (in bold).
+function ttfxNoteRows(chart) {
+  const s = chart.scales.x;
+  const key = s ? `${s.min}|${s.max}|${s.left}|${s.right}|${PHONE_WIDTH.matches}` : "";
+  if (chart.$ttfxNotes && chart.$ttfxNotes.key === key) return chart.$ttfxNotes;
+  const rows = {};
+  const ends = []; // the right edge of the last label in each row
+  const notes = chart.config.options.plugins?.annotation?.annotations || {};
+  if (s && !PHONE_WIDTH.matches) {
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = `bold ${TTFX_NOTE_FONT_PX}px ${Chart.defaults.font.family}`;
+    const area = chart.chartArea || { left: s.left, right: s.right };
+    const placed = Object.entries(notes)
+      .filter(([, n]) => n.label && n.xMin >= s.min && n.xMin <= s.max)
+      .map(([id, n]) => {
+        const width = ctx.measureText(n.label.content).width + 2 * TTFX_NOTE_PAD_PX;
+        const left = Math.max(area.left, Math.min(s.getPixelForValue(n.xMin) - width / 2, area.right - width));
+        return { id, left, right: left + width };
+      })
+      .sort((a, b) => a.left - b.left);
+    ctx.restore();
+    for (const n of placed) {
+      let r = ends.findIndex((end) => end + TTFX_NOTE_GAP_X_PX <= n.left);
+      if (r < 0) r = ends.push(n.right) - 1;
+      else ends[r] = n.right;
+      rows[n.id] = r;
+    }
+  }
+  chart.$ttfxNotes = { key, rows, count: ends.length };
+  return chart.$ttfxNotes;
+}
+
+// Keeps the top of a TTFX chart clear of data for its note labels. The rows
+// are only known once an update has laid out the x axis, so when they need
+// a different band than the y axis left, the chart is updated once more.
+Chart.register({
+  id: "ttfxNoteBand",
+  afterUpdate(chart) {
+    if (!chart.config.options.ttfxNotes || chart.$ttfxSettling) return;
+    const n = ttfxNoteRows(chart).count;
+    const band = n ? n * TTFX_NOTE_ROW_PX + TTFX_NOTE_GAP_Y_PX : 0;
+    if (band === (chart.$ttfxNoteBand ?? 0)) return;
+    chart.$ttfxNoteBand = band;
+    chart.$ttfxSettling = true;
+    try {
+      chart.update("none");
+    } finally {
+      chart.$ttfxSettling = false;
+    }
+  },
+});
+
 // Chart.js annotation-plugin config: one dashed vertical line per annotated
 // job in `builds`, with its short label at the top and the full text while
 // the pointer is over the line or the label
@@ -11064,18 +11127,11 @@ function buildTtfxAnnotations(builds, isDark) {
   const labelBg = isDark ? "rgba(22,27,34,0.85)" : "rgba(255,255,255,0.9)";
   const labelColor = chartTheme().text;
   const out = {};
-  // Labels of notes close together in pixels are stepped down so they do not
-  // cover each other; roughly a label's width, since the plugin does not
-  // measure them before laying out
-  const LABEL_CLEARANCE_PX = 110;
-  const LABEL_STEP_PX = 16;
-  const earlier = []; // x of the notes already placed, in time order
   for (const b of builds) {
     ttfxAnnotationsFor(b).forEach((a, i) => {
       const x = ttfxBuildTime(b);
-      const before = earlier.slice();
-      earlier.push(x);
-      out[`note-${b.job_id}-${i}`] = {
+      const id = `note-${b.job_id}-${i}`;
+      out[id] = {
         enter: ({ chart }, event) => {
           const open = a.url ? `<div class="ttfx-note-hint">Click to open ${escapeHtml(ttfxAnnotationLinkText(a))}</div>` : "";
           showChartNote(chart, `${escapeHtml(ttfxAnnotationText(a))}${open}<div class="ttfx-note-hint">${escapeHtml(TTFX_ANNOTATION_HINT)}</div>`, event);
@@ -11103,21 +11159,11 @@ function buildTtfxAnnotations(builds, isDark) {
           display: () => !PHONE_WIDTH.matches,
           content: a.label || a.description,
           position: "end",
-          yAdjust: ({ chart }) => {
-            const s = chart.scales.x;
-            if (!s) return 0;
-            const px = s.getPixelForValue(x);
-            let level = 0;
-            for (let k = before.length - 1; k >= 0 && before[k] >= s.min; k--) {
-              if (px - s.getPixelForValue(before[k]) < LABEL_CLEARANCE_PX) level++;
-              else break;
-            }
-            return level * LABEL_STEP_PX;
-          },
+          yAdjust: ({ chart }) => (ttfxNoteRows(chart).rows[id] ?? 0) * TTFX_NOTE_ROW_PX,
           backgroundColor: labelBg,
           color: labelColor,
-          font: { size: 10 },
-          padding: 3,
+          font: { size: TTFX_NOTE_FONT_PX },
+          padding: TTFX_NOTE_PAD_PX,
         },
       };
     });
@@ -11746,6 +11792,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
   const fmt = normalized ? formatSignedPct : (v) => formatTtfxValue(v, metric);
   return {
     ...baseChartOptions(),
+    ttfxNotes: true,
     parsing: false,
     normalized: true,
     // One point at a time, and only when the pointer is near it: with every
@@ -11900,7 +11947,12 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
         grid: { color: gridColor },
         // A count starts at 0, so a step from 0 to a few methods reads as one
         beginAtZero: count,
-        afterDataLimits: count ? undefined : ttfxEnforceMinYSpan,
+        afterDataLimits: (axis) => ttfxFitYAxis(axis, count),
+        // End at the padded limits rather than rounding out to a whole tick,
+        // which could leave half the panel empty. Chart.js then starts the
+        // ticks at the limit, so they are put back on multiples of its step.
+        bounds: "data",
+        afterBuildTicks: ttfxRoundTicks,
         // Tick values carry float noise (13.600000000000001) on fine steps
         ticks: {
           color: textColor,
@@ -11993,19 +12045,37 @@ function ttfxLegendIcon(chart, ds) {
 // Runs after Chart.js has found the data extent (and again on every x zoom,
 // which refits y), so widen symmetrically about the midpoint when the
 // visible span is below the floor. A box zoom's y range is kept as drawn.
-function ttfxEnforceMinYSpan(axis) {
+function ttfxRoundTicks(axis) {
+  const t = axis.ticks;
+  if (t.length < 2) return;
+  const step = t[1].value - t[0].value;
+  if (!(step > 0)) return;
+  const ticks = [];
+  for (let k = Math.ceil(axis.min / step - 1e-9); k * step <= axis.max + step * 1e-9; k++) ticks.push({ value: k * step || 0 });
+  axis.ticks = ticks;
+}
+
+function ttfxFitYAxis(axis, count) {
   if (axis.options.min != null || axis.options.max != null) return;
   if (!isFinite(axis.min) || !isFinite(axis.max)) return;
-  const mid = (axis.min + axis.max) / 2;
-  const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
-  if (axis.max - axis.min < minSpan) {
-    axis.min = mid - minSpan / 2;
-    axis.max = mid + minSpan / 2;
+  // A count starts at 0 and keeps its own span
+  if (!count) {
+    const mid = (axis.min + axis.max) / 2;
+    const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
+    if (axis.max - axis.min < minSpan) {
+      axis.min = mid - minSpan / 2;
+      axis.max = mid + minSpan / 2;
+    }
+    const span = axis.max - axis.min;
+    // Seconds never go below zero
+    axis.min = ttfxNormalized ? axis.min - span * TTFX_Y_PAD : Math.max(0, axis.min - span * TTFX_Y_PAD);
   }
-  const span = axis.max - axis.min;
-  // Seconds never go below zero
-  axis.min = ttfxNormalized ? axis.min - span * TTFX_Y_PAD_BELOW : Math.max(0, axis.min - span * TTFX_Y_PAD_BELOW);
-  axis.max += span * TTFX_Y_PAD_ABOVE;
+  // The share of the plot's height the labels' band takes, as room above
+  // the data: `share` of the axis is the band when the data fills the rest
+  const area = axis.chart.chartArea;
+  const height = area ? area.bottom - area.top : 0;
+  const share = height > 0 ? Math.min((axis.chart.$ttfxNoteBand || 0) / height, 0.6) : 0;
+  axis.max += (axis.max - axis.min) * Math.max(TTFX_Y_PAD, share / (1 - share));
 }
 
 // In % mode every series of a time is rebased to its first point in range; a
