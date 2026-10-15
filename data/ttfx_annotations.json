@@ -27,6 +27,12 @@
       "label": "macOS object cache",
       "description": "The macOS agents use the object cache again, which they had stopped using with the update to macOS 27. The warm runs are about a third faster from this job on, the suite geomean going from about 0.61 s to 0.40 s.",
       "url": "https://github.com/JuliaCI/sandboxed-buildkite-agent/pull/176"
+    },
+    {
+      "job_id": "01a13eff-769b-4cc0-8c15-b40162e5e89e",
+      "label": "TTFX driver #664",
+      "description": "The TTFX driver loads freshly precompiled packages once in an untimed process before measuring, so load no longer includes a cost paid once per precompile. The load suite geomean went from about 0.38 s to 0.23 s, level with the GC-off repeats, which never paid it.",
+      "url": "https://github.com/JuliaCI/julia-buildkite/pull/664"
     }
   ]
 }
