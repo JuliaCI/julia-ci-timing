@@ -11145,47 +11145,57 @@ const TTFX_JUMP_WINDOW = 5;
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
 // and earlier ones move, so the numbers of the current master stay real.
-// An annotation with `tasks` only adjusts those tasks. A reference run gets
-// the factor of its date: the steps at the annotated jobs after it, as
-// measured on master.
+// An annotation with `tasks` only adjusts those tasks. A reference series
+// measures the steps on its own runs each side of the annotated job: an
+// annotated change need not move it the way it moved master.
 function computeTtfxJumpScales() {
   ttfxJumpScales = new Map();
-  const builds = (ttfxData && ttfxData.builds) || [];
-  const refs = Object.values(TTFX_REF_KEYS)
-    .flatMap((key) => (ttfxData && ttfxData[key]) || [])
-    .sort((a, b) => ttfxBuildTime(b) - ttfxBuildTime(a));
-  let r = 0;
+  if (!ttfxData) return;
+  const builds = ttfxData.builds || [];
+  const steps = []; // [index of the annotated build, its annotation]
+  builds.forEach((b, j) => ttfxAnnotationsFor(b).forEach((a) => steps.push([j, a])));
+  addTtfxJumpScales(builds, steps, 2);
+  for (const key of Object.values(TTFX_REF_KEYS)) {
+    const runs = (ttfxData[key] || []).slice().sort((a, b) => ttfxBuildTime(a) - ttfxBuildTime(b));
+    const own = steps.map(([j, a]) => [runs.findIndex((r) => ttfxBuildTime(r) >= ttfxBuildTime(builds[j])), a]);
+    // Its runs are sparse and steady, so one each side will do
+    addTtfxJumpScales(runs, own, 1);
+  }
+}
+
+// The factors of one date-sorted series, from `steps` as [index of the first
+// run after the step, annotation]; a step needs `min` measured values each
+// side. Steps between the same two runs are one step there.
+function addTtfxJumpScales(series, steps, min) {
+  const at = new Map(); // run index => tasks with a step just before it
+  for (const [j, a] of steps) {
+    if (j <= 0) continue;
+    if (!at.has(j)) at.set(j, new Set());
+    for (const t of a.tasks || ttfxAllTasks()) at.get(j).add(t);
+  }
   // Up to TTFX_JUMP_WINDOW measured values of one task and index, walking from `from` by `step`
   const near = (from, step, task, i) => {
     const out = [];
-    for (let j = from; j >= 0 && j < builds.length && out.length < TTFX_JUMP_WINDOW; j += step) {
-      const x = builds[j].tasks && builds[j].tasks[task] && builds[j].tasks[task][i];
+    for (let j = from; j >= 0 && j < series.length && out.length < TTFX_JUMP_WINDOW; j += step) {
+      const x = series[j].tasks && series[j].tasks[task] && series[j].tasks[task][i];
       if (x != null && x > 0) out.push(x);
     }
     return out;
   };
   const cumulative = {};
-  const current = () => {
+  for (let j = series.length - 1; j >= 0; j--) {
     const own = {};
     for (const t in cumulative) own[t] = cumulative[t].slice();
-    return own;
-  };
-  for (let j = builds.length - 1; j >= 0; j--) {
-    const b = builds[j];
-    while (r < refs.length && ttfxBuildTime(refs[r]) >= ttfxBuildTime(b)) ttfxJumpScales.set(refs[r++], current());
-    ttfxJumpScales.set(b, current());
-    for (const a of ttfxAnnotationsFor(b)) {
-      for (const t of a.tasks || ttfxAllTasks()) {
-        const scale = cumulative[t] || (cumulative[t] = new Array(7).fill(1));
-        for (let i = 0; i < scale.length; i++) {
-          const after = near(j, 1, t, i);
-          const before = near(j - 1, -1, t, i);
-          if (after.length >= 2 && before.length >= 2) scale[i] *= median(after) / median(before);
-        }
+    ttfxJumpScales.set(series[j], own);
+    for (const t of at.get(j) || []) {
+      const scale = cumulative[t] || (cumulative[t] = new Array(7).fill(1));
+      for (let i = 0; i < scale.length; i++) {
+        const after = near(j, 1, t, i);
+        const before = near(j - 1, -1, t, i);
+        if (after.length >= min && before.length >= min) scale[i] *= median(after) / median(before);
       }
     }
   }
-  while (r < refs.length) ttfxJumpScales.set(refs[r++], current());
 }
 
 function ttfxMetricLabel(metric = ttfxMetric) {
