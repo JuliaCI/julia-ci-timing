@@ -11148,10 +11148,12 @@ Chart.register({
     chart.$ttfxSettling = true;
     try {
       // A new y axis can change the width of its labels and so move the
-      // points a little; a few passes settle it
+      // points a little; a few passes settle it. The axis is fitted with the
+      // plot height of the previous layout, so a new height needs a pass too.
       for (let pass = 0; pass < 3; pass++) {
         const needs = ttfxNoteClearances(chart);
-        const key = needs.map((n) => `${n.v}@${n.below}`).join("|");
+        const area = chart.chartArea;
+        const key = `${area ? area.bottom - area.top : 0}:` + needs.map((n) => `${n.v}@${n.below}`).join("|");
         if (key === (chart.$ttfxNoteKey ?? "")) break;
         chart.$ttfxNoteKey = key;
         chart.$ttfxNoteNeeds = needs;
