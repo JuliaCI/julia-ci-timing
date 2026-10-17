@@ -9977,7 +9977,7 @@ function updatePackagesDownloadsChart() {
 let pkgevalData = null;
 let pkgevalChart = null;
 let pkgevalTimeRangeDays = 30;
-let pkgevalProportional = false;
+let pkgevalProportional = true;
 
 function togglePkgevalProportional() {
   pkgevalProportional = !pkgevalProportional;
@@ -10011,11 +10011,7 @@ function updatePkgevalURL() {
   setOrDelete("pd", pkgevalChangesDay);
   setOrDelete("pk", pkgevalChangesKind === "broke" ? "" : pkgevalChangesKind || "both");
   setOrDelete("pf", pkgevalShowFlaky ? "1" : "");
-  if (pkgevalProportional) {
-    url.searchParams.set("pp", "1");
-  } else {
-    url.searchParams.delete("pp");
-  }
+  setOrDelete("pp", pkgevalProportional ? "" : "0");
   if (pkgevalPackage) {
     url.searchParams.set("pkg", pkgevalPackage);
   } else {
@@ -10041,10 +10037,9 @@ function applyPkgevalURLParams() {
       if (sel) sel.value = days;
     }
   }
-  if (params.get("pp") === "1") {
-    pkgevalProportional = true;
-    document.getElementById("pkgeval-btn-proportional").textContent =
-      "Show counts";
+  if (params.get("pp") === "0") {
+    pkgevalProportional = false;
+    document.getElementById("pkgeval-btn-proportional").textContent = "Show %";
   }
   const pr = params.get("pr") ?? (params.get("pv") === "precompile" ? "precompile" : "");
   pkgevalReasonFilter = pr.split(",").map((r) => r.trim()).filter((r) => /^[a-z_]+$/.test(r)).sort();
@@ -10422,7 +10417,10 @@ function getPkgevalFilteredReports() {
   if (pkgevalTimeRangeDays === 0) return reports;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - pkgevalTimeRangeDays);
-  return reports.filter((r) => new Date(r.date) >= cutoff);
+  // The report before the range too, so the bands run in from the left edge
+  // instead of starting at the first report inside it
+  const first = reports.findIndex((r) => new Date(r.date) >= cutoff);
+  return first === -1 ? reports.slice(-1) : reports.slice(Math.max(0, first - 1));
 }
 
 async function loadPkgevalData() {
@@ -10496,14 +10494,14 @@ function updatePkgevalChart() {
       data: skipData,
       borderColor: outcome.skip,
       fill: true,
-      order: 2,
+      order: 1,
     },
     {
       label: "Kill",
       data: killData,
       borderColor: outcome.kill,
       fill: true,
-      order: 1,
+      order: 2,
     },
   ];
 
@@ -10541,6 +10539,8 @@ function updatePkgevalChart() {
         tooltip: {
           usePointStyle: true,
           boxPadding: 4,
+          // Top band first, as the chart stacks them
+          itemSort: (a, b) => (b.dataset.order ?? 0) - (a.dataset.order ?? 0),
           callbacks: {
             footer: TAP_AGAIN_FOOTER,
             title: (items) => {
@@ -10609,6 +10609,7 @@ function updatePkgevalChart() {
     },
   };
 
+  config.plugins = [pkgevalBandLabels(reports)];
   const canvas = document.getElementById("pkgeval-chart");
   if (pkgevalChart) {
     pkgevalChart.destroy();
@@ -10616,6 +10617,64 @@ function updatePkgevalChart() {
   pkgevalChart = new Chart(canvas, config);
   document.getElementById("pkgeval-btn-reset-zoom").style.display = "none";
   updatePkgevalDeltaChart();
+}
+
+// Each outcome's share of the packages, written inside its band at the
+// first and last report in view, where the band is tall enough to hold it.
+// A badge in the outcome's colour keeps it readable on the band's own fill.
+function pkgevalBandLabels(reports) {
+  return {
+    id: "pkgevalBandLabels",
+    afterDatasetsDraw(chart) {
+      const { ctx, chartArea, scales } = chart;
+      // Bands stack in dataset order, bottom first
+      const visible = chart.data.datasets
+        .map((ds, i) => i)
+        .filter((i) => chart.isDatasetVisible(i))
+        .sort((a, b) => (chart.data.datasets[a].order ?? 0) - (chart.data.datasets[b].order ?? 0) || a - b);
+      if (!visible.length) return;
+      const points = chart.getDatasetMeta(visible[0]).data;
+      const inView = points.map((p, j) => j).filter((j) => points[j].x >= chartArea.left && points[j].x <= chartArea.right);
+      if (!inView.length) return;
+      const ends = [inView[0], inView[inView.length - 1]].filter((j, k, a) => a.indexOf(j) === k);
+      const background = chartTheme().isDark ? "#0d1117" : "#ffffff";
+      ctx.save();
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      for (const j of ends) {
+        const r = reports[j];
+        if (!r || !r.total) continue;
+        const left = j === ends[0] && ends.length > 1;
+        let base = 0;
+        for (const i of visible) {
+          const ds = chart.data.datasets[i];
+          const value = ds.data[j] || 0;
+          const bottom = scales.y.getPixelForValue(base);
+          const top = scales.y.getPixelForValue(base + value);
+          base += value;
+          if (bottom - top < 18) continue;
+          const pct = ((r[ds.label.toLowerCase()] || 0) / r.total) * 100;
+          const text = `${pct.toFixed(1)}%`;
+          const w = ctx.measureText(text).width + 10;
+          const h = 16;
+          const edge = Math.min(Math.max(points[j].x, chartArea.left), chartArea.right);
+          const x = left ? edge + 4 : edge - 4 - w;
+          const y = (top + bottom) / 2 - h / 2;
+          ctx.beginPath();
+          ctx.roundRect(x, y, w, h, 8);
+          ctx.fillStyle = colorToRgba(background, 0.85);
+          ctx.fill();
+          ctx.strokeStyle = ds.borderColor;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = ds.borderColor;
+          ctx.fillText(text, x + 5, y + h / 2 + 0.5);
+        }
+      }
+      ctx.restore();
+    },
+  };
 }
 
 // === Recent PkgEval changes (api/pkgeval/changes) ===
