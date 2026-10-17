@@ -6512,6 +6512,10 @@ const DASHBOARD_PARAMS = new Set([
   "pkg", // pkgeval package history
   "pr", // pkgeval package list reason filter
   "pv", // legacy pkgeval list view (pv=precompile is pr=precompile)
+  "pl", // pkgeval package list: recent changes or not passing
+  "pd", // pkgeval changes on one report
+  "pk", // pkgeval changes: broke or fixed
+  "pf", // pkgeval changes: show flaky packages
   "edt", // ecosystem downloads time range
   "edc", // ecosystem downloads client type
   "edv", // ecosystem downloads Julia minor filter
@@ -6750,7 +6754,7 @@ const TAB_URL_KEYS = {
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   activity: ["at", "aw"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
-  pkgeval: ["pt", "pp", "pkg", "pr", "pv"],
+  pkgeval: ["pt", "pp", "pkg", "pr", "pv", "pl", "pd", "pk", "pf"],
 };
 const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers" ? "ci" : tab);
 const perfOwnsKey = (k) => k === "perf" || !DASHBOARD_PARAMS.has(k);
@@ -9972,7 +9976,7 @@ function updatePackagesDownloadsChart() {
 // === PkgEval State ===
 let pkgevalData = null;
 let pkgevalChart = null;
-let pkgevalTimeRangeDays = 0;
+let pkgevalTimeRangeDays = 30;
 let pkgevalProportional = false;
 
 function togglePkgevalProportional() {
@@ -9987,16 +9991,26 @@ function setPkgevalTimeRange(val) {
   pkgevalTimeRangeDays = parseInt(val);
   updatePkgevalChart();
   updatePkgevalURL();
+  if (pkgevalChanges && pkgevalChanges.days !== pkgevalChangesDays()) {
+    pkgevalChangesDay = "";
+    pkgevalChangesGroup = "";
+    loadPkgevalChanges();
+  }
 }
 
 function updatePkgevalURL() {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(activeTab));
-  if (pkgevalTimeRangeDays !== 0) {
+  if (pkgevalTimeRangeDays !== 30) {
     url.searchParams.set("pt", pkgevalTimeRangeDays);
   } else {
     url.searchParams.delete("pt");
   }
+  const setOrDelete = (key, value) => (value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
+  setOrDelete("pl", pkgevalPanelView === "failing" ? "failing" : "");
+  setOrDelete("pd", pkgevalChangesDay);
+  setOrDelete("pk", pkgevalChangesKind === "broke" ? "" : pkgevalChangesKind || "both");
+  setOrDelete("pf", pkgevalShowFlaky ? "1" : "");
   if (pkgevalProportional) {
     url.searchParams.set("pp", "1");
   } else {
@@ -10034,6 +10048,13 @@ function applyPkgevalURLParams() {
   }
   const pr = params.get("pr") ?? (params.get("pv") === "precompile" ? "precompile" : "");
   pkgevalReasonFilter = pr.split(",").map((r) => r.trim()).filter((r) => /^[a-z_]+$/.test(r)).sort();
+  // A reason filter belongs to the list of packages not passing
+  pkgevalPanelView = params.get("pl") === "failing" || pkgevalReasonFilter.length ? "failing" : "changes";
+  const pd = params.get("pd") || "";
+  pkgevalChangesDay = /^\d{4}-\d{2}-\d{2}$/.test(pd) ? pd : "";
+  const pk = params.get("pk");
+  pkgevalChangesKind = pk === "fixed" ? "fixed" : pk === "both" ? "" : "broke";
+  pkgevalShowFlaky = params.get("pf") === "1";
   const pkg = params.get("pkg");
   if (pkg) {
     pkgevalPackage = pkg.trim();
@@ -10161,8 +10182,7 @@ async function loadPkgevalPopular() {
   pkgevalPopular = d;
   if (pkgevalReasonFilter.length) await loadPkgevalFailures();
   renderPkgevalPanel();
-  panel.classList.remove("view-hidden");
-  document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
+  showPkgevalPanels();
 }
 
 // The popular failing packages, by download rank until a header is clicked
@@ -10209,7 +10229,7 @@ function renderPkgevalPopular() {
       ? `${d.top_not_ok} of the ${d.top_tested} most downloaded packages the report tested (of the top ${d.top_n}) did not pass`
       : "";
   panel.innerHTML = `
-    <h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3>
+    <div class="pkgeval-panel-head">${pkgevalPanelSwitch()}<h3>Most downloaded packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a></h3></div>
     <p class="package-panel-help">${escapeHtml(topLine)}${topLine && weighted ? "; " : ""}${escapeHtml(weighted)}. Downloads are user requests to the package server over ${d.days} days (${escapeHtml(d.since)} to ${escapeHtml(d.until)}); the rank is the package's place among every package by those downloads. Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
     ${pkgevalReasonChips()}
     ${phoneListHtml(
@@ -10258,7 +10278,8 @@ let pkgevalFailuresSort = { col: "rank", asc: true };
 let pkgevalFailuresFilter = "";
 
 function renderPkgevalPanel() {
-  if (pkgevalReasonFilter.length && pkgevalFailures) renderPkgevalFailures();
+  if (pkgevalPanelView === "changes" && pkgevalChanges) renderPkgevalChanges();
+  else if (pkgevalReasonFilter.length && pkgevalFailures) renderPkgevalFailures();
   else if (pkgevalPopular) renderPkgevalPopular();
 }
 
@@ -10319,7 +10340,7 @@ function renderPkgevalFailures() {
   const url = pkgevalReportUrl(d.date_path || d.date);
   const newCount = d.packages.filter((p) => p.failing_since === d.date).length;
   panel.innerHTML = `
-    <h3>Packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">${d.packages.length.toLocaleString("en-US")} packages, ${newCount} new</span></h3>
+    <div class="pkgeval-panel-head">${pkgevalPanelSwitch()}<h3>Packages not passing on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">${d.packages.length.toLocaleString("en-US")} packages, ${newCount} new</span></h3></div>
     <p class="package-panel-help">Every package that did not pass for one of the picked reasons, most downloaded first (user requests over ${d.days} days, ${escapeHtml(d.since)} to ${escapeHtml(d.until)}). Days failing counts from the first report after the last one the package passed (≥ when it has not passed on any report with package results); <span class="pe-row-new">new</span> failures and those within ${PKGEVAL_RECENT_DAYS} days are <span class="pe-row-recent">highlighted</span>. Click a row for the package's history.</p>
     ${pkgevalReasonChips()}
     <input type="search" class="pkgeval-failures-filter" placeholder="Filter packages" aria-label="Filter the packages" value="${escapeHtml(pkgevalFailuresFilter)}" />
@@ -10411,6 +10432,7 @@ async function loadPkgevalData() {
 
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
+    loadPkgevalChanges(true);
     loadPkgevalPopular();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
@@ -10546,6 +10568,7 @@ function updatePkgevalChart() {
         },
         zoom: zoomOptions(() => {
           document.getElementById("pkgeval-btn-reset-zoom").style.display = "";
+          syncPkgevalDeltaZoom();
         }),
       },
       onClick: tapAgainToOpen((evt, elements) => {
@@ -10565,10 +10588,12 @@ function updatePkgevalChart() {
         evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
       },
       scales: {
-        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
+        // The bars under the chart label the shared time axis once they show
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd", ...pkgevalXBounds(reports), ticks: { display: !pkgevalChanges } }),
         y: {
           stacked: true,
           grid: { color: gridColor },
+          afterFit: pkgevalYAxisFit,
           ticks: {
             color: textColor,
             callback: pkgevalProportional ? (v) => v.toFixed(0) + "%" : compactNumber,
@@ -10589,6 +10614,430 @@ function updatePkgevalChart() {
     pkgevalChart.destroy();
   }
   pkgevalChart = new Chart(canvas, config);
+  document.getElementById("pkgeval-btn-reset-zoom").style.display = "none";
+  updatePkgevalDeltaChart();
+}
+
+// === Recent PkgEval changes (api/pkgeval/changes) ===
+// Packages that broke or were fixed on a report and stayed so: the bars
+// under the chart count them per report, the panel lists them
+const PKGEVAL_CHANGES_MAX_DAYS = 180;
+// A package that changed state this often over the last reports is flaky
+const PKGEVAL_FLAKY_FLIPS = 4;
+// A report this many days after the one before spans many commits
+const PKGEVAL_GAP_DAYS = 7;
+// At most this many changes are drawn as rows; the filters narrow the rest
+const PKGEVAL_CHANGES_ROWS = 500;
+let pkgevalChanges = null;
+let pkgevalDeltaChart = null;
+let pkgevalPanelView = "changes"; // "changes" | "failing"
+let pkgevalChangesDay = ""; // a report picked on the bars, "" for every report
+let pkgevalChangesKind = "broke"; // "broke", "fixed" or "" for both
+let pkgevalChangesGroup = ""; // a picked cluster, as its pkgevalChangeGroup key
+let pkgevalShowFlaky = false;
+let pkgevalChangesFilter = "";
+let pkgevalChangesSort = { col: "rank", asc: true };
+
+const pkgevalChangesDays = () =>
+  Math.min(pkgevalTimeRangeDays || PKGEVAL_CHANGES_MAX_DAYS, PKGEVAL_CHANGES_MAX_DAYS);
+
+async function loadPkgevalChanges(force = false) {
+  const days = pkgevalChangesDays();
+  if (!force && pkgevalChanges && pkgevalChanges.days === days) return;
+  let d;
+  try {
+    d = await apiGet("pkgeval/changes", { days, client: "user" });
+  } catch (err) {
+    console.error("Failed to load the PkgEval changes:", err);
+    return;
+  }
+  // The time range changed while this was loading; its own request draws
+  if (!d || days !== pkgevalChangesDays()) return;
+  d.reportByDate = new Map(d.reports.map((r) => [r.date, r]));
+  for (const c of d.changes) {
+    // What the change is about: the failure it began, or the one it ended
+    c.reason = c.kind === "broke" ? c.to_reason || c.to_status : c.from_reason || c.from_status;
+    c.status = c.kind === "broke" ? c.to_status : c.from_status;
+  }
+  if (pkgevalChangesDay && !d.reportByDate.has(pkgevalChangesDay)) pkgevalChangesDay = "";
+  pkgevalChanges = d;
+  updatePkgevalDeltaChart();
+  renderPkgevalPanel();
+  showPkgevalPanels();
+}
+
+const pkgevalChangeGroup = (c) => `${c.date}|${c.kind}|${c.reason}`;
+const pkgevalIsFlaky = (c) => c.flips >= PKGEVAL_FLAKY_FLIPS;
+
+// The changes the panel's filters let through; the clusters are counted
+// before a cluster is picked
+function pkgevalVisibleChanges({ ignoreGroup = false, ignoreText = false } = {}) {
+  return pkgevalChanges.changes.filter(
+    (c) =>
+      (pkgevalShowFlaky || !pkgevalIsFlaky(c)) &&
+      (!pkgevalChangesKind || c.kind === pkgevalChangesKind) &&
+      (!pkgevalChangesDay || c.date === pkgevalChangesDay) &&
+      (ignoreGroup || !pkgevalChangesGroup || pkgevalChangeGroup(c) === pkgevalChangesGroup) &&
+      (ignoreText || !pkgevalChangesFilter || matchesSearchWords(c.name, pkgevalChangesFilter)),
+  );
+}
+
+// The time range both PkgEval charts show, so the bars line up with the
+// report they count; half a day either side keeps the end bars whole
+function pkgevalXBounds(reports) {
+  if (!reports || !reports.length) return {};
+  const day = 86400000;
+  const last = Date.parse(reports[reports.length - 1].date);
+  const first = pkgevalTimeRangeDays
+    ? Date.now() - pkgevalTimeRangeDays * day
+    : Date.parse(reports[0].date);
+  return { min: first - day / 2, max: last + day / 2 };
+}
+
+// Both charts take the same y axis width, so their plot areas line up
+function pkgevalYAxisFit(axis) {
+  axis.width = 64;
+}
+
+function syncPkgevalDeltaZoom() {
+  if (!pkgevalDeltaChart || !pkgevalChart) return;
+  pkgevalDeltaChart.options.scales.x.min = pkgevalChart.scales.x.min;
+  pkgevalDeltaChart.options.scales.x.max = pkgevalChart.scales.x.max;
+  pkgevalDeltaChart.update("none");
+}
+
+function resetPkgevalZoom() {
+  if (pkgevalChart) pkgevalChart.resetZoom();
+  document.getElementById("pkgeval-btn-reset-zoom").style.display = "none";
+  syncPkgevalDeltaZoom();
+}
+
+// The most common reasons among some changes, as "time_limit 42, precompile 9"
+function pkgevalTopReasons(changes, n = 3) {
+  const counts = new Map();
+  for (const c of changes) counts.set(c.reason, (counts.get(c.reason) || 0) + 1);
+  return [...counts]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([r, k]) => `${r} ${k}`)
+    .join(", ");
+}
+
+function updatePkgevalDeltaChart() {
+  const container = document.getElementById("pkgeval-delta");
+  const d = pkgevalChanges;
+  if (!container || !d || !pkgevalChart) return;
+  container.classList.remove("view-hidden");
+  if (pkgevalChart.options.scales.x.ticks.display !== false) {
+    pkgevalChart.options.scales.x.ticks.display = false;
+    pkgevalChart.update("none");
+  }
+  const { text: textColor, grid: gridColor } = chartTheme();
+  const outcome = statusColors();
+  const reports = d.reports;
+  const changes = d.changes.filter((c) => pkgevalShowFlaky || !pkgevalIsFlaky(c));
+  const byDate = new Map(reports.map((r) => [r.date, { broke: [], fixed: [], pbroke: [], pfixed: [] }]));
+  for (const c of changes) byDate.get(c.date)?.[(c.pending ? "p" : "") + c.kind].push(c);
+  const series = (key, sign) => reports.map((r) => sign * byDate.get(r.date)[key].length);
+  // A report long after the one before is grey: its changes span many
+  // commits. With a report picked, the others fade.
+  const color = (base, alpha) => (ctx) => {
+    const r = reports[ctx.dataIndex];
+    if (!r) return base;
+    const faded = pkgevalChangesDay && r.date !== pkgevalChangesDay;
+    return colorToRgba(r.gap_days > PKGEVAL_GAP_DAYS ? outcome.skip : base, faded ? alpha * 0.3 : alpha);
+  };
+  const datasets = [
+    { label: "Fixed", data: series("fixed", 1), backgroundColor: color(outcome.ok, 0.85) },
+    { label: "Fixed, pending", data: series("pfixed", 1), backgroundColor: color(outcome.ok, 0.35) },
+    { label: "Broke", data: series("broke", -1), backgroundColor: color(outcome.fail, 0.85) },
+    { label: "Broke, pending", data: series("pbroke", -1), backgroundColor: color(outcome.fail, 0.35) },
+  ].filter((ds) => !ds.label.endsWith("pending") || ds.data.some((v) => v !== 0));
+  const bounds = pkgevalChart.scales?.x ? { min: pkgevalChart.scales.x.min, max: pkgevalChart.scales.x.max } : {};
+  // A report after a long gap gathers weeks of changes; it is clipped
+  // rather than let it flatten the daily bars
+  const daily = reports.map((r, i) => i).filter((i) => reports[i].gap_days <= PKGEVAL_GAP_DAYS);
+  const extent = (sign) => Math.max(5, ...daily.map((i) => datasets.reduce((t, ds) => t + Math.max(0, sign * ds.data[i]), 0)));
+  const up = extent(1);
+  const down = extent(-1);
+  // A round tick step, so the bounds land on ticks
+  const raw = Math.max(up, down) / 2;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const yStep = [1, 2, 5, 10].map((m) => m * mag).find((x) => x >= raw);
+  const yMax = Math.ceil(up / yStep) * yStep;
+  const yMin = -Math.ceil(down / yStep) * yStep;
+  const config = {
+    type: "bar",
+    data: {
+      labels: reports.map((r) => r.date),
+      datasets: datasets.map((ds) => ({ ...ds, stack: "changes", barPercentage: 0.9, categoryPercentage: 0.9 })),
+    },
+    options: {
+      ...baseChartOptions(),
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        // No legend, so the plot area spans the main chart's
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const r = items.length ? reports[items[0].dataIndex] : null;
+              return r ? `${r.date} (since ${r.prev_date})` : "";
+            },
+            label: (item) => ` ${item.dataset.label}: ${Math.abs(item.raw)}`,
+            afterBody: (items) => {
+              if (!items.length) return "";
+              const r = reports[items[0].dataIndex];
+              const g = byDate.get(r.date);
+              const lines = [];
+              const broke = [...g.broke, ...g.pbroke];
+              const fixed = [...g.fixed, ...g.pfixed];
+              if (broke.length) lines.push(`Broke with: ${pkgevalTopReasons(broke)}`);
+              if (fixed.length) lines.push(`Fixed from: ${pkgevalTopReasons(fixed)}`);
+              lines.push(`Every flip, flaky included: ${r.raw_breaks} broke, ${r.raw_fixes} fixed`);
+              if (r.gap_days > PKGEVAL_GAP_DAYS)
+                lines.push(`${r.gap_days} days after the report before: these span every commit in between, and the bar is cut off`);
+              return lines;
+            },
+            footer: () => (IS_TOUCH ? "Tap again to list them" : "Click to list them"),
+          },
+        },
+      },
+      onClick: tapAgainToOpen((evt, elements) => {
+        if (!elements.length) return;
+        const r = reports[elements[0].index];
+        setPkgevalChangesDay(r && r.date !== pkgevalChangesDay ? r.date : "");
+      }),
+      onHover: (evt, elements) => {
+        evt.native.target.style.cursor = elements.length > 0 ? "pointer" : "";
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd", ...bounds, stacked: true, offset: false }),
+        y: {
+          stacked: true,
+          min: yMin,
+          max: yMax,
+          grid: { color: (ctx) => (ctx.tick.value === 0 ? textColor : gridColor) },
+          afterFit: pkgevalYAxisFit,
+          ticks: { color: textColor, stepSize: yStep, callback: (v) => compactNumber(Math.abs(v)) },
+          title: { display: true, text: "▼ broke · fixed ▲", color: textColor },
+        },
+      },
+    },
+  };
+  if (pkgevalDeltaChart) pkgevalDeltaChart.destroy();
+  pkgevalDeltaChart = new Chart(document.getElementById("pkgeval-delta-chart"), config);
+}
+
+function setPkgevalChangesDay(day) {
+  pkgevalChangesDay = day;
+  pkgevalChangesGroup = "";
+  pkgevalPanelView = "changes";
+  showPkgevalPanels();
+  renderPkgevalPanel();
+  pkgevalDeltaChart?.update("none");
+  updatePkgevalURL();
+}
+
+function setPkgevalPanelView(view) {
+  pkgevalPanelView = view;
+  showPkgevalPanels();
+  renderPkgevalPanel();
+  updatePkgevalURL();
+}
+
+// The list under the chart shows once either of its views has loaded
+function showPkgevalPanels() {
+  const view =
+    pkgevalPanelView === "changes" && pkgevalChanges
+      ? "changes"
+      : pkgevalPopular
+        ? "failing"
+        : pkgevalChanges
+          ? "changes"
+          : "";
+  document.getElementById("pkgeval-changes")?.classList.toggle("view-hidden", view !== "changes");
+  document.getElementById("pkgeval-popular")?.classList.toggle("view-hidden", view !== "failing");
+  if (view) document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
+}
+
+function pkgevalPanelSwitch() {
+  const button = (view, label, title) =>
+    `<button class="btn${pkgevalPanelView === view ? " btn-primary" : ""}" onclick="setPkgevalPanelView('${view}')" title="${title}" aria-pressed="${pkgevalPanelView === view}">${label}</button>`;
+  return `<span class="bench-table-view-toggle pkgeval-panel-switch" role="group" aria-label="Package list">${button(
+    "changes",
+    "Recent changes",
+    "Packages that broke or were fixed on a report in the time range, and stayed so",
+  )}${button("failing", "Not passing now", "Packages not passing the newest report, most downloaded first")}</span>`;
+}
+
+function setPkgevalChangesKind(kind) {
+  pkgevalChangesKind = kind;
+  pkgevalChangesGroup = "";
+  renderPkgevalChanges();
+  updatePkgevalURL();
+}
+
+function setPkgevalShowFlaky(on) {
+  pkgevalShowFlaky = on;
+  pkgevalChangesGroup = "";
+  renderPkgevalChanges();
+  updatePkgevalDeltaChart();
+  updatePkgevalURL();
+}
+
+function setPkgevalChangesGroup(key) {
+  pkgevalChangesGroup = pkgevalChangesGroup === key ? "" : key;
+  renderPkgevalChanges();
+}
+
+// A state as text: ok, or the failure as a pill
+const pkgevalStateHtml = (status, reason) =>
+  status === "ok" ? `<span class="pe-ok">ok</span>` : pkgevalReasonPill(reason, status);
+
+function renderPkgevalChanges() {
+  const panel = document.getElementById("pkgeval-changes");
+  const d = pkgevalChanges;
+  if (!panel || !d) return;
+  const unflaky = d.changes.filter((c) => !pkgevalIsFlaky(c));
+  const counted = pkgevalShowFlaky ? d.changes : unflaky;
+  const count = (kind, pending) => counted.filter((c) => c.kind === kind && c.pending === pending).length;
+  const pending = count("broke", true) + count("fixed", true);
+  const first = d.reports[0];
+  const last = d.reports[d.reports.length - 1];
+  const kindButton = (kind, label) =>
+    `<button class="btn${pkgevalChangesKind === kind ? " btn-primary" : ""}" onclick="setPkgevalChangesKind('${kind}')" aria-pressed="${pkgevalChangesKind === kind}">${label}</button>`;
+  const flakyCount = d.changes.length - unflaky.length;
+  const day = pkgevalChangesDay ? d.reportByDate.get(pkgevalChangesDay) : null;
+  const dayChip = day
+    ? `<span class="pe-changes-day">Report ${escapeHtml(day.date)} ${extLink(pkgevalReportUrl(day.date_path || day.date), "report ↗")} ${extLink(
+        githubCompareURL(day.prev_commit.slice(0, 10), day.commit.slice(0, 10)),
+        "commits since " + escapeHtml(day.prev_date) + " ↗",
+      )} <button class="btn pe-chip-clear" onclick="setPkgevalChangesDay('')" aria-label="Show every report">×</button></span>`
+    : "";
+  // The same change to many packages on one report points at one cause
+  const groups = new Map();
+  for (const c of pkgevalVisibleChanges({ ignoreGroup: true, ignoreText: true })) {
+    const key = pkgevalChangeGroup(c);
+    const g = groups.get(key) || { key, date: c.date, kind: c.kind, reason: c.reason, status: c.status, n: 0 };
+    g.n++;
+    groups.set(key, g);
+  }
+  const clusters = [...groups.values()]
+    .filter((g) => g.n >= 3)
+    .sort((a, b) => b.n - a.n || b.date.localeCompare(a.date))
+    .slice(0, 7);
+  const clusterChips = clusters.length
+    ? `<div class="pe-chips" role="group" aria-label="Clusters"><span class="pe-chips-label" title="Many packages changing the same way on one report usually share a cause: a Julia commit, a package release or the runners">Clusters</span>${clusters
+        .map((g) => {
+          const on = g.key === pkgevalChangesGroup;
+          const arrow = g.kind === "broke" ? "▼" : "▲";
+          return `<button class="pe-pill pe-pill-${escapeHtml(g.status)} pe-chip${on ? " selected" : ""}" data-reason="${escapeHtml(g.reason)}" data-group="${escapeHtml(g.key)}" aria-pressed="${on}" title="${g.n} packages ${g.kind === "broke" ? "broke with" : "fixed from"} ${escapeHtml(g.reason)} on ${g.date}">${arrow} ${escapeHtml(g.date.slice(5))} ${escapeHtml(g.reason)} <span class="pe-chip-count">${g.n}</span></button>`;
+        })
+        .join("")}</div>`
+    : "";
+  panel.innerHTML = `
+    <div class="pkgeval-panel-head">${pkgevalPanelSwitch()}<h3>Changes on the reports from ${escapeHtml(first.date)} to ${escapeHtml(last.date)} <span class="updated">· ${count("broke", false)} broke, ${count("fixed", false)} fixed${pending ? `, ${pending} pending` : ""}</span></h3></div>
+    <p class="package-panel-help">A package broke (or was fixed) on a report when it passed (failed) on the ${d.sustain} reports before and failed (passed) on that one and the ${d.sustain - 1 === 1 ? "one" : d.sustain - 1} after. Most packages that flip between two reports flip back, so those are left out. A change on the last report${d.sustain > 2 ? "s" : ""} is pending until another report confirms it. Skipped packages count as not tested. Flaky packages changed state ${PKGEVAL_FLAKY_FLIPS} or more times over the last ${d.flaky_reports} reports. Click a bar under the chart to see one report, or click a row to see the package's history.</p>
+    <div class="pe-changes-controls">
+      <span class="bench-table-view-toggle" role="group" aria-label="Direction">${kindButton("broke", "Broke")}${kindButton("fixed", "Fixed")}${kindButton("", "Both")}</span>
+      <label class="pe-changes-flaky"><input type="checkbox" ${pkgevalShowFlaky ? "checked" : ""} onchange="setPkgevalShowFlaky(this.checked)" /> Show flaky packages (${flakyCount})</label>
+      <input type="search" class="pkgeval-failures-filter" placeholder="Filter packages" aria-label="Filter the packages" value="${escapeHtml(pkgevalChangesFilter)}" />
+      ${dayChip}
+      ${clusterChips}
+    </div>
+    <div class="pkgeval-changes-list"></div>`;
+  panel.querySelectorAll("[data-group]").forEach((b) => {
+    b.onclick = () => setPkgevalChangesGroup(b.dataset.group);
+  });
+  const input = panel.querySelector(".pkgeval-failures-filter");
+  input.oninput = () => {
+    pkgevalChangesFilter = input.value;
+    renderPkgevalChangesList();
+  };
+  renderPkgevalChangesList();
+}
+
+// Only the list is drawn again as the filter changes, so the box keeps focus
+function renderPkgevalChangesList() {
+  const panel = document.getElementById("pkgeval-changes");
+  const list = panel?.querySelector(".pkgeval-changes-list");
+  if (!list) return;
+  const d = pkgevalChanges;
+  const last = d.reports[d.reports.length - 1].date;
+  const shown = sortRows(pkgevalVisibleChanges(), pkgevalChangesSort, "name");
+  const rows = shown.slice(0, PKGEVAL_CHANGES_ROWS);
+  const change = (c) =>
+    `${pkgevalStateHtml(c.from_status, c.from_reason)} → ${pkgevalStateHtml(c.to_status, c.to_reason)}`;
+  // Where the package is now, when that differs from where it changed to
+  const now = (c) => {
+    const same = c.now_status === c.to_status && (c.now_reason || "") === (c.to_reason || "");
+    const stale = c.now_date !== last ? ` <span class="col-secondary">on ${escapeHtml(c.now_date)}</span>` : "";
+    return same ? `<span class="col-secondary">same</span>${stale}` : `${pkgevalStateHtml(c.now_status, c.now_reason)}${stale}`;
+  };
+  const commits = (c) => {
+    const r = d.reportByDate.get(c.date);
+    return r ? extLink(githubCompareURL(r.prev_commit.slice(0, 10), r.commit.slice(0, 10)), "compare ↗", 'class="pe-compare"') : "";
+  };
+  const arrow = (c) => `<span class="pe-kind pe-kind-${c.kind}" title="${c.kind}">${c.kind === "broke" ? "▼" : "▲"}</span>`;
+  const pendingTag = (c) => (c.pending ? ` <span class="pe-pending" title="Not yet confirmed by a later report">pending</span>` : "");
+  const flipsTitle = `Times the package changed state over the last ${d.flaky_reports} reports`;
+  const tableRows = rows
+    .map(
+      (c) => `<tr tabindex="0" data-name="${escapeHtml(c.name)}" class="${pkgevalIsFlaky(c) ? "pe-row-flaky" : ""}">
+        <td>${arrow(c)} ${escapeHtml(c.date)}${pendingTag(c)}</td>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${change(c)}</td>
+        <td>${now(c)}</td>
+        <td class="num" title="${flipsTitle}">${c.flips}</td>
+        <td class="num">${c.rank != null ? c.rank.toLocaleString("en-US") : ""}</td>
+        <td class="num">${c.user.toLocaleString("en-US")}</td>
+        <td>${commits(c)}</td>
+      </tr>`,
+    )
+    .join("");
+  const more =
+    shown.length > rows.length
+      ? `<p class="package-panel-help">Showing ${rows.length} of ${shown.length.toLocaleString("en-US")} changes; filter to see the rest.</p>`
+      : "";
+  list.innerHTML = `
+    ${phoneListHtml(
+      rows.map((c) => ({
+        attrs: `data-name="${escapeHtml(c.name)}"`,
+        lead: arrow(c),
+        title: `${escapeHtml(c.name)}${pendingTag(c)}`,
+        meta: `${escapeHtml(c.date)} · ${change(c)} · ${compactNumber(c.user)} downloads`,
+        value: c.rank != null ? `#${c.rank.toLocaleString("en-US")}` : "",
+        valueClass: "m-muted",
+      })),
+    )}
+    <table class="m-desktop-only">
+      <thead>${sortableHeaderRow(
+        [
+          ["date", "Report"],
+          ["name", "Package"],
+          ["reason", "Change"],
+          [null, "Now", "", "The package's state on the newest report it was tested on"],
+          ["flips", "Flips", "num", flipsTitle],
+          ["rank", "Rank", "num", "Place among every package by user downloads over 30 days"],
+          ["user", "Downloads", "num"],
+          [null, "Commits", "", "The Julia commits between the report before and this one"],
+        ],
+        pkgevalChangesSort,
+      )}</thead>
+      <tbody>${tableRows || '<tr><td colspan="8">No change matches the filters.</td></tr>'}</tbody>
+    </table>
+    ${more}`;
+  bindSortHeaders(list.querySelector("thead"), (col) => {
+    pkgevalChangesSort = nextSort(pkgevalChangesSort, col, (c) => ["name", "reason", "rank", "flips"].includes(c));
+    renderPkgevalChangesList();
+  });
+  list.querySelectorAll(".pe-compare").forEach((a) => {
+    a.onclick = (e) => e.stopPropagation();
+  });
+  list.querySelectorAll("[data-name]").forEach((el) => {
+    el.onclick = () => setPkgevalPackage(el.dataset.name);
+  });
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===

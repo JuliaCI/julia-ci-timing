@@ -133,7 +133,7 @@ end
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
                            "ttfx" => ["ttfx"], "sizes" => ["sizes"], "downloads" => ["packages"], "agents" => ["agents"],
                            "github" => ["github"])
-const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"])
+const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "changes"] => ["pkgeval", "packages"])
 
 function route_seq(s::Server, segments)
     sources = get(ROUTE_SOURCES_EXACT, segments, nothing)
@@ -266,6 +266,15 @@ const ROUTES = [
               (length(reasons) <= 20 && all(r -> occursin(r"^[a-z_]{1,40}$", r), reasons)) ||
                   throw(BadRequest("reason must be up to 20 reason names such as precompile,test_errors"))
               Render.pkgeval_failures(db; reasons, days=days_param(p, 30), client=client_param(p))
+          end),
+    Route("pkgeval/changes", ["days" => "reports in the last days days, 30 by default, at most 180",
+                              "sustain" => "reports a state must hold either side of a flip, 2 by default, 1 to 5", CLIENT],
+          "Packages that went from passing to not passing (broke) or back (fixed) on a daily report in the window and held the new state, having held the old one on the sustain reports before: the changes that are not flaky tests. A flip too recent to be confirmed, and not undone yet, is pending. Per report: the sustained, pending and raw counts each way, its commit and the previous report's, and the days between them. Per change: the states either side, the package's state now, its download rank (over 30 days) and flips, how often it changed state over the last 30 reports.",
+          (db, _, p) -> begin
+              sustain = cursor(p, "sustain")
+              sustain = sustain == 0 ? 2 : sustain
+              sustain <= 5 || throw(BadRequest("sustain must be 1 to 5"))
+              Render.pkgeval_changes(db; days=min(days_param(p, 30), 180), sustain, client=client_param(p))
           end),
     Route("ttfx/summary", [SINCE],
           "TTFX on every master build: per task, an array in the order of metrics: the precompile, load, run and warm seconds (and load, run and warm with the GC off), the MethodInstances the task script invalidated, and from the trace logs the methods compiled again after an invalidation and their compile seconds; null where the job did not record it. Plus failed tasks. releases holds the same for the weekly runs of the newest stable release on the same tasks and machines, each with the release's version and commit, as a reference; lts the same for the newest release of the LTS series. opt holds the same for the nightly optimized build (PGO and ThinLTO) of master, plus base: the time metrics of the regular build of the same commit, measured interleaved with it in the same job, for a paired comparison.",
@@ -717,7 +726,7 @@ function other_targets(db)
     latest = Render.commit_list(db; limit=1)["commits"]
     groups = Render.bench_groups(db)
     return ["/api/timing/runs?since=$since&changed_since=1", "/api/benchmarks/verdicts?since=$since",
-            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
+            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
             "/api/ttfx/job/$(ttfx_job_example(db))",

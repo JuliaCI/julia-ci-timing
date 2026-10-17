@@ -473,6 +473,79 @@ function pkgeval_failures(db; reasons, days=30, client="user")
                        "days" => days, "since" => r.since, "until" => r.until, "client" => client, "packages" => packages)
 end
 
+# Packages whose pass/fail state flipped on a daily report within the last
+# `days` days, and stayed flipped. Hundreds of packages flip between any
+# two reports, mostly from flaky tests, so a flip counts only when the
+# package held its old state on the `sustain` reports before (it was not
+# already flapping) and its new state on the `sustain` from the flip on.
+# A flip too recent to have that many reports after it, and not undone yet,
+# is `pending`. Skipped packages were not tested, so a skip is no
+# observation. Per report: the sustained and pending breaks and fixes, every
+# flip (`raw_*`), the commit range and the days since the report before
+# (a long gap spans many commits). Per change: the package, the states
+# either side, where it is now, its download rank, and `flips`, how often
+# it changed state over the last PKGEVAL_FLAKY_REPORTS reports.
+const PKGEVAL_FLAKY_REPORTS = 30
+
+function pkgeval_changes(db; days=30, sustain=2, client="user")
+    reports = rows(db, "SELECT r.id, r.date, r.path, r.commit_sha FROM pkgeval_reports r WHERE r.kind = 'daily' AND r.date != '' AND EXISTS " *
+                       "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date")
+    n = length(reports)
+    n < 2 && return nothing
+    last_date = Date(String(reports[n].date))
+    w = something(findfirst(r -> Date(String(r.date)) > last_date - Day(days), reports), n)
+    w = max(w, 2)
+    lo = max(1, min(w - sustain, n - PKGEVAL_FLAKY_REPORTS + 1))
+    idx = Dict(Int(reports[i].id) => i for i in lo:n)
+    obs = Dict{Int,Vector{Tuple{Int,Bool,String,Union{String,Nothing}}}}()
+    for r in rows(db, "SELECT report_id, package_id, status, reason FROM pkgeval_results " *
+                      "WHERE report_id IN (SELECT value FROM json_each(?)) AND status != 'skip'", (JSON3.write(collect(keys(idx))),))
+        status = String(r.status)
+        push!(get!(() -> [], obs, Int(r.package_id)), (idx[Int(r.report_id)], status == "ok", status, r.reason === missing ? nothing : String(r.reason)))
+    end
+    counts = Dict(i => OrderedDict("breaks" => 0, "fixes" => 0, "pending_breaks" => 0, "pending_fixes" => 0, "raw_breaks" => 0, "raw_fixes" => 0)
+                  for i in w:n)
+    changes = Any[]
+    for (pkg, o) in obs
+        sort!(o; by=first)
+        flips = count(k -> o[k][2] != o[k-1][2] && o[k][1] > n - PKGEVAL_FLAKY_REPORTS, 2:length(o))
+        for k in 2:length(o)
+            i, now_ok = o[k][1], o[k][2]
+            (i < w || now_ok == o[k-1][2]) && continue
+            kind = now_ok ? "fixes" : "breaks"
+            counts[i]["raw_" * kind] += 1
+            before = o[max(1, k - sustain):k-1]
+            (length(before) == sustain && all(x -> x[2] != now_ok, before)) || continue
+            after = o[k:min(end, k + sustain - 1)]
+            all(x -> x[2] == now_ok, after) || continue
+            pending = length(after) < sustain
+            counts[i][pending ? "pending_" * kind : kind] += 1
+            push!(changes, (; pkg, i, kind, pending, from=o[k-1], to=o[k], now=o[end], flips))
+        end
+    end
+    names = Dict(Int(r.id) => String(r.name) for r in rows(db, "SELECT id, name FROM packages WHERE id IN (SELECT value FROM json_each(?))",
+                                                            (JSON3.write(unique(c.pkg for c in changes)),)))
+    r = pkgeval_ranking(db, 30, client)
+    ranked = r === nothing ? Dict() : Dict(String(x.name) => x for x in r.ranking)
+    out_changes = Any[]
+    for c in sort(changes; by=c -> (-c.i, c.kind, names[c.pkg]))
+        d = get(ranked, names[c.pkg], nothing)
+        push!(out_changes, OrderedDict("date" => String(reports[c.i].date), "name" => names[c.pkg], "kind" => c.kind == "breaks" ? "broke" : "fixed",
+                                       "pending" => c.pending, "from_status" => c.from[3], "from_reason" => c.from[4],
+                                       "to_status" => c.to[3], "to_reason" => c.to[4], "now_status" => c.now[3], "now_reason" => c.now[4],
+                                       "now_date" => String(reports[c.now[1]].date), "flips" => c.flips,
+                                       "rank" => d === nothing ? nothing : Int(d.rank), "user" => d === nothing ? 0 : Int(d.user)))
+    end
+    out_reports = [OrderedDict("date" => String(reports[i].date), "date_path" => date_path(String(reports[i].path)),
+                               "commit" => String(reports[i].commit_sha), "prev_commit" => String(reports[i-1].commit_sha),
+                               "prev_date" => String(reports[i-1].date),
+                               "gap_days" => Dates.value(Date(String(reports[i].date)) - Date(String(reports[i-1].date))), counts[i]...)
+                   for i in w:n]
+    return OrderedDict("days" => days, "sustain" => sustain, "flaky_reports" => min(PKGEVAL_FLAKY_REPORTS, n),
+                       "downloads_since" => r === nothing ? nothing : r.since, "downloads_until" => r === nothing ? nothing : r.until,
+                       "client" => client, "reports" => out_reports, "changes" => out_changes)
+end
+
 function pkgeval(db)
     reports = Any[]
     for r in rows(db, "SELECT date, path, commit_sha, julia_version, total, ok, fail, crash, skip, kill " *

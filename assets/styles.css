@@ -2278,6 +2278,77 @@ th.sorted .sort-indicator {
   touch-action: pan-y;
   max-width: 100% !important;
 }
+/* Breaks and fixes per report, under the chart and on its time axis */
+.pkgeval-delta-container {
+  flex-shrink: 0;
+  height: 130px;
+  padding: 0 12px 8px;
+  position: relative;
+}
+.pkgeval-delta-wrapper {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 16px;
+  bottom: 8px;
+  overflow: hidden;
+}
+.pkgeval-delta-wrapper canvas {
+  touch-action: pan-y;
+  max-width: 100% !important;
+}
+.pkgeval-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 4px;
+  margin: 2px 0 6px;
+}
+.pkgeval-panel-head h3 {
+  margin: 0;
+}
+/* The cluster chips flow on after the controls */
+.pe-changes-controls .pe-chips {
+  display: contents;
+}
+.pe-changes-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.pe-changes-controls .pkgeval-failures-filter {
+  margin: 0;
+}
+.pe-changes-flaky {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-fg-muted);
+}
+.pe-changes-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 4px 1px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  font-weight: 600;
+}
+.pe-changes-day a {
+  font-weight: normal;
+}
+.pe-kind-broke { color: var(--color-danger-fg); }
+.pe-kind-fixed { color: var(--color-success-fg); }
+.pe-pending {
+  color: var(--color-attention-fg);
+  font-size: 11px;
+}
+.pkgeval-panels tr.pe-row-flaky td {
+  opacity: 0.55;
+}
 /* The scroll region for the list under the chart; its height comes from
    the drag bar above it (makeResizablePanel), collapsed until loaded */
 .pkgeval-panels {
