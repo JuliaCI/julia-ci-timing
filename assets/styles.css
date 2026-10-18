@@ -3552,6 +3552,10 @@ th.sorted .sort-indicator {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.overview-rows dt.overview-rows-spacer {
+  grid-column: 1 / -1;
+  height: 6px;
+}
 .overview-rows dt.overview-rows-heading {
   grid-column: 1 / -1;
   font-weight: 600;

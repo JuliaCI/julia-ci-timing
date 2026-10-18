@@ -15158,6 +15158,10 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
       parts.push(`<dt class="overview-rows-heading">${escapeHtml(row.heading)}</dt>`);
       continue;
     }
+    if (row.spacer) {
+      parts.push('<dt class="overview-rows-spacer"></dt>');
+      continue;
+    }
     const [label, value, labelClass] = row;
     if (value == null || value === "") continue;
     parts.push(`<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`);
@@ -15609,12 +15613,12 @@ function overviewTtfxCard(src, prs) {
     delta,
     spark,
     rows: [
+      ...overviewTtfxCompare(src, latest),
       ["Latest build", `${overviewExtLink(ttfxJobUrl(latest), `#${latest.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(latest.version || "")}`],
       ...overviewTtfxOptBuild(src),
       ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
-      ...overviewTtfxCompare(src, latest),
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -15711,6 +15715,7 @@ function overviewCompareRows(columns, groups) {
       ]);
     }
   }
+  rows.push({ spacer: true });
   return rows;
 }
 
@@ -15786,10 +15791,10 @@ function overviewSizesCard(src, prs) {
     spark,
     donut,
     rows: [
+      ...overviewSizesCompare(src, at),
       ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
-      ...overviewSizesCompare(src, at),
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
