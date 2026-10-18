@@ -218,8 +218,8 @@ function write_coverage!(db, coverage)
     return length(coverage)
 end
 
-# Existing values are kept and only missing provider values filled in, so
-# the whole table is loaded first (a few thousand rows).
+# Existing Coveralls values are kept and only missing ones filled in; Codecov
+# values are refreshed. The whole table is loaded first (a few thousand rows).
 function fetch_coverage_data(db; max_pages=20)
     coverage = Dict{String, Any}()
     for r in rows(db, "SELECT commit_sha, measured_at, codecov, coveralls FROM coverage")
@@ -307,7 +307,9 @@ function fetch_coverage_data(db; max_pages=20)
                         "date" => get(commit_data, :timestamp, nothing)
                     )
                     new_in_page += 1
-                elseif coverage[commit]["codecov"] === nothing && cov_percent !== nothing
+                # Codecov updates a commit's total as each platform's upload is processed,
+                # so a value stored earlier may be partial.
+                elseif cov_percent !== nothing && coverage[commit]["codecov"] != cov_percent
                     coverage[commit]["codecov"] = cov_percent
                     new_in_page += 1
                 end
