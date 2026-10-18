@@ -12826,11 +12826,11 @@ const TTFX_REFS = {
     pointStyle: "rect",
   },
   branch_nightly: {
-    label: "Release branch nightly",
-    short: "Branch nightly",
+    label: "Next release nightly",
+    short: "Next release nightly",
     legend: "The nightly of the next release's branch, measured weekly",
-    legendGcoff: "The branch nightly with the GC off",
-    versioned: "branch nightly",
+    legendGcoff: "The next release nightly with the GC off",
+    versioned: "next release nightly",
     color: ttfxNewestVersionColor("branch_nightly"),
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
     pointStyle: "circle",
@@ -13395,7 +13395,13 @@ function showTtfxPrPopup(p) {
   openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html: ttfxPrDetailsHtml(p, ttfxPrs.metrics), wide: true, key: `ttfx-pr-${p.pr}` });
 }
 
-function ttfxPrDetailsHtml(p, metrics) {
+// The button in a pull request's popup that opens its Commit page, where the TTFX,
+// size and stack details are together
+function prAllStatsButton(n) {
+  return `<a class="btn" href="?tab=${tabToURLValue("commit")}&c=${n}" onclick="closeTtfxBuildPopup();lookupCommit('${n}');return false" title="Everything recorded for this pull request on the Commit page">All PR stats</a>`;
+}
+
+function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "–");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
@@ -13408,6 +13414,7 @@ function ttfxPrDetailsHtml(p, metrics) {
   html += `<a class="btn" href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${p.pr}</a>`;
   if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   html += `<button type="button" class="btn" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
+  if (allStats) html += prAllStatsButton(p.pr);
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
@@ -14730,13 +14737,14 @@ async function showSizesPrPopup(n) {
 }
 
 // A sizes/pr entry's links and what was measured, without the metrics
-function sizesPrDetailsHtml(p) {
+function sizesPrDetailsHtml(p, { allStats = true } = {}) {
   const n = p.number;
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   let html = '<div class="ttfx-popup-actions">';
   html += `<a class="btn" href="${githubPrURL(n)}" target="_blank" rel="noopener noreferrer">GitHub PR #${n}</a>`;
   if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite build</a>`;
   html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener noreferrer" title="The pull request's commits since its merge-base">Commits</a>`;
+  if (allStats) html += prAllStatsButton(n);
   html += "</div>";
   html += row("Title", escapeHtml(p.title));
   html += row("Author", escapeHtml(p.author));
@@ -15826,7 +15834,7 @@ function overviewTtfxCompare(src, latest) {
   const against = (b) => [
     rel && [`vs ${rel.version}`, overviewTtfxRelease(src, b, rel)],
     lts && [`vs ${lts.version} (LTS)`, overviewTtfxRelease(src, b, lts)],
-    bn && [`vs ${bn.version} (branch nightly)`, overviewTtfxRelease(src, b, bn)],
+    bn && [`vs ${bn.version} (next release nightly)`, overviewTtfxRelease(src, b, bn)],
   ];
   groups.push(["Nightly", against(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);
@@ -16802,13 +16810,13 @@ function commitPrHtml(d, gh) {
   </section>`;
   const t = d.ttfx;
   const ttfx = t
-    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics)}</div>`, {
+    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false })}</div>`, {
         links: overviewTabLink("ci-ttfx", "TTFX tab"),
       })
     : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>');
   const z = d.sizes;
   const sizes = z
-    ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z)}${sizesPrDiffHtml(z)}</div>`, {
+    ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z, { allStats: false })}${sizesPrDiffHtml(z)}</div>`, {
         links: overviewTabLink("ci-sizes", "Size tab"),
       })
     : commitCard("Size", '<p class="commit-line text-muted">No size measurement recorded for this pull request.</p>');
