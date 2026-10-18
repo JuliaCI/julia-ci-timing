@@ -618,6 +618,10 @@ function ttfx(db; since="")
         for j in rows(db, sql, (params..., kind))
             pipeline = String(j.pipeline)
             tasks = get(results, String(j.job_uuid), Dict{String,Any}())
+            # The branch nightly job passes without measuring anything when no release
+            # branch is ahead of the latest release
+            kind == "branch_nightly" && String(j.state) == "passed" && isempty(tasks) &&
+                !haskey(failures, String(j.job_uuid)) && continue
             job_traces = get(traces, String(j.job_uuid), Dict{String,Any}())
             n = Int(j.n_metrics)
             push!(out, Dict{String,Any}(
@@ -634,10 +638,12 @@ function ttfx(db; since="")
     builds = jobs("master")
     releases = jobs("release")
     lts = jobs("lts")
+    branch_nightly = jobs("branch_nightly")
     opt = jobs("opt")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
-                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts, "opt" => opt)
+                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts,
+                       "branch_nightly" => branch_nightly, "opt" => opt)
 end
 
 # What one job recorded about compilation, per task: the statements its trace marks as

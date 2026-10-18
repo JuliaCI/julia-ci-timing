@@ -11856,9 +11856,10 @@ function getTtfxFilteredBuilds() {
 
 // The reference series, kept apart from the master builds: only the charts
 // draw them. `releases` are the weekly runs of the newest stable release,
-// `lts` those of the newest LTS release, `opt` the nightly optimized (PGO and
-// ThinLTO) builds of master.
-const TTFX_REF_KEYS = { release: "releases", lts: "lts", opt: "opt" };
+// `lts` those of the newest LTS release, `branch_nightly` those of the nightly
+// of the next release's branch, `opt` the nightly optimized (PGO and ThinLTO)
+// builds of master.
+const TTFX_REF_KEYS = { release: "releases", lts: "lts", branch_nightly: "branch_nightly", opt: "opt" };
 function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
@@ -12735,8 +12736,8 @@ function ttfxSuiteDataset(builds, common, metric, { gcoff = false, base = null }
 
 // The reference series, each as the suite geomean over the same tasks next to
 // the master line, rebased in % mode to the master line's first point `base`
-// so a gap between them reads as such. The release runs are diamonds in
-// their version's colour, the version of each point in the tooltip; the
+// so a gap between them reads as such. The release runs are diamonds (the
+// LTS squares, the branch nightly circles) in their version's colour, the version of each point in the tooltip; the
 // optimized builds triangles in an accent colour. `_ref` names the series, `_refCommon` holds its tasks and
 // `_refTasks` their count.
 // Each minor series of releases has its own hue, and the shade alternates
@@ -12777,6 +12778,16 @@ const TTFX_REFS = {
     color: ttfxNewestVersionColor("lts"),
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
     pointStyle: "rect",
+  },
+  branch_nightly: {
+    label: "Release branch nightly",
+    short: "Branch nightly",
+    legend: "The nightly of the next release's branch, measured weekly",
+    legendGcoff: "The branch nightly with the GC off",
+    versioned: "branch nightly",
+    color: ttfxNewestVersionColor("branch_nightly"),
+    pointColor: (b) => ttfxReleaseVersionColor(b?.version),
+    pointStyle: "circle",
   },
   opt: {
     label: "Nightly Optimized",
@@ -15674,11 +15685,13 @@ function overviewTtfxOptBuild(src) {
 function overviewTtfxCompare(src, latest) {
   const rel = src.releases && src.releases[src.releases.length - 1];
   const lts = src.lts && src.lts[src.lts.length - 1];
+  const bn = src.branch_nightly && src.branch_nightly[src.branch_nightly.length - 1];
   const opt = overviewTtfxOpt(src);
   const groups = [];
   const against = (b) => [
     rel && [`vs ${rel.version}`, overviewTtfxRelease(src, b, rel)],
     lts && [`vs ${lts.version} (LTS)`, overviewTtfxRelease(src, b, lts)],
+    bn && [`vs ${bn.version} (branch nightly)`, overviewTtfxRelease(src, b, bn)],
   ];
   groups.push(["Nightly", against(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);

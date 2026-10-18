@@ -13,7 +13,8 @@
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
 # A weekly job measures the newest stable release on the same tasks and machines, as a
 # reference; its rows have kind 'release' and the release's version and commit. A second
-# weekly job does the same for the newest patch release of the LTS series (kind 'lts').
+# weekly job does the same for the newest patch release of the LTS series (kind 'lts'),
+# and a third for the nightly of the next release's branch (kind 'branch_nightly').
 # The nightly schedule's optimized build (PGO and ThinLTO, JULIA_CI_BUILD_MODE=opt) is
 # measured too; its rows have kind 'opt'.
 # Jobs whose driver logs invalidations add, per task, how many MethodInstances the task
@@ -36,11 +37,11 @@ using SQLite, DBInterface
 const CI_PIPELINE = "julia-ci"
 const BRANCH = "master"
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml),
-# ":macos: TTFX release <triplet>" and ":macos: TTFX lts <triplet>" for the weekly
-# release and LTS references, or
+# ":macos: TTFX release <triplet>", ":macos: TTFX lts <triplet>" and
+# ":macos: TTFX branch nightly <triplet>" for the weekly references, or
 # ":macos: TTFX opt <triplet>" for the nightly optimized build; the triplet keeps the
 # group's "Launch TTFX benchmark jobs" step from matching
-const TTFX_JOB = r"\bTTFX\s+(?:(release|lts|opt)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
+const TTFX_JOB = r"\bTTFX\s+(?:(release|lts|opt|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
@@ -128,7 +129,7 @@ function build_row(build, job, results, meta)
     m = match(TTFX_JOB, name)
     triplet = m === nothing ? "" : String(m.captures[2])
     # An optimized build's triplet ends in `opt` (aarch64-apple-darwinopt), whatever the label says
-    kind = m === nothing ? "master" : m.captures[1] !== nothing ? String(m.captures[1]) :
+    kind = m === nothing ? "master" : m.captures[1] !== nothing ? replace(String(m.captures[1]), ' ' => '_') :
            endswith(triplet, "opt") ? "opt" : "master"
     raw_message = something(get(build, :message, ""), "")
     message = first(split(String(raw_message), '\n'))
