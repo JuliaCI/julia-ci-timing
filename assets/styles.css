@@ -3544,9 +3544,8 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   white-space: nowrap;
 }
-.overview-ttfx-cells {
+.overview-compare-cells {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   column-gap: 6px;
   max-width: 22em;
   text-align: right;
@@ -3558,7 +3557,7 @@ th.sorted .sort-indicator {
   font-weight: 600;
   color: var(--color-fg-default);
 }
-.overview-rows dt.overview-ttfx-sub {
+.overview-rows dt.overview-compare-sub {
   padding-left: 8px;
 }
 .overview-rows dt.overview-delta-bad {

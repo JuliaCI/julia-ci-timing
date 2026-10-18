@@ -15679,12 +15679,21 @@ function overviewTtfxCompare(src, latest) {
   ];
   groups.push(["Nightly", against(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);
+  return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups);
+}
+
+// Card rows laying out comparisons as a table: a header row of `columns`, then
+// per group a heading and one row per comparison, its label in the label column
+// and its cells lined up in the value column. A cell is null or has `pct`
+// (which colours it), `title` and optionally `text`.
+function overviewCompareRows(columns, groups) {
   const shown = groups
     .map(([name, comps]) => [name, comps.filter((c) => c && c[1].some(Boolean))])
     .filter(([, comps]) => comps.length);
   if (!shown.length) return [];
-  const cellsHtml = (cells) => `<span class="overview-ttfx-cells">${cells.join("")}</span>`;
-  const rows = [["", cellsHtml(OVERVIEW_TTFX_METRICS.map((m) => `<span>${TTFX_PILL_LABELS[m]}</span>`)), "overview-ttfx-head"]];
+  const cellsHtml = (cells) =>
+    `<span class="overview-compare-cells" style="grid-template-columns: repeat(${columns.length}, minmax(0, 1fr))">${cells.join("")}</span>`;
+  const rows = [["", cellsHtml(columns.map((c) => `<span>${escapeHtml(c)}</span>`))]];
   for (const [name, comps] of shown) {
     rows.push({ heading: name });
     for (const [label, cells] of comps) {
@@ -15693,10 +15702,12 @@ function overviewTtfxCompare(src, latest) {
         label,
         cellsHtml(
           cells.map((c) =>
-            c ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${formatSignedPct(c.pct)}</span>` : "<span></span>",
+            c
+              ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${escapeHtml(c.text ?? formatSignedPct(c.pct))}</span>`
+              : "<span></span>",
           ),
         ),
-        `overview-ttfx-sub ${overviewReleaseRowClass(tones)}`,
+        `overview-compare-sub ${overviewReleaseRowClass(tones)}`,
       ]);
     }
   }
@@ -15778,8 +15789,7 @@ function overviewSizesCard(src, prs) {
       ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
-      overviewSizesRelease(src.release, at),
-      overviewSizesRelease(overviewSizesLts(src), at, " (LTS)"),
+      ...overviewSizesCompare(src, at),
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -15795,23 +15805,22 @@ function overviewSizesLts(src) {
   return best;
 }
 
-// The latest measured commit against the official tarball of release `rel`,
-// unpacked and packed
-function overviewSizesRelease(rel, at, suffix = "") {
-  if (!rel) return ["Against release", ""];
-  const parts = [];
-  const tones = [];
-  for (const [label, m] of [["Total", "total"], ["Tarball", "tarball"]]) {
-    const a = at(m);
-    const b = rel.values[m];
-    if (a == null || !b) continue;
-    const d = a - b;
-    tones.push(overviewReleaseClass((100 * d) / b));
-    parts.push(
-      `${label} <span class="${overviewReleaseClass((100 * d) / b)}" title="${formatBytes(a)} against ${formatBytes(b)}">${formatSizeDelta(d)} (${formatSignedPct((100 * d) / b)})</span>`,
-    );
-  }
-  return [`Against ${rel.version}${suffix}`, parts.join(", "), overviewReleaseRowClass(tones)];
+// The latest measured commit against the official tarballs of the latest
+// release and LTS, unpacked and packed
+function overviewSizesCompare(src, at) {
+  const against = (rel, suffix = "") =>
+    rel && [
+      `vs ${rel.version}${suffix}`,
+      ["total", "tarball"].map((m) => {
+        const a = at(m);
+        const b = rel.values[m];
+        if (a == null || !b) return null;
+        const d = a - b;
+        const pct = (100 * d) / b;
+        return { pct, text: `${formatSizeDelta(d)} (${formatSignedPct(pct)})`, title: `${formatBytes(a)} against ${formatBytes(b)}` };
+      }),
+    ];
+  return overviewCompareRows(["Total", "Tarball"], [["Nightly", [against(src.release), against(overviewSizesLts(src), " (LTS)")]]]);
 }
 
 // The five open pull requests that change the total most, with the change
