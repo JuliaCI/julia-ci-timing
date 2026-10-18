@@ -1133,7 +1133,7 @@ async function renderAgentsSection() {
   }
   const parts = ['<table class="agents-table"><thead><tr>'];
   parts.push(
-    "<th>Agent</th><th>Host</th><th>Queue</th><th>OS / arch</th><th>Status</th><th>Current job</th><th>Since</th>",
+    '<th>Agent</th><th class="col-secondary">Host</th><th class="col-secondary">Queue</th><th class="col-secondary">OS / arch</th><th>Status</th><th>Current job</th><th class="col-secondary">Since</th>',
   );
   parts.push("</tr></thead><tbody>");
   const filtering = workersFilter !== "";
@@ -1175,12 +1175,12 @@ async function renderAgentsSection() {
     parts.push(
       `<td class="agents-name"><span class="agents-dot agents-dot-${escapeHtml(status)}"></span>${escapeHtml(name)}</td>`,
     );
-    parts.push(`<td>${escapeHtml(rec.hostname || "")}</td>`);
-    parts.push(`<td>${escapeHtml(rec.queue || "")}</td>`);
-    parts.push(`<td>${escapeHtml([rec.os, rec.arch].filter(Boolean).join(" / "))}</td>`);
+    parts.push(`<td class="col-secondary">${escapeHtml(rec.hostname || "")}</td>`);
+    parts.push(`<td class="col-secondary">${escapeHtml(rec.queue || "")}</td>`);
+    parts.push(`<td class="col-secondary">${escapeHtml([rec.os, rec.arch].filter(Boolean).join(" / "))}</td>`);
     parts.push(`<td>${escapeHtml(statusText)}</td>`);
     parts.push(`<td class="agents-job" title="${escapeHtml(jobText)}">${escapeHtml(jobText)}</td>`);
-    parts.push(`<td title="${escapeHtml(status === "connected" ? formatUtc(rec.connected_at) : "")}">${escapeHtml(since)}</td>`);
+    parts.push(`<td class="col-secondary" title="${escapeHtml(status === "connected" ? formatUtc(rec.connected_at) : "")}">${escapeHtml(since)}</td>`);
     parts.push("</tr>");
   }
   if (filtering && shown === 0) {
@@ -10145,7 +10145,7 @@ function renderPkgevalPackage() {
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
     <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report.</p>
     <table>
-      <thead><tr><th>Date</th><th>Julia</th><th>Version</th><th>Status</th><th>Reason</th><th class="num">Duration</th></tr></thead>
+      <thead><tr><th>Date</th><th class="col-secondary">Julia</th><th>Version</th><th>Status</th><th>Reason</th><th class="num">Duration</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   panel.querySelectorAll("tr[data-url]").forEach((tr) => {
@@ -14498,7 +14498,7 @@ function renderSizesPrsTable() {
   )}. Click a row for details.</span>`;
   thead.innerHTML =
     "<tr><th>PR</th><th>Title</th><th class=\"col-secondary\">Author</th>" +
-    metrics.map((m) => `<th class="num">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
+    metrics.map((m) => `<th class="num${m === rank ? "" : " col-secondary"}">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
     '<th class="col-secondary" title="The pull request\'s merge-base with master, which it is compared with">Merge-base</th><th class="col-secondary">Build</th></tr>';
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="${metrics.length + 5}">${sizesPrs?.failed ? "Failed to load" : "No open pull request measured yet"}</td></tr>`;
@@ -14514,12 +14514,13 @@ function renderSizesPrsTable() {
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     for (const m of metrics) {
       const d = delta(p, m);
+      const secondary = m === rank ? "" : " col-secondary";
       if (d == null || d === 0) {
-        html += `<td class="num col-secondary">${d === 0 ? "0" : ""}</td>`;
+        html += `<td class="num${secondary}">${d === 0 ? "0" : ""}</td>`;
         continue;
       }
       const before = p.base_values[m];
-      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
+      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}${secondary}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
     }
     html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
     html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener noreferrer">${p.build}</a></td>`;
@@ -15152,20 +15153,18 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     parts.push(`<div class="overview-spark overview-bars"><canvas id="${id}" role="img" aria-label="${escapeHtml(bars.label)}"></canvas></div>`);
     charts.push({ id, kind: "bars", spec: bars });
   }
+  const rowsHtml = (rows) =>
+    rows
+      .map((row) => {
+        if (row.heading) return `<dt class="overview-rows-heading">${escapeHtml(row.heading)}</dt>`;
+        if (row.table) return `<div class="overview-compare">${rowsHtml(row.table)}</div>`;
+        const [label, value, labelClass] = row;
+        if (value == null || value === "") return "";
+        return `<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`;
+      })
+      .join("");
   parts.push('<dl class="overview-rows">');
-  for (const row of rows) {
-    if (row.heading) {
-      parts.push(`<dt class="overview-rows-heading">${escapeHtml(row.heading)}</dt>`);
-      continue;
-    }
-    if (row.spacer) {
-      parts.push('<dt class="overview-rows-spacer"></dt>');
-      continue;
-    }
-    const [label, value, labelClass] = row;
-    if (value == null || value === "") continue;
-    parts.push(`<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`);
-  }
+  parts.push(rowsHtml(rows));
   parts.push("</dl></section>");
   return { html: parts.join(""), tab, title, status, charts };
 }
@@ -15686,9 +15685,18 @@ function overviewTtfxCompare(src, latest) {
   return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups);
 }
 
+// A cell's text, and for a phone a shorter one when it has its own: numbers of
+// 10 or more lose their decimal
+function overviewCompareText(c) {
+  if (c.text == null) return escapeHtml(formatSignedPct(c.pct));
+  const short = c.text.replace(/\d+\.\d+/g, (x) => (Number(x) >= 10 ? String(Math.round(Number(x))) : x));
+  if (short === c.text) return escapeHtml(c.text);
+  return `<span class="overview-compare-full">${escapeHtml(c.text)}</span><span class="overview-compare-short">${escapeHtml(short)}</span>`;
+}
+
 // Card rows laying out comparisons as a table: a header row of `columns`, then
 // per group a heading and one row per comparison, its label in the label column
-// and its cells lined up in the value column. A cell is null or has `pct`
+// and its cells lined up in the value column, even on a phone. A cell is null or has `pct`
 // (which colours it), `title` and optionally `text`.
 function overviewCompareRows(columns, groups) {
   const shown = groups
@@ -15707,7 +15715,7 @@ function overviewCompareRows(columns, groups) {
         cellsHtml(
           cells.map((c) =>
             c
-              ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${escapeHtml(c.text ?? formatSignedPct(c.pct))}</span>`
+              ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${overviewCompareText(c)}</span>`
               : "<span></span>",
           ),
         ),
@@ -15715,8 +15723,7 @@ function overviewCompareRows(columns, groups) {
       ]);
     }
   }
-  rows.push({ spacer: true });
-  return rows;
+  return [{ table: rows }];
 }
 
 // The five best-ranked open pull requests that come out faster, with their score
@@ -16611,12 +16618,12 @@ function commitMatchesHtml(ref, data, pr) {
     (m) => `<tr>
       <td>${commitLink(m.prefix, `<code>${escapeHtml(m.prefix)}</code>`)}</td>
       <td class="commits-reg-msg">${escapeHtml(m.message || "")}</td>
-      <td>${escapeHtml(m.author || "")}</td>
+      <td class="col-secondary">${escapeHtml(m.author || "")}</td>
       <td>${timeHtml(m.created_at)}</td>
     </tr>`,
   );
   return `<p class="commit-message">${data.matches.length} commits match ${/^\d+$/.test(ref) ? `PR #${r}` : `<code>${r}</code>`}:</p>
-    ${commitTable("<th>Commit</th><th>Subject</th><th>Author</th><th>First build</th>", rows)}`;
+    ${commitTable('<th>Commit</th><th>Subject</th><th class="col-secondary">Author</th><th>First build</th>', rows)}`;
 }
 
 function commitHeaderHtml(data, pr) {
@@ -16650,17 +16657,17 @@ function commitCIHtml(data) {
       return `<tr>
         <td>${escapeHtml(b.pipeline)}</td>
         <td>${b.url ? overviewExtLink(b.url, `#${b.build}`) : `#${b.build}`}</td>
-        <td>${timeHtml(b.created_at)}</td>
+        <td class="col-secondary">${timeHtml(b.created_at)}</td>
         <td>${escapeHtml(b.state || "")}</td>
 
         <td class="num" title="${escapeHtml(wallTitle)}">${formatDuration(b.wall_s)}</td>
         <td class="num" title="${escapeHtml(wallTitle)}">${commitPctHtml(commitPct(b.wall_s, prevWall))}</td>
-        <td class="num">${formatDuration(b.queue_median_s)}</td>
+        <td class="num col-secondary">${formatDuration(b.queue_median_s)}</td>
       </tr>`;
     });
     parts.push(
       commitTable(
-        '<th>Pipeline</th><th>Build</th><th>Created</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num" title="Against the previous build on the pipeline">vs previous</th><th class="num" title="Median wait from runnable to started">Queue (median)</th>',
+        '<th>Pipeline</th><th>Build</th><th class="col-secondary">Created</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num" title="Against the previous build on the pipeline">vs previous</th><th class="num col-secondary" title="Median wait from runnable to started">Queue (median)</th>',
         rows,
       ),
     );
@@ -16703,12 +16710,12 @@ function commitJobsHtml(j) {
     <td>${x.url ? `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${convertEmoji(x.name)}</a>` : convertEmoji(x.name)}</td>
     <td class="${x.failed ? "commit-worse" : ""}">${escapeHtml(x.state)}${x.soft_failed ? " (soft)" : ""}${x.failed && x.previous_state === "passed" ? " · new" : ""}</td>
     <td class="num">${formatDuration(x.duration_s)}</td>
-    <td class="num" title="${escapeHtml(x.previous_state || "")}">${formatDuration(x.previous_s)}</td>
+    <td class="num col-secondary" title="${escapeHtml(x.previous_state || "")}">${formatDuration(x.previous_s)}</td>
     <td class="num">${commitPctHtml(x.pct)}</td>
-    <td>${escapeHtml(x.agent || "")}</td>
+    <td class="col-secondary">${escapeHtml(x.agent || "")}</td>
   </tr>`;
   const head =
-    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num" title="The same job on the build of the previous commit">Previous</th><th class="num">Change</th><th>Agent</th>';
+    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num col-secondary" title="The same job on the build of the previous commit">Previous</th><th class="num">Change</th><th class="col-secondary">Agent</th>';
   // Failures first, newly failing before those that were already failing,
   // then the biggest changes
   const byChange = (a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0);
@@ -16742,9 +16749,9 @@ function commitTtfxHtml(data) {
   const worst = (x) => Math.max(...x.pcts.map((p) => Math.abs(p ?? 0)));
   const row = (x) => `<tr>
     <td>${escapeHtml(x.task)}</td>
-    ${metrics.map((_, i) => `<td class="num">${commitSeconds(x.now?.[i])}</td><td class="num">${commitPctHtml(x.pcts[i])}</td>`).join("")}
+    ${metrics.map((_, i) => `<td class="num col-secondary">${commitSeconds(x.now?.[i])}</td><td class="num">${commitPctHtml(x.pcts[i])}</td>`).join("")}
   </tr>`;
-  const head = `<th>Task</th>${metrics.map((m) => `<th class="num">${escapeHtml(m)}</th><th class="num">Δ</th>`).join("")}`;
+  const head = `<th>Task</th>${metrics.map((m) => `<th class="num col-secondary">${escapeHtml(m)}</th><th class="num"><span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(m)}</span></th>`).join("")}`;
   const notable = tasks
     .filter((x) => !x.failed && worst(x) >= COMMIT_CHANGE_PCT)
     .sort((a, b) => worst(b) - worst(a))
@@ -16787,13 +16794,13 @@ function commitBenchHtml(data) {
     text += ".";
   }
   const row = (v) => `<tr>
-    <td>${escapeHtml(v.group)}</td>
+    <td class="col-secondary">${escapeHtml(v.group)}</td>
     <td class="commits-reg-msg">${escapeHtml(v.name)}</td>
     <td class="${v.verdict === "regression" ? "commit-worse" : "commit-better"}">${escapeHtml(v.verdict)}</td>
     <td class="num">${v.time_ratio != null ? `${v.time_ratio.toFixed(2)}×` : "—"}</td>
-    <td class="num">${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
+    <td class="num col-secondary">${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
   </tr>`;
-  const head = '<th>Group</th><th>Benchmark</th><th>Verdict</th><th class="num">Time</th><th class="num">Memory</th>';
+  const head = '<th class="col-secondary">Group</th><th>Benchmark</th><th>Verdict</th><th class="num">Time</th><th class="num col-secondary">Memory</th>';
   const rows = b.verdicts.map(row);
   const verdicts = rows.length
     ? commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "largest changes")
@@ -17096,7 +17103,7 @@ function updateActivityTable() {
   // Uncoloured: more activity is neither better nor worse here
   const pct = (a, b) => (a == null || b == null || b === 0 ? "" : formatSignedPct(((a - b) / b) * 100, { digits: 0 }));
   document.getElementById("activity-stats-thead").innerHTML =
-    `<tr><th>Series</th><th class="num">Now</th><th class="num">${w} days before</th><th class="num">A year before</th>` +
+    `<tr><th>Series</th><th class="num">Now</th><th class="num col-secondary">${w} days before</th><th class="num col-secondary">A year before</th>` +
     `<th class="num">Change over the year</th></tr>`;
   let html = "";
   for (const panel of ACTIVITY_PANELS) {
@@ -17107,10 +17114,10 @@ function updateActivityTable() {
       const yearAgo = at(vals, n - 1 - 365, panel.perDay);
       const unit = panel.perDay ? ` <small>per day, ${w}-day mean</small>` : "";
       html +=
-        `<tr><td>${escapeHtml(panel.title.replace(/ \(.*\)$/, ""))}: ${escapeHtml(label)}${unit}</td>` +
+        `<tr><td class="activity-series">${escapeHtml(panel.title.replace(/ \(.*\)$/, ""))}: ${escapeHtml(label)}${unit}</td>` +
         `<td class="num">${formatActivityValue(now, key)}</td>` +
-        `<td class="num">${formatActivityValue(before, key)}</td>` +
-        `<td class="num">${formatActivityValue(yearAgo, key)}</td>` +
+        `<td class="num col-secondary">${formatActivityValue(before, key)}</td>` +
+        `<td class="num col-secondary">${formatActivityValue(yearAgo, key)}</td>` +
         `<td class="num">${pct(now, yearAgo)}</td></tr>`;
     }
   }

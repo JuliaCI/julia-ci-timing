@@ -1292,9 +1292,32 @@ th.sorted .sort-indicator {
 
 /* Secondary table columns (versions, spreads, messages) are dropped on
    narrow screens so the important ones fit without sideways scrolling */
+.col-phone {
+  display: none;
+}
 @media (max-width: 600px) {
   .col-secondary {
     display: none;
+  }
+  .col-phone {
+    display: inline;
+  }
+  /* The History groups table keeps the group, its latest value, the trend and notes */
+  #bench-stats :is(th, td):is(:nth-child(3), :nth-child(4), :nth-child(5), :nth-child(7), :nth-child(8)) {
+    display: none;
+  }
+  .ttfx-stats td.activity-series,
+  .ttfx-stats td.msg {
+    white-space: normal;
+    min-width: 12em;
+  }
+  .agents-table tbody td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .ttfx-compile-table th:not(:first-child),
+  .ttfx-compile-table td:not(:first-child) {
+    width: 52px;
   }
 }
 
@@ -2216,14 +2239,22 @@ th.sorted .sort-indicator {
   .benchmarks-chart-container {
     min-height: 300px;
   }
-  /* On narrow screens the sticky label columns would consume most of the
-     viewport, leaving no room to see the day-cell strip. Drop the sticky
-     positioning so the whole table scrolls horizontally as one unit. */
+  /* On narrow screens the sticky label columns get narrower, leaving room
+     to see the day-cell strip beside them. */
   .workers-table th:nth-child(1),
-  .workers-table td:nth-child(1),
+  .workers-table td:nth-child(1) {
+    width: 120px;
+    min-width: 120px;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .workers-table th:nth-child(2),
   .workers-table td:nth-child(2) {
-    position: static;
+    left: 120px;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
   }
 }
 
@@ -2307,6 +2338,9 @@ th.sorted .sort-indicator {
 }
 .pkgeval-panel-head h3 {
   margin: 0;
+}
+.pkgeval-panel-switch .btn {
+  white-space: nowrap;
 }
 /* The cluster chips flow on after the controls */
 .pe-changes-controls .pe-chips {
@@ -3546,15 +3580,29 @@ th.sorted .sort-indicator {
 }
 .overview-compare-cells {
   display: grid;
-  column-gap: 6px;
+  column-gap: 10px;
   max-width: 22em;
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.overview-rows dt.overview-rows-spacer {
+.overview-compare-short {
+  display: none;
+}
+@media (max-width: 480px) {
+  .overview-compare-full {
+    display: none;
+  }
+  .overview-compare-short {
+    display: inline;
+  }
+}
+.overview-compare {
   grid-column: 1 / -1;
-  height: 6px;
+  display: grid;
+  grid-template-columns: subgrid;
+  row-gap: 4px;
+  margin-bottom: 6px;
 }
 .overview-rows dt.overview-rows-heading {
   grid-column: 1 / -1;
@@ -3594,6 +3642,13 @@ th.sorted .sort-indicator {
   }
   .overview-rows dd {
     margin-bottom: 4px;
+  }
+  .overview-compare {
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 12px;
+  }
+  .overview-compare dd {
+    margin-bottom: 0;
   }
   .overview-card-top {
     flex-direction: column;
@@ -3689,6 +3744,10 @@ th.sorted .sort-indicator {
   }
   .commits-reg-table td.commits-reg-msg {
     min-width: 14em;
+  }
+  .commit-card .commits-reg-table td:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .ttfx-stats td.msg {
     max-width: 45vw;
@@ -4013,6 +4072,10 @@ th.sorted .sort-indicator {
   .workers-note {
     margin: 8px 8px 0;
     border-radius: 12px;
+    /* A border instead of padding, so the line clamp cannot show a cut line below the second */
+    padding: 0;
+    border: solid var(--color-attention-subtle, #fff8c5);
+    border-width: 8px 12px;
   }
   .package-panel-help,
   .commits-reg-help,
