@@ -295,7 +295,7 @@ end
 # --- pull requests -------------------------------------------------------------
 
 const PR_COLS = ["title", "author", "draft", "base_ref", "build", "build_created_at", "web_url", "head_commit",
-                 "merge_base", "base_commit"]
+                 "merge_base", "base_commit", "stack_base"]
 
 # The newest julia-pr build since `since` of each pull request whose linux-x86_64
 # build job passed, as pull request number => (build, job)
@@ -338,6 +338,13 @@ function measure_pr!(db, n, pull, build, job, bucket)
     cmp = github_get("compare/master...$head")
     cmp === nothing && return false
     merge_base = String(cmp.merge_base_commit.sha)
+    # A stacked pull request is also compared with the one below it, which is exact when
+    # that one's measured head is where this one branched off
+    stack_base = missing
+    if !isempty(pull.base_ref) && pull.base_ref != "master"
+        below = github_get("compare/$(join(HTTP.escapeuri.(split(pull.base_ref, '/')), '/'))...$head")
+        below === nothing || (stack_base = String(below.merge_base_commit.sha))
+    end
     version, metrics, files = measure_tarball(artifact_download(url))
     # Compressed differently from the master builds' tarballs, so not compared
     delete!(metrics, "tarball")
@@ -349,24 +356,25 @@ function measure_pr!(db, n, pull, build, job, bucket)
         write_measurement!(db, "pr", TRIPLET, head, row, metrics, files; seq)
         upsert!(upsert_stmt(db, "size_prs", ["pr_number"], PR_COLS),
                 (n, pull.title, pull.author, pull.draft, pull.base_ref, Int(build.number), created_at,
-                 String(build.web_url), head, merge_base, base, seq))
+                 String(build.web_url), head, merge_base, base, stack_base, seq))
     end
     @info "Measured pull request" pr=n build=build.number total=metrics["total"] merge_base measured_base=base !== missing
     return true
 end
 
-# The open pull requests as number => (title, author, draft, base_ref), from GitHub when
+# The open pull requests as number => (title, author, draft, base_ref, head_ref), from GitHub when
 # the copy in size_open_prs is older than PULLS_REFRESH. A refresh also drops the rows
 # of closed pull requests and brings the titles of the others up to date.
 function open_prs!(db)
-    cached() = Dict(Int(r.pr_number) => (title=String(r.title), author=String(r.author), draft=Int(r.draft), base_ref=String(r.base_ref))
+    cached() = Dict(Int(r.pr_number) => (title=String(r.title), author=String(r.author), draft=Int(r.draft), base_ref=String(r.base_ref),
+                                         head_ref=String(r.head_ref))
                     for r in query(db, "SELECT * FROM size_open_prs"))
     at = query(db, "SELECT value FROM meta WHERE key = 'sizes:open_prs_at'")
     !isempty(at) && now(UTC) - Store.parse_upstream(String(at[1].value)) < PULLS_REFRESH && return cached()
     function summary(p)
         u = get(p, :user, nothing)
         return (title=String(something(get(p, :title, ""), "")), author=u === nothing ? "" : String(u.login),
-                draft=get(p, :draft, false) === true ? 1 : 0, base_ref=String(p.base.ref))
+                draft=get(p, :draft, false) === true ? 1 : 0, base_ref=String(p.base.ref), head_ref=pr_head_ref(p))
     end
     listed = try
         github_open_pulls()
@@ -389,9 +397,9 @@ function open_prs!(db)
     transaction(db) do
         seq = next_seq!(db)
         DBInterface.execute(db, "DELETE FROM size_open_prs")
-        stmt = DBInterface.prepare(db, "INSERT INTO size_open_prs VALUES (?, ?, ?, ?, ?)")
+        stmt = DBInterface.prepare(db, "INSERT INTO size_open_prs (pr_number, title, author, draft, base_ref, head_ref) VALUES (?, ?, ?, ?, ?, ?)")
         for (n, p) in pulls
-            DBInterface.execute(stmt, (n, p.title, p.author, p.draft, p.base_ref))
+            DBInterface.execute(stmt, (n, p.title, p.author, p.draft, p.base_ref, p.head_ref))
         end
         DBInterface.execute(db, "DELETE FROM size_prs WHERE pr_number NOT IN (SELECT pr_number FROM size_open_prs)")
         DBInterface.execute(db, "UPDATE size_prs SET title = o.title, author = o.author, draft = o.draft, base_ref = o.base_ref, change_seq = ? " *

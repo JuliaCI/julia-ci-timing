@@ -83,6 +83,8 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_prs", "ci_url", "TEXT"),
     ("ttfx_prs", "head_ref", "TEXT NOT NULL DEFAULT ''"),
     ("ttfx_prs", "base_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("size_open_prs", "head_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("size_prs", "stack_base", "TEXT"),
     ("ttfx_jobs", "kind", "TEXT NOT NULL DEFAULT 'master'"),
     ("ttfx_jobs", "trace_state", "TEXT"),
     ("ttfx_results", "invalidated", "INTEGER"),

@@ -768,6 +768,7 @@ function ttfx_prs(db)
         stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"], weights))
         push!(prs, OrderedDict(
             "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+            "head_ref" => String(r.head_ref), "base_ref" => String(r.base_ref),
             # Ranked by the estimate against master: a stacked layer's own gains may only undo a regression below it
             "score" => stack === nothing ? own_score : stack["score"], "own_score" => own_score,
             "stack" => stack, "verdict" => String(r.verdict),
@@ -1069,14 +1070,85 @@ function commit_pr(db, n)
         OrderedDict("title" => String(gh[1].title), "author" => js(gh[1].author),
                     "labels" => String(gh[1].labels), "created_at" => String(gh[1].created_at),
                     "closed_at" => js(gh[1].closed_at), "merged_at" => js(gh[1].merged_at))
+    ttfx_all = ttfx_prs(db)["prs"]
     ttfx = nothing
-    if !isempty(rows(db, "SELECT 1 FROM ttfx_prs WHERE pr_number = ?", (n,)))
-        all_prs = ttfx_prs(db)
-        ttfx = OrderedDict("metrics" => all_prs["metrics"], "pr" => only(p for p in all_prs["prs"] if p["pr"] == n))
-    end
+    i = findfirst(p -> p["pr"] == n, ttfx_all)
+    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "pr" => ttfx_all[i]))
     sizes = size_pr(db, string(n))
     github === nothing && ttfx === nothing && sizes === nothing && return nothing
-    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes)
+    stack = commit_pr_stack(db, n, ttfx_all, size_prs(db)["prs"])
+    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes, "stack" => stack)
+end
+
+# The stack a pull request is part of, from the one on master up: the layers below it
+# through the branches they target, then those that target its branch, and theirs. The
+# branches of every open pull request come from the sizes' listing, and those with a TTFX
+# comparison from that too. A branch no open pull request has ends the walk down there
+# (missing). Each layer carries its TTFX scores and its total size change against the
+# layer below, when they were measured. Nothing when the pull request is not stacked.
+function commit_pr_stack(db, n, ttfx_all, size_all)
+    info = Dict{Int,Any}()
+    for r in rows(db, "SELECT pr_number, title, author, draft, base_ref, head_ref FROM size_open_prs")
+        info[Int(r.pr_number)] = (title=String(r.title), author=String(r.author), draft=r.draft == 1,
+                                  base_ref=String(r.base_ref), head_ref=String(r.head_ref))
+    end
+    ttfx_by = Dict(p["pr"] => p for p in ttfx_all)
+    for p in ttfx_all
+        old = get(info, p["pr"], nothing)
+        head_ref = isempty(p["head_ref"]) && old !== nothing ? old.head_ref : p["head_ref"]
+        info[p["pr"]] = (title=p["title"], author=p["author"], draft=p["draft"], base_ref=p["base_ref"], head_ref)
+    end
+    haskey(info, n) || return nothing
+    by_head = Dict(v.head_ref => k for (k, v) in info if !isempty(v.head_ref))
+    size_by = Dict(e["number"] => e for e in size_all)
+    function size_own(k)
+        e = get(size_by, k, nothing)
+        e === nothing && return nothing
+        before = e["stack"] === nothing ? e["base_values"] : e["below_values"]
+        (before === nothing || !haskey(before, "total") || !haskey(e["values"], "total")) && return nothing
+        return e["values"]["total"] - before["total"]
+    end
+    function layer(k)
+        v = info[k]
+        t = get(ttfx_by, k, nothing)
+        return OrderedDict("pr" => k, "title" => v.title, "author" => v.author, "draft" => v.draft,
+                           "head_ref" => v.head_ref, "base_ref" => v.base_ref,
+                           "own_score" => t === nothing ? nothing : t["own_score"], "score" => t === nothing ? nothing : t["score"],
+                           "outdated" => t === nothing ? false : t["outdated"], "size_own" => size_own(k))
+    end
+    below = Int[]
+    missing_ref = nothing
+    cur = n
+    while true
+        ref = info[cur].base_ref
+        (isempty(ref) || ref == "master") && break
+        k = get(by_head, ref, nothing)
+        if k === nothing || k == n || k in below
+            missing_ref = ref
+            break
+        end
+        push!(below, k)
+        cur = k
+    end
+    above = Int[]
+    seen = Set([n; below])
+    frontier = [n]
+    while !isempty(frontier)
+        next = Int[]
+        for k in frontier
+            ref = info[k].head_ref
+            isempty(ref) && continue
+            for c in sort!([c for (c, v) in info if v.base_ref == ref && !(c in seen)])
+                push!(seen, c)
+                push!(above, c)
+                push!(next, c)
+            end
+        end
+        frontier = next
+    end
+    isempty(below) && isempty(above) && missing_ref === nothing && return nothing
+    return OrderedDict("missing" => missing_ref, "layers" => [layer(k) for k in [reverse(below); n; above]],
+                       "position" => length(below) + 1)
 end
 
 function commit(db, ref)
@@ -1244,15 +1316,49 @@ end
 const SIZE_PR_METRICS = filter(!=("tarball"), SIZE_SUMMARY_METRICS)
 
 const SIZE_PR_QUERY = "SELECT p.*, h.id AS head_id, h.version AS head_version, h.measured_at AS measured_at, " *
-    "b.id AS base_id, b.merged_at AS base_merged_at, b.version AS base_version FROM size_prs p " *
+    "b.id AS base_id, b.merged_at AS base_merged_at, b.version AS base_version, COALESCE(o.head_ref, '') AS head_ref FROM size_prs p " *
     "JOIN size_builds h ON h.source = 'pr' AND h.triplet = ?1 AND h.commit_sha = p.head_commit " *
-    "LEFT JOIN size_builds b ON b.source = 'ci' AND b.triplet = ?1 AND b.commit_sha = p.base_commit"
+    "LEFT JOIN size_builds b ON b.source = 'ci' AND b.triplet = ?1 AND b.commit_sha = p.base_commit " *
+    "LEFT JOIN size_open_prs o ON o.pr_number = p.pr_number"
+
+# The open pull request whose branch each branch is, by branch
+size_open_heads(db) = Dict(String(r.head_ref) => Int(r.pr_number)
+                           for r in rows(db, "SELECT pr_number, head_ref FROM size_open_prs WHERE head_ref != ''"))
+
+# A stacked pull request's place: the branch it targets, the open pull request of that
+# branch (below), and that one's measured build when there is one. Its own change is its
+# change against master less the one below's, which cancels whatever master did between
+# their merge-bases. That is exact when the build below is the commit this one branched
+# off; otherwise the one below has moved on since. Nothing for a pull request on master.
+# The values a stacked pull request's own change is from: its values less its change
+# against master net of the one below's, so value - before is its own change. Nothing
+# unless both merge-bases are measured.
+function size_own_before(values, base_values, below_values, below_base_values)
+    any(isnothing, (base_values, below_values, below_base_values)) && return nothing
+    out = Dict{String,Int}()
+    for (m, v) in values
+        (haskey(base_values, m) && haskey(below_values, m) && haskey(below_base_values, m)) || continue
+        out[m] = v - ((v - base_values[m]) - (below_values[m] - below_base_values[m]))
+    end
+    return out
+end
+
+function size_pr_stack(r, heads, measured)
+    base_ref = String(r.base_ref)
+    (isempty(base_ref) || base_ref == "master") && return nothing, nothing
+    below = get(heads, base_ref, nothing)
+    m = below === nothing ? nothing : get(measured, below, nothing)
+    exact = m !== nothing && isequal(r.stack_base, m.head_commit)
+    info = OrderedDict("base_ref" => base_ref, "below" => below, "below_head" => m === nothing ? nothing : String(m.head_commit),
+                       "exact" => exact)
+    return info, m
+end
 
 function size_pr_info(r)
     base = r.base_id === missing ? nothing :
         OrderedDict("commit" => String(r.base_commit), "merged_at" => String(r.base_merged_at), "version" => String(r.base_version))
     return OrderedDict("number" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
-                       "base_ref" => String(r.base_ref), "build" => Int(r.build), "build_created_at" => String(r.build_created_at),
+                       "base_ref" => String(r.base_ref), "head_ref" => String(r.head_ref), "build" => Int(r.build), "build_created_at" => String(r.build_created_at),
                        "web_url" => js(r.web_url), "measured_at" => String(r.measured_at),
                        "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
                        "merge_base" => String(r.merge_base), "base" => base)
@@ -1268,11 +1374,17 @@ function size_prs(db)
                       "AND metric IN (SELECT value FROM json_each(?))", (JSON3.write(ids), JSON3.write(SIZE_PR_METRICS)))
         get!(values, Int(r.id), Dict{String,Int}())[String(r.metric)] = Int(r.value)
     end
+    heads = size_open_heads(db)
+    measured = Dict(Int(r.pr_number) => r for r in prs)
     out = Any[]
     for r in prs
         e = size_pr_info(r)
         e["values"] = get(values, Int(r.head_id), Dict{String,Int}())
         e["base_values"] = r.base_id === missing ? nothing : get(values, Int(r.base_id), Dict{String,Int}())
+        e["stack"], below = size_pr_stack(r, heads, measured)
+        e["below_values"] = below === nothing || below.base_id === missing ? nothing :
+            size_own_before(e["values"], e["base_values"], get(values, Int(below.head_id), Dict{String,Int}()),
+                            get(values, Int(below.base_id), Dict{String,Int}()))
         push!(out, e)
     end
     return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => SIZE_PR_METRICS, "prs" => out)
@@ -1287,6 +1399,21 @@ function size_pr(db, number)
     isempty(r) && return nothing
     e = size_pr_info(r[1])
     merge!(e, size_diff(db, Int(r[1].head_id), r[1].base_id === missing ? 0 : Int(r[1].base_id)))
+    heads = size_open_heads(db)
+    below_n = get(heads, String(r[1].base_ref), nothing)
+    below_rows = below_n === nothing ? [] : rows(db, SIZE_PR_QUERY * " WHERE p.pr_number = ?2", (SIZE_TRIPLET, below_n))
+    e["stack"], below = size_pr_stack(r[1], heads, Dict(Int(b.pr_number) => b for b in below_rows))
+    e["below_metrics"] = nothing
+    e["below_files"] = nothing
+    if below !== nothing && below.base_id !== missing && r[1].base_id !== missing
+        b = size_diff(db, Int(below.head_id), Int(below.base_id))["metrics"]
+        pick(i, d) = Dict(m => v[i] for (m, v) in d if v[i] !== nothing)
+        before = size_own_before(pick(1, e["metrics"]), pick(2, e["metrics"]), pick(1, b), pick(2, b))
+        e["below_metrics"] = OrderedDict(m => [v[1], get(before, m, nothing)] for (m, v) in e["metrics"])
+        # Files compare directly only from the same master commit; otherwise master's own
+        # changes between the merge-bases would show up as theirs
+        r[1].merge_base == below.merge_base && (e["below_files"] = size_diff(db, Int(r[1].head_id), Int(below.head_id))["files"])
+    end
     return e
 end
 

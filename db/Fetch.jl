@@ -160,6 +160,14 @@ function github_open_pulls()
     error("more than 5000 open pull requests")
 end
 
+# A pull request's branch, if it is in JuliaLang/julia, where another pull request can
+# target it; a fork's branch names can repeat ours
+function pr_head_ref(pull)
+    repo = get(pull.head, :repo, nothing)
+    repo === nothing && return ""
+    return String(get(repo, :full_name, "")) == "JuliaLang/julia" ? String(pull.head.ref) : ""
+end
+
 # One pull request, or nothing (with a warning) when the request failed
 function github_pull(n)
     resp = http_get_retry("$GITHUB_REPO/pulls/$n", github_headers())

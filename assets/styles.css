@@ -3302,8 +3302,12 @@ th.sorted .sort-indicator {
   gap: 12px;
 }
 #commit-body > :not(.commit-card),
-#commit-body > .commit-head {
+#commit-body > .commit-head,
+#commit-body > .commit-stack {
   grid-column: 1 / -1;
+}
+.commit-stack-current td {
+  background: var(--color-accent-subtle);
 }
 .commit-card {
   border: 1px solid var(--color-border-default);

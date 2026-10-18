@@ -13289,10 +13289,18 @@ function ttfxPrStackTitle(p) {
   );
 }
 
+// The badge the TTFX and Size tables put on a pull request that targets another
+// branch: the pull request below it, or the branch when no open one has it, and ≈
+// when the comparison is approximate
+function prStackBadge(below, baseRef, title, approximate) {
+  const label = below ? `stacked on #${below}` : `on ${baseRef}`;
+  return `<span class="ttfx-pr-badge ttfx-pr-stacked" title="${escapeHtml(title)}">↳ ${escapeHtml(label)}${approximate ? " ≈" : ""}</span> `;
+}
+
 function ttfxPrStackBadge(p) {
-  if (!p.stack) return "";
-  const label = p.stack.parents.length ? `stacked on #${p.stack.parents[0]}` : "stacked";
-  return `<span class="ttfx-pr-badge ttfx-pr-stacked" title="${escapeHtml(ttfxPrStackTitle(p))}">↳ ${label}${p.stack.complete && !p.stack.exact ? " ≈" : ""}</span> `;
+  const st = p.stack;
+  if (!st) return "";
+  return prStackBadge(st.parents[0], st.base_ref, ttfxPrStackTitle(p), st.complete && !st.exact);
 }
 
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
@@ -13419,7 +13427,10 @@ function ttfxPrDetailsHtml(p, metrics) {
     `<b>${ttfxScorePct(p.score)}</b>${st ? ` for the stack against master; on its own against ${parent}: ${ttfxScorePct(p.own_score)}` : ""}`,
   );
   if (p.outdated) html += '<div class="ttfx-popup-note">Note: measured on an older commit; the pull request has newer commits.</div>';
-  if (st) html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(ttfxPrStackTitle(p))}</div>`;
+  if (st) {
+    html += row("Stack", ttfxPrStackBadge(p).trim());
+    html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(ttfxPrStackTitle(p))}</div>`;
+  }
 
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
   html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
@@ -13466,16 +13477,29 @@ function ttfxPrDetailsHtml(p, metrics) {
   return html;
 }
 
-// Hovering a stacked pull request's row lights up the rows of the ones below it,
-// fainter the further down the stack
-function highlightTtfxPrStack(p, on) {
-  if (!p.stack) return;
-  p.stack.parents.forEach((pr, depth) => {
-    const row = document.querySelector(`#ttfx-stats-tbody tr[data-pr="${pr}"]`);
+// Hovering a stacked pull request's row lights up the rows of the ones below it
+// (`parents`, nearest first), fainter the further down the stack
+function highlightPrStack(tbodyId, parents, on) {
+  parents.forEach((pr, depth) => {
+    const row = document.querySelector(`#${tbodyId} tr[data-pr="${pr}"]`);
     if (!row) return;
     row.classList.toggle("ttfx-pr-parent-hl", on);
     row.style.setProperty("--ttfx-pr-hl", on ? `${Math.max(25 / 2 ** depth, 6)}%` : "");
   });
+}
+
+function highlightTtfxPrStack(p, on) {
+  if (p.stack) highlightPrStack("ttfx-stats-tbody", p.stack.parents, on);
+}
+
+// The open pull requests below a stacked one in the Size table, nearest first
+function sizesPrParents(p) {
+  const out = [];
+  for (let q = p; q?.stack?.below && !out.includes(q.stack.below); ) {
+    out.push(q.stack.below);
+    q = sizesPrs.prs.find((x) => x.number === q.stack.below);
+  }
+  return out;
 }
 
 // Pull requests whose score is within 0.25% of no change are folded into one row
@@ -14551,14 +14575,17 @@ function renderSizesPrsTable() {
   const prs = sizesPrs?.prs || [];
   const metrics = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m) && (sizesPrs?.metrics || []).includes(m));
   const rank = sizesPrRankMetric();
-  const delta = (p, m) => (p.base_values && p.values[m] != null && p.base_values[m] != null ? p.values[m] - p.base_values[m] : null);
+  const delta = (p, m) => {
+    const before = sizesPrBefore(p);
+    return before && p.values[m] != null && before[m] != null ? p.values[m] - before[m] : null;
+  };
   // Waiting pull requests (no delta yet) go last, below any change, even 0
   const size = (p) => {
     const d = delta(p, rank);
     return d == null ? -1 : Math.abs(d);
   };
   const rows = prs.slice().sort((a, b) => size(b) - size(a));
-  caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, ranked by ${escapeHtml(
+  caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, or a stacked one's own change against the pull request below it, ranked by ${escapeHtml(
     sizesMetricLabel(rank).toLowerCase(),
   )}. Click a row for details.</span>`;
   thead.innerHTML =
@@ -14573,8 +14600,13 @@ function renderSizesPrsTable() {
   for (const p of rows) {
     html += `<tr class="clickable" tabindex="0" data-pr="${p.number}">`;
     html += `<td><a href="${githubPrURL(p.number)}" target="_blank" rel="noopener noreferrer">#${p.number}</a></td>`;
-    const draft = p.draft ? '<span class="ttfx-note-badge">draft</span> ' : "";
-    const stacked = p.base_ref && p.base_ref !== "master" ? `<span class="ttfx-note-badge" title="Targets ${escapeHtml(p.base_ref)}; compared with master, so the pull requests below it count too">on ${escapeHtml(p.base_ref)}</span> ` : "";
+    const draft = p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "";
+    const st = p.stack;
+    const stacked = !st
+      ? ""
+      : p.below_values
+        ? prStackBadge(st.below, st.base_ref, `Targets ${st.base_ref} (#${st.below}). Its change against master less #${st.below}'s${st.exact ? "" : "; approximate, since #" + st.below + " has commits newer than where this one branched off"}`, !st.exact)
+        : prStackBadge(st.below, st.base_ref, `Targets ${st.base_ref}${st.below ? ` (#${st.below}), which is not measured` : ""}; compared with master, so the pull requests below it count too`, false);
     html += `<td class="msg" title="${escapeHtml(p.title)}">${draft}${stacked}${escapeHtml(p.title)}</td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     for (const m of metrics) {
@@ -14584,7 +14616,7 @@ function renderSizesPrsTable() {
         html += `<td class="num${secondary}">${d === 0 ? "0" : ""}</td>`;
         continue;
       }
-      const before = p.base_values[m];
+      const before = sizesPrBefore(p)[m];
       html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}${secondary}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
     }
     html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
@@ -14598,8 +14630,14 @@ function renderSizesPrsTable() {
       if (e.target.closest("a")) return;
       showSizesPrPopup(p.number);
     });
-    tr.addEventListener("mouseenter", () => showSizesPrPoints(p));
-    tr.addEventListener("mouseleave", hideSizesPrPoints);
+    tr.addEventListener("mouseenter", () => {
+      showSizesPrPoints(p);
+      highlightPrStack("sizes-stats-tbody", sizesPrParents(p), true);
+    });
+    tr.addEventListener("mouseleave", () => {
+      hideSizesPrPoints();
+      highlightPrStack("sizes-stats-tbody", sizesPrParents(p), false);
+    });
   }
 }
 
@@ -14706,31 +14744,61 @@ function sizesPrDetailsHtml(p) {
   html += row("Merge-base", `${commitShaLink(p.merge_base)} ${githubCommitLink(p.merge_base)}`);
 
   html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
+  const st = p.stack;
+  if (st) {
+    const measured = !!st.below_head;
+    const title = !st.below
+      ? `Targets ${st.base_ref}, which no open pull request has, so it is compared with master only`
+      : measured
+        ? `Targets ${st.base_ref} (#${st.below}). Its own change is its change against master less #${st.below}'s${st.exact ? "" : "; approximate, since #" + st.below + " has commits newer than where this one branched off"}`
+        : `Targets ${st.base_ref} (#${st.below}), which is not measured, so it is compared with master only`;
+    html += row("Stack", prStackBadge(st.below, st.base_ref, title, measured && !st.exact).trim());
+    html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(title)}</div>`;
+  }
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
   return html;
 }
 
-// The metrics and changed files of a sizes/pr answer
+// The metrics and changed files of a sizes/pr answer. A stacked pull request's own
+// change comes first, then the whole stack's against master.
 function sizesPrDiffHtml(d) {
+  if (d.below_metrics) {
+    const below = `vs #${d.stack.below}`;
+    const html = sizesMetricsTableHtml(d.below_metrics, below, d.metrics, "stack vs master");
+    return html + (d.below_files ? sizesFilesHtml(d.below_files, `against #${d.stack.below}`) : sizesFilesHtml(d.files, "against master"));
+  }
   return sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + (d.base ? sizesFilesHtml(d.files) : "");
 }
 
+// The values a pull request's change is shown from: the one below it for a stacked
+// one when that is measured, otherwise its merge-base with master
+function sizesPrBefore(p) {
+  return p.stack && p.below_values ? p.below_values : p.base_values;
+}
+
 // The metrics of a diff (metric => [value, value before]) as the popup's table
-function sizesMetricsTableHtml(metrics, label) {
-  let html = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Size</th><th class="num">${escapeHtml(label)}</th></tr></thead><tbody>`;
+// `more` adds a second column of changes, from another diff of the same values
+function sizesMetricsTableHtml(metrics, label, more = null, moreLabel = "") {
+  let html = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Size</th><th class="num">${escapeHtml(label)}</th>`;
+  if (more) html += `<th class="num">${escapeHtml(moreLabel)}</th>`;
+  html += "</tr></thead><tbody>";
+  const cell = (v) => {
+    const d = !v || v[0] == null || v[1] == null ? null : v[0] - v[1];
+    const cls = d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "";
+    return `<td class="num ${cls}">${formatSizeDelta(d)}${d ? formatSizePct(d, v[1]) : ""}</td>`;
+  };
   for (const m of Object.keys(SIZES_METRICS)) {
     const v = metrics[m];
     if (!v || v[0] == null) continue;
-    const d = v[1] == null ? null : v[0] - v[1];
-    const cls = d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "";
-    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatSizeValue(v[0])}</td>`;
-    html += `<td class="num ${cls}">${formatSizeDelta(d)}${d ? formatSizePct(d, v[1]) : ""}</td></tr>`;
+    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatSizeValue(v[0])}</td>${cell(v)}`;
+    if (more) html += cell(more[m]);
+    html += "</tr>";
   }
   return html + "</tbody></table>";
 }
 
 // The files of a diff whose size changed, largest change first
-function sizesFilesHtml(files) {
+function sizesFilesHtml(files, against = "") {
   const changed = files.filter((f) => f.bytes !== f.previous);
   if (!changed.length) return '<div class="ttfx-popup-muted ttfx-popup-hint">No file of at least 1 MiB changed size.</div>';
   const rows = changed
@@ -14741,7 +14809,7 @@ function sizesFilesHtml(files) {
       return `<tr><th class="sizes-file-path"><code>${escapeHtml(f.path)}</code></th><td class="num">${formatSizeValue(f.bytes ?? f.previous)}</td><td class="num ${cls}">${change}</td></tr>`;
     })
     .join("");
-  return `<details class="ttfx-popup-failed" open><summary>${changed.length} file${changed.length > 1 ? "s" : ""} of at least 1 MiB changed</summary>
+  return `<details class="ttfx-popup-failed" open><summary>${changed.length} file${changed.length > 1 ? "s" : ""} of at least 1 MiB changed${against ? ` ${escapeHtml(against)}` : ""}</summary>
     <table class="ttfx-popup-table"><tbody>${rows}</tbody></table></details>`;
 }
 
@@ -15917,7 +15985,10 @@ function overviewSizesCompare(src, at) {
 
 // The five open pull requests that change the total most, with the change
 function overviewSizesPrs(prs) {
-  const delta = (p) => (p.base_values && p.values.total != null && p.base_values.total != null ? p.values.total - p.base_values.total : null);
+  const delta = (p) => {
+    const before = sizesPrBefore(p);
+    return before && p.values.total != null && before.total != null ? p.values.total - before.total : null;
+  };
   return ((prs && prs.prs) || [])
     .map((p) => ({ p, d: delta(p) }))
     .filter(({ d }) => d)
@@ -16741,7 +16812,38 @@ function commitPrHtml(d, gh) {
         links: overviewTabLink("ci-sizes", "Size tab"),
       })
     : commitCard("Size", '<p class="commit-line text-muted">No size measurement recorded for this pull request.</p>');
-  return head + ttfx + sizes;
+  return head + commitPrStackHtml(d.stack, n) + ttfx + sizes;
+}
+
+// The pull requests stacked with this one, top first and master last, as gh stack
+// lists them: each one's TTFX against the layer below it and the whole stack's
+// estimate against master up to it, and its own change of the total size
+function commitPrStackHtml(st, n) {
+  if (!st) return "";
+  const pct = (score) => `<td class="num"${ttfxScoreStyle(score == null ? null : (score - 1) * 100)}>${ttfxScorePct(score)}</td>`;
+  const rows = st.layers.map((l, i) => {
+    const badges = [l.draft ? '<span class="ttfx-pr-badge">draft</span>' : "", l.outdated ? '<span class="ttfx-pr-badge" title="Measured on an older commit; the pull request has newer commits">older commit</span>' : ""].join(" ");
+    return `<tr class="${l.pr === n ? "commit-stack-current" : ""}">
+      <td class="num col-secondary">${i + 1}</td>
+      <td>${l.pr === n ? `<b>#${l.pr}</b>` : commitLink(String(l.pr), `#${l.pr}`)}</td>
+      <td class="commits-reg-msg">${escapeHtml(l.title)} ${badges}</td>
+      <td class="col-secondary"><code>${escapeHtml(l.head_ref)}</code></td>
+      ${pct(l.own_score)}${pct(l.score)}
+      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}">${l.size_own == null ? "–" : formatSizeDelta(l.size_own)}</td>
+    </tr>`;
+  });
+  rows.reverse();
+  const base = st.missing
+    ? `<tr><td></td><td colspan="3" class="col-secondary"><code>${escapeHtml(st.missing)}</code>: no open pull request has this branch, so the layers below it are not known</td><td></td><td></td><td></td></tr>`
+    : '<tr><td></td><td colspan="3" class="col-secondary"><code>master</code></td><td></td><td></td><td></td></tr>';
+  const head = '<th class="num col-secondary">#</th><th>PR</th><th>Title</th><th class="col-secondary">Branch</th>' +
+    '<th class="num" title="TTFX score against the layer below">TTFX own</th><th class="num" title="Estimated TTFX score of the stack up to here against master">TTFX stack</th>' +
+    '<th class="num" title="Change of the total unpacked size against the layer below">Size own</th>';
+  const title = `Stack: ${st.position} of ${st.layers.length}${st.missing ? "+" : ""}`;
+  return `<section class="commit-card commit-stack">
+    <div class="commit-card-header"><h3 class="commit-card-title">${title}</h3></div>
+    ${commitTable(head, [...rows, base])}
+  </section>`;
 }
 
 function commitMatchesHtml(ref, data, pr) {

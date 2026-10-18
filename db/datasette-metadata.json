@@ -277,12 +277,15 @@
           "description": "The latest measured julia-pr build of every open julia pull request that has one (its size_builds row has source pr and commit_sha head_commit) and its merge-base with master, compared with once that is measured as a master commit. Current state only; a closed pull request's row is deleted.",
           "columns": {
             "merge_base": "the head's merge-base with master",
-            "base_commit": "merge_base once it is measured (source ci): NULL while its julia-ci build job has not finished"
+            "base_commit": "merge_base once it is measured (source ci): NULL while its julia-ci build job has not finished",
+            "stack_base": "for a pull request stacked on another one's branch (base_ref not master), the head's merge-base with that branch, which is exact to compare with when it is the head the one below was measured at; NULL otherwise"
           }
         },
         "size_open_prs": {
           "description": "Every open julia pull request as fetch_sizes.jl last listed them from GitHub (every two hours, at meta sizes:open_prs_at); only their julia-pr builds are measured.",
-          "columns": {}
+          "columns": {
+            "head_ref": "the pull request's branch, '' when it is not in JuliaLang/julia; a pull request whose base_ref is this branch is stacked on this one"
+          }
         }
       },
       "queries": {

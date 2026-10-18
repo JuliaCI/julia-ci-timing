@@ -493,7 +493,8 @@ CREATE TABLE IF NOT EXISTS size_prs (
     head_commit      TEXT NOT NULL,              -- the commit the build measured
     merge_base       TEXT NOT NULL DEFAULT '',   -- with master
     base_commit      TEXT,                       -- merge_base once it is measured (source ci), NULL until then
-    change_seq       INTEGER NOT NULL
+    change_seq       INTEGER NOT NULL,
+    stack_base       TEXT                        -- merge-base with base_ref when that is not master, NULL otherwise
 );
 
 -- Every open pull request, as fetch_sizes.jl last listed them from GitHub (at
@@ -503,7 +504,8 @@ CREATE TABLE IF NOT EXISTS size_open_prs (
     title     TEXT NOT NULL DEFAULT '',
     author    TEXT NOT NULL DEFAULT '',
     draft     INTEGER NOT NULL DEFAULT 0,
-    base_ref  TEXT NOT NULL DEFAULT ''
+    base_ref  TEXT NOT NULL DEFAULT '',
+    head_ref  TEXT NOT NULL DEFAULT ''   -- its branch, '' when it is not in JuliaLang/julia
 );
 
 -- ------------------------------------------------------------- downloads --
