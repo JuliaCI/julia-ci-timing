@@ -4816,11 +4816,12 @@ makeResizablePanel({
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    for (const id of ["popup-overlay", "shortcuts-overlay", "ttfx-build-popup-overlay"]) {
+    for (const id of ["popup-overlay", "shortcuts-overlay"]) {
       const el = document.getElementById(id);
       el.classList.remove("visible");
       el.setAttribute("aria-hidden", "true");
     }
+    closeTtfxBuildPopup();
     // Its own close also takes the methodology lines off the chart
     closeBenchMethodologyPopup();
   }
@@ -6538,6 +6539,7 @@ const DASHBOARD_PARAMS = new Set([
   "zv", // sizes table view (open pull requests or master commits)
   "at", // activity time range
   "aw", // activity averaging window
+  "pop", // the TTFX or Sizes tab's open details popup
   "perf", // legacy: full iframe path
 ]);
 
@@ -6709,6 +6711,10 @@ function switchTab(tab, { pushHistory = true } = {}) {
   updatePhoneShell(tab);
   setUpdatedLabels();
 
+
+  // A popup belongs to the tab it was opened on (back can leave it), but the
+  // landing tab reopens the one its URL names once its data is in
+  if (tabShown) closeTtfxBuildPopup();
 
   // Update tab in URL
   const url = new URL(window.location);
@@ -11498,9 +11504,11 @@ async function renderTtfxCompileDetails(b, prev, task) {
 }
 
 // The TTFX and Sizes tabs' details popup. `key` names what it shows, so an
-// answer that arrives after it moved on to something else is dropped.
+// answer that arrives after it moved on to something else is dropped, and
+// the URL carries it (`pop`) so a link opens the same popup.
 // `wide` gives the room a pull request's tables need.
 function openDetailPopup({ title, html, wide = false, key = "" }) {
+  setDetailPopupURL(key);
   document.getElementById("ttfx-build-popup-title").textContent = title;
   const body = document.getElementById("ttfx-build-popup-body");
   body.parentElement.classList.toggle("ttfx-pr-popup", wide);
@@ -11522,6 +11530,43 @@ function closeTtfxBuildPopup() {
   const overlay = document.getElementById("ttfx-build-popup-overlay");
   overlay.classList.remove("visible");
   overlay.setAttribute("aria-hidden", "true");
+  setDetailPopupURL("");
+}
+
+function setDetailPopupURL(key) {
+  const url = new URL(window.location);
+  if (key) url.searchParams.set("pop", key);
+  else url.searchParams.delete("pop");
+  if (url.href !== window.location.href) history.replaceState(null, "", url);
+}
+
+// The popup a link names (`pop`), once the tab's data has loaded. Each
+// prefix is the key its popup is opened with.
+async function reopenDetailPopup(tab) {
+  const key = new URLSearchParams(window.location.search).get("pop");
+  if (!key || activeTab !== tab) return;
+  const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit)-(.+)$/);
+  const kind = m?.[1];
+  const id = m?.[2];
+  if (kind === "ttfx-job") {
+    const runs = [ttfxData.builds, ...Object.values(TTFX_REF_KEYS).map((k) => ttfxData[k])];
+    const b = runs.flatMap((r) => r || []).find((x) => String(x.job_id) === id);
+    if (b) return showTtfxBuildPopup(b, null);
+  } else if (kind === "ttfx-pr") {
+    await loadTtfxPrs();
+    const p = ttfxPrs.prs.find((x) => x.pr === Number(id));
+    if (p && activeTab === tab) return showTtfxPrPopup(p);
+  } else if (kind === "sizes-pr") {
+    // The PR table loads them; the commits view does not
+    await sizesPrsLoading?.promise;
+    if (!sizesPrs) sizesPrs = await apiGet("sizes/prs").catch(() => null);
+    if (sizesPrs?.prs.some((q) => q.number === Number(id)) && activeTab === tab) return showSizesPrPopup(Number(id));
+  } else if (kind === "sizes-commit") {
+    const i = sizesData.commits.indexOf(id);
+    if (i >= 0) return showSizesCommitPopup(i, null);
+  }
+  // Gone from the data (a closed pull request, say)
+  setDetailPopupURL("");
 }
 
 function ttfxAnnotationsFor(b) {
@@ -12206,6 +12251,7 @@ async function loadTtfxData() {
     updateTtfxTable();
     // The task selection needs the task list, so the URL waits for it
     if (activeTab === "ci-ttfx") updateTtfxURL();
+    reopenDetailPopup("ci-ttfx");
   } catch (err) {
     console.error("Failed to load TTFX data:", err);
     document.getElementById("ttfx-chart-loading").innerHTML =
@@ -14012,6 +14058,7 @@ async function loadSizesData() {
     populateSizesMetricList();
     updateSizesChart();
     updateSizesTable();
+    reopenDetailPopup("ci-sizes");
   } catch (err) {
     console.error("Failed to load size data:", err);
     document.getElementById("sizes-chart-loading").innerHTML =
@@ -14470,7 +14517,7 @@ function updateSizesTable() {
   if (!sizesPrsLoading) {
     const job = (sizesPrsLoading = { pending: true });
     if (!sizesPrs) document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="loading">Loading...</td></tr>';
-    apiGet("sizes/prs")
+    job.promise = apiGet("sizes/prs")
       .then((d) => (sizesPrs = d))
       .catch((err) => {
         console.error("Failed to load the pull requests' sizes:", err);
