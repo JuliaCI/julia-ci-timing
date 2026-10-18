@@ -533,7 +533,16 @@
           that includes the commit.</span
         >
       </div>
-      <div class="commit-layout">
+      <div class="commit-layout" id="commit-layout">
+        <button
+          class="commit-list-toggle"
+          type="button"
+          onclick="toggleCommitList()"
+          aria-controls="commit-list"
+          aria-expanded="false"
+        >
+          Master commits
+        </button>
         <nav class="commit-list" id="commit-list" aria-label="Master commits, newest first"></nav>
         <div class="overview-body" id="commit-body"></div>
       </div>

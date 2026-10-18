@@ -16671,6 +16671,7 @@ function commitRowsWithMore(head, shown, all, what) {
 function drawCommit({ ref, data, pr }) {
   const body = document.getElementById("commit-body");
   markCommitListSelection(data.commit?.prefix);
+  setCommitListMinimized(!!(!data.commit && data.pr));
   if (!data.commit) {
     body.innerHTML = data.pr ? commitPrHtml(data.pr, pr) : commitMatchesHtml(ref, data, pr);
     return;
@@ -16684,6 +16685,23 @@ function drawCommit({ ref, data, pr }) {
   ].join("");
 }
 
+// A pull request is not in the list of master commits, so the list folds to a
+// strip that opens it again
+function setCommitListMinimized(minimized) {
+  const layout = document.getElementById("commit-layout");
+  layout.classList.toggle("commit-list-minimized", minimized);
+  layout.classList.remove("commit-list-open");
+  layout.querySelector(".commit-list-toggle").setAttribute("aria-expanded", String(!minimized));
+}
+
+function toggleCommitList() {
+  const layout = document.getElementById("commit-layout");
+  const open = layout.classList.toggle("commit-list-open");
+  const toggle = layout.querySelector(".commit-list-toggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.textContent = open ? "Hide master commits" : "Master commits";
+}
+
 // A pull request without a master commit here: what its GitHub listing, TTFX
 // job and size measurement recorded, as the TTFX and Size tabs show it
 function commitPrHtml(d, gh) {
@@ -16693,21 +16711,22 @@ function commitPrHtml(d, gh) {
   const author = g?.author || d.ttfx?.pr.author || d.sizes?.author || "";
   const merged = g?.merged_at || gh?.merged_at;
   const closed = g?.closed_at || gh?.closed_at;
-  const state = merged
-    ? `merged ${timeHtml(merged)}${gh && gh.base !== "master" ? ` into <code>${escapeHtml(gh.base)}</code>` : ""}`
-    : closed ? `closed ${timeHtml(closed)}` : "open";
+  const draft = d.ttfx?.pr.draft || d.sizes?.draft || gh?.draft;
+  const state = merged ? "merged" : closed ? "closed" : draft ? "draft" : "open";
+  const pill = `<span class="pr-state pr-state-${state}">${state[0].toUpperCase() + state.slice(1)}</span>`;
   const meta = [
     overviewExtLink(githubPrURL(n), `#${n}`),
     author ? escapeHtml(author) : "",
     g?.created_at ? `opened ${timeHtml(g.created_at)}` : "",
-    state,
+    merged ? `merged ${timeHtml(merged)}${gh && gh.base !== "master" ? ` into <code>${escapeHtml(gh.base)}</code>` : ""}` : "",
+    !merged && closed ? `closed ${timeHtml(closed)}` : "",
   ].filter(Boolean);
   const note = merged
     ? "Its merge commit has no master build here."
     : "It is not merged, so only the comparisons its own CI builds made against master are shown.";
   const head = `<section class="commit-card commit-head">
     <h2 class="commit-title">${escapeHtml(title)}</h2>
-    <div class="commit-meta">${meta.join(" · ")}</div>
+    <div class="commit-meta">${pill}${meta.join(" · ")}</div>
     <p class="commit-line text-muted">${note}</p>
   </section>`;
   const t = d.ttfx;

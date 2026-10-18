@@ -3178,6 +3178,29 @@ th.sorted .sort-indicator {
   background: var(--color-canvas-subtle);
   font-size: 12px;
 }
+.commit-list-toggle {
+  display: none;
+}
+.commit-layout.commit-list-minimized:not(.commit-list-open) .commit-list {
+  display: none;
+}
+.commit-layout.commit-list-minimized .commit-list-toggle {
+  display: block;
+  flex-shrink: 0;
+  padding: 12px 4px;
+  writing-mode: vertical-rl;
+  border: none;
+  border-right: 1px solid var(--color-border-default);
+  background: var(--color-canvas-subtle);
+  color: var(--color-fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.commit-layout.commit-list-minimized .commit-list-toggle:hover {
+  color: var(--color-fg-default);
+  background: var(--color-neutral-muted);
+}
 .commit-list-day {
   position: sticky;
   top: 0;
@@ -3260,6 +3283,13 @@ th.sorted .sort-indicator {
     border-right: none;
     border-bottom: 1px solid var(--color-border-default);
   }
+  .commit-layout.commit-list-minimized .commit-list-toggle {
+    padding: 6px 12px;
+    writing-mode: horizontal-tb;
+    text-align: left;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border-default);
+  }
 }
 /* Commit lookup view: the overview's toolbar and body, one card per source */
 /* Two columns of cards once each can be 640px wide: CI beside TTFX,
@@ -3323,6 +3353,24 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   overflow-wrap: anywhere;
 }
+/* A pull request's state on the Commit page, coloured as GitHub does */
+.pr-state {
+  --pill: var(--color-success-fg);
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--pill) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pill) 14%, transparent);
+  color: var(--pill);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  vertical-align: baseline;
+}
+.pr-state-draft { --pill: var(--color-fg-muted); }
+.pr-state-merged { --pill: var(--color-done-fg); }
+.pr-state-closed { --pill: var(--color-danger-fg); }
 .commit-line,
 .commit-message {
   font-size: 13px;
