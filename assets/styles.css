@@ -3544,6 +3544,23 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   white-space: nowrap;
 }
+.overview-ttfx-cells {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 6px;
+  max-width: 22em;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.overview-rows dt.overview-rows-heading {
+  grid-column: 1 / -1;
+  font-weight: 600;
+  color: var(--color-fg-default);
+}
+.overview-rows dt.overview-ttfx-sub {
+  padding-left: 8px;
+}
 .overview-rows dt.overview-delta-bad {
   color: var(--color-danger-fg);
 }

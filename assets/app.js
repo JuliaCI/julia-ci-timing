@@ -15153,7 +15153,12 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     charts.push({ id, kind: "bars", spec: bars });
   }
   parts.push('<dl class="overview-rows">');
-  for (const [label, value, labelClass] of rows) {
+  for (const row of rows) {
+    if (row.heading) {
+      parts.push(`<dt class="overview-rows-heading">${escapeHtml(row.heading)}</dt>`);
+      continue;
+    }
+    const [label, value, labelClass] = row;
     if (value == null || value === "") continue;
     parts.push(`<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`);
   }
@@ -15605,11 +15610,11 @@ function overviewTtfxCard(src, prs) {
     spark,
     rows: [
       ["Latest build", `${overviewExtLink(ttfxJobUrl(latest), `#${latest.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(latest.version || "")}`],
+      ...overviewTtfxOptBuild(src),
       ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
-      overviewTtfxRelease(src, latest, src.releases),
-      overviewTtfxRelease(src, latest, src.lts, " (LTS)"),
+      ...overviewTtfxCompare(src, latest),
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -15626,25 +15631,76 @@ const overviewReleaseClass = (pct) =>
 const overviewReleaseRowClass = (tones) =>
   tones.includes("overview-delta-bad") ? "overview-delta-bad" : tones.includes("overview-delta-good") ? "overview-delta-good" : "";
 
-// The latest build against the latest weekly run of a release series, per
+const OVERVIEW_TTFX_METRICS = ["precompile", "load", "run", "warm"];
+
+// A run of master against the latest weekly run of a release series, per
 // time metric over the snippets both measured
-function overviewTtfxRelease(src, latest, runs, suffix = "") {
-  const rel = runs && runs[runs.length - 1];
-  if (!rel) return ["Against release", ""];
-  const parts = [];
-  const tones = [];
-  for (const m of ["precompile", "load", "run", "warm"]) {
-    const tasks = ttfxCommonTasks([latest, rel], src.tasks || [], m);
-    const a = ttfxGeomean(latest, tasks, m);
-    const b = ttfxGeomean(rel, tasks, m);
-    if (a == null || !b) continue;
-    const pct = (100 * (a - b)) / b;
-    tones.push(overviewReleaseClass(pct));
-    parts.push(
-      `${TTFX_PILL_LABELS[m]} <span class="${overviewReleaseClass(pct)}" title="${formatTtfxSeconds(a)} against ${formatTtfxSeconds(b)}, geomean over ${tasks.length} snippets">${formatSignedPct(pct)}</span>`,
-    );
+function overviewTtfxRelease(src, b, rel) {
+  return OVERVIEW_TTFX_METRICS.map((m) => {
+    const tasks = ttfxCommonTasks([b, rel], src.tasks || [], m);
+    const x = ttfxGeomean(b, tasks, m);
+    const y = ttfxGeomean(rel, tasks, m);
+    if (x == null || !y) return null;
+    return { pct: (100 * (x - y)) / y, title: `${formatTtfxSeconds(x)} against ${formatTtfxSeconds(y)}, geomean over ${tasks.length} snippets` };
+  });
+}
+
+// An optimized build against the regular build of the same commit, which its
+// job measured beside it
+function overviewTtfxPaired(src, opt) {
+  return OVERVIEW_TTFX_METRICS.map((m) => {
+    const r = ttfxPairedRatio(opt, src.tasks || [], m);
+    return r && { pct: (r.ratio - 1) * 100, title: `Geomean over ${r.n} snippets measured in the same job` };
+  });
+}
+
+function overviewTtfxOpt(src) {
+  const runs = (src && src.opt) || [];
+  return runs[runs.length - 1] || null;
+}
+
+function overviewTtfxOptBuild(src) {
+  const opt = overviewTtfxOpt(src);
+  if (!opt) return [];
+  const builtAt = new Date(ttfxBuildTime(opt)).toISOString();
+  return [["Latest optimized", `${overviewExtLink(ttfxJobUrl(opt), `#${opt.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(opt.version || "")}`]];
+}
+
+// The latest master build, and the latest optimized (PGO and ThinLTO) build,
+// against the releases and each other, one row per comparison
+function overviewTtfxCompare(src, latest) {
+  const rel = src.releases && src.releases[src.releases.length - 1];
+  const lts = src.lts && src.lts[src.lts.length - 1];
+  const opt = overviewTtfxOpt(src);
+  const groups = [];
+  const against = (b) => [
+    rel && [`vs ${rel.version}`, overviewTtfxRelease(src, b, rel)],
+    lts && [`vs ${lts.version} (LTS)`, overviewTtfxRelease(src, b, lts)],
+  ];
+  groups.push(["Nightly", against(latest)]);
+  if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);
+  const shown = groups
+    .map(([name, comps]) => [name, comps.filter((c) => c && c[1].some(Boolean))])
+    .filter(([, comps]) => comps.length);
+  if (!shown.length) return [];
+  const cellsHtml = (cells) => `<span class="overview-ttfx-cells">${cells.join("")}</span>`;
+  const rows = [["", cellsHtml(OVERVIEW_TTFX_METRICS.map((m) => `<span>${TTFX_PILL_LABELS[m]}</span>`)), "overview-ttfx-head"]];
+  for (const [name, comps] of shown) {
+    rows.push({ heading: name });
+    for (const [label, cells] of comps) {
+      const tones = cells.filter(Boolean).map((c) => overviewReleaseClass(c.pct));
+      rows.push([
+        label,
+        cellsHtml(
+          cells.map((c) =>
+            c ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${formatSignedPct(c.pct)}</span>` : "<span></span>",
+          ),
+        ),
+        `overview-ttfx-sub ${overviewReleaseRowClass(tones)}`,
+      ]);
+    }
   }
-  return [`Against ${rel.version}${suffix}`, parts.join(", "), overviewReleaseRowClass(tones)];
+  return rows;
 }
 
 // The five best-ranked open pull requests that come out faster, with their score
