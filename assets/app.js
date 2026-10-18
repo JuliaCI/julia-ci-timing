@@ -13789,14 +13789,15 @@ function showSizesPrPoints(p) {
   const isDark = isDarkMode();
   const xs = chart.scales.x;
   let last = -Infinity;
-  for (const ds of chart.data.datasets) if (ds.data.length) last = Math.max(last, ds.data[ds.data.length - 1].x);
+  for (const ds of chart.data.datasets) if (!ds._release && ds.data.length) last = Math.max(last, ds.data[ds.data.length - 1].x);
   if (!isFinite(last)) return;
   const share = (SIZES_PR_POINT_SPACING + SIZES_PR_POINT_MARGIN) / xs.width;
   const x = last + (SIZES_PR_POINT_SPACING / xs.width) * widenForProjection(chart, last, share);
   const notes = chart.options.plugins.annotation.annotations;
   chart.data.datasets.forEach((ds, k) => {
     const m = ds._metric;
-    if (!chart.isDatasetVisible(k) || !ds.data.length) return;
+    // The release levels are not commits and get no point of their own
+    if (ds._release || !chart.isDatasetVisible(k) || !ds.data.length) return;
     if (p.values[m] == null || p.base_values[m] == null) return;
     const delta = p.values[m] - p.base_values[m];
     const end = ds.data[ds.data.length - 1];
