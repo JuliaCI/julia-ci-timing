@@ -340,7 +340,7 @@ const ROUTES = [
               Render.commit_list(db; before=instant(p, "before"), limit=limit == 0 ? 100 : min(limit, 500))
           end),
     Route("commit/<ref>", [],
-          "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches.",
+          "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches. A PR number with no master commit (an open pull request, say) returns no matches and, under pr, what is recorded for the pull request: its GitHub listing, its TTFX comparison (an entry of ttfx/prs, with the metrics) and its size measurement (as sizes/pr/<number>), each null when missing; pr is null when there is none.",
           (db, a, _) -> begin
               ref = lowercase(a[1])
               occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))

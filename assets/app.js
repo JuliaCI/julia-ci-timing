@@ -13297,7 +13297,7 @@ function ttfxPrStackBadge(p) {
 
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
 // stacked one it adds the estimate of the whole stack against master.
-function ttfxPrMarkdown(p) {
+function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
   const blocks = (x) => x.geomeans.map(ttfxRatioPct).join(", ");
   const st = p.stack;
   const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `\`${st.base_ref}\``) : "master";
@@ -13320,7 +13320,7 @@ function ttfxPrMarkdown(p) {
   const head = ["suite geomean", st ? `this PR vs ${parent}` : "change per block"];
   if (chained) head.push("stack vs master (est.)");
   lines.push("", `| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`);
-  for (const m of ttfxPrs.metrics) {
+  for (const m of metrics) {
     const on = p.suite[m];
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];
@@ -13358,9 +13358,13 @@ function copyToClipboard(button, text) {
   );
 }
 
+// The button is in the TTFX tab's popup or on the Commit page, which has its own copy
 function copyTtfxPrSummary(button) {
-  const p = ttfxPrs && ttfxPrs.prs.find((x) => x.pr === Number(button.dataset.copyPr));
-  if (p) copyToClipboard(button, ttfxPrMarkdown(p));
+  const n = Number(button.dataset.copyPr);
+  const p = ttfxPrs?.prs?.find((x) => x.pr === n);
+  if (p) return copyToClipboard(button, ttfxPrMarkdown(p));
+  const c = commitResult?.data?.pr?.ttfx;
+  if (c && c.pr.pr === n) copyToClipboard(button, ttfxPrMarkdown(c.pr, c.metrics));
 }
 
 // Captured so the click does not also reach the row, which opens the popup
@@ -13380,6 +13384,10 @@ document.addEventListener(
 // every metric (and the stack's estimate against master), then the tasks
 // with a robust change
 function showTtfxPrPopup(p) {
+  openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html: ttfxPrDetailsHtml(p, ttfxPrs.metrics), wide: true, key: `ttfx-pr-${p.pr}` });
+}
+
+function ttfxPrDetailsHtml(p, metrics) {
   const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "–");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
@@ -13417,7 +13425,7 @@ function showTtfxPrPopup(p) {
   html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
   if (chained) html += '<th class="num">Stack vs master (est.)</th>';
   html += "</tr></thead><tbody>";
-  for (const m of ttfxPrs.metrics) {
+  for (const m of metrics) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(on && on.verdict, off && off.verdict);
@@ -13433,16 +13441,16 @@ function showTtfxPrPopup(p) {
   const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
   if (changed.length) {
     html += `<table class="ttfx-popup-table"><thead><tr><th>Task with a robust change</th>`;
-    html += ttfxPrs.metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+    html += metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
     html += "</tr></thead><tbody>";
     for (const t of changed) {
       html += `<tr><th>${escapeHtml(t.name)}</th>`;
       if (t.note) {
         // A task that fails on one side has no ratios, only the failure
-        html += `<td class="ttfx-up ttfx-popup-task-note" colspan="${ttfxPrs.metrics.length}" title="${escapeHtml(t.note)}">${escapeHtml(t.note)}</td></tr>`;
+        html += `<td class="ttfx-up ttfx-popup-task-note" colspan="${metrics.length}" title="${escapeHtml(t.note)}">${escapeHtml(t.note)}</td></tr>`;
         continue;
       }
-      for (const m of ttfxPrs.metrics) {
+      for (const m of metrics) {
         const r = t.metrics[m];
         const cls = t.regressions.includes(m) ? "ttfx-up" : t.improvements.includes(m) ? "ttfx-down" : "";
         html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(ttfxRatioPct).join(", ") : "–"}${
@@ -13455,8 +13463,7 @@ function showTtfxPrPopup(p) {
   } else {
     html += '<div class="ttfx-popup-muted ttfx-popup-hint">No task has a robust change.</div>';
   }
-
-  openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html, wide: true, key: `ttfx-pr-${p.pr}` });
+  return html;
 }
 
 // Hovering a stacked pull request's row lights up the rows of the ones below it,
@@ -14666,19 +14673,7 @@ function sizesPrBaseHtml(p) {
 async function showSizesPrPopup(n) {
   const p = (sizesPrs?.prs || []).find((q) => q.number === n);
   if (!p) return;
-  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
-  let html = '<div class="ttfx-popup-actions">';
-  html += `<a class="btn" href="${githubPrURL(n)}" target="_blank" rel="noopener noreferrer">GitHub PR #${n}</a>`;
-  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite build</a>`;
-  html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener noreferrer" title="The pull request's commits since its merge-base">Commits</a>`;
-  html += "</div>";
-  html += row("Title", escapeHtml(p.title));
-  html += row("Author", escapeHtml(p.author));
-  html += row("Build", `#${p.build}, ${timeHtml(p.build_created_at)}, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
-  html += row("Merge-base", `${commitShaLink(p.merge_base)} ${githubCommitLink(p.merge_base)}`);
-
-  html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
-  if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
+  let html = sizesPrDetailsHtml(p);
   html += '<div id="sizes-popup-files" class="ttfx-popup-muted ttfx-popup-hint">Loading...</div>';
   openDetailPopup({ title: `Size of #${n}`, html, key: `sizes-pr-${n}` });
   let d;
@@ -14693,7 +14688,31 @@ async function showSizesPrPopup(n) {
     el.textContent = "Could not load the measurement.";
     return;
   }
-  el.outerHTML = sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + (d.base ? sizesFilesHtml(d.files) : "");
+  el.outerHTML = sizesPrDiffHtml(d);
+}
+
+// A sizes/pr entry's links and what was measured, without the metrics
+function sizesPrDetailsHtml(p) {
+  const n = p.number;
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+  let html = '<div class="ttfx-popup-actions">';
+  html += `<a class="btn" href="${githubPrURL(n)}" target="_blank" rel="noopener noreferrer">GitHub PR #${n}</a>`;
+  if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite build</a>`;
+  html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener noreferrer" title="The pull request's commits since its merge-base">Commits</a>`;
+  html += "</div>";
+  html += row("Title", escapeHtml(p.title));
+  html += row("Author", escapeHtml(p.author));
+  html += row("Build", `#${p.build}, ${timeHtml(p.build_created_at)}, of <code>${escapeHtml(p.head.commit.slice(0, 10))}</code> (${escapeHtml(p.head.version)})`);
+  html += row("Merge-base", `${commitShaLink(p.merge_base)} ${githubCommitLink(p.merge_base)}`);
+
+  html += row("Merge-base version", p.base ? escapeHtml(p.base.version) : "");
+  if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
+  return html;
+}
+
+// The metrics and changed files of a sizes/pr answer
+function sizesPrDiffHtml(d) {
+  return sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + (d.base ? sizesFilesHtml(d.files) : "");
 }
 
 // The metrics of a diff (metric => [value, value before]) as the popup's table
@@ -16494,7 +16513,8 @@ async function renderCommitView() {
   try {
     let data = await apiGet(`commit/${ref}`);
     let pr = null;
-    if (/^\d+$/.test(ref) && !data.commit && !data.matches.length) {
+    // An open pull request the server knows needs no GitHub lookup
+    if (/^\d+$/.test(ref) && !data.commit && !data.matches.length && (!data.pr || data.pr.github?.merged_at)) {
       pr = await githubPullRequest(ref).catch(() => null);
       if (pr?.merged && pr.base === "master" && pr.sha) data = await apiGet(`commit/${pr.sha}`);
     }
@@ -16606,6 +16626,7 @@ function commitIntroHtml() {
       <li>the Nanosoldier benchmark and PkgEval daily reports that first include it, with their regressions and newly broken packages;</li>
       <li>coverage, when it was measured on this commit.</li>
     </ul>
+    <p>For a pull request that is still open, it shows the TTFX and size comparisons its own CI builds made against master.</p>
     <p>A GitHub commit or pull request URL works too.</p>
   </div>`;
 }
@@ -16651,7 +16672,7 @@ function drawCommit({ ref, data, pr }) {
   const body = document.getElementById("commit-body");
   markCommitListSelection(data.commit?.prefix);
   if (!data.commit) {
-    body.innerHTML = commitMatchesHtml(ref, data, pr);
+    body.innerHTML = data.pr ? commitPrHtml(data.pr, pr) : commitMatchesHtml(ref, data, pr);
     return;
   }
   body.innerHTML = [
@@ -16661,6 +16682,47 @@ function drawCommit({ ref, data, pr }) {
     commitBenchHtml(data),
     commitPkgevalHtml(data),
   ].join("");
+}
+
+// A pull request without a master commit here: what its GitHub listing, TTFX
+// job and size measurement recorded, as the TTFX and Size tabs show it
+function commitPrHtml(d, gh) {
+  const n = d.number;
+  const g = d.github;
+  const title = g?.title || d.ttfx?.pr.title || d.sizes?.title || gh?.title || "";
+  const author = g?.author || d.ttfx?.pr.author || d.sizes?.author || "";
+  const merged = g?.merged_at || gh?.merged_at;
+  const closed = g?.closed_at || gh?.closed_at;
+  const state = merged
+    ? `merged ${timeHtml(merged)}${gh && gh.base !== "master" ? ` into <code>${escapeHtml(gh.base)}</code>` : ""}`
+    : closed ? `closed ${timeHtml(closed)}` : "open";
+  const meta = [
+    overviewExtLink(githubPrURL(n), `#${n}`),
+    author ? escapeHtml(author) : "",
+    g?.created_at ? `opened ${timeHtml(g.created_at)}` : "",
+    state,
+  ].filter(Boolean);
+  const note = merged
+    ? "Its merge commit has no master build here."
+    : "It is not merged, so only the comparisons its own CI builds made against master are shown.";
+  const head = `<section class="commit-card commit-head">
+    <h2 class="commit-title">${escapeHtml(title)}</h2>
+    <div class="commit-meta">${meta.join(" · ")}</div>
+    <p class="commit-line text-muted">${note}</p>
+  </section>`;
+  const t = d.ttfx;
+  const ttfx = t
+    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics)}</div>`, {
+        links: overviewTabLink("ci-ttfx", "TTFX tab"),
+      })
+    : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>');
+  const z = d.sizes;
+  const sizes = z
+    ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z)}${sizesPrDiffHtml(z)}</div>`, {
+        links: overviewTabLink("ci-sizes", "Size tab"),
+      })
+    : commitCard("Size", '<p class="commit-line text-muted">No size measurement recorded for this pull request.</p>');
+  return head + ttfx + sizes;
 }
 
 function commitMatchesHtml(ref, data, pr) {

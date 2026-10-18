@@ -1060,11 +1060,32 @@ function commit_list(db; before="", limit=100)
     return OrderedDict("before" => before, "commits" => out)
 end
 
+# What is recorded for a pull request that has no master commit here, usually because it
+# is still open: its GitHub listing, and its TTFX and size comparisons with master.
+# Nothing when none of them has it.
+function commit_pr(db, n)
+    gh = rows(db, "SELECT title, author, labels, created_at, closed_at, merged_at FROM gh_items WHERE number = ? AND kind = 'pr'", (n,))
+    github = isempty(gh) ? nothing :
+        OrderedDict("title" => String(gh[1].title), "author" => js(gh[1].author),
+                    "labels" => String(gh[1].labels), "created_at" => String(gh[1].created_at),
+                    "closed_at" => js(gh[1].closed_at), "merged_at" => js(gh[1].merged_at))
+    ttfx = nothing
+    if !isempty(rows(db, "SELECT 1 FROM ttfx_prs WHERE pr_number = ?", (n,)))
+        all_prs = ttfx_prs(db)
+        ttfx = OrderedDict("metrics" => all_prs["metrics"], "pr" => only(p for p in all_prs["prs"] if p["pr"] == n))
+    end
+    sizes = size_pr(db, string(n))
+    github === nothing && ttfx === nothing && sizes === nothing && return nothing
+    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes)
+end
+
 function commit(db, ref)
     candidates = commit_candidates(db, ref)
     if length(candidates) != 1
         matches = [commit_summary(db, p, s) for (p, s) in Iterators.take(candidates, COMMIT_LIST_LIMIT)]
-        return OrderedDict("query" => ref, "matches" => matches)
+        out = OrderedDict{String,Any}("query" => ref, "matches" => matches)
+        isempty(matches) && occursin(r"^\d+$", ref) && (out["pr"] = commit_pr(db, parse(Int, ref)))
+        return out
     end
     prefix, sha = only(candidates)
     info = commit_summary(db, prefix, sha)
