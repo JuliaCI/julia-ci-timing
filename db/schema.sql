@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS ttfx_jobs (
     pipeline         TEXT NOT NULL DEFAULT 'julia-ci',
     build            INTEGER NOT NULL,
     triplet          TEXT NOT NULL,
-    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', 'release' for the weekly run of the newest stable release, 'lts' for that of the LTS, 'branch_nightly' for that of the next release's branch nightly, or 'opt' for the nightly optimized build
+    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', 'release' for the weekly run of the newest stable release, 'lts' for that of the LTS, 'branch_nightly' for that of the next release's branch nightly, 'release_branch' for the job of a release branch's own build, or 'opt' for the nightly optimized build
     state            TEXT NOT NULL,
     build_created_at TEXT NOT NULL,          -- seconds; minutes in rows written before 2026-10-13
     commit_sha       TEXT NOT NULL DEFAULT '',

@@ -639,6 +639,14 @@ function ttfx(db; since="")
     releases = jobs("release")
     lts = jobs("lts")
     branch_nightly = jobs("branch_nightly")
+    # The release branch's own builds join its weekly nightly runs, once the branch has
+    # commits of its own. Only the branch ahead of the latest release counts: a backport
+    # to an older release branch is not the next release.
+    latest = isempty(releases) ? nothing : tryparse(VersionNumber, releases[end]["version"])
+    ahead(b) = (v = tryparse(VersionNumber, b["version"]); v !== nothing && latest !== nothing &&
+                (v.major, v.minor) > (latest.major, latest.minor))
+    branch_builds = filter(ahead, jobs("release_branch"))
+    isempty(branch_builds) || sort!(append!(branch_nightly, branch_builds); by=b -> (b["date"], b["build"]))
     opt = jobs("opt")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
@@ -1321,9 +1329,14 @@ const SIZE_PR_QUERY = "SELECT p.*, h.id AS head_id, h.version AS head_version, h
     "LEFT JOIN size_builds b ON b.source = 'ci' AND b.triplet = ?1 AND b.commit_sha = p.base_commit " *
     "LEFT JOIN size_open_prs o ON o.pr_number = p.pr_number"
 
-# The open pull request whose branch each branch is, by branch
-size_open_heads(db) = Dict(String(r.head_ref) => Int(r.pr_number)
-                           for r in rows(db, "SELECT pr_number, head_ref FROM size_open_prs WHERE head_ref != ''"))
+# The open pull request whose branch each branch is, by branch. The TTFX listing fills in
+# branches the sizes' listing has not recorded yet; it lists the open pull requests only
+# every two hours.
+function size_open_heads(db)
+    sql = "SELECT pr_number, head_ref FROM ttfx_prs WHERE head_ref != '' AND pr_number IN (SELECT pr_number FROM size_open_prs) " *
+          "UNION ALL SELECT pr_number, head_ref FROM size_open_prs WHERE head_ref != ''"
+    return Dict(String(r.head_ref) => Int(r.pr_number) for r in rows(db, sql))
+end
 
 # A stacked pull request's place: the branch it targets, the open pull request of that
 # branch (below), and that one's measured build when there is one. Its own change is its

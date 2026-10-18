@@ -16,7 +16,9 @@
 # weekly job does the same for the newest patch release of the LTS series (kind 'lts'),
 # and a third for the nightly of the next release's branch (kind 'branch_nightly').
 # The nightly schedule's optimized build (PGO and ThinLTO, JULIA_CI_BUILD_MODE=opt) is
-# measured too; its rows have kind 'opt'.
+# measured too; its rows have kind 'opt'. Once a release branch has commits of its own,
+# julia-ci measures each of its builds as it does master's; those rows have kind
+# 'release_branch'.
 # Jobs whose driver logs invalidations add, per task, how many MethodInstances the task
 # script invalidated, and the top causes (ttfx_invalidation_causes). Separately, every
 # job's ttfx/trace-compile.tar.gz is parsed for the methods compiled again because an
@@ -35,7 +37,6 @@ using .Store
 using SQLite, DBInterface
 
 const CI_PIPELINE = "julia-ci"
-const BRANCH = "master"
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml),
 # ":macos: TTFX release <triplet>", ":macos: TTFX lts <triplet>" and
 # ":macos: TTFX branch nightly <triplet>" for the weekly references, or
@@ -131,6 +132,8 @@ function build_row(build, job, results, meta)
     # An optimized build's triplet ends in `opt` (aarch64-apple-darwinopt), whatever the label says
     kind = m === nothing ? "master" : m.captures[1] !== nothing ? replace(String(m.captures[1]), ' ' => '_') :
            endswith(triplet, "opt") ? "opt" : "master"
+    # The regular TTFX job of a release branch's own build
+    kind == "master" && String(something(get(build, :branch, "master"), "master")) != "master" && (kind = "release_branch")
     raw_message = something(get(build, :message, ""), "")
     message = first(split(String(raw_message), '\n'))
     message = length(message) > 80 ? first(message, 77) * "..." : message
@@ -205,12 +208,15 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
     known_builds = sort!(unique(parse(Int, first(split(k, ':'))) for k in known); rev=true)
     min_known = isempty(known_builds) ? typemax(Int) : known_builds[min(50, end)]
     seen_any = false
-    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds", ["branch" => BRANCH]; max_pages) do builds, page
+    # Every branch: master, and the release branches once they have commits of their own
+    buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$CI_PIPELINE/builds"; max_pages) do builds, page
         new_in_page = 0
         ttfx_in_page = 0
         oldest = typemax(Int)
         for build in builds
             oldest = min(oldest, build.number)
+            branch = String(something(get(build, :branch, "master"), "master"))
+            (branch == "master" || startswith(branch, "release-")) || continue
             for job in get(build, :jobs, [])
                 get(job, :type, nothing) == "script" || continue
                 name = get(job, :name, nothing)

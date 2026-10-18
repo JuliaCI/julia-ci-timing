@@ -92,7 +92,9 @@ separate series and computes nothing else from it. `lts` is the same for the
 weekly `TTFX lts` job, which measures the newest patch release of the LTS series,
 and `branch_nightly` for the weekly `TTFX branch nightly` job, which measures the
 nightly of the next release's branch (its `version` is the nightly's). A week
-when no release branch is ahead of the latest release has no entry.
+when no release branch is ahead of the latest release has no entry. Once that
+branch has commits of its own, julia-ci measures each of its builds too; those
+jobs have kind `release_branch` in the database and join `branch_nightly`.
 `opt` is a third array of the same shape for the `TTFX opt` job of the daily
 schedule, which measures the nightly optimized build (PGO and ThinLTO) against
 the regular master build of the same commit, interleaved in the same job. Each
