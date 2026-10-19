@@ -6374,6 +6374,7 @@ async function refreshData() {
     sourceTimes = status.generated_at || {};
     for (const source of changed) for (const view of SOURCE_VIEWS[source] || []) staleViews.add(view);
     if (changed.length > 0) overviewLoadedAt = 0;
+    if (commitResult && (changed.length > 0 || timingMoved)) commitResult.stale = true;
     if (sourceTimes.timing) checkStaleData(sourceTimes.timing);
     setUpdatedLabels();
     if (timingMoved) {
@@ -6383,6 +6384,7 @@ async function refreshData() {
     }
     reloadStaleView(activeTab);
     if (changed.length > 0 && activeTab === "overview") renderOverview();
+    if (commitResult?.stale && activeTab === "commit") renderCommitView();
   } catch (err) {
     if (err.name !== "AbortError") console.warn("Data refresh failed:", err);
   }
@@ -16615,11 +16617,13 @@ async function renderCommitView() {
     body.innerHTML = `<p class="commit-message">Enter a commit SHA (at least 7 characters) or a PR number.</p>`;
     return;
   }
-  if (commitResult?.ref === ref) {
+  // A stale result is still on screen, so it stays there while the new one loads
+  const refreshing = commitResult?.ref === ref && commitResult.stale;
+  if (commitResult?.ref === ref && !refreshing) {
     drawCommit(commitResult);
     return;
   }
-  body.innerHTML = '<div class="loading">Looking up...</div>';
+  if (!refreshing) body.innerHTML = '<div class="loading">Looking up...</div>';
   let result;
   try {
     let data = await apiGet(`commit/${ref}`);
@@ -16631,7 +16635,7 @@ async function renderCommitView() {
     }
     result = { ref, data, pr };
   } catch (err) {
-    if (ref === (commitRef || commitList?.commits[0]?.commit) && activeTab === "commit") {
+    if (!refreshing && ref === (commitRef || commitList?.commits[0]?.commit) && activeTab === "commit") {
       body.innerHTML = `<p class="commit-message">Lookup failed: ${escapeHtml(err.message)}</p>`;
     }
     return;
