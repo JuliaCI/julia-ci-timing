@@ -685,8 +685,11 @@ th.sortable {
   cursor: pointer;
   user-select: none;
 }
+/* The tint goes over the header's own background, not in place of it: the
+   headers are sticky and the tint is translucent, so the rows would show
+   through */
 th.sortable:hover {
-  background: var(--color-neutral-muted);
+  background-image: linear-gradient(var(--color-neutral-muted), var(--color-neutral-muted));
   color: var(--color-fg-default);
 }
 th.sorted {
@@ -2862,9 +2865,6 @@ th.sorted .sort-indicator {
 }
 .ttfx-stats th.sortable {
   cursor: pointer;
-}
-.ttfx-stats th.sortable:hover {
-  background: var(--color-neutral-muted);
 }
 .ttfx-stats td {
   font-family:

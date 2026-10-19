@@ -156,6 +156,12 @@ function sortableHeaderRow(cols, sort) {
   return `<tr>${cells.join("")}</tr>`;
 }
 
+// A click anywhere in a sortable header, its padding too, is one on its button
+document.addEventListener("click", (e) => {
+  const th = e.target.closest?.("th.sortable");
+  if (th && !e.target.closest("button")) th.querySelector("button[data-sort]")?.click();
+});
+
 // Clicks and keys on the header buttons call `onSort(key)`
 function bindSortHeaders(thead, onSort) {
   thead.querySelectorAll("button[data-sort]").forEach((btn) => {
@@ -170,9 +176,12 @@ function nextSort(sort, col, ascFirst = () => false) {
 }
 
 // Sorts rows on `col` with missing values last in either direction, then on
-// `tiebreak` ascending
+// `tiebreak` ascending; strings in natural order (1.9 before 1.10), but commit
+// hashes as they are
+const isHash = (v) => /^[0-9a-f]{7,40}$/.test(v);
 function sortRows(rows, { col, asc }, tiebreak) {
-  const cmp = (va, vb) => (typeof va === "string" ? va.localeCompare(vb) : va - vb);
+  const cmp = (va, vb) =>
+    typeof va === "string" ? va.localeCompare(vb, undefined, { numeric: !(isHash(va) && isHash(vb)) }) : va - vb;
   return rows.sort((a, b) => {
     const va = a[col];
     const vb = b[col];
@@ -182,6 +191,47 @@ function sortRows(rows, { col, asc }, tiebreak) {
     return c || (tiebreak ? cmp(a[tiebreak] ?? "", b[tiebreak] ?? "") : 0);
   });
 }
+
+// A table drawn once as a string sorts in place: its header comes from
+// `inPlaceHeaderRow` and its body cells sort on their `data-v`, a number, or
+// else their text, with "" and "—" as missing. A column sorts as text if any
+// cell in it is. Rows marked data-pin stay last.
+function inPlaceHeaderRow(cols) {
+  return sortableHeaderRow(
+    cols.map((c, i) => [i, ...c]),
+    { col: null },
+  );
+}
+
+const sortCellValue = (td) => {
+  if (td?.dataset.v != null) return Number(td.dataset.v);
+  const t = td ? td.textContent.trim() : "";
+  return t === "" || t === "—" ? null : /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : t;
+};
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("table.in-place-sort button[data-sort]");
+  if (!btn) return;
+  const table = btn.closest("table");
+  const col = Number(btn.dataset.sort);
+  const tbody = table.tBodies[0];
+  const all = [...tbody.rows];
+  const rows = all.filter((tr) => !tr.hasAttribute("data-pin")).map((tr, i) => ({ tr, i, v: sortCellValue(tr.cells[col]) }));
+  // Text starts ascending, numbers descending
+  const text = rows.some((r) => typeof r.v === "string");
+  if (text) for (const r of rows) if (typeof r.v === "number") r.v = String(r.v);
+  const prev = table._sort || { col: null };
+  const sort = (table._sort = nextSort(prev, col, () => text));
+  sortRows(rows, { col: "v", asc: sort.asc }, "i");
+  tbody.append(...rows.map((r) => r.tr), ...all.filter((tr) => tr.hasAttribute("data-pin")));
+  table.querySelectorAll("thead th.sortable").forEach((th) => {
+    const on = th.querySelector("button").dataset.sort === String(col);
+    th.classList.toggle("sorted", on);
+    if (on) th.setAttribute("aria-sort", sort.asc ? "ascending" : "descending");
+    else th.removeAttribute("aria-sort");
+    th.querySelector(".sort-indicator").textContent = on && !sort.asc ? "▼" : "▲";
+  });
+});
 
 // A clickable row reached with Tab opens with Enter, as a click would
 document.addEventListener("keydown", (e) => {
@@ -1069,6 +1119,10 @@ function summarizeAgents(agents, connected, latestMs) {
   return { rows, perQueue, missing, quiet };
 }
 
+// Within each queue's section: flagged rows first, then by name, until a header
+// is clicked
+let agentsSort = { col: "status", asc: true };
+
 async function renderAgentsSection() {
   const section = document.getElementById("agents-section");
   if (!section) return;
@@ -1123,19 +1177,51 @@ async function renderAgentsSection() {
 
   // Live table, one section per queue: the Julia cluster's queues first, then
   // the rest (yggdrasil, the GPU queues, ...) by name, since a queue is what
-  // ties agents to a pipeline. Flagged rows lead within a section.
+  // ties agents to a pipeline. The rows sort within a section.
   const statusOrder = { missing: 0, lost: 0, quiet: 0, stopping: 1, running: 2, connected: 2, idle: 3 };
   const queueRank = (q) => {
     const i = AGENTS_JULIA_QUEUE_ORDER.indexOf(q);
     return i < 0 ? AGENTS_JULIA_QUEUE_ORDER.length : i;
   };
   const rawQueue = (row) => row.rec.queue || "(no queue)";
+  for (const row of rows) {
+    const { name, rec, status, lastSeenMs } = row;
+    const lastSeen = isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString());
+    if (status === "connected") row.statusText = "connected";
+    else if (status === "running") row.statusText = `${row.running} running (${row.slots} slot${row.slots === 1 ? "" : "s"} seen)`;
+    else if (status === "idle") row.statusText = `idle, last job seen ${lastSeen}`;
+    else if (status === "quiet") row.statusText = `no job seen since ${lastSeen}`;
+    else row.statusText = `${status}, last seen ${lastSeen}`;
+    if (row.jobs) {
+      // Identical jobs on several slots collapse to one entry with a count
+      const counts = new Map();
+      for (const j of row.jobs) counts.set(j, (counts.get(j) || 0) + 1);
+      row.jobText = [...counts].map(([j, n]) => (n > 1 ? `${j} ×${n}` : j)).join("; ");
+    } else {
+      row.jobText = agentJobText(rec.job);
+    }
+    row.sort = {
+      name,
+      host: rec.hostname || null,
+      queue: rec.queue || null,
+      os: [rec.os, rec.arch].filter(Boolean).join(" / ") || null,
+      status: statusOrder[status],
+      job: row.jobText || null,
+      since: status === "connected" && rec.connected_at ? rec.connected_at : null,
+    };
+  }
+  // Sorted on the column, then stably into the sections
+  const sortKeys = sortRows(
+    rows.map((row) => row.sort),
+    agentsSort,
+    "name",
+  );
+  const order = new Map(sortKeys.map((k, i) => [k, i]));
   rows.sort(
     (a, b) =>
       queueRank(rawQueue(a)) - queueRank(rawQueue(b)) ||
       rawQueue(a).localeCompare(rawQueue(b)) ||
-      statusOrder[a.status] - statusOrder[b.status] ||
-      a.name.localeCompare(b.name),
+      order.get(a.sort) - order.get(b.sort),
   );
   // Pipelines with a job on each queue right now, for the section headers
   const queuePipelines = new Map();
@@ -1149,33 +1235,28 @@ async function renderAgentsSection() {
       queuePipelines.get(q).add(rec.job.pipeline);
     }
   }
-  const parts = ['<table class="agents-table"><thead><tr>'];
-  parts.push(
-    '<th>Agent</th><th class="col-secondary">Host</th><th class="col-secondary">Queue</th><th class="col-secondary">OS / arch</th><th>Status</th><th>Current job</th><th class="col-secondary">Since</th>',
-  );
-  parts.push("</tr></thead><tbody>");
+  const parts = [
+    '<table class="agents-table"><thead>',
+    sortableHeaderRow(
+      [
+        ["name", "Agent"],
+        ["host", "Host", "col-secondary"],
+        ["queue", "Queue", "col-secondary"],
+        ["os", "OS / arch", "col-secondary"],
+        ["status", "Status"],
+        ["job", "Current job"],
+        ["since", "Since", "col-secondary"],
+      ],
+      agentsSort,
+    ),
+    "</thead><tbody>",
+  ];
   const filtering = workersFilter !== "";
   let shown = 0;
   let openQueue = null;
   for (const row of rows) {
-    const { name, rec, status, lastSeenMs } = row;
+    const { name, rec, status, statusText, jobText } = row;
     const flaggedRow = status === "missing" || status === "lost" || status === "quiet";
-    const lastSeen = isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString());
-    let statusText;
-    if (status === "connected") statusText = "connected";
-    else if (status === "running") statusText = `${row.running} running (${row.slots} slot${row.slots === 1 ? "" : "s"} seen)`;
-    else if (status === "idle") statusText = `idle, last job seen ${lastSeen}`;
-    else if (status === "quiet") statusText = `no job seen since ${lastSeen}`;
-    else statusText = `${status}, last seen ${lastSeen}`;
-    let jobText;
-    if (row.jobs) {
-      // Identical jobs on several slots collapse to one entry with a count
-      const counts = new Map();
-      for (const j of row.jobs) counts.set(j, (counts.get(j) || 0) + 1);
-      jobText = [...counts].map(([j, n]) => (n > 1 ? `${j} ×${n}` : j)).join("; ");
-    } else {
-      jobText = agentJobText(rec.job);
-    }
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
     if (filtering && !matchesSearchWords(`${name} ${rec.hostname || ""}`, workersFilter)) continue;
@@ -1206,6 +1287,12 @@ async function renderAgentsSection() {
   }
   parts.push("</tbody></table>");
   tableEl.innerHTML = parts.join("");
+  bindSortHeaders(tableEl.querySelector("thead"), (col) => {
+    // Every column starts ascending: status with the flagged rows, since with
+    // the longest connected
+    agentsSort = nextSort(agentsSort, col, () => true);
+    renderAgentsSection();
+  });
   if (filtering) summaryEl.innerHTML += `, <strong>${shown}</strong> of ${rows.length} shown`;
 }
 
@@ -1577,6 +1664,9 @@ function renderBalanceCharts(d) {
   bindDatasetToggles(container, (btn) => balanceCharts[Number(btn.dataset.chart)]);
 }
 
+// Busiest hosts first until a header is clicked
+let workersHostsSort = { col: "runs", asc: false };
+
 function renderWorkerPresence({ charts = true } = {}) {
   const container = document.getElementById("workers-grid");
   if (!container) return;
@@ -1654,10 +1744,11 @@ function renderWorkerPresence({ charts = true } = {}) {
   else cellW = 16;
   const cellH = 14;
 
-  // Busiest hosts first
-  const agents = [...agentDays.keys()]
-    .filter((name) => matchesSearchWords(name, workersFilter))
-    .sort((a, b) => (agentTotal.get(b) || 0) - (agentTotal.get(a) || 0) || a.localeCompare(b));
+  const agents = sortRows(
+    [...agentDays.keys()].filter((name) => matchesSearchWords(name, workersFilter)).map((name) => ({ name, runs: agentTotal.get(name) || 0 })),
+    workersHostsSort,
+    "name",
+  ).map((r) => r.name);
   if (agents.length === 0) {
     container.innerHTML = `<div class="workers-empty">No hosts match "${escapeHtml(workersFilter)}"</div>`;
     return;
@@ -1679,17 +1770,21 @@ function renderWorkerPresence({ charts = true } = {}) {
   parts.push(
     `<table class="workers-table" style="--workers-cell-w:${cellW}px">`,
   );
-  parts.push("<thead><tr>");
-  parts.push("<th>Host</th><th>Runs</th>");
+  const months = monthLabels
+    .map((ml) => `<span class="workers-month" style="left:${ml.i * cellW}px">${ml.label}</span>`)
+    .join("");
   parts.push(
-    `<th class="workers-cells-cell"><div class="workers-month-row" style="width:${stripWidth}px">`,
+    "<thead>",
+    sortableHeaderRow(
+      [
+        ["name", "Host"],
+        ["runs", "Runs"],
+        [null, `<div class="workers-month-row" style="width:${stripWidth}px">${months}</div>`, "workers-cells-cell"],
+      ],
+      workersHostsSort,
+    ),
+    "</thead><tbody>",
   );
-  for (const ml of monthLabels) {
-    parts.push(
-      `<span class="workers-month" style="left:${ml.i * cellW}px">${ml.label}</span>`,
-    );
-  }
-  parts.push("</div></th></tr></thead><tbody>");
 
   for (const agent of agents) {
     const m = agentDays.get(agent);
@@ -1719,6 +1814,10 @@ function renderWorkerPresence({ charts = true } = {}) {
   }
   parts.push("</tbody></table>");
   container.innerHTML = parts.join("");
+  bindSortHeaders(container.querySelector("thead"), (col) => {
+    workersHostsSort = nextSort(workersHostsSort, col, (c) => c === "name");
+    renderWorkerPresence({ charts: false });
+  });
 }
 
 // === Builds and the per-run palette ===
@@ -8172,18 +8271,27 @@ function updateBenchTable() {
 }
 
 // Nanosoldier's own regressions and improvements (api/benchmarks/verdicts)
-// for the reports in the selected range, newest first
+// for the reports in the selected range, newest first until a header is clicked
+let benchVerdictsSort = { col: "date", asc: false };
+
 function renderBenchVerdictsTable() {
   const thead = document.getElementById("bench-stats-thead");
   const tbody = document.getElementById("bench-stats-tbody");
-  thead.innerHTML = `<tr>
-                <th>Date</th>
-                <th>Group</th>
-                <th>Benchmark</th>
-                <th>Verdict</th>
-                <th class="bench-time-header" title="Time against the baseline report; the tolerance is Nanosoldier's threshold">Time ratio</th>
-                <th class="bench-time-header" title="Memory against the baseline report">Memory ratio</th>
-            </tr>`;
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Date"],
+      ["group", "Group"],
+      ["name", "Benchmark"],
+      ["verdict", "Verdict"],
+      ["time_ratio", "Time ratio", "bench-time-header", "Time against the baseline report; the tolerance is Nanosoldier's threshold"],
+      ["memory_ratio", "Memory ratio", "bench-time-header", "Memory against the baseline report"],
+    ],
+    benchVerdictsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    benchVerdictsSort = nextSort(benchVerdictsSort, col, (c) => ["group", "name", "verdict"].includes(c));
+    renderBenchVerdictsTable();
+  });
   const since = apiSince(getBenchCutoff());
   const covered = benchVerdicts && (benchVerdicts.since === since || benchVerdicts.since === "" || (since !== "" && benchVerdicts.since < since));
   if (!covered) {
@@ -8205,8 +8313,10 @@ function renderBenchVerdictsTable() {
     return;
   }
   const cutoff = getBenchCutoff();
-  const rows = benchVerdicts.verdicts.filter(
-    (v) => benchSelectedGroups.has(v.group) && (!cutoff || new Date(v.date) >= cutoff),
+  const rows = sortRows(
+    benchVerdicts.verdicts.filter((v) => benchSelectedGroups.has(v.group) && (!cutoff || new Date(v.date) >= cutoff)),
+    benchVerdictsSort,
+    "name",
   );
   if (rows.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6">${benchVerdicts.failed ? "Failed to load verdicts." : "No regressions or improvements flagged for the selected groups and range" + (benchVerdicts.verdicts.length === 0 ? " (verdicts exist for reports parsed from their tarball)" : "") + "."}</td></tr>`;
@@ -10210,6 +10320,9 @@ async function setPkgevalPackage(name) {
 
 const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
 
+// The package's changes, newest first until a header is clicked
+let pkgevalPackageSort = { col: "date", asc: false };
+
 function renderPkgevalPackage() {
   const panel = document.getElementById("pkgeval-package-view");
   if (!panel || !pkgevalPackageData) return;
@@ -10239,9 +10352,18 @@ function renderPkgevalPackage() {
     prev = h;
   }
   changes.reverse();
-  const rows = changes
-    .slice(0, 200)
-    .map((h) => {
+  const keyed = changes.slice(0, 200).map((h, i) => ({
+    h,
+    i,
+    date: h.date,
+    julia: h.julia || null,
+    version: h.version || null,
+    status: h.status,
+    reason: h.reason || null,
+    duration_s: h.duration_s ?? null,
+  }));
+  const rows = sortRows(keyed, pkgevalPackageSort, "i")
+    .map(({ h }) => {
       const url = pkgevalReportUrl(h.date_path || h.date);
       return `<tr class="clickable" tabindex="0" data-url="${escapeHtml(url)}">
         <td>${escapeHtml(h.date)}</td>
@@ -10258,9 +10380,23 @@ function renderPkgevalPackage() {
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
     <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report.</p>
     <table>
-      <thead><tr><th>Date</th><th class="col-secondary">Julia</th><th>Version</th><th>Status</th><th>Reason</th><th class="num">Duration</th></tr></thead>
+      <thead>${sortableHeaderRow(
+        [
+          ["date", "Date"],
+          ["julia", "Julia", "col-secondary"],
+          ["version", "Version"],
+          ["status", "Status"],
+          ["reason", "Reason"],
+          ["duration_s", "Duration", "num"],
+        ],
+        pkgevalPackageSort,
+      )}</thead>
       <tbody>${rows}</tbody>
     </table>`;
+  bindSortHeaders(panel.querySelector("thead"), (col) => {
+    pkgevalPackageSort = nextSort(pkgevalPackageSort, col, (c) => ["status", "reason"].includes(c));
+    renderPkgevalPackage();
+  });
   panel.querySelectorAll("tr[data-url]").forEach((tr) => {
     tr.onclick = () => window.open(tr.dataset.url, "_blank", "noopener");
   });
@@ -13269,6 +13405,9 @@ function updateTtfxTable() {
   else renderTtfxBuildsTable();
 }
 
+// Newest first until a header is clicked
+let ttfxBuildsSort = { col: "date", asc: false };
+
 function renderTtfxBuildsTable() {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
@@ -13277,22 +13416,46 @@ function renderTtfxBuildsTable() {
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metricCols = Object.keys(TTFX_METRICS);
-  thead.innerHTML =
-    "<tr><th>Date</th><th>Commit</th><th class=\"col-secondary\">Version</th><th class=\"num\" title=\"Tasks measured / tasks run; failed tasks in the tooltip\">Tasks</th>" +
-    metricCols
-      .map(
-        (key) =>
-          `<th class="num" title="${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsGcOff(key) ? "; after it, muted, the same from the repeats with the GC off" : ""}">${ttfxMetricLabel(key)}</th>`,
-      )
-      .join("") +
-    '<th class="col-secondary">Message</th></tr>';
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Date"],
+      ["commit", "Commit"],
+      ["version", "Version", "col-secondary"],
+      ["tasks", "Tasks", "num", "Tasks measured / tasks run; failed tasks in the tooltip"],
+      ...metricCols.map((key) => [
+        key,
+        ttfxMetricLabel(key),
+        "num",
+        `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsGcOff(key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
+      ]),
+      ["message", "Message", "col-secondary"],
+    ],
+    ttfxBuildsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    ttfxBuildsSort = nextSort(ttfxBuildsSort, col, (c) => ["commit", "version", "message"].includes(c));
+    renderTtfxBuildsTable();
+  });
   if (!builds.length) {
     tbody.innerHTML = `<tr><td colspan="${metricCols.length + 5}">No data</td></tr>`;
     return;
   }
+  const rows = builds.map((b) => {
+    const r = {
+      b,
+      date: b.date,
+      commit: b.commit,
+      version: b.version || null,
+      tasks: b.tasks ? Object.keys(b.tasks).length : 0,
+      message: b.message || null,
+    };
+    for (const key of metricCols) r[key] = ttfxSuiteValue(b, common[key], key);
+    return r;
+  });
   let html = "";
-  for (const b of builds.slice().reverse()) {
-    const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
+  for (const r of sortRows(rows, ttfxBuildsSort, "date")) {
+    const b = r.b;
+    const nOk = r.tasks;
     const failed = b.failed ? Object.keys(b.failed) : [];
     const nRun = nOk + failed.length;
     const tasksTitle = failed.length
@@ -13306,7 +13469,7 @@ function renderTtfxBuildsTable() {
     html += `<td class="num ${stateClass}" title="${escapeHtml(tasksTitle)}">${nRun ? `${nOk}/${nRun}` : escapeHtml(b.state)}</td>`;
     for (const key of metricCols) {
       const off = ttfxShowsGcOff(key) ? ttfxSuiteValue(b, common[key], key, true) : null;
-      html += `<td class="num">${formatTtfxValue(ttfxSuiteValue(b, common[key], key), key)}${off != null ? ` <span class="col-secondary" title="GC off">${formatTtfxSeconds(off)}</span>` : ""}</td>`;
+      html += `<td class="num">${formatTtfxValue(r[key], key)}${off != null ? ` <span class="col-secondary" title="GC off">${formatTtfxSeconds(off)}</span>` : ""}</td>`;
     }
     const notes = ttfxAnnotationsFor(b);
     const noteBadge = notes.length
@@ -13688,22 +13851,42 @@ function renderTtfxPrsList() {
   });
 }
 
+// The server's ranking until a header is clicked. The changes sort worst first,
+// then best first.
+let ttfxPrsSort = { col: "rank", asc: true };
+
 function renderTtfxPrsTable() {
   if (PHONE_WIDTH.matches) return renderTtfxPrsList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   const metrics = ["precompile", "load", "run", "warm"];
-  thead.innerHTML =
-    '<tr><th class="num">#</th><th>Pull request</th><th class="col-secondary">Author</th>' +
-    '<th class="num" title="Estimated change in the total of precompile, load, run and warm, each weighted by its time on master (so precompile counts most), taking the block nearer no change. Rows are ranked by it.">Score</th>' +
-    metrics
-      .map(
-        (m) =>
-          `<th class="num" title="Suite geometric mean of head against base, per ABBA block, over every task. Coloured when the job judged the change robust${TTFX_METRICS[m].gcoffIndex != null ? " (with the GC on or off; the GC-off numbers are in the tooltip)" : ""}.">${ttfxMetricLabel(m)}</th>`,
-      )
-      .join("") +
-    '<th class="num" title="Tasks with a robust improvement / regression; the list is in the tooltip">Tasks</th>' +
-    '<th class="col-secondary">Measured</th><th></th></tr>';
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["rank", "#", "num"],
+      ["pr", "Pull request"],
+      ["author", "Author", "col-secondary"],
+      [
+        "score",
+        "Score",
+        "num",
+        "Estimated change in the total of precompile, load, run and warm, each weighted by its time on master (so precompile counts most), taking the block nearer no change. Rows are ranked by it.",
+      ],
+      ...metrics.map((m) => [
+        m,
+        ttfxMetricLabel(m),
+        "num",
+        `Suite geometric mean of head against base, per ABBA block, over every task. Coloured when the job judged the change robust${TTFX_METRICS[m].gcoffIndex != null ? " (with the GC on or off; the GC-off numbers are in the tooltip)" : ""}. Sorts on the geometric mean of the blocks.`,
+      ]),
+      ["tasks", "Tasks", "num", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
+      ["date", "Measured", "col-secondary"],
+      [null, ""],
+    ],
+    ttfxPrsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    ttfxPrsSort = nextSort(ttfxPrsSort, col, (c) => c === "rank" || c === "author");
+    renderTtfxPrsTable();
+  });
   const cols = 7 + metrics.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
@@ -13719,12 +13902,32 @@ function renderTtfxPrsTable() {
     return;
   }
   document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
+  const blocksMean = (s) => (s && s.geomeans.length ? Math.exp(s.geomeans.reduce((a, g) => a + Math.log(g), 0) / s.geomeans.length) : null);
+  const rows = ttfxPrs.prs.map((p, i) => {
+    const r = {
+      p,
+      rank: i + 1,
+      pr: p.pr,
+      author: p.author,
+      score: p.score,
+      tasks: p.tasks.filter((t) => t.regressions.length).length - p.tasks.filter((t) => t.improvements.length).length,
+      date: p.date,
+    };
+    for (const m of metrics) r[m] = blocksMean(p.suite[m]);
+    return r;
+  });
+  sortRows(rows, ttfxPrsSort, "rank");
+  // The pull requests with ~no change are next to each other, and folded, only
+  // in the ranking or by score
+  const fold = ttfxPrsSort.col === "rank" || ttfxPrsSort.col === "score";
   let html = "";
-  ttfxPrs.prs.forEach((p, i) => {
-    if (ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]))) html += ttfxPrsFlatToggleRow(cols);
-    if (ttfxPrIsFlat(p) && !ttfxPrsShowFlat) return;
+  rows.forEach(({ p, rank }, i) => {
+    if (fold && ttfxPrIsFlat(p)) {
+      if (!(i > 0 && ttfxPrIsFlat(rows[i - 1].p))) html += ttfxPrsFlatToggleRow(cols);
+      if (!ttfxPrsShowFlat) return;
+    }
     html += `<tr tabindex="0" data-pr="${p.pr}">`;
-    html += `<td class="num">${i + 1}</td>`;
+    html += `<td class="num">${rank}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
       (p.outdated
@@ -14701,7 +14904,10 @@ function sizesPrRankMetric() {
 }
 
 // Open pull requests by how much their latest build changes the selected
-// metrics against the master commit they branched from, largest first
+// metrics against the master commit they branched from, largest first until a
+// header is clicked
+let sizesPrsSort = { col: "rank", asc: true };
+
 function renderSizesPrsTable() {
   const caption = document.getElementById("sizes-stats-caption");
   const thead = document.getElementById("sizes-stats-thead");
@@ -14718,20 +14924,39 @@ function renderSizesPrsTable() {
     const d = delta(p, rank);
     return d == null ? -1 : Math.abs(d);
   };
-  const rows = prs.slice().sort((a, b) => size(b) - size(a));
+  const rows = prs
+    .slice()
+    .sort((a, b) => size(b) - size(a))
+    .map((p, i) => {
+      const r = { p, rank: i, number: p.number, title: p.title, author: p.author, base: p.base?.version ?? null, build: p.build };
+      for (const m of metrics) r[m] = delta(p, m);
+      return r;
+    });
+  sortRows(rows, sizesPrsSort, "rank");
   caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, or a stacked one's own change against the pull request below it, ranked by ${escapeHtml(
     sizesMetricLabel(rank).toLowerCase(),
   )}. Click a row for details.</span>`;
-  thead.innerHTML =
-    "<tr><th>PR</th><th>Title</th><th class=\"col-secondary\">Author</th>" +
-    metrics.map((m) => `<th class="num${m === rank ? "" : " col-secondary"}">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
-    '<th class="col-secondary" title="The pull request\'s merge-base with master, which it is compared with">Merge-base</th><th class="col-secondary">Build</th></tr>';
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["number", "PR"],
+      ["title", "Title"],
+      ["author", "Author", "col-secondary"],
+      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), `num${m === rank ? "" : " col-secondary"}`]),
+      ["base", "Merge-base", "col-secondary", "The pull request's merge-base with master, which it is compared with"],
+      ["build", "Build", "col-secondary"],
+    ],
+    sizesPrsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    sizesPrsSort = nextSort(sizesPrsSort, col, (c) => c === "title" || c === "author");
+    renderSizesPrsTable();
+  });
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="${metrics.length + 5}">${sizesPrs?.failed ? "Failed to load" : "No open pull request measured yet"}</td></tr>`;
     return;
   }
   let html = "";
-  for (const p of rows) {
+  for (const { p } of rows) {
     html += `<tr class="clickable" tabindex="0" data-pr="${p.number}">`;
     html += `<td><a href="${githubPrURL(p.number)}" target="_blank" rel="noopener noreferrer">#${p.number}</a></td>`;
     const draft = p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "";
@@ -14960,11 +15185,13 @@ function sizesFilesHtml(files, against = "") {
     <table class="ttfx-popup-table"><tbody>${rows}</tbody></table></details>`;
 }
 
-// Master commits in the window, newest first, like the TTFX tab's builds
-// table: each selected metric's change from the previous commit of the same
-// source (none across the switch of sources, which is theirs and not a
-// commit's)
+// Master commits in the window, newest first until a header is clicked, like
+// the TTFX tab's builds table: each selected metric's change from the previous
+// commit of the same source (none across the switch of sources, which is
+// theirs and not a commit's)
 const SIZES_COMMITS_ROWS = 300;
+let sizesCommitsSort = { col: "date", asc: false };
+
 function renderSizesCommitsTable() {
   const caption = document.getElementById("sizes-stats-caption");
   const thead = document.getElementById("sizes-stats-thead");
@@ -14977,26 +15204,39 @@ function renderSizesCommitsTable() {
   }
   const d = sizesData;
   const metrics = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m) && d.values[m]);
-  const rows = [];
-  const idx = sizesIndicesInRange();
-  for (let k = idx.length - 1; k >= 0 && rows.length < SIZES_COMMITS_ROWS; k--) {
-    const i = idx[k];
+  const all = sizesIndicesInRange().map((i) => {
     const deltas = {};
+    const r = { i, deltas, date: d.merged_at[i], commit: d.commits[i], version: d.versions[i] || null, message: d.messages[i] || null };
     for (const m of metrics) {
       const vals = d.values[m];
+      r[m] = null;
       if (vals[i] == null) continue;
       const p = sizesPrevious(vals, i);
-      if (p != null) deltas[m] = { before: vals[p], after: vals[i] };
+      if (p == null) continue;
+      deltas[m] = { before: vals[p], after: vals[i] };
+      r[m] = vals[i] - vals[p];
     }
-    rows.push({ i, deltas });
-  }
-  caption.innerHTML = `<b>Master commits</b> <span class="col-secondary">Newest first, each against the previous measured commit${
-    idx.length > SIZES_COMMITS_ROWS ? ` (the newest ${SIZES_COMMITS_ROWS} of the range)` : ""
+    return r;
+  });
+  const rows = sortRows(all, sizesCommitsSort, "i").slice(0, SIZES_COMMITS_ROWS);
+  const newest = sizesCommitsSort.col === "date" && !sizesCommitsSort.asc;
+  caption.innerHTML = `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the previous measured commit${
+    all.length > SIZES_COMMITS_ROWS ? ` (the first ${SIZES_COMMITS_ROWS} of the ${all.length} in the range)` : ""
   }. Not every commit was measured, so a row can span several commits; its link then lists them. Click a row for details.</span>`;
-  thead.innerHTML =
-    "<tr><th>Date</th><th>Commit</th><th class=\"col-secondary\">Version</th>" +
-    metrics.map((m) => `<th class="num">${escapeHtml(sizesMetricLabel(m))}</th>`).join("") +
-    '<th class="col-secondary">Message</th></tr>';
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Date"],
+      ["commit", "Commit"],
+      ["version", "Version", "col-secondary"],
+      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), "num"]),
+      ["message", "Message", "col-secondary"],
+    ],
+    sizesCommitsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    sizesCommitsSort = nextSort(sizesCommitsSort, col, (c) => ["commit", "version", "message"].includes(c));
+    renderSizesCommitsTable();
+  });
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="${metrics.length + 4}">No changes in the range</td></tr>`;
     return;
@@ -16945,9 +17185,13 @@ function commitCard(title, bodyHtml, { links = "" } = {}) {
   </section>`;
 }
 
-function commitTable(head, rows) {
-  return `<div class="commits-reg-table-wrapper"><table class="commits-reg-table"><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+// `cols` are [label, class, title], sorting in place
+function commitTable(cols, rows) {
+  return `<div class="commits-reg-table-wrapper"><table class="commits-reg-table in-place-sort"><thead>${inPlaceHeaderRow(cols)}</thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
+
+// A cell's sort value, for a cell whose text does not sort
+const dataV = (v) => (v == null || isNaN(v) ? "" : ` data-v="${v}"`);
 
 // The first rows, and the full list behind a disclosure when it is longer
 function commitRowsWithMore(head, shown, all, what) {
@@ -17039,25 +17283,31 @@ function commitPrHtml(d, gh) {
 // estimate against master up to it, and its own change of the total size
 function commitPrStackHtml(st, n) {
   if (!st) return "";
-  const pct = (score) => `<td class="num"${ttfxScoreStyle(score == null ? null : (score - 1) * 100)}>${ttfxScorePct(score)}</td>`;
+  const pct = (score) => `<td class="num"${dataV(score)}${ttfxScoreStyle(score == null ? null : (score - 1) * 100)}>${ttfxScorePct(score)}</td>`;
   const rows = st.layers.map((l, i) => {
     const badges = [l.draft ? '<span class="ttfx-pr-badge">draft</span>' : "", l.outdated ? '<span class="ttfx-pr-badge" title="Measured on an older commit; the pull request has newer commits">older commit</span>' : ""].join(" ");
     return `<tr class="${l.pr === n ? "commit-stack-current" : ""}">
       <td class="num col-secondary">${i + 1}</td>
-      <td>${l.pr === n ? `<b>#${l.pr}</b>` : commitLink(String(l.pr), `#${l.pr}`)}</td>
+      <td data-v="${l.pr}">${l.pr === n ? `<b>#${l.pr}</b>` : commitLink(String(l.pr), `#${l.pr}`)}</td>
       <td class="commits-reg-msg">${escapeHtml(l.title)} ${badges}</td>
       <td class="col-secondary"><code>${escapeHtml(l.head_ref)}</code></td>
       ${pct(l.own_score)}${pct(l.score)}
-      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}">${l.size_own == null ? "—" : formatSizeDelta(l.size_own)}</td>
+      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}"${dataV(l.size_own)}>${l.size_own == null ? "—" : formatSizeDelta(l.size_own)}</td>
     </tr>`;
   });
   rows.reverse();
   const base = st.missing
-    ? `<tr><td></td><td colspan="3" class="col-secondary"><code>${escapeHtml(st.missing)}</code>: no open pull request has this branch, so the layers below it are not known</td><td></td><td></td><td></td></tr>`
-    : '<tr><td></td><td colspan="3" class="col-secondary"><code>master</code></td><td></td><td></td><td></td></tr>';
-  const head = '<th class="num col-secondary">#</th><th>PR</th><th>Title</th><th class="col-secondary">Branch</th>' +
-    '<th class="num" title="TTFX score against the layer below">TTFX own</th><th class="num" title="Estimated TTFX score of the stack up to here against master">TTFX stack</th>' +
-    '<th class="num" title="Change of the total unpacked size against the layer below">Size own</th>';
+    ? `<tr data-pin><td></td><td colspan="3" class="col-secondary"><code>${escapeHtml(st.missing)}</code>: no open pull request has this branch, so the layers below it are not known</td><td></td><td></td><td></td></tr>`
+    : '<tr data-pin><td></td><td colspan="3" class="col-secondary"><code>master</code></td><td></td><td></td><td></td></tr>';
+  const head = [
+    ["#", "num col-secondary"],
+    ["PR"],
+    ["Title"],
+    ["Branch", "col-secondary"],
+    ["TTFX own", "num", "TTFX score against the layer below"],
+    ["TTFX stack", "num", "Estimated TTFX score of the stack up to here against master"],
+    ["Size own", "num", "Change of the total unpacked size against the layer below"],
+  ];
   const title = `Stack: ${st.position} of ${st.layers.length}${st.missing ? "+" : ""}`;
   return `<section class="commit-card commit-stack">
     <div class="commit-card-header"><h3 class="commit-card-title">${title}</h3></div>
@@ -17086,7 +17336,7 @@ function commitMatchesHtml(ref, data, pr) {
     </tr>`,
   );
   return `<p class="commit-message">${data.matches.length} commits match ${/^\d+$/.test(ref) ? `PR #${r}` : `<code>${r}</code>`}:</p>
-    ${commitTable('<th>Commit</th><th>Subject</th><th class="col-secondary">Author</th><th>First build</th>', rows)}`;
+    ${commitTable([["Commit"], ["Subject"], ["Author", "col-secondary"], ["First build"]], rows)}`;
 }
 
 function commitHeaderHtml(data, pr) {
@@ -17119,18 +17369,26 @@ function commitCIHtml(data) {
       const wallTitle = b.previous ? `Previous build #${b.previous.build} (${b.previous.state || "unknown"}): ${b.previous.wall_s != null ? formatDuration(b.previous.wall_s) : "no wall time"}` : "";
       return `<tr>
         <td>${escapeHtml(b.pipeline)}</td>
-        <td>${b.url ? overviewExtLink(b.url, `#${b.build}`) : `#${b.build}`}</td>
+        <td data-v="${b.build}">${b.url ? overviewExtLink(b.url, `#${b.build}`) : `#${b.build}`}</td>
         <td class="col-secondary">${timeHtml(b.created_at)}</td>
         <td>${escapeHtml(b.state || "")}</td>
 
-        <td class="num" title="${escapeHtml(wallTitle)}">${formatDuration(b.wall_s)}</td>
-        <td class="num" title="${escapeHtml(wallTitle)}">${commitPctHtml(commitPct(b.wall_s, prevWall))}</td>
-        <td class="num col-secondary">${formatDuration(b.queue_median_s)}</td>
+        <td class="num"${dataV(b.wall_s)} title="${escapeHtml(wallTitle)}">${formatDuration(b.wall_s)}</td>
+        <td class="num"${dataV(commitPct(b.wall_s, prevWall))} title="${escapeHtml(wallTitle)}">${commitPctHtml(commitPct(b.wall_s, prevWall))}</td>
+        <td class="num col-secondary"${dataV(b.queue_median_s)}>${formatDuration(b.queue_median_s)}</td>
       </tr>`;
     });
     parts.push(
       commitTable(
-        '<th>Pipeline</th><th>Build</th><th class="col-secondary">Created</th><th>State</th><th class="num" title="First job started to last job finished">Wall</th><th class="num" title="Against the previous build on the pipeline">vs previous</th><th class="num col-secondary" title="Median wait from runnable to started">Queue (median)</th>',
+        [
+          ["Pipeline"],
+          ["Build"],
+          ["Created", "col-secondary"],
+          ["State"],
+          ["Wall", "num", "First job started to last job finished"],
+          ["vs previous", "num", "Against the previous build on the pipeline"],
+          ["Queue (median)", "num col-secondary", "Median wait from runnable to started"],
+        ],
         rows,
       ),
     );
@@ -17172,13 +17430,19 @@ function commitJobsHtml(j) {
   const row = (x) => `<tr>
     <td>${x.url ? `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${convertEmoji(x.name)}</a>` : convertEmoji(x.name)}</td>
     <td class="${x.failed ? "commit-worse" : ""}">${escapeHtml(x.state)}${x.soft_failed ? " (soft)" : ""}${x.failed && x.previous_state === "passed" ? " · new" : ""}</td>
-    <td class="num">${formatDuration(x.duration_s)}</td>
-    <td class="num col-secondary" title="${escapeHtml(x.previous_state || "")}">${formatDuration(x.previous_s)}</td>
-    <td class="num">${commitPctHtml(x.pct)}</td>
+    <td class="num"${dataV(x.duration_s)}>${formatDuration(x.duration_s)}</td>
+    <td class="num col-secondary"${dataV(x.previous_s)} title="${escapeHtml(x.previous_state || "")}">${formatDuration(x.previous_s)}</td>
+    <td class="num"${dataV(x.pct)}>${commitPctHtml(x.pct)}</td>
     <td class="col-secondary">${escapeHtml(x.agent || "")}</td>
   </tr>`;
-  const head =
-    '<th>Job</th><th>State</th><th class="num">Time</th><th class="num col-secondary" title="The same job on the build of the previous commit">Previous</th><th class="num">Change</th><th class="col-secondary">Agent</th>';
+  const head = [
+    ["Job"],
+    ["State"],
+    ["Time", "num"],
+    ["Previous", "num col-secondary", "The same job on the build of the previous commit"],
+    ["Change", "num"],
+    ["Agent", "col-secondary"],
+  ];
   // Failures first, newly failing before those that were already failing,
   // then the biggest changes
   const byChange = (a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0);
@@ -17212,9 +17476,15 @@ function commitTtfxHtml(data) {
   const worst = (x) => Math.max(...x.pcts.map((p) => Math.abs(p ?? 0)));
   const row = (x) => `<tr>
     <td>${escapeHtml(x.task)}</td>
-    ${metrics.map((_, i) => `<td class="num col-secondary">${commitSeconds(x.now?.[i])}</td><td class="num">${commitPctHtml(x.pcts[i])}</td>`).join("")}
+    ${metrics.map((_, i) => `<td class="num col-secondary"${dataV(x.now?.[i])}>${commitSeconds(x.now?.[i])}</td><td class="num"${dataV(x.pcts[i])}>${commitPctHtml(x.pcts[i])}</td>`).join("")}
   </tr>`;
-  const head = `<th>Task</th>${metrics.map((m) => `<th class="num col-secondary">${escapeHtml(m)}</th><th class="num"><span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(m)}</span></th>`).join("")}`;
+  const head = [
+    ["Task"],
+    ...metrics.flatMap((m) => [
+      [escapeHtml(m), "num col-secondary"],
+      [`<span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(m)}</span>`, "num"],
+    ]),
+  ];
   const notable = tasks
     .filter((x) => !x.failed && worst(x) >= COMMIT_CHANGE_PCT)
     .sort((a, b) => worst(b) - worst(a))
@@ -17260,10 +17530,10 @@ function commitBenchHtml(data) {
     <td class="col-secondary">${escapeHtml(v.group)}</td>
     <td class="commits-reg-msg">${escapeHtml(v.name)}</td>
     <td class="${v.verdict === "regression" ? "commit-worse" : "commit-better"}">${escapeHtml(v.verdict)}</td>
-    <td class="num">${v.time_ratio != null ? `${v.time_ratio.toFixed(2)}×` : "—"}</td>
-    <td class="num col-secondary">${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
+    <td class="num"${dataV(v.time_ratio)}>${v.time_ratio != null ? `${v.time_ratio.toFixed(2)}×` : "—"}</td>
+    <td class="num col-secondary"${dataV(v.memory_ratio)}>${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
   </tr>`;
-  const head = '<th class="col-secondary">Group</th><th>Benchmark</th><th>Verdict</th><th class="num">Time</th><th class="num col-secondary">Memory</th>';
+  const head = [["Group", "col-secondary"], ["Benchmark"], ["Verdict"], ["Time", "num"], ["Memory", "num col-secondary"]];
   const rows = b.verdicts.map(row);
   const verdicts = rows.length
     ? commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "largest changes")
@@ -17568,7 +17838,10 @@ function updateActivityCharts() {
 }
 
 // One row per series: now (or the mean over the last window) against the
-// window before and the same window a year earlier
+// window before and the same window a year earlier. In the panels' order until
+// a header is clicked.
+let activitySort = { col: "order", asc: true };
+
 function updateActivityTable() {
   if (!activityData) return;
   const w = Math.max(activitySmoothing, 7);
@@ -17584,24 +17857,48 @@ function updateActivityTable() {
   };
   // Uncoloured: more activity is neither better nor worse here
   const pct = (a, b) => (a == null || b == null || b === 0 ? "" : formatSignedPct(((a - b) / b) * 100, { digits: 0 }));
-  document.getElementById("activity-stats-thead").innerHTML =
-    `<tr><th>Series</th><th class="num">Now</th><th class="num col-secondary">${w} days before</th><th class="num col-secondary">A year before</th>` +
-    `<th class="num">Change over the year</th></tr>`;
-  let html = "";
+  const thead = document.getElementById("activity-stats-thead");
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["order", "Series"],
+      ["now", "Now", "num"],
+      ["before", `${w} days before`, "num col-secondary"],
+      ["yearAgo", "A year before", "num col-secondary"],
+      ["change", "Change over the year", "num"],
+    ],
+    activitySort,
+  );
+  bindSortHeaders(thead, (col) => {
+    activitySort = nextSort(activitySort, col, (c) => c === "order");
+    updateActivityTable();
+  });
+  const rows = [];
   for (const panel of ACTIVITY_PANELS) {
     for (const [key, label] of panel.series) {
       const vals = s[key] || [];
       const now = at(vals, n - 1, panel.perDay);
-      const before = at(vals, n - 1 - w, panel.perDay);
       const yearAgo = at(vals, n - 1 - 365, panel.perDay);
-      const unit = panel.perDay ? ` <small>per day, ${w}-day mean</small>` : "";
-      html +=
-        `<tr><td class="activity-series">${escapeHtml(panel.title.replace(/ \(.*\)$/, ""))}: ${escapeHtml(label)}${unit}</td>` +
-        `<td class="num">${formatActivityValue(now, key)}</td>` +
-        `<td class="num col-secondary">${formatActivityValue(before, key)}</td>` +
-        `<td class="num col-secondary">${formatActivityValue(yearAgo, key)}</td>` +
-        `<td class="num">${pct(now, yearAgo)}</td></tr>`;
+      rows.push({
+        order: rows.length,
+        panel,
+        key,
+        label,
+        now,
+        before: at(vals, n - 1 - w, panel.perDay),
+        yearAgo,
+        change: now == null || yearAgo == null || yearAgo === 0 ? null : (now - yearAgo) / yearAgo,
+      });
     }
+  }
+  let html = "";
+  for (const { panel, key, label, now, before, yearAgo } of sortRows(rows, activitySort, "order")) {
+    const unit = panel.perDay ? ` <small>per day, ${w}-day mean</small>` : "";
+    html +=
+      `<tr><td class="activity-series">${escapeHtml(panel.title.replace(/ \(.*\)$/, ""))}: ${escapeHtml(label)}${unit}</td>` +
+      `<td class="num">${formatActivityValue(now, key)}</td>` +
+      `<td class="num col-secondary">${formatActivityValue(before, key)}</td>` +
+      `<td class="num col-secondary">${formatActivityValue(yearAgo, key)}</td>` +
+      `<td class="num">${pct(now, yearAgo)}</td></tr>`;
   }
   document.getElementById("activity-stats-tbody").innerHTML = html;
 }
