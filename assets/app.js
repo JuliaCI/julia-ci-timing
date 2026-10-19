@@ -7936,6 +7936,7 @@ function updateBenchChart() {
     },
   };
 
+  benchHighlightActive = false; // The new datasets have no saved colours to restore
   if (benchChart) {
     benchChart.data = chartConfig.data;
     benchChart.options = chartConfig.options;
