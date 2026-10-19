@@ -1253,7 +1253,8 @@ function backlogSlotsText(p) {
 }
 
 function formatWait(seconds) {
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
 }
 
@@ -1947,9 +1948,11 @@ function agentHueShifts(color, agents) {
 
 function formatDuration(seconds) {
   if (seconds == null) return '<span class="text-muted">—</span>';
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  // Rounded first, so 119.6 s carries into the minutes instead of showing 60s
+  const total = Math.round(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
   if (mins < 60) {
     return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
   }
@@ -9204,7 +9207,12 @@ function renderPackagesPackage(d) {
       plugins: {
         legend: { labels: { color: textColor, usePointStyle: true } },
         title: { display: true, text: `${d.name}: successful package requests per day`, color: textColor },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString("en-US")}` } },
+        tooltip: {
+          callbacks: {
+            title: (items) => (items.length ? overviewDateOnly(items[0].parsed.x) : ""),
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString("en-US")}`,
+          },
+        },
       },
       scales: {
         x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
@@ -9212,9 +9220,12 @@ function renderPackagesPackage(d) {
       },
     },
   });
-  const sum = (key, from) => series.slice(from).reduce((n, s) => n + s[key], 0);
-  const week = Math.max(0, series.length - 7);
-  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", 0).toLocaleString("en-US")} requests (${sum("user", 0).toLocaleString("en-US")} user, ${sum("ci", 0).toLocaleString("en-US")} CI); last 7 days ${sum("all", week).toLocaleString("en-US")} (${sum("user", week).toLocaleString("en-US")} user, ${sum("ci", week).toLocaleString("en-US")} CI).</p>`;
+  const sum = (key, rows) => rows.reduce((n, s) => n + s[key], 0).toLocaleString("en-US");
+  // A package has no row on a day without requests, so the week ends at the
+  // newest day of all downloads when that is known
+  const latest = [packagesTop?.until, series[series.length - 1].date].filter(Boolean).sort().pop();
+  const week = overviewDateWindow(series, latest, 7);
+  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", series)} requests (${sum("user", series)} user, ${sum("ci", series)} CI); last 7 days to ${latest} ${sum("all", week)} (${sum("user", week)} user, ${sum("ci", week)} CI).</p>`;
 }
 
 // The most requested packages over the last week of data
