@@ -190,14 +190,20 @@ document.addEventListener("keydown", (e) => {
   if (row && row === e.target) row.click();
 });
 
+// "1 job", "2,345 jobs"
+const countText = (n, noun) => `${(n ?? 0).toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;
+
 const compactNumber = (n) =>
   n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
 // "+1.2%", "-0.4%"; `minAbs` turns a change that rounds to nothing into ""
 function formatSignedPct(p, { digits = 1, minAbs = 0 } = {}) {
-  if (p == null || !isFinite(p)) return "–";
+  if (p == null || !isFinite(p)) return "—";
   if (Math.abs(p) < minAbs) return "";
-  return `${p > 0 ? "+" : ""}${p.toFixed(digits)}%`;
+  const text = p.toFixed(digits);
+  // A small fall rounds to "-0.0"; it reads as no change
+  if (Number(text) === 0) return `${(0).toFixed(digits)}%`;
+  return `${p > 0 ? "+" : ""}${text}%`;
 }
 
 // The colours and options every chart shares, for the current theme
@@ -320,14 +326,22 @@ let statsTableSortAsc = false; // false = descending (largest first)
 // `julia --project db/serve.jl --db X.sqlite --site .` serves both.
 const API_BASE = "api";
 
+// A request still unanswered by then fails, so the page shows an error
+// rather than waiting on an unreachable server for good
+const API_TIMEOUT_MS = 30000;
+
 // GET an API route; empty parameters are left out of the query
 async function apiGet(path, params = {}, options = {}) {
   const query = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v != null && v !== ""),
   ).toString();
+  const timeout = AbortSignal.timeout?.(API_TIMEOUT_MS);
+  let signal = options.signal || timeout;
+  if (options.signal && timeout && AbortSignal.any) signal = AbortSignal.any([options.signal, timeout]);
   const resp = await fetch(`${API_BASE}/${path}${query ? "?" + query : ""}`, {
     cache: "no-cache",
     ...options,
+    signal,
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
@@ -619,7 +633,7 @@ function drawUsageView() {
   summaryEl.innerHTML =
     `On average <strong>${Math.round(perDay(total)).toLocaleString("en-US")}</strong> agent hours a day, ` +
     `as if <strong>${Math.round(total / (d.days * 86400))}</strong> agents were busy all the time, ` +
-    `over ${jobs.toLocaleString("en-US")} jobs` +
+    `over ${countText(jobs, "job")}` +
     (usageFilters.size ? `: <strong>${pct(total, all)}</strong> of all agent time.` : ".");
   filtersEl.innerHTML = usageFilters.size
     ? "Showing only " +
@@ -682,7 +696,7 @@ function drawUsageView() {
               ? escapeHtml(s.label)
               : `<button type="button" class="usage-legend-btn" data-dim="${donut.dim.id}" data-key="${escapeHtml(s.key)}" aria-pressed="${usageFilters.get(donut.dim.id)?.has(s.key) ? "true" : "false"}">${escapeHtml(s.label)}</button>`;
           return (
-            `<li class="${s.active ? "" : "usage-legend-off"}" title="${escapeHtml(`${s.label}: ${hours(s.value)}, ${s.jobs.toLocaleString("en-US")} jobs`)}"><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${label}</span>` +
+            `<li class="${s.active ? "" : "usage-legend-off"}" title="${escapeHtml(`${s.label}: ${hours(s.value)}, ${countText(s.jobs, "job")}`)}"><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${label}</span>` +
             `<span class="overview-legend-value">${pct(s.value, donut.total)}</span>` +
             `<span class="overview-legend-value overview-legend-pct usage-legend-hours">${escapeHtml(hours(s.value))}</span></li>`
           );
@@ -860,10 +874,10 @@ function drawBuildsView() {
             label: (ctx) => {
               const b = ctx.raw.build;
               const partial = buildRunning(b) ? " so far, still running" : "";
-              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${b.jobs} jobs${partial}`];
+              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${countText(b.jobs, "job")}${partial}`];
               const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
               if (ctx.datasetIndex === 0) {
-                lines.push(`${b.jobs} jobs, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
+                lines.push(`${countText(b.jobs, "job")}, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
               } else {
                 lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total${partial}`);
               }
@@ -928,7 +942,7 @@ function renderBuildsTable(builds) {
     recent.map((b) => ({
       attrs: `data-url="${escapeHtml(buildkiteBuildUrl(b))}"`,
       title: escapeHtml(b.message || b.commit),
-      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${timeHtml(b.created_at, { relative: true })} · ${b.jobs} jobs${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
+      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${timeHtml(b.created_at, { relative: true })} · ${countText(b.jobs, "job")}${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
       value: b.wall_s != null ? formatDuration(b.wall_s) : escapeHtml(b.state),
       valueClass: b.state === "failed" ? "m-bad" : b.state === "passed" ? "" : "m-muted",
     })),
@@ -1078,8 +1092,9 @@ async function renderAgentsSection() {
   const updatedEl = document.getElementById("agents-updated");
   const snapshots = (agentsData && agentsData.snapshots) || [];
   if (agentsData.error || snapshots.length === 0) {
-    tableEl.innerHTML =
-      '<div class="workers-empty">No agent snapshots yet. They appear once the update workflow has run <code>fetch_agents.jl</code> with a Buildkite token that has the <code>read_agents</code> scope.</div>';
+    tableEl.innerHTML = agentsData.error
+      ? '<div class="workers-empty">Failed to load the agent snapshots; try reloading the page.</div>'
+      : '<div class="workers-empty">No agent snapshots yet.</div>';
     summaryEl.textContent = "";
     updatedEl.textContent = "";
     section.classList.add("agents-section-empty");
@@ -1948,6 +1963,7 @@ function agentHueShifts(color, agents) {
 
 function formatDuration(seconds) {
   if (seconds == null) return '<span class="text-muted">—</span>';
+  if (seconds === 0) return "0s";
   if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
   // Rounded first, so 119.6 s carries into the minutes instead of showing 60s
   const total = Math.round(seconds);
@@ -2374,8 +2390,7 @@ function formatTrend(
   }
 
   // Format percentage change
-  const pctSign = percentChange > 0 ? "+" : "";
-  const pctText = `${pctSign}${percentChange.toFixed(1)}%`;
+  const pctText = formatSignedPct(percentChange);
 
   // Direction arrow and color
   let arrow, color;
@@ -4860,6 +4875,100 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Modal dialogs: focus moves into a dialog when it opens and stays inside it
+// on Tab, and goes back to what opened it when it closes. Opening one pushes
+// a history entry, so Back closes it instead of leaving the tab.
+const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea, [tabindex]:not([tabindex="-1"])';
+let modalOpen = null; // { opener, mark } while a dialog shows
+let modalIgnorePop = false;
+let modalMarks = 0;
+
+// The overlays toggle "visible"; the phone sheet is in the page while it shows
+function openModals() {
+  return [
+    ...document.querySelectorAll('.popup-overlay.visible[role="dialog"], .shortcuts-overlay.visible[role="dialog"]'),
+    ...document.querySelectorAll(".m-sheet-backdrop"),
+  ];
+}
+
+function syncModalState() {
+  const open = openModals();
+  if (open.length && !modalOpen) {
+    modalOpen = { opener: document.activeElement, mark: ++modalMarks };
+    const dialog = open[open.length - 1];
+    const target = dialog.querySelector(".popup-close, .m-sheet-done") || dialog.querySelector(MODAL_FOCUSABLE);
+    if (target) target.focus({ preventScroll: true });
+    else {
+      dialog.tabIndex = -1;
+      dialog.focus({ preventScroll: true });
+    }
+    // The details popup has already put its key in the URL; the entry under
+    // the dialog's own is the page without it
+    const shown = window.location.href;
+    const under = new URL(shown);
+    under.searchParams.delete("pop");
+    history.replaceState(history.state, "", under);
+    history.pushState({ ...history.state, modal: modalOpen.mark }, "", shown);
+  } else if (!open.length && modalOpen) {
+    const { opener, mark } = modalOpen;
+    modalOpen = null;
+    if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    // Closed on the page rather than by Back: drop the entry again, unless
+    // something has moved on from it (a link in the dialog, say)
+    if (history.state?.modal === mark) {
+      modalIgnorePop = true;
+      history.back();
+    }
+  }
+}
+
+const modalObserver = new MutationObserver(syncModalState);
+document.querySelectorAll('.popup-overlay[role="dialog"], .shortcuts-overlay[role="dialog"]').forEach((el) =>
+  modalObserver.observe(el, { attributes: true, attributeFilter: ["class"] }),
+);
+modalObserver.observe(document.body, { childList: true });
+
+// Before the tab's own handler: Back closes the dialog and goes no further
+window.addEventListener(
+  "popstate",
+  (e) => {
+    if (modalIgnorePop) {
+      modalIgnorePop = false;
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (!modalOpen) return;
+    e.stopImmediatePropagation();
+    // Each closes when clicked outside its panel
+    for (const el of openModals()) el.click();
+  },
+  true,
+);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || !modalOpen) return;
+  const open = openModals();
+  const dialog = open[open.length - 1];
+  if (!dialog) return;
+  const items = [...dialog.querySelectorAll(MODAL_FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+  if (!items.length) {
+    e.preventDefault();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!dialog.contains(document.activeElement)) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
 function toggleShortcutsHelp() {
   const el = document.getElementById("shortcuts-overlay");
   const visible = el.classList.toggle("visible");
@@ -5090,7 +5199,7 @@ function updateStatsTable() {
     aggRow.className = "aggregate-row";
     const aggTrendResult = formatTrend(aggTrend, null, true);
     aggRow.innerHTML = `
-                    <td>All (${jobStats.length} jobs)</td>
+                    <td>All (${countText(jobStats.length, "job")})</td>
                     <td></td>
                     <td class="num">${aggPassRateHtml}</td>
                     <td>${aggTrendResult.html}</td>
@@ -6149,7 +6258,7 @@ function showTimingLoadError() {
     `<div class="error">Failed to load jobs ${retryBtn}</div>`;
   document.getElementById("stats-tbody").innerHTML = `
                   <tr><td colspan="10" class="error">
-                      Failed to load data. Run <code>julia fetch_timing.jl</code> to generate data. ${retryBtn}
+                      Failed to load the timing data. ${retryBtn}
                   </td></tr>
               `;
 }
@@ -6441,16 +6550,6 @@ function trackPageView(tab) {
   });
 }
 
-const LEGACY_TAB_ALIASES = new Set([
-  "perf",
-  "benchmarks",
-  "ci-timing",
-  "ci-builds",
-  "ci-workers",
-  "packages",
-  "pkgeval",
-]);
-
 function tabToURLValue(tab) {
   return TAB_URL_MAP[tab] || TAB_URL_MAP.overview;
 }
@@ -6460,7 +6559,11 @@ function tabFromURLValue(value) {
   for (const [tabName, tabValue] of Object.entries(TAB_URL_MAP)) {
     if (tabValue === value) return tabName;
   }
-  if (LEGACY_TAB_ALIASES.has(value)) return value;
+  // The internal names, which older links carry, and the short paths' names
+  if (Object.hasOwn(TAB_URL_MAP, value)) return value;
+  for (const [tabName, path] of Object.entries(TAB_SHORT_PATH)) {
+    if (path === "/" + value) return tabName;
+  }
   if (value === "ci-commits") return "ci-builds"; // the Commits tab was folded into Builds
   return null;
 }
@@ -7373,7 +7476,7 @@ async function loadBenchmarkData() {
 
     console.error("Failed to load benchmark data:", err);
     document.getElementById("bench-chart-loading").innerHTML =
-      '<span class="error">Failed to load benchmark data. Run <code>julia fetch_benchmarks.jl</code> to generate data.</span>';
+      '<span class="error">Failed to load the benchmark data; try reloading the page.</span>';
     document.getElementById("bench-group-list").innerHTML =
       '<div class="group-header">Benchmark Groups</div><div class="error" style="padding: 12px;">Failed to load</div>';
     document.getElementById("bench-stats-tbody").innerHTML =
@@ -9119,10 +9222,23 @@ function getPackagesFilteredSeries() {
   if (packagesTimeRangeDays > 0) {
     cutoff.setDate(cutoff.getDate() - packagesTimeRangeDays);
   }
-  return packagesDownloadsData.series.filter((row) => {
+  const rows = packagesDownloadsData.series.filter((row) => {
     if (packagesTimeRangeDays > 0 && new Date(row.date) < cutoff) return false;
     return true;
   });
+  // Days upstream has no rollup for get an empty row, so the chart leaves a
+  // gap there instead of joining the days either side
+  const out = [];
+  for (const row of rows) {
+    const prev = out[out.length - 1];
+    if (prev) {
+      for (let t = Date.parse(prev.date) + 864e5; t < Date.parse(row.date); t += 864e5) {
+        out.push({ date: new Date(t).toISOString().slice(0, 10), all: null, user: null, ci: null, gap: true });
+      }
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 // === Per-package downloads (API only) ===
@@ -9404,7 +9520,7 @@ function updatePackagesDownloadsChart() {
       shareSeries.set(
         s,
         vals.map((v, i) =>
-          dayTotals[i] > 0 ? (Number(v || 0) / dayTotals[i]) * 100 : 0,
+          rows[i].gap ? null : dayTotals[i] > 0 ? (Number(v || 0) / dayTotals[i]) * 100 : 0,
         ),
       );
     }
@@ -9441,13 +9557,15 @@ function updatePackagesDownloadsChart() {
       (sum, s) => sum + Number(shareSeries.get(s)?.[latestIdx] || 0),
       0,
     );
-    const prereleaseTotals = rows.map((_, i) =>
-      presentStages.reduce(
-        (sum, s) => sum + Number(shareSeries.get(s)?.[i] || 0),
-        0,
-      ),
+    const prereleaseTotals = rows.map((r, i) =>
+      r.gap
+        ? null
+        : presentStages.reduce(
+            (sum, s) => sum + Number(shareSeries.get(s)?.[i] || 0),
+            0,
+          ),
     );
-    const trailingWindow = prereleaseTotals.slice(-7);
+    const trailingWindow = prereleaseTotals.slice(-7).filter((v) => v != null);
     const weeklyAvgPrerelease = trailingWindow.length
       ? trailingWindow.reduce((sum, v) => sum + v, 0) / trailingWindow.length
       : 0;
@@ -9736,6 +9854,11 @@ function updatePackagesDownloadsChart() {
 
   for (let idx = 0; idx < rows.length; idx++) {
     const row = rows[idx];
+    if (row.gap) {
+      for (const series of minorSeries.values()) series[idx] = null;
+      otherSeries[idx] = null;
+      continue;
+    }
     const mix = mixByDate.get(row.date);
     const totalPkgs =
       packagesClientType === "user"
@@ -11360,7 +11483,7 @@ function ttfxBuildMarkdown(b, task) {
   if (task && paired) head.push("vs regular build");
   lines.push("", `| | ${head.join(" | ")} |`, `|---|${head.map(() => "---").join("|")}|`);
   const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
-  const ratio = (p) => (p ? formatTtfxRatio(p.ratio) : "–");
+  const ratio = (p) => (p ? formatTtfxRatio(p.ratio) : "—");
   for (const r of suiteRows) {
     const cells = [`${formatTtfxValue(r.g, r.key)}${gc(r.off)}`, r.change.text];
     if (paired) cells.push(ratio(r.paired));
@@ -11443,8 +11566,8 @@ async function renderTtfxCompileDetails(b, prev, task) {
         const sig = r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1");
         const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
         html += `<tr class="${r.gone ? "ttfx-compile-gone" : ""}"><td class="ttfx-compile-stmt" title="${escapeHtml(r.stmt)}">${escapeHtml(sig)}</td>`;
-        html += `<td class="num" title="${tasksTitle(r.x.tasks)}">${r.gone ? "–" : r.x.tasks.length}</td>`;
-        html += `<td class="num">${r.gone ? "–" : r.x.ms.toFixed(1)}</td>`;
+        html += `<td class="num" title="${tasksTitle(r.x.tasks)}">${r.gone ? "—" : r.x.tasks.length}</td>`;
+        html += `<td class="num">${r.gone ? "—" : r.x.ms.toFixed(1)}</td>`;
         if (was) html += `<td class="num ${r.delta > 0 ? "ttfx-up" : r.delta < 0 ? "ttfx-down" : ""}" title="${r.gone ? "Gone; it was in:\n" + tasksTitle(r.x.tasks) : ""}">${delta}</td>`;
         html += "</tr>";
       }
@@ -11454,7 +11577,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
       md.push(`| method | tasks | ms |${was ? " vs previous |" : ""}`, `|---|---|---|${was ? "---|" : ""}`);
       for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
         const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
-        md.push(`| \`${r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1")}\` | ${r.gone ? "gone" : r.x.tasks.length} | ${r.gone ? "–" : r.x.ms.toFixed(1)} |${was ? ` ${delta} |` : ""}`);
+        md.push(`| \`${r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1")}\` | ${r.gone ? "gone" : r.x.tasks.length} | ${r.gone ? "—" : r.x.ms.toFixed(1)} |${was ? ` ${delta} |` : ""}`);
       }
       if (rows.length > TTFX_POPUP_ROWS) md.push("", `and ${rows.length - TTFX_POPUP_ROWS} more`);
       md.push("", "</details>");
@@ -11533,7 +11656,8 @@ function setDetailPopupURL(key) {
   const url = new URL(window.location);
   if (key) url.searchParams.set("pop", key);
   else url.searchParams.delete("pop");
-  if (url.href !== window.location.href) history.replaceState(null, "", url);
+  // The state marks the entry pushed for an open dialog
+  if (url.href !== window.location.href) history.replaceState(history.state, "", url);
 }
 
 // The popup a link names (`pop`), once the tab's data has loaded. Each
@@ -11994,13 +12118,13 @@ function ttfxNormalizedFor(metric = ttfxMetric) {
 
 function formatTtfxValue(v, metric = ttfxMetric) {
   if (!ttfxIsCount(metric)) return formatTtfxSeconds(v);
-  return v == null ? "–" : Math.round(v).toLocaleString("en-US");
+  return v == null ? "—" : Math.round(v).toLocaleString("en-US");
 }
 
 // `v` against `prev` as a table cell's text and class: the % change of a
 // time, the difference of a count
 function ttfxChange(v, prev, metric = ttfxMetric) {
-  if (v == null || prev == null) return { text: "–", cls: "" };
+  if (v == null || prev == null) return { text: "—", cls: "" };
   if (!ttfxIsCount(metric)) {
     const p = (v / prev - 1) * 100;
     return { text: formatSignedPct(p), cls: ttfxPctClass(p) };
@@ -12038,7 +12162,7 @@ function ttfxSuiteTasks(builds, tasks, metric = ttfxMetric) {
 }
 
 function formatTtfxSeconds(s) {
-  if (s == null) return "–";
+  if (s == null) return "—";
   if (s >= 100) return s.toFixed(0) + "s";
   if (s >= 10) return s.toFixed(1) + "s";
   return s.toFixed(2) + "s";
@@ -12251,7 +12375,7 @@ async function loadTtfxData() {
   } catch (err) {
     console.error("Failed to load TTFX data:", err);
     document.getElementById("ttfx-chart-loading").innerHTML =
-      '<span class="error">No TTFX data. It appears once the update workflow has run <code>fetch_ttfx.jl</code> against a julia-ci build with a finished TTFX job.</span>';
+      '<span class="error">Failed to load the TTFX data; try reloading the page.</span>';
     document.getElementById("ttfx-task-items").innerHTML = '<div class="error">Failed to load</div>';
     document.getElementById("ttfx-stats-tbody").innerHTML =
       '<tr><td class="error">Failed to load data</td></tr>';
@@ -13245,7 +13369,7 @@ function ttfxPrCi(p) {
 }
 
 function ttfxScorePct(score) {
-  return score == null ? "–" : formatSignedPct((score - 1) * 100);
+  return score == null ? "—" : formatSignedPct((score - 1) * 100);
 }
 
 // A suite or task ratio, head against base, as a % change
@@ -13330,7 +13454,7 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
     const off = p.suite[m + "_gcoff"];
     const verdict = ttfxVerdict(on.verdict, off && off.verdict);
     const own = verdict !== "same" ? `**${blocks(on)}** (${verdict})` : blocks(on);
-    lines.push(`| ${ttfxMetricLabel(m)} | ${own} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "–"} |` : ""}`);
+    lines.push(`| ${ttfxMetricLabel(m)} | ${own} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "—"} |` : ""}`);
   }
   const scope = st ? ` against ${parent}` : "";
   for (const [key, label] of [
@@ -13398,7 +13522,7 @@ function prAllStatsButton(n) {
 }
 
 function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
-  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "–");
+  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "—");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const st = p.stack;
@@ -13467,7 +13591,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
       for (const m of metrics) {
         const r = t.metrics[m];
         const cls = t.regressions.includes(m) ? "ttfx-up" : t.improvements.includes(m) ? "ttfx-down" : "";
-        html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(ttfxRatioPct).join(", ") : "–"}${
+        html += `<td class="num ${cls}">${r && r.ratios ? r.ratios.map(ttfxRatioPct).join(", ") : "—"}${
           r && r.gcoff_ratios ? ` <span class="ttfx-popup-muted" title="GC off">${r.gcoff_ratios.map(ttfxRatioPct).join(", ")}</span>` : ""
         }</td>`;
       }
@@ -13563,7 +13687,7 @@ function renderTtfxPrsList() {
           <div class="m-item-title"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
           <div class="m-item-meta">${meta.join(" · ")}</div>
         </div>
-        <span class="m-item-value ttfx-pr-score"${ttfxScoreStyle(change)}>${change == null ? "–" : formatSignedPct(change)}</span>
+        <span class="m-item-value ttfx-pr-score"${ttfxScoreStyle(change)}>${change == null ? "—" : formatSignedPct(change)}</span>
       </div></td></tr>`;
     })
     .join("");
@@ -13626,7 +13750,7 @@ function renderTtfxPrsTable() {
     html += `<td class="msg">${ciDot} <a href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     const scoreTitle = p.stack ? ` title="${escapeHtml(ttfxPrStackTitle(p))}"` : "";
-    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "–" : ttfxRatioPct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
+    html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "—" : ttfxRatioPct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
     for (const m of metrics) {
       const on = p.suite[m];
       const off = p.suite[m + "_gcoff"];
@@ -13964,7 +14088,7 @@ const sizesMetricLabel = (m) => SIZES_METRICS[m] || m;
 function formatSizeDelta(d, isCount = false) {
   if (d == null) return "";
   if (d === 0) return "0";
-  const sign = d > 0 ? "+" : "−";
+  const sign = d > 0 ? "+" : "-";
   return sign + (isCount ? Math.abs(d).toLocaleString("en-US") : formatBytes(Math.abs(d)));
 }
 
@@ -14107,7 +14231,7 @@ async function loadSizesData() {
   } catch (err) {
     console.error("Failed to load size data:", err);
     document.getElementById("sizes-chart-loading").innerHTML =
-      '<span class="error">No size data. It appears once <code>fetch_sizes.jl</code> has measured a master build.</span>';
+      '<span class="error">Failed to load the size data; try reloading the page.</span>';
     document.getElementById("sizes-metric-list").innerHTML =
       '<div class="group-header">Metrics</div><div class="error">Failed to load</div>';
     document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
@@ -15148,8 +15272,7 @@ function overviewAgo(dateString) {
   if (days === null) return "unknown";
   // A report is dated by day, so hours since its midnight say nothing
   if (days < 1 && DATE_ONLY_RE.test(dateString)) return "today";
-  if (days < 1) return timeAgo(dateString);
-  return days === 1 ? "1 day ago" : `${days} days ago`;
+  return timeAgo(dateString);
 }
 
 function overviewFormatDays(d) {
@@ -15178,6 +15301,7 @@ function overviewCadence(dates) {
 
 function overviewSigned(n, digits = 0) {
   const s = n.toFixed(digits);
+  if (Number(s) === 0) return (0).toFixed(digits);
   return n > 0 ? `+${s}` : s;
 }
 
@@ -16332,7 +16456,7 @@ function overviewQueueSummary(src) {
     const split = backlogSplit(x.p, src.n - 1);
     return [
       `Waiting: ${x.label}`,
-      `${x.waiting} jobs${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${backlogSlotsText(x.p)}` : ""}`,
+      `${countText(x.waiting, "job")}${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${backlogSlotsText(x.p)}` : ""}`,
     ];
   });
   if (waitingNow.length > OVERVIEW_QUEUE_ROWS) {
@@ -16937,7 +17061,7 @@ function commitPrStackHtml(st, n) {
       <td class="commits-reg-msg">${escapeHtml(l.title)} ${badges}</td>
       <td class="col-secondary"><code>${escapeHtml(l.head_ref)}</code></td>
       ${pct(l.own_score)}${pct(l.score)}
-      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}">${l.size_own == null ? "–" : formatSizeDelta(l.size_own)}</td>
+      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}">${l.size_own == null ? "—" : formatSizeDelta(l.size_own)}</td>
     </tr>`;
   });
   rows.reverse();
@@ -17052,7 +17176,7 @@ function commitJobsHtml(j) {
   const running = jobs.filter((x) => ["running", "scheduled", "assigned", "waiting"].includes(x.state));
   const slower = jobs.filter((x) => x.pct != null && x.pct >= COMMIT_CHANGE_PCT);
   const faster = jobs.filter((x) => x.pct != null && x.pct <= -COMMIT_CHANGE_PCT);
-  let summary = `Build #${j.build}: ${jobs.length} jobs`;
+  let summary = `Build #${j.build}: ${countText(jobs.length, "job")}`;
   if (failed.length) summary += `, <span class="commit-worse">${failed.length} failed</span> (${newly.length} passed on the previous build)`;
   if (running.length) summary += `, ${running.length} still running`;
   summary += j.previous
@@ -17198,11 +17322,30 @@ if (PHONE_WIDTH.matches) {
 
 // On a phone the long explanations above tables are cut to two lines; a tap
 // opens one in full
+const PHONE_HINTS = ".package-panel-help, .commits-reg-help, .agents-help, .workers-note, .overview-note";
 document.addEventListener("click", (e) => {
   if (!PHONE_WIDTH.matches) return;
-  const help = e.target.closest?.(".package-panel-help, .commits-reg-help, .agents-help, .workers-note, .overview-note");
+  const help = e.target.closest?.(PHONE_HINTS);
   if (help && !e.target.closest("a")) help.classList.toggle("m-expanded");
 });
+
+// A chevron marks the hints the clamp cuts short, so a tap is known to open
+// them; measured whenever one is shown or changes size
+const phoneHintObserver = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    if (target.classList.contains("m-expanded")) continue;
+    target.classList.toggle("m-clamped", PHONE_WIDTH.matches && target.scrollHeight > target.clientHeight + 1);
+  }
+});
+let phoneHintScan = 0;
+new MutationObserver(() => {
+  if (!PHONE_WIDTH.matches || phoneHintScan) return;
+  phoneHintScan = requestAnimationFrame(() => {
+    phoneHintScan = 0;
+    document.querySelectorAll(PHONE_HINTS).forEach((el) => phoneHintObserver.observe(el));
+  });
+}).observe(document.body, { childList: true, subtree: true });
+document.querySelectorAll(PHONE_HINTS).forEach((el) => phoneHintObserver.observe(el));
 
 // === Activity ===
 // JuliaLang/julia over time from api/github/activity: day-aligned series from
@@ -17306,7 +17449,7 @@ async function loadActivityData() {
   } catch (err) {
     console.error("Failed to load activity data:", err);
     document.getElementById("activity-chart-loading").innerHTML =
-      '<span class="error">No activity data. It appears once <code>fetch_github.jl</code> has run.</span>';
+      '<span class="error">Failed to load the activity data; try reloading the page.</span>';
     document.getElementById("activity-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
   }
 }
@@ -17788,6 +17931,11 @@ function applyTheme() {
     btn.textContent = icons[t] || icons.system;
     btn.title = `Theme: ${t}`;
   }
+  const metas = document.querySelectorAll('meta[name="theme-color"]');
+  metas.forEach((m) => {
+    const forced = t === "dark" ? "#0d1117" : t === "light" ? "#ffffff" : null;
+    m.content = forced || (m.media.includes("dark") ? "#0d1117" : "#ffffff");
+  });
   // Forward theme to the embedded julia-perf iframe so it stays in sync.
   // Resolve "system" to the actual dark/light value: the iframe's own
   // prefers-color-scheme can differ from the parent's (different sandbox
@@ -17853,7 +18001,7 @@ function prCardMetricsTable(p) {
     const off = p.suite[m + "_gcoff"];
     html += `<tr><th>${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += on.geomeans.map((g) => `<td class="${cls(on.verdict)}">${ttfxRatioPct(g)}</td>`).join("");
-    html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(ttfxRatioPct).join(", ") : "–"}</td></tr>`;
+    html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(ttfxRatioPct).join(", ") : "—"}</td></tr>`;
   }
   return html + "</tbody></table>";
 }
