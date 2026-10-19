@@ -91,9 +91,43 @@
     return points;
   }
 
-  // Build the per-group geomean series by averaging (log-mean) all benchmarks
-  // in `groupDetail` (the parsed data/benchmarks/<group>.json.gz) at each
-  // date. `stat` is "minimum" or "mean".
+  // Chain-link per-date samples into one level. `entries` is sorted by date,
+  // each {x, commit, date_path, values: Map<key, value>}. Each step is the
+  // geomean of the ratios of every key present at that date to its previous
+  // sample, so a key that is missing on some dates, or added or removed, moves
+  // the line only by its own change. The level starts at the first date's
+  // geomean.
+  function chainLink(entries) {
+    const out = [];
+    const last = new Map();
+    let level = null;
+    for (const e of entries) {
+      let logSum = 0;
+      let n = 0;
+      let stepSum = 0;
+      let steps = 0;
+      for (const [k, v] of e.values) {
+        if (!(v > 0)) continue;
+        logSum += Math.log(v);
+        n++;
+        const prev = last.get(k);
+        if (prev != null) {
+          stepSum += Math.log(v / prev);
+          steps++;
+        }
+        last.set(k, v);
+      }
+      if (n === 0) continue;
+      if (level == null) level = Math.exp(logSum / n);
+      else if (steps > 0) level *= Math.exp(stepSum / steps);
+      out.push({ x: e.x, y: level, yRaw: level, commit: e.commit, date_path: e.date_path });
+    }
+    return out;
+  }
+
+  // Build the per-group geomean series from all benchmarks in `groupDetail`
+  // (the parsed data/benchmarks/<group>.json.gz), chain-linked across dates.
+  // `stat` is "minimum" or "mean".
   function buildGroupGeomeanFromDetail(groupDetail, stat, baseCutoff) {
     const statData = groupDetail && groupDetail[stat];
     if (!statData || !statData.dates) return [];
@@ -101,29 +135,19 @@
     const commits = statData.commits || [];
     const datePaths = statData.date_paths || [];
     const benchNames = Object.keys(statData.benchmarks || {});
-    const points = [];
+    const entries = [];
     for (let i = 0; i < dates.length; i++) {
       const d = new Date(dates[i]);
       if (baseCutoff && d < baseCutoff) continue;
-      let logSum = 0;
-      let n = 0;
+      const values = new Map();
       for (const name of benchNames) {
         const v = statData.benchmarks[name][i];
         if (v == null || v === 0) continue;
-        logSum += Math.log(v);
-        n++;
+        values.set(name, v);
       }
-      if (n === 0) continue;
-      const y = Math.exp(logSum / n);
-      points.push({
-        x: d,
-        y,
-        yRaw: y,
-        commit: commits[i] || "",
-        date_path: datePaths[i] || "",
-      });
+      entries.push({ x: d, commit: commits[i] || "", date_path: datePaths[i] || "", values });
     }
-    return points;
+    return chainLink(entries);
   }
 
   // Convert a raw series to "% deviation from baseline" form. Baseline is
@@ -142,33 +166,22 @@
     }));
   }
 
-  // Geomean across an arbitrary set of per-group raw series. `groupSeries` is
-  // a Map<groupName, points[]>. Returns points (one per date) whose y is the
-  // geomean of contributing group values at that date.
+  // Geomean across an arbitrary set of per-group raw series, chain-linked
+  // across dates. `groupSeries` is a Map<groupName, points[]>.
   function buildOverallFromGroupSeries(groupSeries) {
     const byDate = new Map();
-    for (const points of groupSeries.values()) {
+    for (const [group, points] of groupSeries) {
       for (const p of points) {
         const k = p.x.getTime();
         let entry = byDate.get(k);
         if (!entry) {
-          entry = { x: p.x, logSum: 0, n: 0, commit: p.commit, date_path: p.date_path };
+          entry = { x: p.x, commit: p.commit, date_path: p.date_path, values: new Map() };
           byDate.set(k, entry);
         }
-        if (p.y > 0) {
-          entry.logSum += Math.log(p.y);
-          entry.n++;
-        }
+        entry.values.set(group, p.y);
       }
     }
-    const out = [];
-    for (const e of byDate.values()) {
-      if (e.n === 0) continue;
-      const y = Math.exp(e.logSum / e.n);
-      out.push({ x: e.x, y, yRaw: y, commit: e.commit, date_path: e.date_path });
-    }
-    out.sort((a, b) => a.x - b.x);
-    return out;
+    return chainLink([...byDate.values()].sort((a, b) => a.x - b.x));
   }
 
   return {

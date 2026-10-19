@@ -11,7 +11,8 @@
 // is "All"). Reads the extracts that analysis/fetch_data.jl downloads into data/.
 //
 // Prints:
-//   - The group geomean series in the range (raw + % from baseline).
+//   - The group geomean series in the range (chain-linked ns + % from
+//     baseline), as the chart draws it.
 //   - The individual benchmark series for the last several reports, with the
 //     same baseline math the dashboard applies in "expanded group" view.
 //   - A spread summary showing how far apart the individual % values are at
@@ -102,7 +103,7 @@ if (geomean.length === 0) {
 const tail = 10;
 const range = days > 0 ? `last ${days} days` : "all dates";
 console.log(`\n== ${group} group geomean (${stat}, ${range}, ${geomean.length} points, baseline = first point) ==`);
-console.log("  date         raw_ns             % from baseline");
+console.log("  date         linked_ns          % from baseline");
 for (let i = Math.max(0, geomean.length - tail); i < geomean.length; i++) {
   const p = geomean[i];
   const pct = geomeanPct[i];

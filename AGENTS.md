@@ -272,7 +272,11 @@ node tools/inspect-bench.mjs array minimum --days 15   # the site's default rang
 It prints:
 
 1. The group geomean series in the range in ns and as `%` from
-   baseline (the first point in the range).
+   baseline (the first point in the range). Like the chart's group and
+   "Overall" lines it is chain-linked: each step is the geomean of the
+   benchmarks' ratios to their previous sample, so a benchmark missing
+   on some dates, or added or removed, does not make the line jump. The
+   ns value is the first date's geomean carried forward by those steps.
 2. A table of per-benchmark `%` from baseline at the three most
    recent dates, sorted by `|last %|` — i.e. the benchmarks moving
    the chart most. Benchmarks with an entry in
