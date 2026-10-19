@@ -13869,7 +13869,7 @@ function renderTtfxPrsTable() {
         "score",
         "Score",
         "num",
-        "Estimated change in the total of precompile, load, run and warm, each weighted by its time on master (so precompile counts most), taking the block nearer no change. Rows are ranked by it.",
+        "Weighted geometric mean of the metric changes: a third each for precompile (once per install), cold load and run (the first session) and warm (every later session), taking the block nearer no change. Rows are ranked by it.",
       ],
       ...metrics.map((m) => [
         m,
