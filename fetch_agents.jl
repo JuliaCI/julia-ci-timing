@@ -164,24 +164,48 @@ function rule_value(rules, key)
 end
 
 const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "state", "runnable_at", "started_at", "finished_at"]
+const OPEN_JOB_STATES = ["scheduled", "reserved", "assigned", "accepted", "limited", "limiting", "waiting", "blocked",
+                         "running", "canceling", "timing_out"]
+const OPEN_JOB_SQL = "state IN (" * join(("'$s'" for s in OPEN_JOB_STATES), ", ") * ")"
 
 # Upsert the runnable script jobs of `builds`; returns how many were written
 function record_pool_jobs!(db, pipeline, builds)
     stmt = upsert_stmt(db, "pool_jobs", ["job_uuid"], POOL_JOB_COLS)
+    # A finished build can leave a job open, or drop it from its listing, and
+    # such a job would otherwise wait or run forever in the backlog
+    close_stmt = DBInterface.prepare(db, "UPDATE pool_jobs SET state = 'lost', finished_at = ?, change_seq = ? " *
+                                         "WHERE pipeline = ? AND build = ? AND finished_at IS NULL AND $OPEN_JOB_SQL")
     seq = next_seq!(db)
     n = 0
-    for build in builds, job in something(get(build, :jobs, nothing), [])
-        get(job, :type, nothing) == "script" || continue
-        runnable = get(job, :runnable_at, nothing)
-        runnable === nothing && continue
-        rules = something(get(job, :agent_query_rules, nothing), [])
-        upsert!(stmt, (String(job.id), pipeline, Int(build.number), str(get(job, :name, nothing)),
-                       rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"),
-                       str(get(job, :state, nothing)), at(runnable), at(get(job, :started_at, nothing)),
-                       at(get(job, :finished_at, nothing)), seq))
-        n += 1
+    for build in builds
+        for job in something(get(build, :jobs, nothing), [])
+            get(job, :type, nothing) == "script" || continue
+            runnable = get(job, :runnable_at, nothing)
+            runnable === nothing && continue
+            rules = something(get(job, :agent_query_rules, nothing), [])
+            upsert!(stmt, (String(job.id), pipeline, Int(build.number), str(get(job, :name, nothing)),
+                           rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"),
+                           str(get(job, :state, nothing)), at(runnable), at(get(job, :started_at, nothing)),
+                           at(get(job, :finished_at, nothing)), seq))
+            n += 1
+        end
+        finished = get(build, :finished_at, nothing)
+        finished === nothing || DBInterface.execute(close_stmt, (at(finished), seq, pipeline, Int(build.number)))
     end
     return n
+end
+
+# Builds with open jobs that neither listing returned: they finished before
+# the window, so each is fetched alone to close its jobs
+function stale_builds(db, pipeline, listed)
+    seen = Set(Int(b.number) for b in listed)
+    builds = Any[]
+    for r in query(db, "SELECT DISTINCT build FROM pool_jobs WHERE pipeline = ? AND finished_at IS NULL AND $OPEN_JOB_SQL", (pipeline,))
+        Int(r.build) in seen && continue
+        b = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$(r.build)")
+        b === nothing || push!(builds, b)
+    end
+    return builds
 end
 
 # Start of the window of finished builds to fetch: shortly before the last
@@ -200,6 +224,7 @@ function update_pool_jobs!(db, now_time::DateTime)
         active = fetch_builds(pipeline, ["state[]" => s for s in ACTIVE_BUILD_STATES])
         recent = fetch_builds(pipeline, [key => Store.iso(from)])
         fetched[pipeline] = vcat(active, recent)
+        append!(fetched[pipeline], stale_builds(db, pipeline, fetched[pipeline]))
     end
     return transaction(db) do
         n = sum(record_pool_jobs!(db, p, b) for (p, b) in fetched)

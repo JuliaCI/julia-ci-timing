@@ -253,7 +253,8 @@
             "queue": "the queue of the job's agent query rules; with os and arch this is the pool",
             "runnable_at": "when every dependency had finished and the job could take an agent",
             "started_at": "when an agent started it; NULL while queued, or when canceled before starting",
-            "finished_at": "when it finished or was canceled; NULL while queued or running"
+            "finished_at": "when it finished or was canceled; NULL while queued or running",
+            "state": "the job's Buildkite state, or lost for a job its finished build left open or stopped listing (finished_at is then the build's)"
           }
         },
         "size_builds": {

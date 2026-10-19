@@ -157,9 +157,13 @@ end
 function instant(params, key)
     v = get(params, key, "")
     isempty(v) && return ""
-    occursin(ISO_INSTANT, v) || throw(BadRequest("$key must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ"))
+    bad = BadRequest("$key must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ")
+    occursin(ISO_INSTANT, v) || throw(bad)
     # The database's instants carry seconds, and the bounds are compared as text
-    return length(v) == 17 ? v[1:16] * ":00Z" : v
+    v = length(v) == 17 ? v[1:16] * ":00Z" : v
+    # The pattern lets through dates such as February 30
+    tryparse(DateTime, chopsuffix(v, "Z")) === nothing && throw(bad)
+    return v
 end
 
 function cursor(params, key)

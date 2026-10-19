@@ -322,8 +322,13 @@ function ingest!(db, args)
         # alone (cheap): the same backfill the file-based fetcher ran.
         transaction(db) do
             seq = next_seq!(db)
-            stmt = DBInterface.prepare(db, "UPDATE bench_reports SET report_total = ?, report_regressions = ?, report_improvements = ?, " *
-                                           "baseline_date = ?, baseline_commit_sha = COALESCE(baseline_commit_sha, ?), change_seq = ? WHERE id = ?")
+            # Many reports have a baseline date but no total, so the update
+            # must not fire when report.md adds nothing new
+            stmt = DBInterface.prepare(db, "UPDATE bench_reports SET report_total = ?1, report_regressions = ?2, report_improvements = ?3, " *
+                                           "baseline_date = ?4, baseline_commit_sha = COALESCE(baseline_commit_sha, ?5), change_seq = ?6 " *
+                                           "WHERE id = ?7 AND (report_total IS NOT ?1 OR report_regressions IS NOT ?2 OR " *
+                                           "report_improvements IS NOT ?3 OR baseline_date IS NOT ?4 OR " *
+                                           "baseline_commit_sha IS NOT COALESCE(baseline_commit_sha, ?5))")
             backfilled = 0
             for r in query(db, "SELECT id, path FROM bench_reports WHERE kind = 'daily' AND (report_total IS NULL OR baseline_date IS NULL)")
                 date_path = replace(String(r.path), "by_date/" => "")
@@ -332,7 +337,7 @@ function ingest!(db, args)
                 (md.total === nothing && md.baseline_date === nothing) && continue
                 DBInterface.execute(stmt, (sql(md.total), sql(md.regressions), sql(md.improvements), sql(md.baseline_date),
                                            sql(md.baseline_commit), seq, Int(r.id)))
-                backfilled += 1
+                backfilled += Int(query(db, "SELECT changes() AS n")[1].n)
             end
             backfilled > 0 && @info "Backfilled report summaries" count=backfilled
         end

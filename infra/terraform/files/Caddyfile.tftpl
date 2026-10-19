@@ -6,7 +6,9 @@
   root * ${site_root}
 
   redir /db /db/ 308
-  handle /db/* {
+  # Datasette adds its base_url to the path it is given when it builds
+  # absolute links, so it must see the path without /db
+  handle_path /db/* {
     reverse_proxy 127.0.0.1:${datasette_port}
   }
   # The site's own reads (db/serve.jl); its responses are already gzipped.
