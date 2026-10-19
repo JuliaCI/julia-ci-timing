@@ -9031,18 +9031,6 @@ function togglePackagesProportional() {
 }
 window.togglePackagesProportional = togglePackagesProportional;
 
-function setPackagesMinorFilter(val) {
-  // Backward-compatible wrapper: accept a single value and map to multiselect state.
-  if (!val || val === "all") {
-    packagesSelectedMinors.clear();
-  } else {
-    packagesSelectedMinors = new Set([val]);
-  }
-  updatePackagesDownloadsChart();
-  populatePackagesMinorFilterOptions();
-  updatePackagesURL();
-}
-
 function togglePackagesMinorDropdown(event) {
   event.stopPropagation();
   const dropdown = document.getElementById("packages-minor-dropdown");
@@ -14069,7 +14057,6 @@ const SIZES_METRICS = {
   "share.stdlib": "Stdlib sources",
 };
 const SIZES_DEFAULT_METRICS = ["total", "sysimg", "pkgimg.ji", "pkgimg.so"];
-const SIZES_COUNT_METRICS = new Set(["files", "pkgimg.count"]);
 
 let sizesData = null;
 let sizesChart = null;
@@ -16857,7 +16844,7 @@ async function loadOlderCommits(button) {
   button.textContent = "Loading...";
   const last = commitList.commits[commitList.commits.length - 1];
   try {
-    const d = await apiGet("commits", { before: last.first_at, limit: COMMIT_LIST_PAGE });
+    const d = await apiGet("commits", { before: last.first_at, before_commit: last.commit, limit: COMMIT_LIST_PAGE });
     commitList.commits.push(...d.commits);
     commitList.done = d.commits.length < COMMIT_LIST_PAGE;
     drawCommitList();

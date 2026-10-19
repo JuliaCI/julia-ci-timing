@@ -1051,9 +1051,16 @@ end
 # The scheduled pipeline only rebuilt commits julia-master already had.
 # Scheduled builds of julia-ci rebuild a commit under the message
 # "Scheduled build", so the subject comes from another build when there is one.
-function commit_list(db; before="", limit=100)
-    where = isempty(before) ? "" : " WHERE c.first_at < ?"
-    params = isempty(before) ? (limit,) : (before, limit)
+# Paged by (first_at, commit): several commits can share a first build time,
+# so `before_commit` carries on past the last one listed at `before`
+function commit_list(db; before="", before_commit="", limit=100)
+    where, params = if isempty(before)
+        "", (limit,)
+    elseif isempty(before_commit)
+        " WHERE c.first_at < ?", (before, limit)
+    else
+        " WHERE (c.first_at < ? OR (c.first_at = ? AND c.commit_prefix < ?))", (before, before, before_commit, limit)
+    end
     reports(table) = Set(first(String(r.c), 8) for r in rows(db, "SELECT DISTINCT commit_sha AS c FROM $table WHERE kind = 'daily' AND length(commit_sha) >= 8"))
     bench = reports("bench_reports")
     pkgeval = reports("pkgeval_reports")
@@ -1063,7 +1070,7 @@ function commit_list(db; before="", limit=100)
                       "SELECT c.commit_prefix, c.first_at, b.state, f.author, f.message FROM c JOIN builds b ON b.id = c.last_id " *
                       "JOIN builds f ON f.id = (SELECT id FROM builds x WHERE x.commit_prefix = c.commit_prefix " *
                       "ORDER BY x.message = '$SCHEDULED_MESSAGE', x.created_at LIMIT 1)" *
-                      where * " ORDER BY c.first_at DESC LIMIT ?", params)
+                      where * " ORDER BY c.first_at DESC, c.commit_prefix DESC LIMIT ?", params)
         prefix = String(r.commit_prefix)
         push!(out, OrderedDict("commit" => prefix, "first_at" => String(r.first_at), "state" => jstr(r.state),
                                "author" => String(r.author), "message" => String(r.message),

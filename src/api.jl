@@ -338,11 +338,15 @@ const ROUTES = [
     Route("github/activity", [SINCE],
           "JuliaLang/julia activity per day from start: open issues and pull requests at the end of each day; issues opened and closed, pull requests opened, merged and closed unmerged, and master commits on each day; and over the trailing window_days days the distinct commit authors and pull request openers and the median days merged pull requests were open (null without merges). The open counts and windows count everything before since too.",
           (db, _, p) -> Render.github_activity(db; since=instant(p, "since"))),
-    Route("commits", ["before" => "the first_at of the last commit already listed, to page back", "limit" => "commits per page, 100 by default, at most 500"],
+    Route("commits", ["before" => "the first_at of the last commit already listed, to page back",
+                      "before_commit" => "that commit, so commits sharing its first_at are not skipped",
+                      "limit" => "commits per page, 100 by default, at most 500"],
           "Master commits newest first, one row per commit: first build time, latest build state, author, subject, and whether a daily benchmark or PkgEval report ran on it.",
           (db, _, p) -> begin
               limit = cursor(p, "limit")
-              Render.commit_list(db; before=instant(p, "before"), limit=limit == 0 ? 100 : min(limit, 500))
+              before_commit = lowercase(get(p, "before_commit", ""))
+              (isempty(before_commit) || occursin(r"^[0-9a-f]{1,40}$", before_commit)) || throw(BadRequest("before_commit must be a commit SHA prefix"))
+              Render.commit_list(db; before=instant(p, "before"), before_commit, limit=limit == 0 ? 100 : min(limit, 500))
           end),
     Route("commit/<ref>", [],
           "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches. A PR number with no master commit (an open pull request, say) returns no matches and, under pr, what is recorded for the pull request: its GitHub listing, its TTFX comparison (an entry of ttfx/prs, with the metrics) and its size measurement (as sizes/pr/<number>), each null when missing, and stack, the pull requests it is stacked with from the one on master up (position is its place, 1 the lowest; missing the branch where the walk down stopped for want of a TTFX comparison), null when it is not stacked; pr is null when there is none.",
@@ -384,7 +388,7 @@ function api_index()
         "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, distribution sizes, package downloads and Buildkite agents, from one SQLite database refreshed every half hour. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
-        "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 220 MB)",
+        "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 300 MB)",
         "schema" => "https://github.com/JuliaCI/julia-ci-timing/blob/main/db/schema.sql",
         "health" => "https://perf.julialang.org/healthz",
         "routes" => routes)
