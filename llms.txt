@@ -19,8 +19,9 @@ description. All routes are GET and return JSON; use `curl --compressed`. Routes
 
 - `/api/status`: when each source last ingested successfully, and its change sequence; never cached, so poll this to see whether anything changed
 - `/api/commit/<sha or PR number>`: everything recorded for one master commit: its CI
-  jobs and TTFX against the previous commit, and the first benchmark and PkgEval reports
-  that include it. For an open pull request, `pr` has its TTFX and size comparisons with master
+  jobs, TTFX and size against the previous commit and the releases, and the first benchmark
+  and PkgEval reports that include it. For an open pull request, `pr` has its TTFX and size comparisons with master,
+  and each against the releases
 - `/api/commits?limit=100`: master commits, newest first
 - `/api/timing/builds?since=`: wall time and queue wait per master build
 - `/api/timing/runs?since=`: every CI job run in the window (30 days is about 0.2 MB)

@@ -15132,14 +15132,15 @@ function sizesPrBuildChangeBadge(p) {
 }
 
 // The metrics and changed files of a sizes/pr answer. A stacked pull request's own
-// change comes first, then the whole stack's against master.
-function sizesPrDiffHtml(d) {
+// change comes first, then the whole stack's against master. `between` goes
+// between the metrics and the files.
+function sizesPrDiffHtml(d, between = "") {
   if (d.below_metrics) {
     const below = `vs #${d.stack.below}`;
-    const html = sizesMetricsTableHtml(d.below_metrics, below, d.metrics, "stack vs master");
+    const html = sizesMetricsTableHtml(d.below_metrics, below, d.metrics, "stack vs master") + between;
     return html + (d.below_files ? sizesFilesHtml(d.below_files, `against #${d.stack.below}`) : sizesFilesHtml(d.files, "against master"));
   }
-  return sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + (d.base ? sizesFilesHtml(d.files) : "");
+  return sizesMetricsTableHtml(d.metrics, d.base ? "vs merge-base" : "") + between + (d.base ? sizesFilesHtml(d.files) : "");
 }
 
 // The values a pull request's change is shown from: the one below it for a stacked
@@ -17214,6 +17215,7 @@ function drawCommit({ ref, data, pr }) {
     commitHeaderHtml(data, pr),
     commitCIHtml(data),
     commitTtfxHtml(data),
+    commitSizesHtml(data),
     commitBenchHtml(data),
     commitPkgevalHtml(data),
   ].join("");
@@ -17265,17 +17267,103 @@ function commitPrHtml(d, gh) {
   </section>`;
   const t = d.ttfx;
   const ttfx = t
-    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false })}</div>`, {
+    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false })}${ttfxPrReleasesHtml(t)}</div>`, {
         links: overviewTabLink("ci-ttfx", "TTFX tab"),
       })
     : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>');
   const z = d.sizes;
   const sizes = z
-    ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z, { allStats: false })}${sizesPrDiffHtml(z)}</div>`, {
+    ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z, { allStats: false })}${sizesPrDiffHtml(z, sizesPrReleasesHtml(z))}</div>`, {
         links: overviewTabLink("ci-sizes", "Size tab"),
       })
     : commitCard("Size", '<p class="commit-line text-muted">No size measurement recorded for this pull request.</p>');
   return head + commitPrStackHtml(d.stack, n) + ttfx + sizes;
+}
+
+// Larger than the release is worse; a change that rounds to 0.0% is neither
+const prReleaseClass = (pct) => (pct == null || Math.abs(pct) < 0.05 ? "" : pct > 0 ? "ttfx-up" : "ttfx-down");
+
+// A release's row label: a branch nightly is named up to "-DEV", without its build number
+function prReleaseLabel(version, kind, lts) {
+  const v = kind === "branch_nightly" ? version.replace(/-DEV.*$/, "-DEV") : version;
+  return `vs ${escapeHtml(v)}${lts ? " (LTS)" : ""}`;
+}
+
+// TTFX against the latest run of each release series: a master commit's own job,
+// or for a pull request its head, estimated, with the merge-base's job muted beside it
+function ttfxReleasesHtml(metrics, against, base = null) {
+  if (!against || !against.length) return "";
+  const pct = (g) => (g == null ? null : (g - 1) * 100);
+  let html = '<table class="ttfx-popup-table"><thead><tr><th></th>';
+  html += metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+  html += "</tr></thead><tbody>";
+  for (const a of against) {
+    const label = prReleaseLabel(a.version, a.kind, a.kind === "lts");
+    const title = `Run of ${formatUtc(a.date)}, build #${a.build}`;
+    html += `<tr><th title="${escapeHtml(title)}">${a.url ? extLink(a.url, label) : label}</th>`;
+    metrics.forEach((_, i) => {
+      const main = pct(base ? a.head[i] : a.ratio[i]);
+      html += `<td class="num ${prReleaseClass(main)}" title="Geomean over ${a.n_tasks[i]} tasks">${formatSignedPct(main)}`;
+      if (base) html += ` <span class="ttfx-popup-muted" title="Merge-base">${formatSignedPct(pct(a.ratio[i]))}</span>`;
+      html += "</td>";
+    });
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  if (base) {
+    const job = base.url ? extLink(base.url, `#${base.build}`) : `#${base.build}`;
+    html += `<div class="ttfx-popup-muted ttfx-popup-hint">Against the latest run of each release series on the same machines. Muted: the merge-base's master job ${job}. The head is estimated: the merge-base's figure times the head's change against it.</div>`;
+  } else {
+    html += '<div class="ttfx-popup-muted ttfx-popup-hint">This commit\'s job against the latest run of each release series on the same machines, geomean over the tasks both measured.</div>';
+  }
+  return html;
+}
+
+function ttfxPrReleasesHtml(t) {
+  return t.releases ? ttfxReleasesHtml(t.metrics, t.releases.against, t.releases.base) : "";
+}
+
+// The columns of the comparison with the releases. The pkgimages are one column:
+// 1.15 moved much of their data from the .so files to the .ji files.
+const SIZES_RELEASE_COLUMNS = [
+  ["Total unpacked", ["total"]],
+  ["sys.so", ["sysimg"]],
+  ["Stdlib pkgimages", ["pkgimg.ji", "pkgimg.so"]],
+];
+
+// A size measurement against the official tarball of the newest patch of each
+// release series. For a pull request, the merge-base's figure is muted beside it.
+function sizesPrReleasesHtml(z, { pr = true } = {}) {
+  const rels = z.releases;
+  if (!rels || !rels.length) return "";
+  const sum = (ms, get) => {
+    const vs = ms.map(get);
+    return vs.some((v) => v == null) ? null : vs.reduce((a, b) => a + b, 0);
+  };
+  const cols = SIZES_RELEASE_COLUMNS.filter(([, ms]) => sum(ms, (m) => z.metrics[m]?.[0]) != null);
+  const pct = (v, b) => (v == null || !b ? null : (100 * (v - b)) / b);
+  let html = '<table class="ttfx-popup-table"><thead><tr><th></th>';
+  html += cols.map(([label]) => `<th class="num">${escapeHtml(label)}</th>`).join("");
+  html += "</tr></thead><tbody>";
+  for (const rel of rels) {
+    html += `<tr><th title="Published ${escapeHtml(formatUtc(rel.published_at))}">${prReleaseLabel(rel.version, "release", rel.lts)}</th>`;
+    for (const [, ms] of cols) {
+      const head = sum(ms, (m) => z.metrics[m][0]);
+      const base = pr ? sum(ms, (m) => z.metrics[m][1]) : null;
+      const b = sum(ms, (m) => rel.values[m]);
+      const h = pct(head, b);
+      const title = b ? `${pr ? "Head" : "This commit"} ${formatBytes(head)}${base != null ? `, merge-base ${formatBytes(base)}` : ""}, ${rel.version} ${formatBytes(b)}` : "";
+      html += `<td class="num ${prReleaseClass(h)}" title="${escapeHtml(title)}">${formatSignedPct(h)}`;
+      if (base != null && b) html += ` <span class="ttfx-popup-muted">${formatSignedPct(pct(base, b))}</span>`;
+      html += "</td>";
+    }
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  html += pr
+    ? '<div class="ttfx-popup-muted ttfx-popup-hint">The head against the official tarball of the newest patch of each release series. Muted: the merge-base.</div>'
+    : '<div class="ttfx-popup-muted ttfx-popup-hint">This commit\'s tarball against the official tarball of the newest patch of each release series.</div>';
+  return html;
 }
 
 // The pull requests stacked with this one, top first and master last, as gh stack
@@ -17496,9 +17584,21 @@ function commitTtfxHtml(data) {
   const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
   return commitCard(
     "TTFX",
-    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}`,
+    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}${ttfxReleasesHtml(metrics, t.releases)}`,
     { links },
   );
+}
+
+// The commit's CI tarball against the previous measured commit's, and against the releases
+function commitSizesHtml(data) {
+  const z = data.sizes;
+  if (!z) return commitCard("Size", '<p class="commit-line text-muted">No size measurement of this commit\'s CI tarball.</p>');
+  const prev = z.previous;
+  const intro = `<p class="commit-line">The tarball of julia-ci build #${z.build}${z.version ? `, ${escapeHtml(z.version)}` : ""}${
+    prev ? `, against the previous measured commit ${commitLink(prev.commit.slice(0, 10), `<code>${escapeHtml(prev.commit.slice(0, 10))}</code>`)}` : ""
+  }.</p>`;
+  const html = sizesMetricsTableHtml(z.metrics, prev ? "vs previous" : "") + sizesPrReleasesHtml(z, { pr: false }) + (prev ? sizesFilesHtml(z.files) : "");
+  return commitCard("Size", `${intro}<div class="popup-info">${html}</div>`, { links: overviewTabLink("ci-sizes", "Size") });
 }
 
 // "Run on this commit" or "first included, in a range of N commits"

@@ -959,7 +959,7 @@ function commit_ttfx(db, prefix, sha)
     return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
                        "url" => js(j.web_url), "metrics" => metrics,
                        "previous" => isempty(prev) ? nothing : OrderedDict("build" => Int(prev[1].build), "commit" => first(String(prev[1].commit_sha), 8)),
-                       "tasks" => tasks)
+                       "tasks" => tasks, "releases" => isempty(now_) ? Any[] : ttfx_release_ratios(db, String(j.job_uuid), metrics))
 end
 
 # The daily report run on the commit, or failing that the first one run on a
@@ -1083,11 +1083,72 @@ function commit_pr(db, n)
     ttfx_all = ttfx_prs(db)["prs"]
     ttfx = nothing
     i = findfirst(p -> p["pr"] == n, ttfx_all)
-    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "pr" => ttfx_all[i]))
+    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "pr" => ttfx_all[i],
+                                         "releases" => commit_pr_ttfx_releases(db, ttfx_all[i])))
     sizes = size_pr(db, string(n))
+    sizes === nothing || (sizes["releases"] = size_release_series(db))
     github === nothing && ttfx === nothing && sizes === nothing && return nothing
     stack = commit_pr_stack(db, n, ttfx_all, size_prs(db)["prs"])
     return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes, "stack" => stack)
+end
+
+function latest_ttfx_job(db, cond, params=())
+    r = rows(db, "SELECT job_uuid, build, version, build_created_at, web_url FROM ttfx_jobs t WHERE $cond AND EXISTS " *
+                 "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1", params)
+    return isempty(r) ? nothing : r[1]
+end
+
+# Master job `uuid` against the latest run of each release series, by the geometric
+# mean of the task ratios per metric (ratio), over the tasks both measured (n_tasks).
+# `pr_suite`, a pull request's suite geomeans against that commit, adds head: an
+# estimate of the pull request's head, the ratio times the mean of its blocks.
+function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
+    results(u) = Dict(String(r.task) => [js(getproperty(r, Symbol(m))) for m in metrics]
+                      for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (u,)))
+    now_ = results(uuid)
+    release = latest_ttfx_job(db, "kind = 'release'")
+    lts = latest_ttfx_job(db, "kind = 'lts'")
+    branch = latest_ttfx_job(db, "kind IN ('branch_nightly', 'release_branch')")
+    # A branch nightly from before the latest release is of that release's own branch
+    minor(j) = (v = tryparse(VersionNumber, String(j.version)); v === nothing ? nothing : (v.major, v.minor))
+    if branch !== nothing && release !== nothing
+        b, r = minor(branch), minor(release)
+        (b === nothing || r === nothing || b <= r) && (branch = nothing)
+    end
+    good(x) = x isa Real && x > 0
+    against = Any[]
+    for (kind, j) in (("branch_nightly", branch), ("release", release), ("lts", lts))
+        j === nothing && continue
+        ref = results(String(j.job_uuid))
+        ratio, head, counts = Any[], Any[], Int[]
+        for (i, m) in enumerate(metrics)
+            logs = [log(v[i] / ref[t][i]) for (t, v) in now_ if haskey(ref, t) && good(v[i]) && good(ref[t][i])]
+            g = isempty(logs) ? nothing : exp(sum(logs) / length(logs))
+            push!(ratio, g)
+            push!(counts, length(logs))
+            if pr_suite !== nothing
+                pr = haskey(pr_suite, m) ? collect(Float64, pr_suite[m].geomeans) : Float64[]
+                push!(head, g === nothing || isempty(pr) ? nothing : g * exp(sum(log, pr) / length(pr)))
+            end
+        end
+        e = OrderedDict{String,Any}("kind" => kind, "version" => String(j.version), "build" => Int(j.build),
+                                    "job_id" => String(j.job_uuid), "date" => String(j.build_created_at), "url" => js(j.web_url),
+                                    "ratio" => ratio, "n_tasks" => counts)
+        pr_suite === nothing || (e["head"] = head)
+        push!(against, e)
+    end
+    return against
+end
+
+# A pull request's merge-base, and its head (estimated), against the latest run of each
+# release series. Nothing for a stacked pull request, whose base is another branch, or
+# when the merge-base has no master job with results.
+function commit_pr_ttfx_releases(db, p)
+    p["stack"] === nothing || return nothing
+    base = latest_ttfx_job(db, "kind = 'master' AND commit_sha = ?", (p["base"]["commit"],))
+    base === nothing && return nothing
+    return OrderedDict("base" => OrderedDict("build" => Int(base.build), "job_id" => String(base.job_uuid), "url" => js(base.web_url)),
+                       "against" => ttfx_release_ratios(db, String(base.job_uuid), TTFX_PR_METRICS; pr_suite=p["suite"]))
 end
 
 # The stack a pull request is part of, from the one on master up: the layers below it
@@ -1183,6 +1244,7 @@ function commit(db, ref)
         "jobs" => primary === nothing ? nothing : commit_jobs(db, primary),
         "ttfx" => commit_ttfx(db, prefix, sha),
         "benchmarks" => commit_benchmarks(db, prefix, sha, t),
+        "sizes" => commit_sizes(db, something(sha, prefix)),
         "pkgeval" => commit_pkgeval(db, prefix, sha, t),
         "coverage" => commit_coverage(db, prefix, sha))
 end
@@ -1318,6 +1380,26 @@ function size_releases(db, wanted, include)
     return ("releases" => out, "release" => newest, "lts" => SIZE_LTS)
 end
 
+# The metrics a pull request's size is compared with the releases on, the Sizes tab's
+# default ones (the tarball is left out: julia-pr builds compress theirs differently)
+const SIZE_RELEASE_METRICS = ["total", "sysimg", "pkgimg.ji", "pkgimg.so"]
+
+# The newest measured patch of each minor release series, newest series first
+function size_release_series(db)
+    newest = Dict{Tuple{UInt32,UInt32},Any}()
+    for r in last(first(size_releases(db, SIZE_RELEASE_METRICS, true)))
+        v = tryparse(VersionNumber, r["version"])
+        v === nothing && continue
+        k = (v.major, v.minor)
+        (haskey(newest, k) && VersionNumber(newest[k]["version"]) >= v) || (newest[k] = r)
+    end
+    out = sort!(collect(values(newest)); by=r -> VersionNumber(r["version"]), rev=true)
+    for r in out
+        r["lts"] = startswith(r["version"], SIZE_LTS * ".")
+    end
+    return out
+end
+
 # Every metric of measurement `id` next to measurement `before`'s (0 for none),
 # and every file of at least 1 MiB in either, the files that changed most first
 function size_diff(db, id, before)
@@ -1353,6 +1435,17 @@ function size_commit(db, ref)
             size_diff(db, Int(b.id), isempty(prev) ? 0 : Int(prev[1].id))...)
     end
     return isempty(out) ? nothing : OrderedDict("query" => ref, "triplet" => SIZE_TRIPLET, "sources" => out)
+end
+
+# The commit's measurement from its CI tarball against the previous one, with the
+# releases. The manyjulias builds before CI have fewer CPU targets, so they are left
+# out: they do not compare with the releases' tarballs.
+function commit_sizes(db, sha)
+    s = size_commit(db, sha)
+    (s === nothing || !haskey(s["sources"], "ci")) && return nothing
+    c = s["sources"]["ci"]
+    c["releases"] = size_release_series(db)
+    return c
 end
 
 const SIZE_PR_METRICS = filter(!=("tarball"), SIZE_SUMMARY_METRICS)
