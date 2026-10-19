@@ -4844,7 +4844,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   // The remaining shortcuts act on the CI timing chart and job list
-  if (!activeTab.startsWith("ci-") || activeTab === "ci-ttfx") return;
+  if (activeTab !== "ci-timing" || timingView !== "history") return;
   if (e.key === "r") {
     e.preventDefault();
     if (customXMin !== null || customYMin !== null) resetZoom();
