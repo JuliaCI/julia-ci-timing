@@ -37,6 +37,8 @@
   --color-neutral-muted: rgba(175, 184, 193, 0.2);
   --color-overlay-shadow:
     0 1px 3px rgba(31, 35, 40, 0.12), 0 8px 24px rgba(66, 74, 83, 0.12);
+  --color-shadow-medium: 0 3px 6px rgba(140, 149, 159, 0.15);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -76,6 +78,7 @@
     --tab-group-label-tint: 30%;
     --color-neutral-muted: rgba(110, 118, 129, 0.4);
     --color-overlay-shadow: 0 0 0 1px #30363d, 0 16px 32px rgba(1, 4, 9, 0.85);
+    --color-shadow-medium: 0 3px 6px #010409;
   }
 }
 :root[data-theme="dark"] {
@@ -114,6 +117,7 @@
   --tab-group-label-tint: 30%;
   --color-neutral-muted: rgba(110, 118, 129, 0.4);
   --color-overlay-shadow: 0 0 0 1px #30363d, 0 16px 32px rgba(1, 4, 9, 0.85);
+  --color-shadow-medium: 0 3px 6px #010409;
 }
 
 * {
@@ -1661,7 +1665,7 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
 }
 .agents-table td.agents-name {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
 }
 .agents-table td.agents-job {
   max-width: 34ch;
@@ -2582,9 +2586,9 @@ th.sorted .sort-indicator {
   background: var(--color-neutral-muted);
   cursor: default;
 }
-.pkgeval-strip .st-ok { background: var(--color-success-emphasis, #1a7f37); }
-.pkgeval-strip .st-fail { background: var(--color-danger-emphasis, #cf222e); }
-.pkgeval-strip .st-crash { background: var(--color-severe-emphasis, #bc4c00); }
+.pkgeval-strip .st-ok { background: var(--color-success-fg); }
+.pkgeval-strip .st-fail { background: var(--color-danger-fg); }
+.pkgeval-strip .st-crash { background: var(--color-severe-fg); }
 .pkgeval-strip .st-kill { background: var(--color-done-fg); }
 .pkgeval-strip .st-skip { background: var(--color-neutral-muted, #d0d7de); }
 .package-panel tr.clickable {
@@ -2652,10 +2656,6 @@ th.sorted .sort-indicator {
 }
 .commits-reg-table th {
   color: var(--color-fg-muted);
-  font-weight: 600;
-}
-.commits-reg-pct {
-  color: var(--color-danger-fg);
   font-weight: 600;
 }
 .commits-reg-table td.commits-reg-msg {
@@ -2913,7 +2913,7 @@ th.sorted .sort-indicator {
   background: var(--color-canvas-overlay, #fff);
   border: 1px solid var(--color-border-default, #d0d7de);
   border-radius: 6px;
-  box-shadow: var(--color-shadow-medium, 0 3px 6px rgba(140, 149, 159, 0.15));
+  box-shadow: var(--color-shadow-medium);
   color: var(--color-fg-default);
   font-size: 12px;
   line-height: 1.4;
@@ -3007,7 +3007,7 @@ th.sorted .sort-indicator {
   width: 72px;
 }
 .ttfx-compile-table .ttfx-compile-stmt {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   overflow-wrap: anywhere;
 }
@@ -3680,11 +3680,6 @@ th.sorted .sort-indicator {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--color-fg-default);
-}
-.overview-share {
-  display: inline-block;
-  margin-right: 10px;
-  white-space: nowrap;
 }
 @media (max-width: 768px), (max-height: 500px) {
   .overview-body {
