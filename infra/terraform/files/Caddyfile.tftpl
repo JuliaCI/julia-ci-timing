@@ -61,7 +61,16 @@
     header @versioned Cache-Control "public, max-age=31536000, immutable"
     header @unversioned Cache-Control "public, max-age=300"
     header @pages Cache-Control "no-cache"
+    # /commit/<SHA or PR number> is the Commit page's shorthand
+    @commitref path_regexp ^/commit/([0-9a-fA-F]{7,40}|[0-9]{1,6})/?$
+    rewrite @commitref /commit/index.html
     try_files {path} {path}/index.html
+    file_server
+  }
+  # A path nothing serves gets a page saying so, not an empty body
+  handle_errors 404 {
+    root * ${site_root}
+    rewrite * /404.html
     file_server
   }
 }

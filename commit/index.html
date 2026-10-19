@@ -21,12 +21,15 @@
     <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
     <meta name="robots" content="noindex" />
     <!-- Shorthand for ../?tab=commit. Any other query parameters and the
-         fragment are carried over, so /commit?c=abc1234 opens that commit. -->
+         fragment are carried over, so /commit?c=abc1234 opens that commit,
+         and so does /commit/abc1234 (or a PR number), served this page too. -->
     <script>
       (function () {
         var p = new URLSearchParams(location.search);
         p.set("tab", "commit");
-        location.replace("../?" + p.toString() + location.hash);
+        var m = location.pathname.match(/\/commit\/([0-9a-fA-F]{7,40}|\d{1,6})\/?$/);
+        if (m && !p.has("c")) p.set("c", m[1]);
+        location.replace("/?" + p.toString() + location.hash);
       })();
     </script>
     <meta http-equiv="refresh" content="0; url=../?tab=commit" />

@@ -60,7 +60,7 @@ case "${1:-ingest}" in
       set -e
       stage=/site/.sync-new; old=/site/.sync-old
       rm -rf "$stage" "$old"; mkdir "$stage" "$old"
-      cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/robots.txt /app/assets "$stage/"
+      cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/robots.txt /app/404.html /app/assets "$stage/"
       # Every page directory, so a new tab needs no change here
       for index in /app/*/index.html; do cp -r "$(dirname "$index")" "$stage/"; done
       commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"

@@ -32,7 +32,9 @@
       content="Benchmarks, CI build timing, TTFX and PkgEval results for the Julia language."
     />
     <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
-    <meta name="theme-color" content="#111827" />
+    <!-- The page background; the theme button sets both when it forces one -->
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-title" content="Julia Perf" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
@@ -532,9 +534,10 @@
           <button class="btn" type="submit">Look up</button>
         </form>
         <span class="overview-note"
-          >Master commits only. Job and TTFX times are compared with the
-          previous commit's; benchmarks and PkgEval show the first daily report
-          that includes the commit.</span
+          >A master commit, or a pull request: merged ones show their merge
+          commit, open ones their TTFX and size comparisons. Job and TTFX times
+          are compared with the previous commit's; benchmarks and PkgEval show
+          the first daily report that includes the commit.</span
         >
       </div>
       <div class="commit-layout" id="commit-layout">
