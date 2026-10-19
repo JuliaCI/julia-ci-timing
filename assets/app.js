@@ -5925,49 +5925,23 @@ function toggleSection(header) {
   }
 }
 
-// Sections can be collapsed up to this width; wider screens always show them
-const SECTION_COLLAPSE_WIDTH = 768;
-
-// Restore collapsed section states from localStorage (mobile only)
+// Restore collapsed section states from localStorage. The stylesheet only
+// collapses them on phone widths, where their headers show.
 function restoreSectionStates() {
-  const isMobile = window.innerWidth <= SECTION_COLLAPSE_WIDTH;
   document.querySelectorAll(".section-header[id]").forEach((header) => {
     const content = header.nextElementSibling;
-    if (isMobile) {
-      // On mobile, restore saved state; collapsed until the user opens a
-      // section, so the chart is the first thing on screen
-      try {
-        const saved = localStorage.getItem(`section-${header.id}`);
-        if (saved === "1" || saved === null) {
-          header.classList.add("collapsed");
-          if (content) content.classList.add("collapsed");
-        } else {
-          header.classList.remove("collapsed");
-          if (content) content.classList.remove("collapsed");
-        }
-      } catch (e) {
-        /* ignore */
-      }
-    } else {
-      // On larger screens, always show sections expanded
-      header.classList.remove("collapsed");
-      if (content) content.classList.remove("collapsed");
+    // Collapsed until the user opens a section, so the chart is the first thing on screen
+    let collapsed = true;
+    try {
+      collapsed = localStorage.getItem(`section-${header.id}`) !== "0";
+    } catch (e) {
+      /* ignore */
     }
+    header.classList.toggle("collapsed", collapsed);
+    if (content) content.classList.toggle("collapsed", collapsed);
   });
 }
 restoreSectionStates();
-
-// Re-check section visibility on resize
-window.addEventListener("resize", () => {
-  if (window.innerWidth > SECTION_COLLAPSE_WIDTH) {
-    // Ensure sections are expanded on larger screens
-    document.querySelectorAll(".section-header[id]").forEach((header) => {
-      header.classList.remove("collapsed");
-      const content = header.nextElementSibling;
-      if (content) content.classList.remove("collapsed");
-    });
-  }
-});
 
 function toggleMatrixCell(platform, type) {
   toggleJobsSelection(jobMatrix[platform][type]);

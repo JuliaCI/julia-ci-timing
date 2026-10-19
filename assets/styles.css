@@ -452,11 +452,6 @@ a {
   min-height: 0;
   overflow-y: auto;
 }
-.collapsible-content.collapsed {
-  max-height: 0 !important;
-  opacity: 0;
-}
-
 /* Job list below matrix */
 .job-list-section {
   border-top: 1px solid var(--color-border-default);
@@ -1156,6 +1151,11 @@ th.sorted .sort-indicator {
   .job-list-section .collapsible-content {
     max-height: 150px;
     overflow-y: auto;
+  }
+  /* Only here, where the headers show, so a wider window never hides a section it cannot reopen */
+  .collapsible-content.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
   }
   .job-list-header {
     display: none; /* Hide old header, use section-header instead */
