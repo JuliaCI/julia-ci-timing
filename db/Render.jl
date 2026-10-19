@@ -693,10 +693,13 @@ function ttfx_job(db, job_id; task="")
 end
 
 # Open pull requests by how their latest TTFX comparison looks, best first.
-# The score is the estimated head/base ratio of the suite's total time over
-# precompile, load, run and warm: each metric's ratio weighted by how long it
-# takes on master, so precompile counts the most. Below 1 is faster.
-const TTFX_PR_METRICS = ["precompile", "load", "run", "warm"]
+# The score is a weighted geometric mean of the per-metric ratios (head/base, below 1
+# is faster), with a third each for what a user pays: precompile once per install,
+# cold load and run in the first session, and warm load+run in every later one.
+# Fixed weights rather than seconds on master, which would leave the score almost
+# only precompile, and a geomean to match the suite geomeans it combines.
+const TTFX_PR_WEIGHTS = ["precompile" => 1/3, "load" => 1/6, "run" => 1/6, "warm" => 1/3]
+const TTFX_PR_METRICS = first.(TTFX_PR_WEIGHTS)
 
 # A metric's ratio is the block nearest no change, and no change when the blocks
 # disagree on the direction, so one noisy block moves the score neither way.
@@ -706,24 +709,14 @@ function ttfx_pr_ratio(geomeans)
     return 1.0
 end
 
-function ttfx_pr_score(suite, weights)
-    total = ratio = 0.0
-    for m in TTFX_PR_METRICS
+function ttfx_pr_score(suite)
+    total = logratio = 0.0
+    for (m, w) in TTFX_PR_WEIGHTS
         (haskey(suite, m) && !isempty(suite[m].geomeans)) || continue
-        w = get(weights, m, 0.0)
         total += w
-        ratio += w * ttfx_pr_ratio(suite[m].geomeans)
+        logratio += w * log(ttfx_pr_ratio(suite[m].geomeans))
     end
-    return total > 0 ? ratio / total : nothing
-end
-
-# Each metric's summed time over the suite in the newest master TTFX job
-function ttfx_pr_weights(db)
-    sql = "SELECT sum(precompile) AS precompile, sum(load) AS load, sum(run) AS run, sum(warm) AS warm FROM ttfx_results " *
-          "WHERE job_uuid = (SELECT j.job_uuid FROM ttfx_jobs j WHERE j.kind = 'master' AND EXISTS (SELECT 1 FROM ttfx_results r WHERE r.job_uuid = j.job_uuid) " *
-          "ORDER BY j.build_created_at DESC LIMIT 1)"
-    r = only(rows(db, sql))
-    return Dict(m => Float64(something(coalesce(getproperty(r, Symbol(m)), 0.0), 0.0)) for m in TTFX_PR_METRICS)
+    return total > 0 ? exp(logratio / total) : nothing
 end
 
 # Per-block product of two layers' suite geomeans, metric by metric. Layers measured with
@@ -769,14 +762,13 @@ end
 
 function ttfx_prs(db)
     prs = Any[]
-    weights = ttfx_pr_weights(db)
     all_rows = collect(rows(db, "SELECT * FROM ttfx_prs"))
     by_ref = Dict(String(r.head_ref) => r for r in all_rows if !isempty(String(r.head_ref)))
     for r in all_rows
         suite = JSON3.read(String(r.suite))
-        own_score = ttfx_pr_score(suite, weights)
+        own_score = ttfx_pr_score(suite)
         stack = ttfx_pr_stack(r, by_ref)
-        stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"], weights))
+        stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"]))
         push!(prs, OrderedDict(
             "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
             "head_ref" => String(r.head_ref), "base_ref" => String(r.base_ref),
