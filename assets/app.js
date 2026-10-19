@@ -6797,6 +6797,9 @@ let benchStatType = "minimum";
 // Which estimate the API serves: time (the only one the files have), gctime,
 // memory or allocs
 let benchMetric = "time";
+// The API's default metric is left out of the query, so that the Overview's
+// request and this tab's share one cache entry
+const benchMetricParam = (m) => (m === "time" ? "" : m);
 const BENCH_METRIC_LABELS = { time: "Time", gctime: "GC time", memory: "Memory", allocs: "Allocations" };
 let benchVerdicts = null; // { since, verdicts } from api/benchmarks/verdicts
 let benchVerdictsLoading = null;
@@ -7038,7 +7041,7 @@ function setBenchTimeRange(value) {
 // metric changed while it was in flight
 async function fetchBenchGroupDetail(group) {
   const generation = benchDetailGeneration;
-  const detail = await apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetric });
+  const detail = await apiGet(`benchmarks/groups/${encodeURIComponent(group)}`, { since: benchDetailSince, metric: benchMetricParam(benchMetric) });
   return generation === benchDetailGeneration ? detail : null;
 }
 
@@ -7286,7 +7289,7 @@ async function setBenchMetric(value) {
   if (sel) sel.value = value;
   let summary;
   try {
-    summary = await apiGet("benchmarks/summary", { metric: value });
+    summary = await apiGet("benchmarks/summary", { metric: benchMetricParam(value) });
   } catch (err) {
     console.error("Failed to load the benchmark summary:", err);
     return;
@@ -7306,7 +7309,7 @@ async function reloadBenchData() {
   const generation = ++benchDetailGeneration;
   benchGroupDetailLoading = {};
   try {
-    const summary = await apiGet("benchmarks/summary", { metric });
+    const summary = await apiGet("benchmarks/summary", { metric: benchMetricParam(metric) });
     if (generation !== benchDetailGeneration) return;
     benchData = summary;
     const groups = [...benchSelectedGroups];
@@ -7333,7 +7336,7 @@ async function loadBenchmarkData() {
     // before the chart computes anything.
     await BenchCore.loadMethodologyChanges(`${API_BASE}/notes/methodology_changes`);
     updateBenchMethodologyNotesCount();
-    benchData = await apiGet("benchmarks/summary", { metric: benchMetric });
+    benchData = await apiGet("benchmarks/summary", { metric: benchMetricParam(benchMetric) });
     benchDetailSince = apiSince(getBenchCutoff());
 
     document.getElementById("bench-chart-loading").style.display = "none";
@@ -13947,6 +13950,7 @@ const SIZES_COUNT_METRICS = new Set(["files", "pkgimg.count"]);
 let sizesData = null;
 let sizesChart = null;
 let sizesTimeRangeDays = 365;
+let sizesSince = null; // the start of the window loaded or on its way, "" for all time
 let sizesNormalized = false;
 let sizesSelected = new Set(SIZES_DEFAULT_METRICS);
 let sizesColors = {};
@@ -13999,6 +14003,15 @@ function formatSizeValue(v, isCount = false) {
   if (v == null) return "—";
   if (v === 0) return "0";
   return isCount ? v.toLocaleString("en-US") : formatBytes(v);
+}
+
+// The window to load: the range shown, at least the Overview's month, and a
+// week before it so the oldest commit shown has one to compare with. All
+// time is "".
+function sizesWantedSince() {
+  if (sizesTimeRangeDays <= 0) return "";
+  const days = Math.max(sizesTimeRangeDays, OVERVIEW_SPARK_DAYS) + 7;
+  return apiSince(new Date(Date.now() - days * OVERVIEW_DAY_MS));
 }
 
 // The window's start as a timestamp, or -Infinity for all time
@@ -14081,7 +14094,8 @@ function updateSizesURL() {
 
 async function loadSizesData() {
   try {
-    sizesData = await apiGet("sizes/summary");
+    sizesSince = sizesWantedSince();
+    sizesData = await apiGet("sizes/summary", { since: sizesSince });
     setUpdatedLabels();
     const colors = generateColors(Object.keys(SIZES_METRICS).length);
     Object.keys(SIZES_METRICS).forEach((m, i) => (sizesColors[m] = colors[i]));
@@ -14101,8 +14115,12 @@ async function loadSizesData() {
 }
 
 async function reloadSizesData() {
+  const since = sizesSince;
   try {
-    sizesData = await apiGet("sizes/summary");
+    const d = await apiGet("sizes/summary", { since });
+    // A wider window was asked for meanwhile
+    if (since !== sizesSince) return;
+    sizesData = d;
   } catch (err) {
     console.error("Failed to reload the size data:", err);
     return;
@@ -14187,6 +14205,11 @@ function selectSizesMetrics(which) {
 
 function setSizesTimeRange(val) {
   sizesTimeRangeDays = parseInt(val, 10);
+  const wanted = sizesWantedSince();
+  if (sizesData && sizesSince !== "" && (wanted === "" || wanted < sizesSince)) {
+    sizesSince = wanted;
+    reloadSizesData();
+  }
   updateSizesChart();
   updateSizesTable();
   updateSizesURL();
