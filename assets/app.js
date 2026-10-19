@@ -353,14 +353,17 @@ let customYMax = null; // seconds or null
 // === Helper Functions ===
 const isFailedState = (state) => FAILED_STATES.includes(state);
 const getRunState = (run) => run.state || "passed";
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Run dates are "yyyy-mm-dd HH:MM" in UTC (fetch_timing.jl). That form is
 // outside the Date grammar and browsers read it as local time, so it is
-// completed to an ISO string first; coverage dates are already ISO.
+// completed to an ISO string first; coverage dates are already ISO, and a
+// bare report date is midnight UTC.
 const runTime = (run) => {
   const d = run && run.date;
   if (!d) return NaN;
   if (d instanceof Date) return d.getTime();
   if (typeof d === "number") return d;
+  if (DATE_ONLY_RE.test(d)) return Date.parse(d + "T00:00:00Z");
   return Date.parse(d.includes("T") ? d : d.replace(" ", "T") + ":00Z");
 };
 
@@ -6151,6 +6154,8 @@ function initialTimingCutoff() {
     days = nearestTimeRange(stored.timeRange);
   }
   if (days === 0) return null;
+  // The Overview reads these runs too, over a month whatever range this tab keeps
+  days = Math.max(days, OVERVIEW_SPARK_DAYS);
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   return cutoff;
@@ -14614,7 +14619,7 @@ function renderSizesPrsTable() {
       : p.below_values
         ? prStackBadge(st.below, st.base_ref, `Targets ${st.base_ref} (#${st.below}). Its change against master less #${st.below}'s${st.exact ? "" : "; approximate, since #" + st.below + " has commits newer than where this one branched off"}`, !st.exact)
         : prStackBadge(st.below, st.base_ref, `Targets ${st.base_ref}${st.below ? ` (#${st.below}), which is not measured` : ""}; compared with master, so the pull requests below it count too`, false);
-    html += `<td class="msg" title="${escapeHtml(p.title)}">${draft}${stacked}${escapeHtml(p.title)}</td>`;
+    html += `<td class="msg" title="${escapeHtml(p.title)}">${draft}${stacked}${sizesPrBuildChangeBadge(p)}${escapeHtml(p.title)}</td>`;
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     for (const m of metrics) {
       const d = delta(p, m);
@@ -14764,7 +14769,19 @@ function sizesPrDetailsHtml(p, { allStats = true } = {}) {
     html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(title)}</div>`;
   }
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
+  if (p.build_change) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBuildChangeText(p))}</div>`;
   return html;
+}
+
+// A pull request whose merge-base was measured before a change to CI's build
+// and whose build ran after it: part of its change against master is CI's
+function sizesPrBuildChangeText(p) {
+  const c = p.build_change;
+  return `Its merge-base was measured before "${c.label}" (${c.commit.slice(0, 10)}) and its build ran after, so its change against master includes that step: ${c.description}`;
+}
+
+function sizesPrBuildChangeBadge(p) {
+  return p.build_change ? `<span class="ttfx-note-badge" title="${escapeHtml(sizesPrBuildChangeText(p))}">CI build change</span> ` : "";
 }
 
 // The metrics and changed files of a sizes/pr answer. A stacked pull request's own
@@ -15056,7 +15073,6 @@ async function loadOverviewSources() {
   const fresh = (view, d) => (staleViews.has(view) ? null : d);
   // Beyond the tabs' summaries: the latest builds' timing, the failure
   // reasons of the latest PkgEval report, the week's most requested packages
-  const weekAgo = apiSince(new Date(Date.now() - 7 * OVERVIEW_DAY_MS));
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
   const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog, activity] = await Promise.all([
@@ -15068,7 +15084,7 @@ async function loadOverviewSources() {
     fresh("sizes", sizesPrs) || quiet("sizes/prs"),
     fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
     quiet("agents/latest"),
-    quiet("timing/builds", { since: weekAgo }),
+    quiet("timing/builds", { since: twoWeeksAgo }),
     quiet("pkgeval/reasons"),
     quiet("downloads/top", { days: 7, client: "user" }),
     quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
@@ -15107,6 +15123,8 @@ function overviewDays(dateString) {
 function overviewAgo(dateString) {
   const days = overviewDays(dateString);
   if (days === null) return "unknown";
+  // A report is dated by day, so hours since its midnight say nothing
+  if (days < 1 && DATE_ONLY_RE.test(dateString)) return "today";
   if (days < 1) return timeAgo(dateString);
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
@@ -15646,18 +15664,32 @@ function overviewCICard() {
   }
   rows.push(["Builds in last 24 h", String(buildsLastDay.size)]);
   rows.push(["Job runs this week", `${week.runs}${prior.runs ? `, ${prior.runs} the week before` : ""}`]);
-  // Wall time and queue wait of the week's builds, where the database has them
-  const timed = ((overviewSources && overviewSources.builds) || []).filter((b) => b.pipeline === "julia-ci" && b.wall_s != null);
-  if (timed.length) {
-    const newest = timed[0];
-    const walls = timed.map((b) => b.wall_s);
-    const queues = timed.filter((b) => b.queue_median_s != null).map((b) => b.queue_median_s);
+  // Wall time and queue wait of the passed push builds over the last 7x24 h and
+  // the 7x24 h before. Failed builds stop early and scheduled ones run fewer jobs.
+  const timed = ((overviewSources && overviewSources.builds) || []).filter(
+    (b) => b.pipeline === "julia-ci" && b.wall_s != null && b.state === "passed" && b.source !== "schedule",
+  );
+  const created = (b) => Date.parse(b.created_at);
+  const thisWeek = timed.filter((b) => created(b) >= now - OVERVIEW_WEEK_MS);
+  const weekBefore = timed.filter((b) => created(b) >= now - 2 * OVERVIEW_WEEK_MS && created(b) < now - OVERVIEW_WEEK_MS);
+  const queueMedian = (bs) => {
+    const qs = bs.filter((b) => b.queue_median_s != null).map((b) => b.queue_median_s);
+    return qs.length ? median(qs) : null;
+  };
+  if (thisWeek.length) {
+    const newest = thisWeek[0];
+    const before = weekBefore.length ? `, ${formatDuration(median(weekBefore.map((b) => b.wall_s)))} the week before` : "";
     rows.push([
       "Build wall time",
-      `${overviewTabLink("ci-builds", formatDuration(median(walls)))} median over ${timed.length} build${timed.length === 1 ? "" : "s"} this week; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
+      `${overviewTabLink("ci-builds", formatDuration(median(thisWeek.map((b) => b.wall_s))))} median over ${thisWeek.length} passed push build${thisWeek.length === 1 ? "" : "s"} this week${before}; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
     ]);
-    if (queues.length) {
-      rows.push(["Queue wait", `${formatDuration(median(queues))} median job wait this week; latest build ${formatDuration(newest.queue_median_s)}, longest ${formatDuration(newest.queue_max_s)}`]);
+    const queue = queueMedian(thisWeek);
+    const queueBefore = queueMedian(weekBefore);
+    if (queue != null) {
+      rows.push([
+        "Queue wait",
+        `${formatDuration(queue)} median job wait this week${queueBefore != null ? `, ${formatDuration(queueBefore)} the week before` : ""}; latest #${newest.build} ${formatDuration(newest.queue_median_s)}, longest ${formatDuration(newest.queue_max_s)}`,
+      ]);
     }
   }
   // Only jobs still running: the legacy pipelines' jobs keep their last state
@@ -15705,6 +15737,18 @@ function overviewCICard() {
     donut,
     rows,
   });
+}
+
+// The TTFX tab's "Hide annotated jumps" rescales its values; the Overview
+// shows them as measured
+function overviewTtfxUnscaled(fn) {
+  const hide = ttfxHideJumps;
+  ttfxHideJumps = false;
+  try {
+    return fn();
+  } finally {
+    ttfxHideJumps = hide;
+  }
 }
 
 function overviewTtfxCard(src, prs) {
@@ -15762,7 +15806,7 @@ function overviewTtfxCard(src, prs) {
     title: "TTFX",
     status,
     description:
-      "Time to precompile, load and first run a set of packages, measured on every master build.",
+      "Time to precompile, load and first run a set of packages, measured on every master build. Each comparison below is over the snippets both of its runs measured, so it can differ from the TTFX tab, which uses the snippets every run in its range measured.",
     headline: geomean != null ? formatTtfxSeconds(geomean) : null,
     headlineLabel: geomean != null ? `precompile geomean over ${common.length} snippets in the latest build` : null,
     delta,
@@ -15885,11 +15929,20 @@ function overviewCompareRows(columns, groups) {
   return [{ table: rows }];
 }
 
-// The five best-ranked open pull requests that come out faster, with their score
+// The five open pull requests whose passed job shows them most faster on their
+// own, as the Sizes card ranks by a pull request's own change. A stacked one is
+// measured against the branch below it and marked as the TTFX tab marks it.
 function overviewTtfxPrs(prs) {
-  const best = ((prs && prs.prs) || []).filter((p) => p.score != null && p.score < 1).slice(0, 5);
+  const best = ((prs && prs.prs) || [])
+    .filter((p) => p.state === "passed" && p.own_score != null && p.own_score < 1)
+    .sort((a, b) => a.own_score - b.own_score)
+    .slice(0, 5);
   return best
-    .map((p) => `${overviewExtLink(githubPrURL(p.pr), `#${p.pr}`)} ${formatSignedPct((p.score - 1) * 100)}`)
+    .map((p) => {
+      const pct = formatSignedPct((p.own_score - 1) * 100);
+      const text = p.stack ? `<span title="${escapeHtml(`On its own against ${p.stack.base_ref}`)}">${pct}*</span>` : pct;
+      return `${overviewExtLink(githubPrURL(p.pr), `#${p.pr}`)} ${text}`;
+    })
     .join(", ");
 }
 
@@ -16001,6 +16054,7 @@ function overviewSizesPrs(prs) {
     return before && p.values.total != null && before.total != null ? p.values.total - before.total : null;
   };
   return ((prs && prs.prs) || [])
+    .filter((p) => !p.build_change)
     .map((p) => ({ p, d: delta(p) }))
     .filter(({ d }) => d)
     .sort((a, b) => Math.abs(b.d) - Math.abs(a.d))
@@ -16395,7 +16449,7 @@ function drawOverview() {
   for (const c of overviewCharts) c.destroy();
   overviewCharts = [];
   const cards = [
-    overviewTtfxCard(src.ttfx, src.ttfxPrs),
+    overviewTtfxUnscaled(() => overviewTtfxCard(src.ttfx, src.ttfxPrs)),
     overviewSizesCard(src.sizes, src.sizesPrs),
     overviewPackagesCard(src.packages),
     overviewPkgevalCard(src.pkgeval),

@@ -159,11 +159,11 @@ seconds_between(a, b) = (a === missing || b === missing) ? nothing : round((Date
 function timing_builds(db; since="")
     where, params = where_clause("b.created_at", since, "")
     builds = OrderedDict{Int,Any}()
-    for b in rows(db, "SELECT id, pipeline, number, commit_prefix, author, message, state, created_at, started_at, finished_at, web_url " *
+    for b in rows(db, "SELECT id, pipeline, number, commit_prefix, author, message, state, source, created_at, started_at, finished_at, web_url " *
                       "FROM builds b" * where * (isempty(where) ? " WHERE" : " AND") * " b.started_at IS NOT NULL ORDER BY b.created_at DESC", params)
         builds[Int(b.id)] = OrderedDict{String,Any}(
             "pipeline" => String(b.pipeline), "build" => Int(b.number), "commit" => String(b.commit_prefix),
-            "author" => String(b.author), "message" => String(b.message), "state" => jstr(b.state),
+            "author" => String(b.author), "message" => String(b.message), "state" => jstr(b.state), "source" => jstr(b.source),
             "created_at" => String(b.created_at), "started_at" => jstr(b.started_at), "finished_at" => jstr(b.finished_at),
             "url" => js(b.web_url), "wall_s" => seconds_between(b.started_at, b.finished_at),
             "jobs" => 0, "run_total_s" => 0.0, "queue_waits" => Float64[])
@@ -1204,6 +1204,38 @@ const SIZE_SWITCH_DESCRIPTION = "From here on the sizes are of the tarball each 
     "manyjulias builds of the same commits, which have three CPU targets where CI has four (so the code and DWARF of sys.so and " *
     "the pkgimages are about a fifth smaller) and no share/doc or share/man: the step at this line is that difference, not a commit."
 
+# Steps in the CI series that came from a change to how CI builds julia, not from
+# the commit measured there. The summary draws each as a marker, and a pull request
+# whose merge-base was measured before one and whose build ran after it is flagged.
+const SIZE_BUILD_CHANGES = [
+    (commit = "d70e83e75cf8bb26f6162c3cf5d785f865b28c1a", label = "Smaller codegen debug info",
+     description = "From here on CI's builds of libjulia-codegen carry about 16 MB less DWARF debug info (libjulia-codegen goes from " *
+         "95.7 MB to 79.1 MB). CI's build started producing smaller debug info here; the commit only changes Markdown, so the " *
+         "step is not its doing."),
+]
+
+# The build changes measured in the CI series, oldest first, as markers
+function size_build_change_markers(db)
+    out = Any[]
+    for c in SIZE_BUILD_CHANGES
+        r = rows(db, "SELECT merged_at FROM size_builds WHERE source = 'ci' AND triplet = ? AND commit_sha = ?", (SIZE_TRIPLET, c.commit))
+        isempty(r) || push!(out, OrderedDict("at" => String(r[1].merged_at), "commit" => c.commit, "label" => c.label,
+                                             "description" => c.description))
+    end
+    return sort!(out; by=m -> m["at"])
+end
+
+# The build change a pull request's comparison with master spans, if any: its
+# merge-base measured before the change and its build made after it
+function size_pr_build_change(r, markers)
+    r.base_id === missing && return nothing
+    for m in markers
+        String(r.base_merged_at) < m["at"] <= String(r.build_created_at) &&
+            return OrderedDict("label" => m["label"], "description" => m["description"], "commit" => m["commit"])
+    end
+    return nothing
+end
+
 # One source's measured commits from `from` (inclusive) to `until` (exclusive)
 # in merge order, with one array per metric aligned with them (null where a
 # commit lacks the metric)
@@ -1237,7 +1269,7 @@ size_metric_names(db) = [String(r.metric) for r in rows(db, "SELECT DISTINCT met
 # alone instead. `metrics` empty means the summary set, ["all"] every metric.
 function sizes(db; since="", metrics=String[], source="", all_metrics=size_metric_names(db))
     wanted = isempty(metrics) ? SIZE_SUMMARY_METRICS : metrics == ["all"] ? all_metrics : metrics
-    markers = Any[]
+    markers = source in ("", "ci") ? size_build_change_markers(db) : Any[]
     if !isempty(source)
         series = size_series(db, source, wanted; from=since)
     else
@@ -1253,8 +1285,8 @@ function sizes(db; since="", metrics=String[], source="", all_metrics=size_metri
             for m in wanted
                 append!(series["values"][m], ci["values"][m])
             end
-            push!(markers, OrderedDict("at" => switch, "commit" => String(first_ci[1].commit_sha),
-                                       "label" => SIZE_SWITCH_LABEL, "description" => SIZE_SWITCH_DESCRIPTION))
+            pushfirst!(markers, OrderedDict("at" => switch, "commit" => String(first_ci[1].commit_sha),
+                                            "label" => SIZE_SWITCH_LABEL, "description" => SIZE_SWITCH_DESCRIPTION))
         end
     end
     return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => all_metrics,
@@ -1392,9 +1424,11 @@ function size_prs(db)
     end
     heads = size_open_heads(db)
     measured = Dict(Int(r.pr_number) => r for r in prs)
+    markers = size_build_change_markers(db)
     out = Any[]
     for r in prs
         e = size_pr_info(r)
+        e["build_change"] = size_pr_build_change(r, markers)
         e["values"] = get(values, Int(r.head_id), Dict{String,Int}())
         e["base_values"] = r.base_id === missing ? nothing : get(values, Int(r.base_id), Dict{String,Int}())
         e["stack"], below = size_pr_stack(r, heads, measured)
@@ -1414,6 +1448,7 @@ function size_pr(db, number)
     r = rows(db, SIZE_PR_QUERY * " WHERE p.pr_number = ?2", (SIZE_TRIPLET, n))
     isempty(r) && return nothing
     e = size_pr_info(r[1])
+    e["build_change"] = size_pr_build_change(r[1], size_build_change_markers(db))
     merge!(e, size_diff(db, Int(r[1].head_id), r[1].base_id === missing ? 0 : Int(r[1].base_id)))
     heads = size_open_heads(db)
     below_n = get(heads, String(r[1].base_ref), nothing)
