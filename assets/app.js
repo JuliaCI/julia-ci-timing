@@ -15007,10 +15007,10 @@ async function loadSizesPopupFiles(sha, source) {
 // part-to-whole split and a sparkline for a series. The summary files are
 // fetched here rather than through the tabs' loaders, which also build their
 // charts.
-let overviewSources = null; // { pkgeval, bench, ttfx, sizes, packages, agents }
+let overviewSources = null; // { pkgeval, bench, ttfx, sizes, packages, agents, ... }
 let overviewLoadedAt = 0;
 let overviewLoading = null;
-let overviewCharts = [];
+let overviewDrawn = []; // per card: { status, charts }
 
 const OVERVIEW_DAY_MS = 24 * 60 * 60 * 1000;
 const OVERVIEW_WEEK_MS = 7 * OVERVIEW_DAY_MS;
@@ -15050,7 +15050,10 @@ function overviewColors() {
 }
 
 
-async function loadOverviewSources() {
+// Each source is stored as it arrives and `onSource` is told its key, so
+// the cards that read it can be drawn without waiting for the slowest one.
+// A source still on its way is undefined; one that failed is null.
+function loadOverviewSources(onSource) {
   const quiet = (route, params) =>
     apiGet(route, params).catch((err) => {
       console.error(`Failed to load ${route}:`, err);
@@ -15063,42 +15066,51 @@ async function loadOverviewSources() {
   // reasons of the latest PkgEval report, the week's most requested packages
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
-  const [pkgeval, bench, ttfx, ttfxPrsList, sizes, sizesPrsList, packages, agents, builds, reasons, top, popular, backlog, activity] = await Promise.all([
-    fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
-    fresh("benchmarks", benchData) || quiet("benchmarks/summary"),
-    fresh("ttfx", ttfxData) || quiet("ttfx/summary"),
-    fresh("ttfx", ttfxPrs) || quiet("ttfx/prs"),
-    fresh("sizes", sizesData) || quiet("sizes/summary", { since: sparkStart }),
-    fresh("sizes", sizesPrs) || quiet("sizes/prs"),
-    fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
-    quiet("agents/latest"),
-    quiet("timing/builds", { since: twoWeeksAgo }),
-    quiet("pkgeval/reasons"),
-    quiet("downloads/top", { days: 7, client: "user" }),
-    quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
-    quiet("agents/backlog", { since: twoWeeksAgo }),
-    fresh("activity", activityData) || quiet("github/activity", { since: sparkStart }),
-  ]);
-  return { pkgeval, bench, ttfx, ttfxPrs: ttfxPrsList, sizes, sizesPrs: sizesPrsList, packages, agents, builds, reasons, top, popular, backlog, activity };
+  const sources = {
+    pkgeval: () => fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
+    bench: () => fresh("benchmarks", benchData) || quiet("benchmarks/summary"),
+    ttfx: () => fresh("ttfx", ttfxData) || quiet("ttfx/summary"),
+    ttfxPrs: () => fresh("ttfx", ttfxPrs) || quiet("ttfx/prs"),
+    sizes: () => fresh("sizes", sizesData) || quiet("sizes/summary", { since: sparkStart }),
+    sizesPrs: () => fresh("sizes", sizesPrs) || quiet("sizes/prs"),
+    packages: () => fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
+    agents: () => quiet("agents/latest"),
+    builds: () => quiet("timing/builds", { since: twoWeeksAgo }),
+    reasons: () => quiet("pkgeval/reasons"),
+    top: () => quiet("downloads/top", { days: 7, client: "user" }),
+    popular: () => quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
+    backlog: () => quiet("agents/backlog", { since: twoWeeksAgo }),
+    activity: () => fresh("activity", activityData) || quiet("github/activity", { since: sparkStart }),
+  };
+  return Promise.all(
+    Object.entries(sources).map(async ([key, load]) => onSource(key, await load())),
+  );
 }
 
 async function renderOverview({ force = false } = {}) {
   const expired = Date.now() - overviewLoadedAt > DATA_REFRESH_INTERVAL;
   if (!overviewSources || force || expired) {
     if (!overviewLoading) {
-      overviewLoading = loadOverviewSources()
-        .then((s) => {
-          overviewSources = s;
+      // A refresh keeps showing the earlier figures until each source's new
+      // ones arrive
+      const sources = { ...overviewSources };
+      overviewSources = sources;
+      overviewLoading = loadOverviewSources((key, value) => {
+        sources[key] = value;
+        if (activeTab === "overview" && overviewSources === sources) drawOverview([key]);
+      })
+        .then(() => {
           overviewLoadedAt = Date.now();
         })
         .finally(() => {
           overviewLoading = null;
         });
     }
+    if (activeTab === "overview") drawOverview();
     await overviewLoading;
+    return;
   }
-  if (activeTab !== "overview" || !overviewSources) return;
-  drawOverview();
+  if (activeTab === "overview") drawOverview();
 }
 
 // Whole days since a date-only or datetime string
@@ -16432,48 +16444,66 @@ function overviewBarsChart(canvas, bars) {
   });
 }
 
-function drawOverview() {
+// Each card, the sources it reads, and its title while they load. The CI
+// card reads the Timing tab's runs, which redraw the whole grid when they
+// arrive.
+const OVERVIEW_CARDS = [
+  { keys: ["ttfx", "ttfxPrs"], tab: "ci-ttfx", title: "TTFX", make: (s) => overviewTtfxUnscaled(() => overviewTtfxCard(s.ttfx, s.ttfxPrs)) },
+  { keys: ["sizes", "sizesPrs"], tab: "ci-sizes", title: "Sizes", make: (s) => overviewSizesCard(s.sizes, s.sizesPrs) },
+  { keys: ["packages", "top"], tab: "packages", title: "Package downloads", make: (s) => overviewPackagesCard(s.packages) },
+  { keys: ["pkgeval", "reasons", "popular"], tab: "pkgeval", title: "PkgEval", make: (s) => overviewPkgevalCard(s.pkgeval) },
+  { keys: ["builds"], tab: "ci-timing", title: "CI builds", make: () => overviewCICard() },
+  { keys: ["bench"], tab: "benchmarks", title: "Performance benchmarks", make: (s) => overviewBenchCard(s.bench) },
+  { keys: ["agents", "backlog"], tab: "ci-workers", title: "CI workers", make: (s) => overviewAgentsCard(s.agents, s.backlog) },
+  { keys: ["activity"], tab: "activity", title: "Repo Activity", make: (s) => overviewActivityCard(s.activity) },
+];
+
+// The whole card opens its tab; links inside it, and a click that ends a
+// text selection, keep their own meaning. Not on a touchscreen, where a tap
+// is how a card's details are read; its title links to the tab.
+function overviewCardClick(e) {
+  const el = e.target.closest(".overview-card[data-tab]");
+  if (!el || e.target.closest("a")) return;
+  const sel = window.getSelection();
+  if (sel && sel.toString()) return;
+  switchTab(el.dataset.tab);
+}
+
+// Draws every card, or with `changed` only the cards that read one of those
+// sources
+function drawOverview(changed = null) {
   const src = overviewSources;
-  for (const c of overviewCharts) c.destroy();
-  overviewCharts = [];
-  const cards = [
-    overviewTtfxUnscaled(() => overviewTtfxCard(src.ttfx, src.ttfxPrs)),
-    overviewSizesCard(src.sizes, src.sizesPrs),
-    overviewPackagesCard(src.packages),
-    overviewPkgevalCard(src.pkgeval),
-    overviewCICard(),
-    overviewBenchCard(src.bench),
-    overviewAgentsCard(src.agents, src.backlog),
-    overviewActivityCard(src.activity),
-  ];
   const grid = document.getElementById("overview-grid");
-  grid.innerHTML = cards.map((c) => c.html).join("");
-  // The whole card opens its tab; links inside it, and a click that ends a
-  // text selection, keep their own meaning. Not on a touchscreen, where a
-  // tap is how a card's details are read; its title links to the tab.
-  if (!IS_TOUCH) grid.querySelectorAll(".overview-card[data-tab]").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return;
-      const sel = window.getSelection();
-      if (sel && sel.toString()) return;
-      switchTab(el.dataset.tab);
-    });
-  });
-  for (const card of cards) {
+  if (!IS_TOUCH && !grid.onclick) grid.onclick = overviewCardClick;
+  const redraw = OVERVIEW_CARDS.map((c, i) => !changed || !overviewDrawn[i] || c.keys.some((k) => changed.includes(k)));
+  if (!changed || grid.children.length !== OVERVIEW_CARDS.length) {
+    grid.innerHTML = OVERVIEW_CARDS.map(() => "<section></section>").join("");
+    redraw.fill(true);
+  }
+  OVERVIEW_CARDS.forEach((c, i) => {
+    if (!redraw[i]) return;
+    for (const chart of overviewDrawn[i]?.charts || []) chart.destroy();
+    const card = c.keys.some((k) => src[k] === undefined) ? overviewLoadingCard(c.tab, c.title) : c.make(src);
+    grid.children[i].outerHTML = card.html;
+    const charts = [];
     for (const { id, kind, spec } of card.charts) {
       const canvas = document.getElementById(id);
       if (!canvas) continue;
       const make = kind === "donut" ? overviewDonutChart : kind === "bars" ? overviewBarsChart : overviewSparkChart;
-      overviewCharts.push(make(canvas, spec));
+      charts.push(make(canvas, spec));
     }
-  }
+    overviewDrawn[i] = { status: card.status, charts };
+  });
+  const cards = overviewDrawn;
 
   // The toolbar headline counts the cards whose badge is not OK; the badges
   // themselves say what
   const issues = cards.filter((c) => c.status.level === "warn" || c.status.level === "bad").length;
-  document.getElementById("overview-headline").textContent = issues
-    ? `${issues} source${issues === 1 ? "" : "s"} need${issues === 1 ? "s" : ""} attention`
-    : "All sources current";
+  document.getElementById("overview-headline").textContent = cards.some((c) => c.status.level === "none")
+    ? "Loading..."
+    : issues
+      ? `${issues} source${issues === 1 ? "" : "s"} need${issues === 1 ? "s" : ""} attention`
+      : "All sources current";
 
   // Newest data file across the sources: when the update workflow last
   // produced anything
