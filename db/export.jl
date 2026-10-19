@@ -7,6 +7,10 @@
 # The shapes come from db/Render.jl, which db/serve.jl also serves on
 # demand. Files are written to a temporary name and renamed into place, so a
 # reader never sees a partial file. db/compare.jl compares two exports.
+#
+# A source whose sequence has not moved since its last export, by the same
+# code, is skipped, so its files keep the generated_at of the last run that
+# changed its rows. --force renders every source anyway.
 
 using Pkg
 Pkg.activate(dirname(@__DIR__); io=devnull)
@@ -20,7 +24,7 @@ using JSON3, CodecZlib, DataStructures, Dates
 const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents"]
 
 function parse_args(args)
-    opts = Dict{String,Any}("db" => Store.db_path(args), "out" => nothing, "only" => SOURCES)
+    opts = Dict{String,Any}("db" => Store.db_path(args), "out" => nothing, "only" => SOURCES, "force" => false)
     i = 1
     while i <= length(args)
         a = args[i]
@@ -30,6 +34,8 @@ function parse_args(args)
             opts["out"] = args[i+1]; i += 2
         elseif a == "--only"
             opts["only"] = split(args[i+1], ','); i += 2
+        elseif a == "--force"
+            opts["force"] = true; i += 1
         else
             error("unknown argument $a")
         end
@@ -139,18 +145,36 @@ function main(args)
     opts = parse_args(args)
     db = open_db(opts["db"]; create=false)
     mkpath(opts["out"])
+    # Each source's sequence at its last export, kept beside the files. New
+    # code can change the shapes, so it renders everything again.
+    seqs_path = joinpath(opts["out"], ".export_seqs.json")
+    code = string(hash(read(joinpath(@__DIR__, "Render.jl")), hash(read(@__FILE__))); base=16)
+    previous = isfile(seqs_path) ? JSON3.read(read(seqs_path, String)) : nothing
+    exported = Dict{String,Int}()
+    if previous !== nothing && get(previous, :code, "") == code
+        for (k, v) in previous.seqs
+            exported[String(k)] = v
+        end
+    end
     # One source failing to render leaves its files as they were; the others
     # and the health file are still written
     failed = String[]
-    for source in opts["only"]
+    for source in String.(opts["only"])
+        seq = Store.source_seq(db, source)
+        if !opts["force"] && get(exported, source, -1) == seq
+            @info "skipped $source: unchanged since its last export"
+            continue
+        end
         try
-            t = @elapsed EXPORTERS[String(source)](db, opts["out"])
+            t = @elapsed EXPORTERS[source](db, opts["out"])
+            exported[source] = seq
             @info "exported $source" seconds=round(t; digits=1)
         catch e
             @error "export of $source failed" exception=(e, catch_backtrace())
-            push!(failed, String(source))
+            push!(failed, source)
         end
     end
+    write_atomic(io -> JSON3.write(io, Dict("code" => code, "seqs" => exported)), seqs_path)
     export_health(db, opts["out"])
     close(db)
     return isempty(failed) ? 0 : 1

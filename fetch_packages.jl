@@ -247,9 +247,35 @@ function store_package_requests!(db, lines)
     return n
 end
 
+function store_julia_tags!(db, julia_tags, julia_prerelease_tags)
+    tstmt = upsert_stmt(db, "julia_tags", ["tag"], ["date", "published_at", "url", "prerelease"]; seq=false)
+    for (tags, pre) in ((julia_tags, 0), (julia_prerelease_tags, 1))
+        for t in tags
+            upsert!(tstmt, (t["tag"], t["date"], t["published_at"], t["url"], pre))
+        end
+    end
+end
+
+function s3_etag(url)
+    resp = HTTP.head(url; retry=true, retries=3, connect_timeout=30, read_idle_timeout=120)
+    return HTTP.header(resp, "ETag", "")
+end
+
+stored_etag(db, url) = (r = query(db, "SELECT value FROM meta WHERE key = ?", ("etag:" * url,)); isempty(r) ? "" : String(r[1].value))
+
 # The fetches run inside the source's run record too, so a failed download
 # shows on /healthz rather than leaving the last run marked ok
 function ingest!(db, args)
+    # Upstream republishes the rollups about once a day and this runs every
+    # half hour. While none has changed, only the release tags are refreshed.
+    rollup_urls = [PUBLIC_OUTPUTS * name * ".csv.gz" for name in (getfield.(ROLLUPS, :file)..., "package_requests_by_date")]
+    etags = Dict(u => s3_etag(u) for u in rollup_urls)
+    if all(u -> !isempty(etags[u]) && etags[u] == stored_etag(db, u), rollup_urls)
+        @info "Package rollups unchanged since the last run"
+        julia_tags, julia_prerelease_tags = fetch_recent_julia_tags(; years=2)
+        transaction(() -> store_julia_tags!(db, julia_tags, julia_prerelease_tags), db)
+        return 0
+    end
 
     @info "Fetching package download rollup" url=SOURCE_URL
     lines = fetch_csv_lines(SOURCE_URL)
@@ -444,15 +470,13 @@ function ingest!(db, args)
                     end
                 end
             end
-            tstmt = upsert_stmt(db, "julia_tags", ["tag"], ["date", "published_at", "url", "prerelease"]; seq=false)
-            for (tags, pre) in ((julia_tags, 0), (julia_prerelease_tags, 1))
-                for t in tags
-                    upsert!(tstmt, (t["tag"], t["date"], t["published_at"], t["url"], pre))
-                end
-            end
+            store_julia_tags!(db, julia_tags, julia_prerelease_tags)
             n + length(series)
         end
     end
+    # Outside the transaction, so that a new ETag alone does not move the
+    # source's sequence
+    foreach(u -> Store.setmeta!(db, "etag:" * u, etags[u]), rollup_urls)
     return n
 end
 

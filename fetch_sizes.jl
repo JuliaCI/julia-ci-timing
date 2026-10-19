@@ -396,17 +396,18 @@ function open_prs!(db)
     end
     transaction(db) do
         seq = next_seq!(db)
-        DBInterface.execute(db, "DELETE FROM size_open_prs")
-        stmt = DBInterface.prepare(db, "INSERT INTO size_open_prs (pr_number, title, author, draft, base_ref, head_ref) VALUES (?, ?, ?, ?, ?, ?)")
+        DBInterface.execute(db, "DELETE FROM size_open_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
+        stmt = upsert_stmt(db, "size_open_prs", ["pr_number"], ["title", "author", "draft", "base_ref", "head_ref"]; seq=false)
         for (n, p) in pulls
-            DBInterface.execute(stmt, (n, p.title, p.author, p.draft, p.base_ref, p.head_ref))
+            upsert!(stmt, (n, p.title, p.author, p.draft, p.base_ref, p.head_ref))
         end
         DBInterface.execute(db, "DELETE FROM size_prs WHERE pr_number NOT IN (SELECT pr_number FROM size_open_prs)")
         DBInterface.execute(db, "UPDATE size_prs SET title = o.title, author = o.author, draft = o.draft, base_ref = o.base_ref, change_seq = ? " *
                                 "FROM size_open_prs o WHERE o.pr_number = size_prs.pr_number AND (size_prs.title IS NOT o.title " *
                                 "OR size_prs.author IS NOT o.author OR size_prs.draft IS NOT o.draft OR size_prs.base_ref IS NOT o.base_ref)", (seq,))
-        DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('sizes:open_prs_at', ?)", (iso_now(),))
     end
+    # Outside the transaction, so that a list with no changes leaves the sequence alone
+    DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('sizes:open_prs_at', ?)", (iso_now(),))
     return pulls
 end
 

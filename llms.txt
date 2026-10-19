@@ -70,7 +70,7 @@ once a week (about 220 MB, 700 MB unpacked). Download it once and query it with
 ## 4. The extracts
 
 `https://perf.julialang.org/data/<file>.json.gz` are the API's main shapes over all
-history, rendered after every ingest: `timing_summary`, `benchmark_summary` and
+history, rendered after each ingest that changed them: `timing_summary`, `benchmark_summary` and
 `benchmarks/<group>`, `pkgeval_summary`, `ttfx_summary`, `sizes_summary` and
 `packages_downloads_summary`. `analysis/fetch_data.jl` in the repository downloads them.
 

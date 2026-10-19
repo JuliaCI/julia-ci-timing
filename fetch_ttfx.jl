@@ -590,9 +590,9 @@ function refresh_prs!(db)
         end
         if fresh
             DBInterface.execute(db, "DELETE FROM ttfx_prs WHERE pr_number NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(keys(pulls))),))
-            DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs', ?)",
+            # Only a changed list is written, so that an unchanged one leaves the sequence alone
+            DBInterface.execute(db, "INSERT INTO meta VALUES ('ttfx:open_prs', ?1) ON CONFLICT (key) DO UPDATE SET value = ?1 WHERE value IS NOT ?1",
                                 (JSON3.write([pull_summary(pulls[n]) for n in sort!(collect(keys(pulls)))]),))
-            DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs_at', ?)", (Store.iso(listed_at),))
         end
         meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, head_ref = ?5, base_ref = ?6, change_seq = ?7 " *
                                        "WHERE pr_number = ?8 AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4 " *
@@ -607,6 +607,7 @@ function refresh_prs!(db)
                                        seq, Int(r.pr_number)))
         end
     end
+    fresh && DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs_at', ?)", (Store.iso(listed_at),))
     refresh_ci!(db)
     @info "Open pull requests with a TTFX comparison" updated=length(rows) total=query(db, "SELECT count(*) AS n FROM ttfx_prs")[1].n
     return length(rows)
