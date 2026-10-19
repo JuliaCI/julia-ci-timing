@@ -3,42 +3,68 @@
 > Performance and health data for the Julia language, refreshed every half hour: CI job and
 > build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
 > PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
-> tasks on every master build, the size of the binary distribution of master commits and
-> open pull requests, package-server downloads, the Buildkite agents, and the
+> tasks on every master build and open pull request, the size of the binary distribution
+> of master commits and open pull requests, package-server downloads, the Buildkite agents, and the
 > issues, pull requests and commits of JuliaLang/julia.
 > Everything lives in one SQLite database. The web pages are a JavaScript app; read the
-> data through one of the four routes below instead of scraping them.
+> data in one of the four ways below instead of scraping them.
 
 Pick by the size of the answer. All four are public, read-only and need no key.
 
 ## 1. The API: what a page of the site shows
 
 `https://perf.julialang.org/api/` lists every route with its parameters and a
-description. All routes are GET and return JSON; use `curl --compressed`. Routes with a
-`since` parameter return all history without it, so pass it (`YYYY-MM-DD`).
+description; the list below is the routes an agent most often needs. All routes are GET
+and return JSON; use `curl --compressed`. Routes with a `since` parameter return all
+history without it, so pass it (`YYYY-MM-DD`). Responses carry an ETag: send it back as
+`If-None-Match` to get a 304 when nothing changed, or poll `/api/status` first.
 
-- `/api/status`: when each source last ingested successfully, and its change sequence; never cached, so poll this to see whether anything changed
-- `/api/commit/<sha or PR number>`: everything recorded for one master commit: its CI
-  jobs, TTFX and size against the previous commit and the releases, and the first benchmark
-  and PkgEval reports that include it. For an open pull request, `pr` has its TTFX and size comparisons with master,
-  and each against the releases
+Commits:
+- `/api/commit/<sha or PR number>`: everything for one master commit (CI jobs, TTFX and
+  size against the previous commit and the releases, the first benchmark and PkgEval
+  reports that include it), or for an open pull request, under `pr`, its TTFX and size
+  against master and the releases
 - `/api/commits?limit=100`: master commits, newest first
+- `/api/status`: when each source last ingested successfully, and its change sequence; never cached, so poll this to see whether anything changed
+
+CI timing:
 - `/api/timing/builds?since=`: wall time and queue wait per master build
 - `/api/timing/runs?since=`: every CI job run in the window (30 days is about 0.2 MB)
-- `/api/benchmarks/groups/<group>?since=`: every benchmark of one group on every daily report, minimum and mean estimates (group names are the keys of `/api/benchmarks/summary`)
+
+Benchmarks:
+- `/api/benchmarks/summary`: the geomean of every benchmark group on every daily report, with its counts of regressions and improvements; the group names are the keys of each report's `by_group`
+- `/api/benchmarks/groups/<group>?since=`: every benchmark of one group on every daily report, minimum and mean estimates
 - `/api/benchmarks/verdicts?since=`: Nanosoldier's regressions and improvements
+- `/api/notes/methodology_changes`: benchmarks whose measurement changed, where a step in the series is not a commit's
+
+PkgEval:
+- `/api/pkgeval/summary`: every daily report with its counts of ok, fail, crash, skip and kill
 - `/api/pkgeval/package/<Name>`: one package's PkgEval status on every report
-- `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
 - `/api/pkgeval/changes`: packages that recently broke or were fixed on PkgEval and stayed so, with flaky flips filtered out
+- `/api/pkgeval/reasons`: how many packages failed each way on the newest report
+- `/api/pkgeval/failures?reason=precompile`: the packages failing for those reasons, by download rank, with how long each has failed
+- `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
+
+TTFX:
 - `/api/ttfx/summary?since=`: TTFX per task on every master build (times, invalidations and recompiled methods), and (`releases`) on the weekly runs of the newest stable release, and (`lts`) of the newest LTS release, and (`branch_nightly`) of the nightly of the next release's branch, and (`opt`) on the nightly optimized (PGO and ThinLTO) build, with `base`: the regular build of the same commit measured beside it
 - `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master, with whether CI passes on their head
 - `/api/ttfx/job/<job_id>?task=`: one TTFX job's recompiled methods (from its trace logs) and invalidations with their top causes, per task
+- `/api/notes/ttfx_annotations`: notes on TTFX jobs where the runners or the benchmark changed, so a step there is not a commit's
+
+Sizes:
 - `/api/sizes/summary?since=`: size of the linux-x86_64 distribution (total, sys.so, pkgimages, runtime libraries) of master commits, back to 2020, and of every stable release since 1.10
+- `/api/sizes/commit/<sha>`: one master commit's size against the previous measured commit, every metric and every file of at least 1 MiB
 - `/api/sizes/prs`: the size of each open pull request's latest build against the master commit it branched from
+- `/api/sizes/pr/<number>`: one open pull request's size against its merge-base, every metric and every file of at least 1 MiB
+
+Downloads:
+- `/api/downloads/top?days=7`: the 50 most requested packages over the window
 - `/api/downloads/package/<Name>`: one package's daily downloads
+
+Agents and GitHub:
 - `/api/agents/backlog?since=`: per agent pool, the julia-pr and julia-ci jobs waiting for an agent and running over time
-- `/api/github/activity`: JuliaLang/julia per day: open issues and pull requests, issues and pull requests opened, closed and merged, master commits, and contributors and time to merge over 30 days
 - `/api/agents/usage?days=`: agent seconds of the julia-pr and julia-ci jobs finished in the last `days` (7 by default), per pipeline, job name, pool and state
+- `/api/github/activity?since=`: JuliaLang/julia per day: open issues and pull requests, issues and pull requests opened, closed and merged, master commits, and contributors and time to merge over 30 days
 
 The response shapes are the site's own and can change; the database schema is stable.
 
@@ -71,9 +97,10 @@ once a week (about 300 MB, 900 MB unpacked). Download it once and query it with
 ## 4. The extracts
 
 `https://perf.julialang.org/data/<file>.json.gz` are the API's main shapes over all
-history, rendered after each ingest that changed them: `timing_summary`, `benchmark_summary` and
-`benchmarks/<group>`, `pkgeval_summary`, `ttfx_summary`, `sizes_summary` and
-`packages_downloads_summary`. `analysis/fetch_data.jl` in the repository downloads them.
+history, rendered after each ingest that changed them: `timing_summary` (12 MB),
+`benchmark_summary` and `benchmarks/<group>` (up to 3 MB each), `pkgeval_summary`,
+`ttfx_summary`, `sizes_summary` (1 MB) and `packages_downloads_summary`. For a recent window,
+the API with `since` is smaller. `analysis/fetch_data.jl` in the repository downloads them.
 
 ## Reference
 
@@ -85,7 +112,11 @@ history, rendered after each ingest that changed them: `timing_summary`, `benchm
 ## Conventions
 
 - Times are UTC ISO 8601 (`2026-09-22T13:41:50Z`). Durations are seconds, benchmark
-  times nanoseconds, memory bytes.
+  times nanoseconds, memory and sizes bytes. TTFX times are seconds, the minimum over the
+  job's ABBA blocks.
+- A ratio below 1, or a negative percentage, is faster or smaller. A TTFX pull request's
+  score is a weighted geometric mean of its precompile, load, run and warm ratios against
+  master (precompile and warm a third each, load and run a sixth each).
 - A commit is identified by its full SHA where known; many older builds only have the
   8-character prefix (`builds.commit_prefix`).
 - Benchmark and PkgEval reports run daily, not per commit; a commit's results
