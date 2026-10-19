@@ -324,8 +324,8 @@
           "sql": "SELECT r.date, p.status, p.reason, p.version, r.julia_version\nFROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN pkgeval_reports r ON r.id = p.report_id\nWHERE k.name = :package AND r.kind = 'daily' ORDER BY r.date DESC LIMIT 100"
         },
         "pkgeval_newly_broken": {
-          "title": "Packages that passed the previous PkgEval report and not the latest",
-          "sql": "WITH latest AS (SELECT r.id, r.date FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS (SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2)\nSELECT k.name, new.status, new.reason\nFROM pkgeval_results new JOIN pkgeval_results old ON old.package_id = new.package_id JOIN packages k ON k.id = new.package_id\nWHERE new.report_id = (SELECT id FROM latest ORDER BY date DESC LIMIT 1)\n  AND old.report_id = (SELECT id FROM latest ORDER BY date ASC LIMIT 1)\n  AND old.status = 'ok' AND new.status != 'ok' ORDER BY k.name"
+          "title": "Packages that passed the previous PkgEval report and failed the latest",
+          "sql": "WITH latest AS (SELECT r.id, r.date FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS (SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2)\nSELECT k.name, new.status, new.reason\nFROM pkgeval_results new JOIN pkgeval_results old ON old.package_id = new.package_id JOIN packages k ON k.id = new.package_id\nWHERE new.report_id = (SELECT id FROM latest ORDER BY date DESC LIMIT 1)\n  AND old.report_id = (SELECT id FROM latest ORDER BY date ASC LIMIT 1)\n  AND old.status = 'ok' AND new.status NOT IN ('ok', 'skip') ORDER BY k.name"
         },
         "ttfx_task_history": {
           "title": "TTFX of one task per master build over the last :days days",

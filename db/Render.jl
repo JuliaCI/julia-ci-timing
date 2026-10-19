@@ -382,7 +382,7 @@ function pkgeval_ranking(db, days, client)
     return (; since, until, metric, ranking)
 end
 
-function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip"))
+function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail", "crash", "skip", "kill"))
     reports = pkgeval_latest_reports(db)
     isempty(reports) && return nothing
     r = pkgeval_ranking(db, days, client)
@@ -422,24 +422,27 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
                                       "JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
                                       "WHERE ranked.rank <= ? AND r.kind = 'daily' AND r.date >= ? GROUP BY r.id ORDER BY r.date",
                                   (ranked_json(PKGEVAL_WEIGHT_N), PKGEVAL_WEIGHT_N, year_ago))]
-    # Passed the previous report, not this one: the nightly breakage
+    # Passed the previous report, not this one: the nightly breakage. A skip is the package being left out, not broken.
     newly_broken = Any[]
+    n_broken = nothing
     previous = nothing
     if length(reports) == 2
         previous = String(reports[2].date)
+        n_broken = Int(rows(db, "SELECT COUNT(*) AS n FROM pkgeval_results p JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
+                                "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok'", (Int(reports[2].id), report_id))[1].n)
         newly_broken = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
                                     "user" => Int(r.user))
                         for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, ranked.user " *
                                           "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id " *
                                           "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
-                                          "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY ranked.rank, p.package_id LIMIT ?",
+                                          "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok' ORDER BY ranked.rank, p.package_id LIMIT ?",
                                       (all_ranked, Int(reports[2].id), report_id, limit))]
     end
     return OrderedDict("date" => String(reports[1].date), "date_path" => date_path(String(reports[1].path)),
                        "days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages,
                        "top_n" => PKGEVAL_TOP_N, "top_tested" => Int(top.tested), "top_not_ok" => top.not_ok === missing ? 0 : Int(top.not_ok),
                        "weight_n" => PKGEVAL_WEIGHT_N, "weighted_pass_pct" => pass_pct(w), "history" => history,
-                       "previous_date" => previous, "newly_broken" => newly_broken)
+                       "previous_date" => previous, "newly_broken_count" => n_broken, "newly_broken" => newly_broken)
 end
 
 # Every package that did not pass the newest report for one of `reasons`
@@ -1016,7 +1019,7 @@ function commit_pkgeval(db, prefix, sha, t)
     if !isempty(prev)
         rs = rows(db, "SELECT k.name, p.status, p.reason FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
                       "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
-                      "WHERE p.report_id = ? AND p.status != 'ok' AND q.status = 'ok' ORDER BY k.name", (Int(prev[1].id), Int(r.id)))
+                      "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok' ORDER BY k.name", (Int(prev[1].id), Int(r.id)))
         # Reports imported without package rows cannot say
         has_rows = !isempty(rows(db, "SELECT 1 FROM pkgeval_results WHERE report_id = ? LIMIT 1", (Int(r.id),))) &&
                    !isempty(rows(db, "SELECT 1 FROM pkgeval_results WHERE report_id = ? LIMIT 1", (Int(prev[1].id),)))

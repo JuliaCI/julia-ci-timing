@@ -129,11 +129,12 @@ function offload(f)
 end
 
 # The sources each route family reads, for its ETag; nothing means global.
-# The popular list ranks PkgEval's packages by their downloads.
+# Some PkgEval routes rank the packages by their downloads.
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
                            "ttfx" => ["ttfx"], "sizes" => ["sizes"], "downloads" => ["packages"], "agents" => ["agents"],
                            "github" => ["github"])
-const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "changes"] => ["pkgeval", "packages"])
+const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "failures"] => ["pkgeval", "packages"],
+                                 ["pkgeval", "changes"] => ["pkgeval", "packages"])
 
 function route_seq(s::Server, segments)
     sources = get(ROUTE_SOURCES_EXACT, segments, nothing)
@@ -252,7 +253,7 @@ const ROUTES = [
               Render.pkgeval_reasons(db, path)
           end),
     Route("pkgeval/popular", ["days" => "download window in days, 30 by default", CLIENT, "limit" => "packages to list, 50 by default, at most 500"],
-          "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; the packages newly broken since the report before.",
+          "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; how many packages broke (passed the report before, then failed, crashed or were killed; a move to skip is not a break) and the most downloaded of them.",
           (db, _, p) -> begin
               limit = cursor(p, "limit")
               Render.pkgeval_popular(db; days=days_param(p, 30), limit=limit == 0 ? 50 : min(limit, 500), client=client_param(p))

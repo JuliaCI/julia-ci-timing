@@ -15499,9 +15499,11 @@ function overviewPkgevalNewlyBroken() {
   const d = overviewSources && overviewSources.popular;
   if (!d || !d.previous_date) return "";
   const broken = d.newly_broken || [];
-  if (!broken.length) return `None since ${escapeHtml(d.previous_date)}`;
+  // The list is capped and leaves out packages without downloads
+  const total = d.newly_broken_count ?? broken.length;
+  if (!total) return `None since ${escapeHtml(d.previous_date)}`;
   const names = broken.slice(0, 4).map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.reason || p.status)})`);
-  return `${overviewTabLink("pkgeval", `${broken.length} since ${escapeHtml(d.previous_date)}`)}: ${names.join(", ")}${broken.length > 4 ? ", …" : ""}`;
+  return `${overviewTabLink("pkgeval", `${total} since ${escapeHtml(d.previous_date)}`)}${names.length ? `: ${names.join(", ")}${total > names.length ? ", …" : ""}` : ""}`;
 }
 
 // The commonest reasons of the latest report with package rows, from the API
