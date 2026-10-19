@@ -47,7 +47,7 @@ under `queries` in `$B/db/ci-timing.json` run as
 ## The snapshot
 
 ```sh
-curl -O $B/data/ci-timing.sqlite.gz && gunzip ci-timing.sqlite.gz   # about 220 MB, 700 MB unpacked
+curl -O $B/data/ci-timing.sqlite.gz && gunzip ci-timing.sqlite.gz   # about 300 MB, 900 MB unpacked
 sqlite3 ci-timing.sqlite
 ```
 

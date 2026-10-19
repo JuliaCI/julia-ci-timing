@@ -24,7 +24,7 @@ version for agents arriving at the site. Four ways in, cheapest first:
   descriptions and a set of saved queries come from
   `db/datasette-metadata.json` (passed by `infra/docker/entrypoint.sh`).
 - **The whole database**: `https://perf.julialang.org/data/ci-timing.sqlite.gz`,
-  taken once a week (about 220 MB, 700 MB unpacked). Download once
+  taken once a week (about 300 MB, 900 MB unpacked). Download once
   and run any SQL locally with `sqlite3`, no limits and no load on the host.
 - **The extracts**: the gzipped JSON files described below, at
   `https://perf.julialang.org/data/<file>`, rendered from the database

@@ -63,7 +63,7 @@ curl -s -G https://perf.julialang.org/db/ci-timing.json \
 ## 3. The whole database
 
 `https://perf.julialang.org/data/ci-timing.sqlite.gz` is the complete database, taken
-once a week (about 220 MB, 700 MB unpacked). Download it once and query it with
+once a week (about 300 MB, 900 MB unpacked). Download it once and query it with
 `sqlite3` for anything that needs many queries or scans large tables such as
 `bench_results` or `pkgeval_results`.
 
