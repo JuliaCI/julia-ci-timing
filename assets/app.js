@@ -15831,10 +15831,11 @@ function overviewTtfxCompare(src, latest) {
   const bn = src.branch_nightly && src.branch_nightly[src.branch_nightly.length - 1];
   const opt = overviewTtfxOpt(src);
   const groups = [];
+  // Newest version first; a nightly's version is named up to "-DEV", without its build number
   const against = (b) => [
+    bn && [`vs ${bn.version.replace(/-DEV.*$/, "-DEV")}`, overviewTtfxRelease(src, b, bn)],
     rel && [`vs ${rel.version}`, overviewTtfxRelease(src, b, rel)],
     lts && [`vs ${lts.version} (LTS)`, overviewTtfxRelease(src, b, lts)],
-    bn && [`vs ${bn.version} (next release nightly)`, overviewTtfxRelease(src, b, bn)],
   ];
   groups.push(["Nightly", against(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);
