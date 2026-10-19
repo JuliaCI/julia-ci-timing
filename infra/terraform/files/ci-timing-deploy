@@ -1,9 +1,9 @@
 #!/bin/bash
-# Deploy an image: record it as the host's image, pull it, refresh the static
-# site from it, switch the API to it once the new server is warm (or go back to
-# the previous image if it never gets warm) and start one ingest. Invoked
-# through SSM Run Command by .github/workflows/deploy.yml with the
-# digest-pinned image reference.
+# Deploy an image: pull it, record it as the host's image, start the API from
+# it, and once the new server is warm refresh the static site from it and stop
+# the old server (or go back to the previous image if it never gets warm), then
+# start one ingest. Invoked through SSM Run Command by
+# .github/workflows/deploy.yml with the digest-pinned image reference.
 set -euo pipefail
 image_ref="${1:?usage: ci-timing-deploy <repository>@sha256:<digest>}"
 case "$image_ref" in
@@ -29,9 +29,6 @@ record_image() {
     || echo "could not record the image in $CI_TIMING_IMAGE_PARAMETER" >&2
 }
 
-sync_site "$image_ref"
-# Recorded as the host's image only once the site is synced from it, so a
-# failed sync leaves the services on the old image
 record_image "$image_ref"
 systemctl restart ci-timing-datasette.service
 
@@ -39,8 +36,10 @@ systemctl restart ci-timing-datasette.service
 # old one is stopped only once the new one answers /api/ready, which it does
 # when its warm-up has rendered what the site loads on landing. Caddy lists
 # every port and sends requests to the first one that is ready, so the
-# switch costs no request. A server that never gets ready is stopped and
-# the old one keeps serving, with the deploy reported as failed.
+# switch costs no request. The site is synced only then, so its pages never
+# ask the old server for what only the new one serves. A server that never
+# gets ready, or a sync that fails, leaves the old server and site serving,
+# with the deploy reported as failed.
 old=""; new=""
 for port in $CI_TIMING_API_PORTS; do
   if systemctl is-active --quiet "ci-timing-api@$port.service"; then
@@ -61,6 +60,12 @@ for i in $(seq 1 120); do
   if curl -fsS -o /dev/null "http://127.0.0.1:$new/api/ready" 2>/dev/null; then api_ok=1; break; fi
   sleep 5
 done
+if [ "$api_ok" -eq 1 ] && ! sync_site "$image_ref"; then
+  echo "the site could not be synced from the new image" >&2
+  api_ok=0
+elif [ "$api_ok" -eq 0 ]; then
+  echo "the API on port $new did not get ready in 10 minutes; the old server keeps serving" >&2
+fi
 if [ "$api_ok" -eq 1 ]; then
   systemctl enable --quiet "ci-timing-api@$new.service"
   for port in $old; do
@@ -68,18 +73,16 @@ if [ "$api_ok" -eq 1 ]; then
   done
   echo "API switched to port $new"
 else
-  echo "the API on port $new did not get ready in 10 minutes; the old server keeps serving" >&2
   systemctl disable --now --quiet "ci-timing-api@$new.service"
   # Back to the previous image everywhere, so the ingest, a restart or a
   # replacement host does not pick up the image that failed
   record_image "$previous_ref"
   systemctl restart ci-timing-datasette.service
-  sync_site "$previous_ref"
   echo "back on $previous_ref" >&2
 fi
 
 # The ingest takes minutes and its outcome is on /healthz; the deploy
-# returns as soon as the site is synced. A start request while a run is
+# returns as soon as the API has switched. A start request while a run is
 # in progress would merge into it (a oneshot is "activating" for the whole
 # run, never "active", so is-active cannot tell), so wait for that run in
 # a transient unit and start one with the new image after: for the ingest

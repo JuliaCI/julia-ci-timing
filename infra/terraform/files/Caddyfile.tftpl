@@ -4,6 +4,10 @@
   # encoder leaves alone since it only compresses text-like types.
   encode zstd gzip
   root * ${site_root}
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+  }
 
   redir /db /db/ 308
   # Datasette adds its base_url to the path it is given when it builds
@@ -16,6 +20,8 @@
   # image's server on the idle port and stops the old one once the new one
   # answers /api/ready, so requests go to the first port that is ready.
   handle /api/* {
+    # Public, read-only data, so a notebook or another site may fetch it
+    header Access-Control-Allow-Origin *
     reverse_proxy ${api_upstreams} {
       lb_policy first
       lb_try_duration 5s
@@ -40,18 +46,38 @@
     file_server
   }
   handle {
-    header /assets/* Cache-Control "public, max-age=300"
+    # The pages ask for the scripts and styles with their build's commit in
+    # ?v=, so those never change; the rest revalidates, so a deploy shows
+    # at once
+    @versioned {
+      path /assets/*
+      query v=*
+    }
+    @unversioned {
+      path /assets/*
+      not query v=*
+    }
+    @pages not path /assets/*
+    header @versioned Cache-Control "public, max-age=31536000, immutable"
+    header @unversioned Cache-Control "public, max-age=300"
+    header @pages Cache-Control "no-cache"
     try_files {path} {path}/index.html
     file_server
   }
 }
-
-http://${public_ip} {
-  import site_common
-}
 %{ if public_hostname != "" ~}
 
+http://${public_ip} {
+  redir https://${public_hostname}{uri} 308
+}
+
 ${public_hostname} {
+  import site_common
+  header Strict-Transport-Security "max-age=31536000"
+}
+%{ else ~}
+
+http://${public_ip} {
   import site_common
 }
 %{ endif ~}

@@ -1,0 +1,4 @@
+User-agent: *
+# The API and the SQL interface render on demand; the pages carry what is worth indexing
+Disallow: /api/
+Disallow: /db/

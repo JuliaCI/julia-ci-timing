@@ -53,16 +53,30 @@ case "${1:-ingest}" in
     export_all
     ;;
   sync-site)
-    # Everything the browser loads except data/, which the export writes
-    rm -rf /site/assets /site/*.html /site/favicon.svg /site/site.webmanifest /site/llms.txt
-    cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/assets /site/
-    # Every page directory, so a new tab needs no change here
-    for index in /app/*/index.html; do
-      d="$(basename "$(dirname "$index")")"
-      rm -rf "/site/$d"; cp -r "/app/$d" "/site/$d"
-    done
-    commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"
-    sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" /site/index.html
+    # Everything the browser loads except data/, which the export writes. It
+    # is copied beside the live site and renamed into place, so a request
+    # during the sync never finds a file missing or half written.
+    (
+      set -e
+      stage=/site/.sync-new; old=/site/.sync-old
+      rm -rf "$stage" "$old"; mkdir "$stage" "$old"
+      cp -r /app/index.html /app/favicon.svg /app/site.webmanifest /app/llms.txt /app/robots.txt /app/assets "$stage/"
+      # Every page directory, so a new tab needs no change here
+      for index in /app/*/index.html; do cp -r "$(dirname "$index")" "$stage/"; done
+      commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"
+      sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" "$stage/index.html"
+      # A top-level page the image no longer ships goes too
+      for f in /site/*.html; do
+        if [ -e "$f" ] && [ ! -e "$stage/${f##*/}" ]; then mv "$f" "$old/"; fi
+      done
+      for p in "$stage"/*; do
+        name="${p##*/}"
+        # A file is replaced in one rename; a directory is moved aside first
+        if [ -d "/site/$name" ]; then mv "/site/$name" "$old/"; fi
+        mv -f "$p" "/site/$name"
+      done
+      rm -rf "$stage" "$old"
+    )
     ;;
   datasette)
     # The table descriptions and saved queries ship with the image; the host's
