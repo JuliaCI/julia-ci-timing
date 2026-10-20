@@ -4293,6 +4293,15 @@ th.sorted .sort-indicator {
     background: none;
     padding: 12px 16px 16px;
   }
+  /* The sheet has room for the links a narrow toolbar hides */
+  .m-sheet .btn-link {
+    display: inline-block;
+  }
+  /* A popup's wide tables scroll sideways on their own, not the whole popup */
+  .ttfx-popup-table {
+    display: block;
+    overflow-x: auto;
+  }
   .m-filter-chip {
     display: flex;
     align-items: center;

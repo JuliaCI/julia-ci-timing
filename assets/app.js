@@ -13843,11 +13843,8 @@ function renderTtfxPrsList() {
     })
     .join("");
   tbody.querySelectorAll("tr[data-pr]").forEach((tr) => {
-    tr.onclick = () => {
-      hidePrCard();
-      prCardLink = tr;
-      showPrCard(tr, Number(tr.dataset.pr));
-    };
+    const p = ttfxPrs.prs.find((x) => x.pr === Number(tr.dataset.pr));
+    if (p) tr.onclick = () => showTtfxPrPopup(p);
   });
 }
 
@@ -18391,10 +18388,11 @@ function prCardMetricsTable(p) {
 }
 
 // On a touchscreen the card is shown by a tap, so it carries the link the tap
-// did not follow
+// did not follow, and one to its Commit page
 function prCardOpenLink(number) {
   return IS_TOUCH
-    ? `<div><a href="${githubPrURL(number)}" target="_blank" rel="noopener noreferrer">Open #${number} on GitHub</a></div>`
+    ? `<div><a href="${githubPrURL(number)}" target="_blank" rel="noopener noreferrer">Open #${number} on GitHub</a></div>
+      <div><a href="?tab=${tabToURLValue("commit")}&c=${number}" onclick="hidePrCard();lookupCommit('${number}');return false">All stats for #${number}</a></div>`
     : "";
 }
 
