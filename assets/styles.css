@@ -209,9 +209,30 @@ a {
   padding: 0;
   width: 28px;
   height: 28px;
-  line-height: 28px;
-  text-align: center;
-  display: inline-block;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#share-page[hidden] {
+  display: none;
+}
+#share-page svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+#share-page.copied {
+  color: var(--color-success-fg);
+  border-color: var(--color-success-fg);
+}
+#share-page.copy-failed {
+  color: var(--color-danger-fg);
+  border-color: var(--color-danger-fg);
 }
 .btn-primary {
   background: var(--color-accent-emphasis);
@@ -3929,9 +3950,6 @@ th.sorted .sort-indicator {
     font-size: 16px !important;
   }
   .toolbar .btn-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     width: 36px;
     height: 36px;
     min-height: 36px;

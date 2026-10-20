@@ -18592,6 +18592,30 @@ function pullRefreshIndicator() {
   return el;
 }
 
+// A home-screen web app has no address bar either, so it gets a button that
+// shares the page's link, or copies it where the browser cannot share
+document.getElementById("share-page").hidden = !IS_STANDALONE;
+
+function sharePage(button) {
+  const url = window.location.href;
+  if (navigator.share) {
+    navigator.share({ title: document.title, url }).catch(() => {});
+    return;
+  }
+  const done = (ok) => {
+    button.classList.add(ok ? "copied" : "copy-failed");
+    button.title = ok ? "Link copied" : "Could not copy the link";
+    setTimeout(() => {
+      button.classList.remove("copied", "copy-failed");
+      button.title = button.getAttribute("aria-label");
+    }, 1500);
+  };
+  navigator.clipboard.writeText(url).then(
+    () => done(true),
+    () => done(false),
+  );
+}
+
 if (IS_TOUCH && IS_STANDALONE) {
   // Arriving from a pull: the spinner the reload cut off, then away
   let refreshed = false;
