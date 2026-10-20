@@ -18501,14 +18501,14 @@ window.addEventListener("scroll", hidePrCard, true);
 
 // Touch: a tap on a pull request link shows its card instead of leaving the
 // page, and a tap anywhere else closes it. Captured, so a row the link sits
-// in does not open as well.
+// in does not open as well. A button that says it opens GitHub still does.
 if (IS_TOUCH) {
   document.addEventListener(
     "click",
     (e) => {
       if (prCardEl && prCardEl.contains(e.target)) return;
       const link = e.target.closest?.("a[href]");
-      const m = link && PR_CARD_LINK.exec(link.href);
+      const m = link && !link.classList.contains("btn") && PR_CARD_LINK.exec(link.href);
       if (!m) {
         hidePrCard();
         return;
