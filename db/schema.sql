@@ -312,6 +312,8 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     invalidated               INTEGER,       -- MethodInstances invalidated by the task script (load and run phases)
     invalidated_by_definition INTEGER,       -- of those, by a method definition
     invalidated_rejected      INTEGER,       -- of those, package-image code not reinstated on load
+    load_stdlibs       REAL,                 -- load in a copy of the project with every stdlib added and loaded first
+    precompile_stdlibs REAL,                 -- precompile of that copy, after the task's own
     PRIMARY KEY (job_uuid, task)
 ) WITHOUT ROWID;
 
@@ -382,6 +384,10 @@ CREATE TABLE IF NOT EXISTS ttfx_samples (
     load_gcoff_s  TEXT,
     run_gcoff_s   TEXT,
     total_gcoff_s TEXT,
+    error_stdlibs        TEXT,
+    precompile_stdlibs_s REAL,
+    load_stdlibs_s       TEXT,
+    run_stdlibs_s        TEXT,
     PRIMARY KEY (job_uuid, seq)
 ) WITHOUT ROWID;
 

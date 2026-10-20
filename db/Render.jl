@@ -566,8 +566,8 @@ end
 # The first TTFX_RESULT_METRICS come from the job's results (ttfx_results, as many as
 # the job's n_metrics), the rest from its trace logs (ttfx_traces)
 const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                      "recompiled", "recompile_s"]
-const TTFX_RESULT_METRICS = 8
+                      "load_stdlibs", "precompile_stdlibs", "recompiled", "recompile_s"]
+const TTFX_RESULT_METRICS = 10
 
 function ttfx(db; since="")
     where, params = where_clause("build_created_at", since, "")
@@ -943,7 +943,9 @@ function commit_ttfx(db, prefix, sha)
     prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1",
                 (j.build_created_at, commit_glob(prefix, sha)))
-    metrics = TTFX_METRICS[1:4]
+    # The load with every stdlib loaded first only when the job measured it
+    has_stdlibs = !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND load_stdlibs IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
+    metrics = has_stdlibs ? [TTFX_METRICS[1:4]; "load_stdlibs"] : TTFX_METRICS[1:4]
     results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in metrics]
                          for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (uuid,)))
     failures(uuid) = Dict(String(r.task) => String(r.error) for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ?", (uuid,)))

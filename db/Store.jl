@@ -90,6 +90,12 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_results", "invalidated", "INTEGER"),
     ("ttfx_results", "invalidated_by_definition", "INTEGER"),
     ("ttfx_results", "invalidated_rejected", "INTEGER"),
+    ("ttfx_results", "load_stdlibs", "REAL"),
+    ("ttfx_results", "precompile_stdlibs", "REAL"),
+    ("ttfx_samples", "error_stdlibs", "TEXT"),
+    ("ttfx_samples", "precompile_stdlibs_s", "REAL"),
+    ("ttfx_samples", "load_stdlibs_s", "TEXT"),
+    ("ttfx_samples", "run_stdlibs_s", "TEXT"),
 ]
 
 function apply_schema!(db::SQLite.DB)

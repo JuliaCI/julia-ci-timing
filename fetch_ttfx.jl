@@ -47,7 +47,8 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
 # fetched again in case the job already recorded it, the rest are padded.
-const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated")
+const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
+                 "load_stdlibs", "precompile_stdlibs")
 const REFETCH_BUILDS = 30
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
@@ -106,13 +107,18 @@ function summarize_records(records, arm)
         load_gcoff = nanmin([Float64(gcoff(r, :load_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :load_times_gcoff))])
         run_gcoff = nanmin([Float64(gcoff(r, :run_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :run_times_gcoff))])
         warm_gcoff = nanmin([minimum(Float64.(gcoff(r, :total_times_gcoff)[2:end])) for r in ok if length(gcoff(r, :total_times_gcoff)) >= 2])
+        # So is the run in a copy of the project with every stdlib added and loaded
+        # first (`error_stdlibs`), and the precompile of that copy after the task's own
+        load_stdlibs = nanmin([Float64(gcoff(r, :load_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :load_times_stdlibs))])
+        precompile_stdlibs = nanmin([Float64(r.precompile_time_stdlibs) for r in ok if get(r, :precompile_time_stdlibs, nothing) !== nothing])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
         k = findfirst(r -> get(r, :invalidations, nothing) !== nothing, ok)
         inv = k === nothing ? nothing : record_invalidations(ok[k])
         inv === nothing || (invalidations[name] = inv)
         tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
                           round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff),
-                          inv === nothing ? nothing : inv.invalidated]
+                          inv === nothing ? nothing : inv.invalidated,
+                          round3(load_stdlibs), round3(precompile_stdlibs)]
     end
     return tasks, failed, invalidations
 end
@@ -305,7 +311,10 @@ function write_row!(db, r, seq, stmts)
                 str_or_missing(get(rec, :status, nothing)), str_or_missing(get(rec, :error, nothing)), str_or_missing(get(rec, :error_gcoff, nothing)),
                 get(rec, :precompile_time, nothing) === nothing ? missing : Float64(rec.precompile_time),
                 jsonstr(get(rec, :load_times, nothing)), jsonstr(get(rec, :run_times, nothing)), jsonstr(get(rec, :total_times, nothing)),
-                jsonstr(get(rec, :load_times_gcoff, nothing)), jsonstr(get(rec, :run_times_gcoff, nothing)), jsonstr(get(rec, :total_times_gcoff, nothing))))
+                jsonstr(get(rec, :load_times_gcoff, nothing)), jsonstr(get(rec, :run_times_gcoff, nothing)), jsonstr(get(rec, :total_times_gcoff, nothing)),
+                str_or_missing(get(rec, :error_stdlibs, nothing)),
+                get(rec, :precompile_time_stdlibs, nothing) === nothing ? missing : Float64(rec.precompile_time_stdlibs),
+                jsonstr(get(rec, :load_times_stdlibs, nothing)), jsonstr(get(rec, :run_times_stdlibs, nothing))))
         end
     end
     # The artifacts expire on Buildkite; keep what was parsed
@@ -323,7 +332,8 @@ function write_rows!(db, rows)
         failure = DBInterface.prepare(db, "INSERT INTO ttfx_failures (job_uuid, task, error) VALUES (?, ?, ?)"),
         arm = DBInterface.prepare(db, "INSERT INTO ttfx_arms (job_uuid, arm, commit_sha, version) VALUES (?, ?, ?, ?)"),
         sample = DBInterface.prepare(db, "INSERT INTO ttfx_samples (job_uuid, seq, task, arm, block, status, error, error_gcoff, precompile_s, " *
-                                         "load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s) VALUES ($(join(fill("?", 15), ", ")))"),
+                                         "load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s, error_stdlibs, precompile_stdlibs_s, " *
+                                         "load_stdlibs_s, run_stdlibs_s) VALUES ($(join(fill("?", 19), ", ")))"),
         raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst) VALUES (?, ?, ?, ?)"))
     for r in rows
         write_row!(db, r, seq, stmts)

@@ -134,7 +134,9 @@
             "warm_gcoff": "warm, with the GC disabled",
             "invalidated": "MethodInstances the task script's load and run invalidated, from the job's untimed invalidation run; null before the driver logged them",
             "invalidated_by_definition": "of those, invalidated by a method definition",
-            "invalidated_rejected": "of those, package-image code not reinstated on load because an edge no longer held"
+            "invalidated_rejected": "of those, package-image code not reinstated on load because an edge no longer held",
+            "load_stdlibs": "load on the first run in a copy of the task's project with every stdlib added and imported before the task's packages, so they load beside many methods from outside their own dependencies; null before the driver measured it",
+            "precompile_stdlibs": "Pkg.precompile() of that copy right after the task's own: mostly the extensions the stdlibs trigger; not compared between builds"
           }
         },
         "ttfx_invalidation_causes": {

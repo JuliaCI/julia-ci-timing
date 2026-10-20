@@ -78,7 +78,12 @@ first run of the task script, `warm` the best total of the later runs,
 and the `_gcoff` ones the same from repeats with the GC disabled. Then
 come counts: `invalidated`, the MethodInstances the task script
 invalidated (from an untimed run that logs them; null for jobs before
-the driver did), and from the job's trace logs (`trace-compile.tar.gz`)
+the driver did). Then `load_stdlibs`, the cold load in a copy of the
+task's project with every stdlib added and imported first, and
+`precompile_stdlibs`, that copy's precompile after the task's own (null
+for jobs before the driver measured them; the site has no summary panel or
+table column for them: they are in the details, and the per-task chart
+draws them when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`

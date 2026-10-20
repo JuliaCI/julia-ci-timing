@@ -46,7 +46,7 @@ PkgEval:
 - `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
 
 TTFX:
-- `/api/ttfx/summary?since=`: TTFX per task on every master build (times, invalidations and recompiled methods), and (`releases`) on the weekly runs of the newest stable release, and (`lts`) of the newest LTS release, and (`branch_nightly`) of the nightly of the next release's branch, and (`opt`) on the nightly optimized (PGO and ThinLTO) build, with `base`: the regular build of the same commit measured beside it
+- `/api/ttfx/summary?since=`: TTFX per task on every master build (times, including the load with every stdlib loaded first, invalidations and recompiled methods), and (`releases`) on the weekly runs of the newest stable release, and (`lts`) of the newest LTS release, and (`branch_nightly`) of the nightly of the next release's branch, and (`opt`) on the nightly optimized (PGO and ThinLTO) build, with `base`: the regular build of the same commit measured beside it
 - `/api/ttfx/prs`: open pull requests ranked by their latest TTFX comparison against master, with whether CI passes on their head
 - `/api/ttfx/job/<job_id>?task=`: one TTFX job's recompiled methods (from its trace logs) and invalidations with their top causes, per task
 - `/api/notes/ttfx_annotations`: notes on TTFX jobs where the runners or the benchmark changed, so a step there is not a commit's

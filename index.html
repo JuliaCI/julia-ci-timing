@@ -1208,12 +1208,14 @@
           id="ttfx-metric"
           onchange="setTtfxMetric(this.value)"
           aria-label="Metric"
-          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs. Thin lines without markers: load, run and warm from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost. Recompiled methods: methods the task's trace log shows compiled again because an invalidation dropped their code, summed over the tasks. Invalidations: MethodInstances whose code the task script's load and run invalidated, summed over the tasks."
+          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs. Thin lines without markers: load, run and warm from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost. Load (stdlibs first): the cold load in a copy of the task's project with every stdlib added and imported first, so its packages load beside many methods from outside their own dependencies; per task only, as it has no summary panel. Stdlibs precompile (added): precompiling that copy after the task's own, mostly the extensions the stdlibs trigger. Recompiled methods: methods the task's trace log shows compiled again because an invalidation dropped their code, summed over the tasks. Invalidations: MethodInstances whose code the task script's load and run invalidated, summed over the tasks."
         >
           <option value="precompile" selected>Precompile</option>
           <option value="load">Load (cold)</option>
           <option value="run">Run (cold)</option>
           <option value="warm">Load+run (warm)</option>
+          <option value="load_stdlibs">Load (stdlibs first)</option>
+          <option value="precompile_stdlibs">Stdlibs precompile (added)</option>
           <option value="recompiled">Recompiled methods</option>
           <option value="invalidated">Invalidations</option>
         </select>

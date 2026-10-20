@@ -11385,15 +11385,25 @@ const TTFX_ANNOTATION_HINT =
 // (Render.TTFX_METRICS order); precompile has no such run. A `count` is a
 // number of methods, often 0: its suite value is the total over the tasks
 // rather than their geomean, it is never drawn as % change, and it has no
-// summary panel: only the per-task chart draws it.
+// summary panel: only the per-task chart draws it. A `detail` has no summary
+// panel, builds-table column or pill either: it is in the build and pull
+// request details, and the per-task chart draws it when picked. `short` names
+// a metric in running text.
 const TTFX_METRICS = {
   precompile: { label: "Precompile", index: 0 },
   load: { label: "Load (cold)", index: 1, gcoffIndex: 4 },
   run: { label: "Run (cold)", index: 2, gcoffIndex: 5 },
   warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
+  // The load in a copy of the task's project with every stdlib added and
+  // imported first, so its packages load beside many methods from outside
+  // their own dependencies, as in a session with several unrelated packages
+  load_stdlibs: { label: "Load (stdlibs first)", short: "load, stdlibs first", index: 8, detail: true },
+  // Precompiling that copy right after the task's own: mostly the extensions
+  // the stdlibs trigger. A large one means adding them changed the resolve.
+  precompile_stdlibs: { label: "Stdlibs precompile (added)", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
   // Marked "# recompile" in the task's trace log: compiled again because an
   // invalidation had dropped the code compiled before
-  recompiled: { label: "Recompiled methods", index: 8, count: true },
+  recompiled: { label: "Recompiled methods", index: 10, count: true },
   // MethodInstances the task script's load and run invalidated, by method
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", index: 7, count: true },
@@ -11427,7 +11437,7 @@ function ttfxBuildPr(b) {
 // and for an optimized build both against the regular build beside it
 function ttfxBuildSuiteRows(b, builds, series, tasks, task) {
   const i = series.indexOf(b);
-  return Object.keys(TTFX_METRICS).map((key) => {
+  return Object.keys(TTFX_METRICS).filter((key) => !ttfxIsDetail(key) || ttfxBuildHas(b, key)).map((key) => {
     const common = ttfxSuiteTasks(builds, tasks, key);
     const gcoff = ttfxShowsGcOff(key);
     let prev = null;
@@ -11466,6 +11476,7 @@ function ttfxBuildOutliers(b, series, tasks, suiteRows) {
   const times = [];
   const counts = [];
   for (const key of Object.keys(TTFX_METRICS)) {
+    if (TTFX_METRICS[key].outliers === false) continue;
     for (const t of tasks) {
       const v = ttfxValue(b, t, key);
       if (v == null) continue;
@@ -12034,6 +12045,9 @@ function ttfxValue(b, task, metric = ttfxMetric, gcoff = false) {
 
 // The builds each side of an annotated job used to measure its step
 const TTFX_JUMP_WINDOW = 5;
+// Value indices the steps are measured for: every time metric and GC-off twin
+const TTFX_TIME_SLOTS =
+  1 + Math.max(...Object.values(TTFX_METRICS).filter((m) => !m.count).flatMap((m) => [m.index, m.gcoffIndex ?? -1]));
 
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
@@ -12065,7 +12079,7 @@ function computeTtfxJumpScales() {
     for (const { a, scales } of steps) {
       if (!ttfxAnnotationCovers(a, run.version)) continue;
       for (const t in scales) {
-        const s = own[t] || (own[t] = new Array(7).fill(1));
+        const s = own[t] || (own[t] = new Array(TTFX_TIME_SLOTS).fill(1));
         scales[t].forEach((f, i) => (s[i] *= f));
       }
     }
@@ -12078,7 +12092,7 @@ function computeTtfxJumpScales() {
     for (const a of ttfxAnnotationsFor(b)) {
       const scales = {};
       for (const t of a.tasks || ttfxAllTasks()) {
-        const scale = (scales[t] = new Array(7).fill(1));
+        const scale = (scales[t] = new Array(TTFX_TIME_SLOTS).fill(1));
         for (let i = 0; i < scale.length; i++) {
           const after = near(j, 1, t, i);
           const before = near(j - 1, -1, t, i);
@@ -12112,6 +12126,11 @@ function ttfxAnnotationCovers(a, version) {
 
 function ttfxMetricLabel(metric = ttfxMetric) {
   return TTFX_METRICS[metric].label;
+}
+
+// A metric's name in running text, or the key itself for one the site does not list
+function ttfxShortName(metric) {
+  return TTFX_METRICS[metric]?.short || metric;
 }
 
 // Whether `metric`'s GC-off twin is drawn
@@ -12192,6 +12211,21 @@ function ttfxGeomean(b, tasks, metric = ttfxMetric, gcoff = false) {
 
 function ttfxIsCount(metric = ttfxMetric) {
   return !!TTFX_METRICS[metric].count;
+}
+
+function ttfxIsDetail(metric = ttfxMetric) {
+  return !!TTFX_METRICS[metric].detail;
+}
+
+// Counts and details are drawn by the per-task chart alone
+function ttfxHasPanel(metric = ttfxMetric) {
+  return !ttfxIsCount(metric) && !ttfxIsDetail(metric);
+}
+
+// Whether any task of a build has a value of `metric`
+function ttfxBuildHas(b, metric) {
+  const i = TTFX_METRICS[metric].index;
+  return Object.values(b.tasks || {}).some((v) => v[i] != null);
 }
 
 // The suite value of `metric` in one build: the geomean over `tasks`, or for
@@ -12312,8 +12346,8 @@ function setTtfxMetric(val) {
   if (!TTFX_METRICS[val]) return;
   ttfxMetric = val;
   document.getElementById("ttfx-metric").value = val;
-  // A count has no summary panel
-  if (ttfxIsCount() && ttfxMode === "summary") applyTtfxMode("tasks");
+  // A count or a detail has no summary panel
+  if (!ttfxHasPanel() && ttfxMode === "summary") applyTtfxMode("tasks");
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
@@ -12451,8 +12485,8 @@ function applyTtfxURLParams() {
     ttfxGcOffDrawn = true;
     document.getElementById("ttfx-btn-gcoff").classList.add("btn-primary");
   }
-  // A count has no summary panel
-  applyTtfxMode(params.get("ts") === "tasks" || ttfxIsCount() ? "tasks" : "summary");
+  // A count or a detail has no summary panel
+  applyTtfxMode(params.get("ts") === "tasks" || !ttfxHasPanel() ? "tasks" : "summary");
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
@@ -13200,8 +13234,8 @@ function applyTtfxMode(mode) {
 
 function setTtfxMode(mode) {
   applyTtfxMode(mode);
-  // The summary has no panel for a count
-  if (ttfxMode === "summary" && ttfxIsCount()) return setTtfxMetric("precompile");
+  // The summary has no panel for a count or a detail
+  if (ttfxMode === "summary" && !ttfxHasPanel()) return setTtfxMetric("precompile");
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxURL();
@@ -13215,6 +13249,7 @@ function updateTtfxMetricPills() {
   const el = document.getElementById("ttfx-metric-pills");
   if (!el) return;
   el.innerHTML = Object.keys(TTFX_METRICS)
+    .filter((m) => !ttfxIsDetail(m))
     .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')">${TTFX_PILL_LABELS[m]}</button>`)
     .join("");
   document.getElementById("ttfx-summary-grid").dataset.metric = ttfxMetric;
@@ -13309,7 +13344,7 @@ function updateTtfxSummaryCharts() {
     syncing = false;
   };
   for (const metric of Object.keys(TTFX_METRICS)) {
-    if (ttfxIsCount(metric)) continue;
+    if (!ttfxHasPanel(metric)) continue;
     const canvas = document.getElementById("ttfx-chart-" + metric);
     const common = ttfxSuiteTasks(builds, tasks, metric);
     const label = ttfxMetricLabel(metric);
@@ -13415,7 +13450,7 @@ function renderTtfxBuildsTable() {
   for (const metric of Object.keys(TTFX_METRICS)) common[metric] = ttfxSuiteTasks(builds, tasks, metric);
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
-  const metricCols = Object.keys(TTFX_METRICS);
+  const metricCols = Object.keys(TTFX_METRICS).filter((m) => !ttfxIsDetail(m));
   thead.innerHTML = sortableHeaderRow(
     [
       ["date", "Date"],
@@ -13540,7 +13575,7 @@ function ttfxTaskChanges(t, kinds) {
     .map((k) => {
       const m = t.metrics[k];
       const r = m && (m.ratios || m.gcoff_ratios);
-      return r ? `${k} ${r.map(ttfxRatioPct).join(", ")}` : k;
+      return r ? `${ttfxShortName(k)} ${r.map(ttfxRatioPct).join(", ")}` : ttfxShortName(k);
     })
     .join("; ");
 }
@@ -13577,6 +13612,7 @@ function ttfxPrStackBadge(p) {
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
 // stacked one it adds the estimate of the whole stack against master.
 function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
+  metrics = [...metrics, ...ttfxPrDetailMetrics(p)];
   const blocks = (x) => x.geomeans.map(ttfxRatioPct).join(", ");
   const st = p.stack;
   const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `\`${st.base_ref}\``) : "master";
@@ -13672,7 +13708,13 @@ function prAllStatsButton(n) {
   return `<a class="btn" href="?tab=${tabToURLValue("commit")}&c=${n}" onclick="closeTtfxBuildPopup();lookupCommit('${n}');return false" title="Everything recorded for this pull request on the Commit page">All PR stats</a>`;
 }
 
+// The detail metrics a pull request's job compared, shown after the scored ones
+function ttfxPrDetailMetrics(p) {
+  return Object.keys(TTFX_METRICS).filter((m) => ttfxIsDetail(m) && p.suite && p.suite[m]);
+}
+
 function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
+  const details = ttfxPrDetailMetrics(p);
   const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "—");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
@@ -13714,11 +13756,12 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
   if (chained) html += '<th class="num">Stack vs master (est.)</th>';
   html += "</tr></thead><tbody>";
-  for (const m of metrics) {
+  for (const m of [...metrics, ...details]) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(on && on.verdict, off && off.verdict);
-    html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks">${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    const note = details.includes(m) ? "; not in the score" : "";
+    html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
     html += `<td class="${ttfxVerdictClass(v)}">${v}</td>`;
     if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
@@ -13728,6 +13771,8 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   html += '<div class="ttfx-popup-muted ttfx-popup-hint">One value per ABBA block. Muted: the same with the GC off.</div>';
 
   const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
+  // A detail metric gets a column when a task changed in it
+  metrics = [...metrics, ...details.filter((m) => changed.some((t) => t.metrics[m]))];
   if (changed.length) {
     html += `<table class="ttfx-popup-table"><thead><tr><th>Task with a robust change</th>`;
     html += metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
@@ -17550,7 +17595,7 @@ function commitTtfxHtml(data) {
   const figures = metrics.map((m, i) => {
     const logs = tasks.map((x) => x.pcts[i]).filter((p) => p != null).map((p) => Math.log(1 + p / 100));
     const pct = logs.length ? (Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length) - 1) * 100 : null;
-    return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(m)}</span>${commitPctHtml(pct, 2)}</div>`;
+    return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(ttfxShortName(m))}</span>${commitPctHtml(pct, 2)}</div>`;
   });
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";
@@ -17566,8 +17611,8 @@ function commitTtfxHtml(data) {
   const head = [
     ["Task"],
     ...metrics.flatMap((m) => [
-      [escapeHtml(m), "num col-secondary"],
-      [`<span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(m)}</span>`, "num"],
+      [escapeHtml(ttfxShortName(m)), "num col-secondary"],
+      [`<span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(ttfxShortName(m))}</span>`, "num"],
     ]),
   ];
   const notable = tasks
