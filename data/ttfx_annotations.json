@@ -41,6 +41,20 @@
       "label": "TTFX driver #664",
       "description": "The TTFX driver loads freshly precompiled packages once in an untimed process before measuring, so load no longer includes a cost paid once per precompile. The load suite geomean went from about 0.38 s to 0.23 s, level with the GC-off repeats, which never paid it.",
       "url": "https://github.com/JuliaCI/julia-buildkite/pull/664"
+    },
+    {
+      "job_id": "01a1576d-0a17-4749-9085-a5513e27935c",
+      "kind": "packages",
+      "label": "DocStringExtensions 0.10",
+      "tasks": [
+        "ForwardDiff/Gradient-Of-Square-Norm",
+        "Ferrite/Heat-Equation",
+        "Distributions/Normal-Distribution",
+        "ReverseDiff/Gradient-Of-Square-Norm",
+        "Manifolds/Geodesic-On-Sphere"
+      ],
+      "description": "Five tasks resolved new package versions, among them DocStringExtensions 0.10, whose release made the package slower to precompile. Their precompile rose by 12% to 53% (ForwardDiff 4.7 s to 7.1 s). The tasks whose packages did not change held level, so the Julia commit of this build (#63813) is not the cause.",
+      "url": "https://github.com/JuliaLang/julia/pull/63813"
     }
   ]
 }
