@@ -93,6 +93,7 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_results", "load_stdlibs", "REAL"),
     ("ttfx_results", "precompile_stdlibs", "REAL"),
     ("ttfx_samples", "error_stdlibs", "TEXT"),
+    ("agent_snapshot_members", "pipeline", "TEXT"),
     ("ttfx_samples", "precompile_stdlibs_s", "REAL"),
     ("ttfx_samples", "load_stdlibs_s", "TEXT"),
     ("ttfx_samples", "run_stdlibs_s", "TEXT"),

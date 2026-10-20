@@ -1687,6 +1687,47 @@ end
 # Buildkite states of a job that is still waiting for an agent
 const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited", "limiting")
 
+# The pipelines whose jobs pool_jobs records
+const POOL_PIPELINES = ("julia-pr", "julia-ci")
+# How long a snapshot's count of other pipelines' jobs stands; ingests run every half hour
+const SNAPSHOT_HOLD = Minute(45)
+
+"""
+    other_running(db, start, step, n)
+
+Per pool (queue, os and arch of the agent), how many of its agents were running
+a job of a pipeline that pool_jobs does not record, at each of the `n` samples
+from `start`, `step` seconds apart. Those jobs hold the same agents as the
+julia-pr and julia-ci ones. Each sample takes the latest snapshot before it,
+and counts nothing when there is none in the last `SNAPSHOT_HOLD`.
+"""
+function other_running(db, start, step, n)
+    lo = Store.iso(start - SNAPSHOT_HOLD)
+    times = [DateTime(String(r.time), Store.ISO_SECONDS)
+             for r in rows(db, "SELECT DISTINCT time FROM agent_snapshot_members WHERE time >= ? AND pipeline IS NOT NULL ORDER BY time", (lo,))]
+    counts = Dict{Tuple{String,String,String},Dict{DateTime,Int}}()
+    known = join(("'$p'" for p in POOL_PIPELINES), ", ")
+    for r in rows(db, "SELECT m.time, a.queue, a.os, a.arch, COUNT(*) AS n FROM agent_snapshot_members m " *
+                      "JOIN agents a ON a.name = m.agent_name WHERE m.time >= ? AND m.pipeline <> '' " *
+                      "AND m.pipeline NOT IN ($known) GROUP BY m.time, a.queue, a.os, a.arch", (lo,))
+        get!(Dict{DateTime,Int}, counts, (String(r.queue), String(r.os), String(r.arch)))[DateTime(String(r.time), Store.ISO_SECONDS)] = Int(r.n)
+    end
+    out = Dict{Tuple{String,String,String},Vector{Int}}()
+    for (pool, at) in counts
+        v = zeros(Int, n)
+        k = 0
+        for i in 1:n
+            t = start + Second((i - 1) * step)
+            while k < length(times) && times[k+1] <= t
+                k += 1
+            end
+            k > 0 && t - times[k] <= SNAPSHOT_HOLD && (v[i] = get(at, times[k], 0))
+        end
+        out[pool] = v
+    end
+    return out
+end
+
 """
     pool_slots(db, cutoff)
 
@@ -1735,7 +1776,9 @@ every `step_s` seconds from `since` (all retained jobs by default) to now, with 
 sample, the agent slots seen for the pool in the last 30 days and the pools
 sharing its hosts (see `pool_slots`). The same
 series per pipeline are under `by_pipeline`, so master (julia-ci) and pull
-request (julia-pr) jobs can be told apart.
+request (julia-pr) jobs can be told apart. Its `other` entry counts the pool's
+agents busy with jobs of any other pipeline, from the agent snapshots (see
+`other_running`); their waiting jobs are not known, so it never has any.
 """
 function pool_backlog(db; since="")
     now_t = floor(now(UTC), Minute(10))
@@ -1779,6 +1822,7 @@ function pool_backlog(db; since="")
             p.running[first_at(s1)+1] -= 1
         end
     end
+    others = other_running(db, start, step, n)
     gen = agents_generated_at(db)
     slots, shared, hosts, peak = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
     function series(p)
@@ -1804,6 +1848,10 @@ function pool_backlog(db; since="")
     out = Any[]
     for ((q, o, a), per) in pools
         by = OrderedDict{String,Any}(pl => series(per[pl]) for pl in sort!(collect(keys(per))))
+        if haskey(others, (q, o, a))
+            by["other"] = OrderedDict{String,Any}("waiting" => zeros(Int, n), "running" => others[(q, o, a)],
+                                                  "oldest_wait_s" => zeros(Int, n))
+        end
         parts = collect(values(by))
         push!(out, OrderedDict{String,Any}("queue" => q, "os" => o, "arch" => a, "slots" => get(slots, (q, o, a), nothing),
                                            "hosts" => get(hosts, (q, o, a), String[]),
@@ -1816,7 +1864,7 @@ function pool_backlog(db; since="")
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
     return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,
                                    "host_slots" => OrderedDict(h => peak[h] for h in sort!(unique(h for p in out for h in p["hosts"])) if haskey(peak, h)),
-                                   "pipelines" => ["julia-pr", "julia-ci"], "pools" => out)
+                                   "pipelines" => collect(POOL_PIPELINES), "pools" => out)
 end
 
 """

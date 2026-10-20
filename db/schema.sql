@@ -639,6 +639,7 @@ CREATE TABLE IF NOT EXISTS agent_snapshots (
 CREATE TABLE IF NOT EXISTS agent_snapshot_members (
     time       TEXT NOT NULL REFERENCES agent_snapshots (time),
     agent_name TEXT NOT NULL,
+    pipeline   TEXT,                         -- of the agent's job then, '' when idle, NULL before it was recorded
     PRIMARY KEY (time, agent_name)
 ) WITHOUT ROWID;
 

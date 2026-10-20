@@ -229,7 +229,10 @@
           "description": "When the Buildkite agents were listed (every ingest)."
         },
         "agent_snapshot_members": {
-          "description": "Which agents were connected at each snapshot."
+          "description": "Which agents were connected at each snapshot.",
+          "columns": {
+            "pipeline": "the pipeline of the agent's job then, '' when idle, NULL in snapshots before it was recorded"
+          }
         },
         "agents": {
           "description": "Every Buildkite agent seen: host, queue, OS, state, first and last seen, and its current job.",

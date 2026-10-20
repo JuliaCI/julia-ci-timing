@@ -111,11 +111,15 @@ function record_snapshot!(db, agents, now_time::DateTime)
     end
     stmt = upsert_stmt(db, "agents", ["name"], AGENT_COLS)
     connected = String[]
+    pipelines = Dict{String,String}()
     for agent in agents
         name = str(get(agent, :name, nothing))
         isempty(name) && continue
         rec = agent_record(agent, snapshot_time, get(first_seen, name, snapshot_time))
-        rec["state"] == "connected" && push!(connected, name)
+        if rec["state"] == "connected"
+            push!(connected, name)
+            pipelines[name] = rec["job"] === nothing ? "" : rec["job"]["pipeline"]
+        end
         tags = something(get(agent, :meta_data, nothing), [])
         upsert!(stmt, (name, fold_key(name), str(get(agent, :id, nothing)), rec["hostname"], rec["queue"], rec["os"], rec["arch"],
                        rec["version"], JSON3.write(String.(tags)), rec["state"], rec["connected_at"], rec["first_seen"],
@@ -127,9 +131,9 @@ function record_snapshot!(db, agents, now_time::DateTime)
                             "change_seq = ? WHERE name NOT IN (SELECT value FROM json_each(?)) AND (job_json IS NOT NULL OR state = 'connected')",
                         (seq, JSON3.write(connected)))
     DBInterface.execute(db, "INSERT OR IGNORE INTO agent_snapshots (time) VALUES (?)", (snapshot_time,))
-    mstmt = DBInterface.prepare(db, "INSERT OR IGNORE INTO agent_snapshot_members (time, agent_name) VALUES (?, ?)")
+    mstmt = DBInterface.prepare(db, "INSERT OR IGNORE INTO agent_snapshot_members (time, agent_name, pipeline) VALUES (?, ?, ?)")
     for name in connected
-        DBInterface.execute(mstmt, (snapshot_time, name))
+        DBInterface.execute(mstmt, (snapshot_time, name, pipelines[name]))
     end
     return connected
 end

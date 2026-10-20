@@ -178,7 +178,10 @@ builds in `pool_jobs` (kept 60 days, backfilled 30 on the first run), with the
 pool it asked for (the queue, os and arch of its agent query rules) and when it
 became runnable, started and finished. `api/agents/backlog` samples from it how
 many jobs wait for each pool and for how long, which the Workers tab charts as
-the queue backlog. `api/agents/usage` sums the agent time of the jobs that
+the queue backlog. Other pipelines (julia-buildkite-ci, for one) run on the
+same agents, so each snapshot also keeps the pipeline of every agent's job in
+`agent_snapshot_members`, and the backlog counts those agents as running under
+`other`. `api/agents/usage` sums the agent time of the jobs that
 finished in the last 7 days, which the Timing tab's Worker time view
 (`?tab=ci-timing&jv=usage`) splits by pipeline, job type, OS and so on;
 clicking slices filters the other charts (`jf=os.Linux~queue.test`).

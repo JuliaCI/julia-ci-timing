@@ -1312,14 +1312,15 @@ function workersYAxisFit(axis) {
 
 // === Queue backlog (Workers tab) ===
 // api/agents/backlog samples, per agent pool, the julia-pr and julia-ci jobs
-// waiting for an agent and running, from pool_jobs (fetch_agents.jl).
+// waiting for an agent and running, from pool_jobs (fetch_agents.jl). Agents
+// busy with other pipelines' jobs count as running under "other".
 let backlogData = null;
 let backlogSince = null;
 let backlogPromise = null;
 let backlogChart = null;
 let backlogMetric = "per-slot";
 let backlogPipeline = "all";
-const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR" };
+const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR", other: "other pipelines" };
 
 // A pool's series for one pipeline, or for all of them
 function backlogSeries(p, pipeline = backlogPipeline) {

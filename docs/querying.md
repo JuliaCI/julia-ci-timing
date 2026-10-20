@@ -105,7 +105,7 @@ only the files that changed. `AGENTS.md` describes their shapes.
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.
 - **Agents.** `agents` (every Buildkite agent seen), `agent_snapshots` and
-  `agent_snapshot_members` (who was connected at each ingest). `pool_jobs` holds every
+  `agent_snapshot_members` (who was connected at each ingest, and the pipeline of each one's job). `pool_jobs` holds every
   runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
   for (queue, os, arch) and when it became runnable, started and finished: the queue
   backlog behind `api/agents/backlog` and the worker time shares behind `api/agents/usage`.
