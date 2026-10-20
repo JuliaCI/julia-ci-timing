@@ -353,7 +353,7 @@ function extLink(url, html, attrs = "") {
 function tapAgainToOpen(open) {
   if (!IS_TOUCH) return open;
   let last = null;
-  return (evt, elements, chart) => {
+  const onClick = (evt, elements, chart) => {
     const key = elements.length ? `${elements[0].datasetIndex}:${elements[0].index}` : null;
     if (key && key === last) {
       last = null;
@@ -361,8 +361,29 @@ function tapAgainToOpen(open) {
     }
     last = key;
   };
+  onClick.open = open;
+  return onClick;
 }
-const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap again to open" : "");
+const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap here or the point again to open" : "");
+
+// On a touchscreen a tap on the tooltip opens what it shows, as a second tap
+// on its point does. The tap is kept from the tooltip, which would otherwise
+// move to whatever point is nearest the tap, or close.
+Chart.register({
+  id: "tapTooltipToOpen",
+  beforeEvent(chart, args) {
+    const e = args.event;
+    // A tap arrives as a touchstart, a mousemove and then a click
+    if (!IS_TOUCH || !["mousedown", "mousemove", "click"].includes(e.type)) return;
+    const open = chart.config.options.onClick?.open;
+    const tip = chart.tooltip;
+    const active = tip?.getActiveElements() || [];
+    if (!open || !active.length || !tip.opacity) return;
+    if (e.x < tip.x || e.x > tip.x + tip.width || e.y < tip.y || e.y > tip.y + tip.height) return;
+    if (e.type === "click") open(e, active, chart);
+    return false;
+  },
+});
 
 // === State ===
 let chart = null;
@@ -11108,7 +11129,7 @@ function updatePkgevalDeltaChart() {
                 lines.push(`${r.gap_days} days after the report before: these span every commit in between, and the bar is cut off`);
               return lines;
             },
-            footer: () => (IS_TOUCH ? "Tap again to list them" : "Click to list them"),
+            footer: () => (IS_TOUCH ? "Tap here or the point again to list them" : "Click to list them"),
           },
         },
       },
@@ -11511,6 +11532,8 @@ function showTtfxBuildPopup(b, task) {
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
 
   let html = '<div class="ttfx-popup-actions">';
+  // The release, LTS and branch nightly runs measure commits off master
+  if (!ref || ref === "opt") html += allStatsButton(b.commit);
   html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
   html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">GitHub commit</a>`;
@@ -12817,7 +12840,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(...wrapTooltipText(b.message));
             for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-            lines.push(IS_TOUCH ? "Tap again for details and links" : "Click for details and links");
+            lines.push(IS_TOUCH ? "Tap here or the point again for details and links" : "Click for details and links");
             return lines;
           },
         },
@@ -13716,10 +13739,12 @@ function showTtfxPrPopup(p) {
   openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html: ttfxPrDetailsHtml(p, ttfxPrs.metrics), wide: true, key: `ttfx-pr-${p.pr}` });
 }
 
-// The button in a pull request's popup that opens its Commit page, where the TTFX,
-// size and stack details are together
-function prAllStatsButton(n) {
-  return `<a class="btn" href="?tab=${tabToURLValue("commit")}&c=${n}" onclick="closeTtfxBuildPopup();lookupCommit('${n}');return false" title="Everything recorded for this pull request on the Commit page">All PR stats</a>`;
+// The button in a popup that opens the Commit page of a pull request or master
+// commit, where its TTFX, size and stack details are together
+function allStatsButton(ref, { pr = false } = {}) {
+  const r = escapeHtml(String(ref));
+  const what = pr ? "pull request" : "commit";
+  return `<a class="btn btn-primary" href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="closeTtfxBuildPopup();lookupCommit('${r}');return false" title="Everything recorded for this ${what} on the Commit page">All ${pr ? "PR" : "commit"} stats</a>`;
 }
 
 // The detail metrics a pull request's job compared, shown after the scored ones
@@ -13738,10 +13763,10 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   const ci = ttfxPrCi(p);
 
   let html = '<div class="ttfx-popup-actions">';
+  if (allStats) html += allStatsButton(p.pr, { pr: true });
   html += `<a class="btn" href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${p.pr}</a>`;
   if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   html += `<button type="button" class="btn" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
-  if (allStats) html += prAllStatsButton(p.pr);
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
@@ -14829,7 +14854,7 @@ function updateSizesChart() {
               const span = sizesSpan(sizesPrevious(d.values.total || [], i), i);
               if (span > 1) lines.push(`${span} commits since the previous measured one`);
               if (d.messages[i]) lines.push(...wrapTooltipText(span > 1 ? `Last: ${d.messages[i]}` : d.messages[i]));
-              lines.push(IS_TOUCH ? "Tap again for details and links" : "Click for details and links");
+              lines.push(IS_TOUCH ? "Tap here or the point again for details and links" : "Click for details and links");
               return lines;
             },
           },
@@ -15149,10 +15174,10 @@ function sizesPrDetailsHtml(p, { allStats = true } = {}) {
   const n = p.number;
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   let html = '<div class="ttfx-popup-actions">';
+  if (allStats) html += allStatsButton(n, { pr: true });
   html += `<a class="btn" href="${githubPrURL(n)}" target="_blank" rel="noopener noreferrer">GitHub PR #${n}</a>`;
   if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite build</a>`;
   html += `<a class="btn" href="${githubCompareURL(p.merge_base, p.head.commit)}" target="_blank" rel="noopener noreferrer" title="The pull request's commits since its merge-base">Commits</a>`;
-  if (allStats) html += prAllStatsButton(n);
   html += "</div>";
   html += row("Title", escapeHtml(p.title));
   html += row("Author", escapeHtml(p.author));

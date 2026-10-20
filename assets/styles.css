@@ -2965,6 +2965,30 @@ th.sorted .sort-indicator {
 .popup-info .ttfx-popup-actions a.btn {
   color: var(--color-fg-default);
 }
+.popup-info .ttfx-popup-actions a.btn-primary {
+  color: #fff;
+}
+/* On a phone the buttons fill two even columns, with the Commit page link
+   across the top, rather than wrapping raggedly. A button left alone on the
+   last row takes the whole row. */
+@media (max-width: 600px) {
+  .ttfx-popup-actions .btn {
+    flex: 1 1 calc(50% - 4px);
+    text-align: center;
+    padding: 8px 6px;
+  }
+  .ttfx-popup-actions .btn-primary {
+    flex-basis: 100%;
+  }
+  /* Clear of the larger close button, which would cover the first buttons */
+  .ttfx-build-popup h3 {
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    margin-bottom: 8px;
+    padding-right: 44px;
+  }
+}
 .popup-info .ttfx-popup-actions a.btn:hover {
   text-decoration: none;
 }
