@@ -11800,6 +11800,7 @@ function setDetailPopupURL(key) {
 async function reopenDetailPopup(tab) {
   const key = new URLSearchParams(window.location.search).get("pop");
   if (!key || activeTab !== tab) return;
+  if (key === "ttfx-method") return showTtfxMethodPopup();
   const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit)-(.+)$/);
   const kind = m?.[1];
   const id = m?.[2];
@@ -13698,6 +13699,18 @@ document.addEventListener(
 // overlay: its links, what the job compared and when, the suite geomeans of
 // every metric (and the stack's estimate against master), then the tasks
 // with a robust change
+function showTtfxMethodPopup() {
+  // From the phone's options sheet, which would cover the popup
+  document.querySelector(".m-sheet-done")?.click();
+  const readme = "https://github.com/JuliaCI/julia-buildkite/blob/main/utilities/ttfx/README.md";
+  openDetailPopup({
+    title: "TTFX method",
+    html: `<p>The goal is to measure real-world TTFX: the Time To First X, where X is a plot, a result and so on. Each run resolves the package versions you would have got at that time. So a new release of a dependency can change the results too, and the charts annotate the jumps it causes.</p>
+      <p>${extLink(readme, "How the TTFX job measures each task")}</p>`,
+    key: "ttfx-method",
+  });
+}
+
 function showTtfxPrPopup(p) {
   openDetailPopup({ title: `TTFX of pull request #${p.pr}`, html: ttfxPrDetailsHtml(p, ttfxPrs.metrics), wide: true, key: `ttfx-pr-${p.pr}` });
 }
