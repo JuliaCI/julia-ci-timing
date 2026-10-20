@@ -87,7 +87,9 @@ only the files that changed. `AGENTS.md` describes their shapes.
   the MethodInstances the task script invalidated), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
   methods compiled again because an invalidation dropped their code),
-  `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX
+  `ttfx_failures`, `ttfx_samples` (every repeat). The task `MEGA/All-Tasks` is every
+  task in one session: leave it out of sums and geomeans over tasks, and compare it only
+  between jobs with the same `ttfx_jobs.mega_left_out`. `ttfx_prs` holds the latest TTFX
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
   current state only.
@@ -181,7 +183,7 @@ appeared or went away):
 ```sql
 SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, count(*) AS tasks, c.statement
 FROM ttfx_recompiles c JOIN ttfx_jobs j ON j.job_uuid = c.job_uuid
-WHERE j.kind = 'master' AND j.build_created_at >= date('now', '-30 days')
+WHERE j.kind = 'master' AND j.build_created_at >= date('now', '-30 days') AND c.task != 'MEGA/All-Tasks'
 GROUP BY j.build, c.statement ORDER BY j.build_created_at DESC, tasks DESC
 ```
 

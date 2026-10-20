@@ -11469,9 +11469,10 @@ function ttfxBuildOutliers(b, series, tasks, suiteRows) {
     for (const t of tasks) {
       const v = ttfxValue(b, t, key);
       if (v == null) continue;
-      let prev = null;
-      for (let j = i - 1; j >= 0 && prev == null; j--) prev = ttfxValue(series[j], t, key);
-      if (prev == null) continue;
+      let j = i - 1;
+      while (j >= 0 && ttfxValue(series[j], t, key) == null) j--;
+      if (j < 0 || !ttfxComparable(t, b, series[j])) continue;
+      const prev = ttfxValue(series[j], t, key);
       const row = { task: t, key, v, prev, change: ttfxChange(v, prev, key) };
       if (ttfxIsCount(key)) {
         if (Math.abs(v - prev) >= TTFX_OUTLIER_MIN_COUNT) counts.push({ ...row, score: Math.abs(v - prev) });
@@ -11515,6 +11516,7 @@ function showTtfxBuildPopup(b, task) {
   html += row("Agent", escapeHtml([b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")));
   html += row("Clicked task", task ? escapeHtml(task) : "");
   html += row("Tasks", `${nOk} measured${failed.length ? `, ${failed.length} failed` : ""}${b.blocks ? `, ${b.blocks} ABBA blocks` : ""}`);
+  html += row("MEGA leaves out", escapeHtml(ttfxMegaLeftOut(b)));
 
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
   html += "<th class=\"num\" title=\"Geometric mean over the selected tasks; for a count, their total\">Suite</th><th class=\"num\">vs previous</th>";
@@ -11599,6 +11601,7 @@ function ttfxBuildMarkdown(b, task) {
     `${nOk} tasks measured${failed.length ? `, ${failed.length} failed` : ""}` +
       `${b.agent || b.cpu ? ` on ${[b.agent, b.cpu, b.triplet].filter(Boolean).join(", ")}` : ""}.`,
   );
+  if (ttfxMegaLeftOut(b)) lines.push("", `MEGA/All-Tasks leaves out ${ttfxMegaLeftOut(b)}.`);
   const gc = (v) => (v != null ? ` (GC off ${formatTtfxSeconds(v)})` : "");
   const paired = !!b.base;
   const head = ["suite", ref ? "vs previous run" : "vs previous build"];
@@ -12127,6 +12130,18 @@ function ttfxAllTasks() {
   return ttfxData ? ttfxData.tasks || [] : [];
 }
 
+// MEGA/All-Tasks runs every task in one session, minus those that failed or
+// lack the phase markers (`mega_left_out`). It is kept out of the suite values,
+// and its values compare only between runs that left out the same tasks.
+const ttfxIsMega = (t) => t.startsWith("MEGA/");
+const ttfxMegaLeftOut = (b) => (b.mega_left_out || []).join(", ");
+const ttfxComparable = (t, a, b) => !ttfxIsMega(t) || ttfxMegaLeftOut(a) === ttfxMegaLeftOut(b);
+
+// A MEGA line is dashed where the tasks left out change
+function ttfxMegaSegment(data) {
+  return { borderDash: (ctx) => (ttfxComparable("MEGA/", data[ctx.p0DataIndex].build, data[ctx.p1DataIndex].build) ? undefined : [4, 4]) };
+}
+
 // Whether a build has any value from the GC-off repeats
 function ttfxHasGcOffValues(b) {
   const indices = Object.values(TTFX_METRICS).map((m) => m.gcoffIndex).filter((i) => i != null);
@@ -12156,7 +12171,7 @@ function getTtfxFilteredRefs(ref) {
 // How many of the selected tasks one series alone measured in every one of
 // its runs in range: the reference series `ref`, or the master builds
 function ttfxSeriesTasksText(ref, metric, gcoff = false) {
-  const tasks = ttfxSelectedList();
+  const tasks = ttfxSelectedList().filter((t) => !ttfxIsMega(t));
   const runs = ref ? getTtfxFilteredRefs(ref) : getTtfxFilteredBuilds();
   const n = ttfxCommonTasks(runs, tasks, metric, gcoff).length;
   return `${n} of ${tasks.length} selected tasks measured in every run in range`;
@@ -12262,6 +12277,7 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
 // over time. Per metric, since a task's run can round to 0 while its
 // precompile is fine.
 function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, gcoff = false) {
+  tasks = tasks.filter((t) => !ttfxIsMega(t));
   // The builds that measured any of `tasks`: a task added to the job later
   // (Ferrite in October 2026) then has a line of its own from when it starts,
   // instead of none because the builds before it measured other tasks
@@ -12779,6 +12795,13 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
               if (p) lines.push(`${suite.label} (${suite._common} tasks): ${fmt(p.y)}`);
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
+            const ds = items[0].dataset;
+            if (ttfxIsMega(ds._twinOf ?? ds.label ?? "")) {
+              const before = ds.data[items[0].dataIndex - 1];
+              lines.push(`MEGA leaves out ${ttfxMegaLeftOut(b) || "no task"}`);
+              if (before && !ttfxComparable(ds._twinOf ?? ds.label, b, before.build))
+                lines.push(`unlike the run before (${ttfxMegaLeftOut(before.build) || "none"}), so not comparable with it`);
+            }
             if (b.message) lines.push(...wrapTooltipText(b.message));
             for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
             lines.push(IS_TOUCH ? "Tap again for details and links" : "Click for details and links");
@@ -13369,15 +13392,18 @@ function updateTtfxTaskChart() {
       ...ttfxHoverPointStyle(),
       order: 1,
     };
+    if (ttfxIsMega(t)) on.segment = ttfxMegaSegment(on.data);
     datasets.push(on);
     if (!ttfxDrawsGcOff()) continue;
     const off = series(t, true);
     if (!off.length) continue;
+    const offData = ttfxRebase(off, on.data[0].s, ttfxMetric);
     datasets.push({
       ...on,
       ...ttfxTwinStyle(color, TTFX_TASK_TWIN_WIDTH),
       label: `${t}, GC off`,
-      data: ttfxRebase(off, on.data[0].s, ttfxMetric),
+      data: offData,
+      ...(ttfxIsMega(t) ? { segment: ttfxMegaSegment(offData) } : {}),
       _twinOf: t,
     });
   }
@@ -14183,9 +14209,10 @@ function renderTtfxTasksTable() {
   const latestBuild = ttfxLatestMeasured(builds);
   for (const t of tasks) {
     const vals = [];
+    const measured = [];
     for (const b of builds) {
       const v = ttfxValue(b, t);
-      if (v != null) vals.push(v);
+      if (v != null) vals.push(v), measured.push(b);
     }
     const failedMsg = latestBuild && latestBuild.failed && latestBuild.failed[t];
     if (!vals.length && !failedMsg) continue;
@@ -14200,7 +14227,7 @@ function renderTtfxTasksTable() {
       min: stats ? stats.min : null,
       max: stats ? stats.max : null,
 
-      change: vals.length < 2 ? null : ttfxIsCount() ? vals[vals.length - 1] - vals[0] : (vals[vals.length - 1] / vals[0] - 1) * 100,
+      change: vals.length < 2 || !ttfxComparable(t, measured[0], measured[measured.length - 1]) ? null : ttfxIsCount() ? vals[vals.length - 1] - vals[0] : (vals[vals.length - 1] / vals[0] - 1) * 100,
       n: vals.length,
       failedMsg,
     });

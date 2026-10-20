@@ -68,9 +68,15 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
   "tasks":  ["Package/Task", ...],
   "builds": [ { "build", "job_id", "commit", "date", "version", "state",
                 "tasks":  { "Package/Task": [precompile, load, run, warm, ...] },
-                "failed": { "Package/Task": "error" } }, ... ]
+                "failed": { "Package/Task": "error" },
+                "mega_left_out": ["Package/Task", ...] }, ... ]
 }
 ```
+
+`MEGA/All-Tasks` is every task run in one session. Its values compare only between
+builds with the same `mega_left_out` (the tasks it left out because they failed or lack
+the phase markers; absent for builds without MEGA). Keep it out of anything summed or
+averaged over tasks.
 
 Each task's array follows the file's `metrics` list. Times are seconds,
 the minimum over the job's ABBA blocks; `load` and `run` are the cold

@@ -569,6 +569,10 @@ const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gc
                       "recompiled", "recompile_s"]
 const TTFX_RESULT_METRICS = 8
 
+# MEGA/All-Tasks, every task in one session: kept out of the suite values, and only
+# compared between jobs that left out the same tasks (ttfx_jobs.mega_left_out)
+is_mega(task) = startswith(task, "MEGA/")
+
 function ttfx(db; since="")
     where, params = where_clause("build_created_at", since, "")
     # The per-task tables are read for the window's jobs alone
@@ -635,6 +639,7 @@ function ttfx(db; since="")
                 "tasks" => Dict(k => task_values(v, n, get(job_traces, k, nothing)) for (k, v) in tasks),
                 "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
             kind == "opt" && (out[end]["base"] = get(bases, String(j.job_uuid), Dict{String,Any}()))
+            j.mega_left_out === missing || (out[end]["mega_left_out"] = String.(JSON3.read(String(j.mega_left_out))))
         end
         return out
     end
@@ -936,11 +941,11 @@ end
 # The TTFX job of the commit's build against the latest earlier one with
 # results on another commit
 function commit_ttfx(db, prefix, sha)
-    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
+    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url, mega_left_out FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
                   "ORDER BY build_created_at DESC LIMIT 1", (commit_glob(prefix, sha),))
     isempty(tj) && return nothing
     j = tj[1]
-    prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
+    prev = rows(db, "SELECT job_uuid, build, commit_sha, mega_left_out FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1",
                 (j.build_created_at, commit_glob(prefix, sha)))
     metrics = TTFX_METRICS[1:4]
@@ -951,6 +956,8 @@ function commit_ttfx(db, prefix, sha)
     failed = failures(String(j.job_uuid))
     before = isempty(prev) ? Dict{String,Any}() : results(String(prev[1].job_uuid))
     failed_before = isempty(prev) ? Dict{String,String}() : failures(String(prev[1].job_uuid))
+    # MEGA against a job that left out other tasks is no comparison
+    isempty(prev) || isequal(j.mega_left_out, prev[1].mega_left_out) || filter!(kv -> !is_mega(kv[1]), before)
     tasks = Any[]
     for task in sort!(unique([collect(keys(now_)); collect(keys(failed))]))
         push!(tasks, OrderedDict("task" => task, "now" => get(now_, task, nothing), "previous" => get(before, task, nothing),
@@ -1122,7 +1129,7 @@ function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
         ref = results(String(j.job_uuid))
         ratio, head, counts = Any[], Any[], Int[]
         for (i, m) in enumerate(metrics)
-            logs = [log(v[i] / ref[t][i]) for (t, v) in now_ if haskey(ref, t) && good(v[i]) && good(ref[t][i])]
+            logs = [log(v[i] / ref[t][i]) for (t, v) in now_ if !is_mega(t) && haskey(ref, t) && good(v[i]) && good(ref[t][i])]
             g = isempty(logs) ? nothing : exp(sum(logs) / length(logs))
             push!(ratio, g)
             push!(counts, length(logs))

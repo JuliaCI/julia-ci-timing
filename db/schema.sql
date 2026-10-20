@@ -293,7 +293,8 @@ CREATE TABLE IF NOT EXISTS ttfx_jobs (
     web_url          TEXT,
     has_samples      INTEGER NOT NULL DEFAULT 0,
     change_seq       INTEGER NOT NULL,
-    trace_state      TEXT                    -- trace-compile.tar.gz: NULL not looked at yet, 'ok' parsed, 'none' not uploaded or expired
+    trace_state      TEXT,                   -- trace-compile.tar.gz: NULL not looked at yet, 'ok' parsed, 'none' not uploaded or expired
+    mega_left_out    TEXT                    -- JSON list of the tasks MEGA/All-Tasks left out; NULL without MEGA
 );
 CREATE INDEX IF NOT EXISTS ttfx_jobs_build ON ttfx_jobs (build_created_at, build);
 

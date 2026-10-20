@@ -87,6 +87,7 @@ const COLUMN_MIGRATIONS = [
     ("size_prs", "stack_base", "TEXT"),
     ("ttfx_jobs", "kind", "TEXT NOT NULL DEFAULT 'master'"),
     ("ttfx_jobs", "trace_state", "TEXT"),
+    ("ttfx_jobs", "mega_left_out", "TEXT"),
     ("ttfx_results", "invalidated", "INTEGER"),
     ("ttfx_results", "invalidated_by_definition", "INTEGER"),
     ("ttfx_results", "invalidated_rejected", "INTEGER"),

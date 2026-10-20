@@ -142,6 +142,10 @@ function build_row(build, job, results, meta)
     settings = meta === nothing ? nothing : get(meta, :settings, nothing)
     system = meta === nothing ? nothing : get(meta, :system, nothing)
     snippets = meta === nothing ? nothing : get(meta, :snippets, nothing)
+    # MEGA/All-Tasks runs every task in one session, minus those that failed or lack
+    # the phase markers; its numbers compare only between jobs that left out the same
+    mega = results === nothing ? nothing : findfirst(r -> String(get(r, :package, "")) == "MEGA", results)
+    mega_left_out = mega === nothing ? nothing : sort!(String.(something(get(results[mega], :mega_left_out, nothing), [])))
 
     return Dict{String,Any}(
         "build" => build.number,
@@ -160,6 +164,7 @@ function build_row(build, job, results, meta)
         "n_tasks" => settings === nothing ? length(tasks) + length(failed) : get(settings, :n_tasks, nothing),
         "tasks" => tasks,
         "failed" => failed,
+        "mega_left_out" => mega_left_out,
         # Database-only extras, not part of the exported row
         "_arm" => arm,
         "_arms" => arms,
@@ -267,7 +272,8 @@ str_or_missing(x) = x === nothing ? missing : String(x)
 jsonstr(x) = x === nothing ? missing : JSON3.write(x)
 
 const JOB_COLS = ["pipeline", "build", "triplet", "kind", "state", "build_created_at", "commit_sha", "version", "message", "agent", "cpu",
-                  "snippets", "blocks", "n_tasks", "n_metrics", "selected_arm", "started_at", "finished_at", "web_url", "has_samples"]
+                  "snippets", "blocks", "n_tasks", "n_metrics", "selected_arm", "started_at", "finished_at", "web_url", "has_samples",
+                  "mega_left_out"]
 
 # Store one row and its children, replacing whatever the job had before.
 function write_row!(db, r, seq, stmts)
@@ -277,7 +283,7 @@ function write_row!(db, r, seq, stmts)
                         r["version"], r["message"], r["agent"], r["cpu"], r["snippets"], something(r["blocks"], missing),
                         something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
                         at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
-                        r["_results"] === nothing ? 0 : 1, seq))
+                        r["_results"] === nothing ? 0 : 1, jsonstr(r["mega_left_out"]), seq))
     for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples", "ttfx_invalidation_causes")
         DBInterface.execute(db, "DELETE FROM $t WHERE job_uuid = ?", (uuid,))
     end
