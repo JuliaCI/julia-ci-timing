@@ -80,10 +80,12 @@ come counts: `invalidated`, the MethodInstances the task script
 invalidated (from an untimed run that logs them; null for jobs before
 the driver did). Then `load_stdlibs`, the cold load in a copy of the
 task's project with every stdlib added and imported first, and
-`precompile_stdlibs`, that copy's precompile after the task's own (null
+`precompile_stdlibs`, that copy's precompile after the task's own, and
+`run_stdlibs`, the cold run after that load (null
 for jobs before the driver measured them; the site has no summary panel or
-table column for them: they are in the details, and the per-task chart
-draws them when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
+table column for them: the stdlibs-first load and run are drawn as a dotted
+twin of load and run with "Show stdlibs first" (`tl=1`), and the precompile
+by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`

@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     invalidated_rejected      INTEGER,       -- of those, package-image code not reinstated on load
     load_stdlibs       REAL,                 -- load in a copy of the project with every stdlib added and loaded first
     precompile_stdlibs REAL,                 -- precompile of that copy, after the task's own
+    run_stdlibs        REAL,                 -- run in that copy, after its load
     PRIMARY KEY (job_uuid, task)
 ) WITHOUT ROWID;
 

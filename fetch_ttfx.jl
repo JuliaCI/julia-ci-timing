@@ -48,7 +48,7 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
 # fetched again in case the job already recorded it, the rest are padded.
 const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                 "load_stdlibs", "precompile_stdlibs")
+                 "load_stdlibs", "precompile_stdlibs", "run_stdlibs")
 const REFETCH_BUILDS = 30
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
@@ -111,6 +111,7 @@ function summarize_records(records, arm)
         # first (`error_stdlibs`), and the precompile of that copy after the task's own
         load_stdlibs = nanmin([Float64(gcoff(r, :load_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :load_times_stdlibs))])
         precompile_stdlibs = nanmin([Float64(r.precompile_time_stdlibs) for r in ok if get(r, :precompile_time_stdlibs, nothing) !== nothing])
+        run_stdlibs = nanmin([Float64(gcoff(r, :run_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :run_times_stdlibs))])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
         k = findfirst(r -> get(r, :invalidations, nothing) !== nothing, ok)
         inv = k === nothing ? nothing : record_invalidations(ok[k])
@@ -118,7 +119,7 @@ function summarize_records(records, arm)
         tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
                           round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff),
                           inv === nothing ? nothing : inv.invalidated,
-                          round3(load_stdlibs), round3(precompile_stdlibs)]
+                          round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs)]
     end
     return tasks, failed, invalidations
 end
