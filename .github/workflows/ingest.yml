@@ -1,0 +1,67 @@
+name: Ingest now
+
+# Starts one ingest on the host outside the half-hourly timer, through the
+# same systemd unit the timer starts, and waits for it to finish. A run
+# already in progress is joined rather than doubled. Cancelling this
+# workflow does not stop the ingest on the host.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  SITE_URL: ${{ vars.CI_TIMING_SITE_URL || 'https://perf.julialang.org' }}
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    # The unit's own timeout is 90 minutes
+    timeout-minutes: 100
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.CI_TIMING_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run the ingest on the host
+        run: |
+          instance=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=ci-timing" "Name=tag:Name,Values=ci-timing-site" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          [ "$instance" != "None" ] || { echo "no running ci-timing-site instance"; exit 1; }
+          # A blocking start returns when the run ends, and fails if any
+          # fetcher or the export failed
+          params=$(jq -nc '{commands: [
+            "systemctl start ci-timing-ingest.service; rc=$?",
+            "journalctl -u ci-timing-ingest.service -n 60 --no-pager",
+            "exit $rc"], executionTimeout: ["5700"]}')
+          cmd=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
+            --comment "manual ingest ${GITHUB_RUN_ID}" --parameters "$params" \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command $cmd on $instance"
+          while :; do
+            sleep 30
+            status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Pending|InProgress|Delayed) ;;
+              *) break ;;
+            esac
+          done
+          aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text | tail -80
+          [ "$status" = "Success" ] || { echo "::error::ingest $status"; exit 1; }
+
+      - name: Source status
+        if: always()
+        run: |
+          curl -sSf --max-time 60 "$SITE_URL/healthz" |
+            jq -r '.sources | to_entries[] | "\(.key): last run \(.value.last_run_at), ok=\(.value.last_ok), rows \(.value.last_rows)\(if .value.last_error then ", error: \(.value.last_error)" else "" end)"'

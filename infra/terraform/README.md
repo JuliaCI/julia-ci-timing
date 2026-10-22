@@ -30,7 +30,9 @@ On the host (all from cloud-init, files under `files/`):
   one of the two ports Caddy lists; a deploy starts the new image's server on
   the other port and switches once it answers `/api/ready`.
 - `ci-timing-ingest.timer`: every half hour, runs the image (`fetch_*.jl`,
-  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`.
+  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`. The
+  "Ingest now" workflow (`.github/workflows/ingest.yml`) starts one by hand
+  over SSM and waits for it (`gh workflow run ingest.yml`).
 - `ci-timing-backup.timer`: weekly, `ci-timing-backup` uploads
   `runtime/latest.tar.gz` and publishes `/data/ci-timing.sqlite.gz`. A fresh
   data volume restores from it, so run it by hand before replacing the host.
