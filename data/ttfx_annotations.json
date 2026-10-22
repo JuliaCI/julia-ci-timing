@@ -55,6 +55,14 @@
       ],
       "description": "Five tasks resolved new package versions, among them DocStringExtensions 0.10, whose release made the package slower to precompile. Their precompile rose by 12% to 53% (ForwardDiff 4.7 s to 7.1 s). The tasks whose packages did not change held level, so the Julia commit of this build (#63813) is not the cause.",
       "url": "https://github.com/JuliaLang/julia/pull/63813"
+    },
+    {
+      "job_id": "01a1606d-9bec-458e-9510-9601e4ab9185",
+      "kind": "packages",
+      "label": "GMT 1.44.1",
+      "tasks": ["GMT/Create-A-Xy-Plot"],
+      "description": "The GMT task resolved the newly registered GMT v1.44.1, which no longer depends on SparseArrays. Loaded alone, GMT now invalidates 3 MethodInstances instead of 599 and loads about 0.2 s faster. With the stdlibs loaded first, SparseArrays invalidates GMT's precompiled plotting code, so the first plot recompiles it: the stdlibs-first run went from 0.008 s to 5.9 s. Importing SparseArrays alone before GMT reproduces this locally, and v1.44.0 does not show it. The Julia commit of this build (#63909) is not the cause.",
+      "url": "https://github.com/GenericMappingTools/GMT.jl/compare/v1.44.0...v1.44.1"
     }
   ]
 }
