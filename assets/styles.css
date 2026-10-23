@@ -1603,6 +1603,9 @@ th.sorted .sort-indicator {
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border-default);
 }
+.backlog-section[hidden] {
+  display: none;
+}
 /* More specific than .agents-chart-wrapper, which comes later */
 .backlog-section .backlog-chart-wrapper {
   flex: 1 1 0;

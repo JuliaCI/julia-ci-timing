@@ -784,8 +784,7 @@ function setWorkersFilter(value, { immediate = false } = {}) {
   workersFilter = (value || "").trim();
   clearTimeout(workersFilterTimer);
   const apply = () => {
-    // The filter narrows the agents table and the grid, not the charts
-    renderWorkerPresence({ charts: false });
+    renderWorkerPresence();
     updateURL();
   };
   if (immediate) apply();
@@ -1071,6 +1070,18 @@ function agentQueueGroup(rec) {
   return q === "build" || q === "test" || q === "launch" ? q : "other";
 }
 
+// The text the Workers filter matches for a host of the grid: its name plus
+// the queues, OS and arch of its agents, so "macos" or "test" finds hosts
+// whose names do not say so
+function hostSearchText(host) {
+  const words = new Set([host]);
+  for (const rec of Object.values((agentsData && agentsData.agents) || {})) {
+    if (rec.hostname !== host) continue;
+    for (const w of [rec.queue, rec.os, rec.arch]) if (w) words.add(w);
+  }
+  return [...words].join(" ");
+}
+
 // One table row per resident agent, or per host for the per-job queues, each
 // with a status; `connected` is the agent-name set of the snapshot taken at
 // `latestMs`. Shared by the Workers tab and the Overview card.
@@ -1259,7 +1270,8 @@ async function renderAgentsSection() {
     const flaggedRow = status === "missing" || status === "lost" || status === "quiet";
     const since =
       status === "connected" && rec.connected_at ? timeAgo(rec.connected_at) : "";
-    if (filtering && !matchesSearchWords(`${name} ${rec.hostname || ""}`, workersFilter)) continue;
+    const searchText = [name, rec.hostname, rec.queue, rec.os, rec.arch, statusText, jobText].filter(Boolean).join(" ");
+    if (filtering && !matchesSearchWords(searchText, workersFilter)) continue;
     shown++;
     const q = rawQueue(row);
     if (q !== openQueue) {
@@ -1345,6 +1357,11 @@ const BACKLOG_COLORS = {
   dark: ["#db6d28", "#388bfd", "#a371f7", "#3fb950", "#db61a2", "#d29922", "#79c0ff", "#8b949e"],
 };
 
+// Whether the Workers filter keeps a pool: it matches the pool's queue, OS,
+// arch and hosts like the agents table matches an agent's
+const backlogPoolShown = (p) =>
+  matchesSearchWords([p.queue, p.os, p.arch, ...(p.hosts || [])].filter(Boolean).join(" "), workersFilter);
+
 const backlogPoolLabel = (p) => `${p.queue || "(no queue)"} ${[p.os, p.arch].filter(Boolean).join("/")}`.trim();
 
 // "20 slots", or "5 slots shared with build macos/aarch64" when the pool's hosts
@@ -1390,6 +1407,7 @@ async function renderBacklogSection() {
   renderBalanceCharts(d);
   if (d.error || !d.pools || d.pools.length === 0) {
     summaryEl.textContent = d.error ? "Could not load the backlog." : "No jobs recorded yet.";
+    document.getElementById("backlog-section").hidden = false;
     if (backlogChart) {
       backlogChart.destroy();
       backlogChart = null;
@@ -1397,6 +1415,7 @@ async function renderBacklogSection() {
     return;
   }
   const now = d.pools
+    .filter(backlogPoolShown)
     .map((p) => ({ p, n: p.waiting[p.waiting.length - 1], w: p.oldest_wait_s[p.oldest_wait_s.length - 1] }))
     .filter((x) => x.n > 0);
   summaryEl.innerHTML = now.length
@@ -1421,8 +1440,10 @@ function renderBacklogChart(d) {
   const metric = backlogMetric;
   // Pools that never queued more than a few jobs in the window add nothing but legend
   const pools = d.pools
-    .filter((p) => Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || p.slots))
+    .filter((p) => backlogPoolShown(p) && Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || p.slots))
     .slice(0, BACKLOG_MAX_POOLS);
+  // A filter that leaves no pool to draw hides the whole section
+  document.getElementById("backlog-section").hidden = workersFilter !== "" && pools.length === 0;
   const datasets = pools.map((p, i) => {
     const color = palette[i % palette.length];
     const s = backlogSeries(p);
@@ -1549,7 +1570,19 @@ function renderBalanceCharts(d) {
   if (!container) return;
   for (const c of balanceCharts) c.destroy();
   balanceCharts = [];
-  const groups = d && !d.error ? balanceGroups(d.pools || []) : [];
+  let groups = d && !d.error ? balanceGroups(d.pools || []) : [];
+  // The filter keeps a group's matching pools and hides groups with none, or
+  // the whole section when no group is left
+  const section = document.getElementById("balance-section");
+  section.hidden = false;
+  if (workersFilter) {
+    for (const g of groups) g.shown = g.pools.filter(backlogPoolShown);
+    groups = groups.filter((g) => g.shown.length > 0);
+    if (!groups.length && d && !d.error) {
+      section.hidden = true;
+      return;
+    }
+  }
   if (!groups.length) {
     container.innerHTML = `<div class="workers-empty">${d?.error ? "Could not load the pools." : "No pools share hosts."}</div>`;
     return;
@@ -1574,8 +1607,10 @@ function renderBalanceCharts(d) {
   groups.sort((a, b) => b.queued - a.queued);
   for (const g of groups) {
     const sameQueue = new Set(g.pools.map((p) => p.queue)).size < g.pools.length;
-    g.series = g.pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
-    if (g.capacity) g.series.push({ p: g.all, label: "All pools", color: textColor, all: true });
+    const pools = g.shown || g.pools;
+    g.series = pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
+    // The group's total only reads right beside all of its pools
+    if (g.capacity && pools.length === g.pools.length) g.series.push({ p: g.all, label: "All pools", color: textColor, all: true });
   }
   const stats = (p, idleKnown) => {
     let queued = 0, idle = 0, busy = 0;
@@ -1672,7 +1707,10 @@ function renderWorkerPresence({ charts = true } = {}) {
   const container = document.getElementById("workers-grid");
   if (!container) return;
   if (charts) renderBacklogSection();
-  renderAgentsSection();
+  const agentsShown = renderAgentsSection();
+  // The filter matches the grid's hosts by their queue and OS, which come
+  // with the agent snapshots, so draw it again once they have loaded
+  if (workersFilter && !agentsData) agentsShown.then(() => renderWorkerPresence({ charts: false }));
   if (!data || !data.jobs || Object.keys(data.jobs).length === 0) {
     container.innerHTML = '<div class="workers-empty">No data loaded yet.</div>';
     return;
@@ -1746,7 +1784,7 @@ function renderWorkerPresence({ charts = true } = {}) {
   const cellH = 14;
 
   const agents = sortRows(
-    [...agentDays.keys()].filter((name) => matchesSearchWords(name, workersFilter)).map((name) => ({ name, runs: agentTotal.get(name) || 0 })),
+    [...agentDays.keys()].filter((name) => matchesSearchWords(hostSearchText(name), workersFilter)).map((name) => ({ name, runs: agentTotal.get(name) || 0 })),
     workersHostsSort,
     "name",
   ).map((r) => r.name);
