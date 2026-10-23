@@ -1084,8 +1084,10 @@ function hostSearchText(host) {
 
 // One table row per resident agent, or per host for the per-job queues, each
 // with a status; `connected` is the agent-name set of the snapshot taken at
-// `latestMs`. Shared by the Workers tab and the Overview card.
-function summarizeAgents(agents, connected, latestMs) {
+// `latestMs`. Shared by the Workers tab and the Overview card. `hostSlots`,
+// the most jobs each host was seen running at once, marks an idle row whose
+// host is already full with other queues' jobs.
+function summarizeAgents(agents, connected, latestMs, hostSlots = null) {
   const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
   for (const name of connected) perQueue[agentQueueGroup(agents[name])]++;
   const rows = [];
@@ -1125,6 +1127,24 @@ function summarizeAgents(agents, connected, latestMs) {
     else host.status = "idle";
     rows.push(host);
   }
+  if (hostSlots) {
+    const byHostname = new Map();
+    for (const host of hosts.values()) {
+      const h = host.rec.hostname;
+      if (!h) continue;
+      if (!byHostname.has(h)) byHostname.set(h, []);
+      byHostname.get(h).push(host);
+    }
+    for (const group of byHostname.values()) {
+      const running = group.reduce((acc, host) => acc + host.running, 0);
+      const slots = hostSlots[group[0].rec.hostname];
+      if (!slots || running < slots) continue;
+      for (const host of group) {
+        if (host.status !== "idle") continue;
+        host.hostBusy = group.filter((o) => o.running > 0).map((o) => ({ queue: o.queue, running: o.running }));
+      }
+    }
+  }
   const missing = rows.filter((r) => r.status === "missing" || r.status === "lost");
   const quiet = rows.filter((r) => r.status === "quiet");
   return { rows, perQueue, missing, quiet };
@@ -1133,6 +1153,7 @@ function summarizeAgents(agents, connected, latestMs) {
 // Within each queue's section: flagged rows first, then by name, until a header
 // is clicked
 let agentsSort = { col: "status", asc: true };
+let agentsHostSlotsShown = false;
 
 async function renderAgentsSection() {
   const section = document.getElementById("agents-section");
@@ -1175,7 +1196,9 @@ async function renderAgentsSection() {
 
   // Summary: connected now, per queue, and how many are missing
   const connected = new Set(latest.connected);
-  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs);
+  const hostSlots = backlogData && !backlogData.error ? backlogData.host_slots : null;
+  agentsHostSlotsShown = !!hostSlots;
+  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs, hostSlots);
   const queueParts = ["build", "test", "launch", "other"]
     .filter((q) => perQueue[q] > 0)
     .map((q) => `${q} ${perQueue[q]}`);
@@ -1200,7 +1223,11 @@ async function renderAgentsSection() {
     const lastSeen = isNaN(lastSeenMs) ? "—" : timeAgo(new Date(lastSeenMs).toISOString());
     if (status === "connected") row.statusText = "connected";
     else if (status === "running") row.statusText = `${row.running} running (${row.slots} slot${row.slots === 1 ? "" : "s"} seen)`;
-    else if (status === "idle") row.statusText = `idle, last job seen ${lastSeen}`;
+    else if (status === "idle" && row.hostBusy) {
+      const n = row.hostBusy.reduce((acc, b) => acc + b.running, 0);
+      const parts = row.hostBusy.map((b) => `${b.running} ${b.queue}`).join(", ");
+      row.statusText = `host full: ${parts} job${n === 1 ? "" : "s"} running`;
+    } else if (status === "idle") row.statusText = `idle, last job seen ${lastSeen}`;
     else if (status === "quiet") row.statusText = `no job seen since ${lastSeen}`;
     else row.statusText = `${status}, last seen ${lastSeen}`;
     if (row.jobs) {
@@ -1405,6 +1432,8 @@ async function renderBacklogSection() {
   if (backlogSince !== since) return;
   backlogData = d;
   renderBalanceCharts(d);
+  // The agents table names the hosts already full from the backlog's slots
+  if (agentsData && !agentsData.error && !agentsHostSlotsShown && d.host_slots) renderAgentsSection();
   if (d.error || !d.pools || d.pools.length === 0) {
     summaryEl.textContent = d.error ? "Could not load the backlog." : "No jobs recorded yet.";
     document.getElementById("backlog-section").hidden = false;
