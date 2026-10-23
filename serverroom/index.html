@@ -366,6 +366,13 @@
       // Queues served by somebody's own machine rather than a rack: drawn as an
       // Intel NUC on a table, one per slot
       const NUC_QUEUES = new Set(["oneapi"]);
+      // Queues served by desktop towers: drawn standing under a table
+      const DESKTOP_QUEUES = new Set(["rocm"]);
+      // Machines that look different from the rest of their queue, by hostname
+      // as the room shows it: amdgpu1 is an open test bench on top of the
+      // table, amdgpu2 a 2013 Xeon E5-2620 v2 workstation. The rest of a
+      // desktop queue's hosts are towers under the table.
+      const HOST_STYLES = { "amdgpu1.luraess.com": "openbench", "amdgpu2.luraess.com": "workstation" };
       // Queues whose agents run on another queue's machine, drawn in that
       // queue's row: one row of hardware, a sign per queue stacked above it,
       // and the worst of their moods for the row's lights and effects
@@ -497,6 +504,7 @@
             queues: q,
             mac: entry.os.size === 1 && entry.os.has("macos"),
             nuc: NUC_QUEUES.has(q),
+            desktop: DESKTOP_QUEUES.has(q),
             hosts: [...entry.hosts].map(([name, states]) => ({ name, states })).sort(byName),
             waiting: 0,
             oldest: 0,
@@ -592,6 +600,28 @@
         nucOff: surface(0x353a42, { metalness: 0.5, roughness: 0.5 }),
         nucLid: surface(0x14171c, { metalness: 0.3, roughness: 0.15 }),
         mug: surface(0xf5f5f4, { roughness: 0.4 }),
+        tower: surface(0x15181d, { metalness: 0.5, roughness: 0.4 }),
+        towerOff: surface(0x2a2e35, { metalness: 0.4, roughness: 0.5 }),
+        // Smoked glass: see-through enough to show the card behind it
+        glass: new THREE.MeshStandardMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.05, roughness: 0.1, metalness: 0.3, depthWrite: false }),
+        gpu: surface(0x2b3038, { metalness: 0.6, roughness: 0.4 }),
+        gpuFan: surface(0x14171c, { roughness: 0.7 }),
+        gpuGlow: new THREE.MeshBasicMaterial({ color: 0x7dd3fc }),
+        workstation: surface(0xa7adb5, { metalness: 0.6, roughness: 0.45 }),
+        workstationOff: surface(0x7c828a, { metalness: 0.5, roughness: 0.55 }),
+        // Lit like the case, so the table's shadow falls on it, with a little glow of its own
+        ventOn: surface(0xb3261e, { emissive: 0xb3261e, emissiveIntensity: 0.35, roughness: 0.6, metalness: 0.1 }),
+        dust: surface(0x8d8a85, { roughness: 1, metalness: 0 }),
+        benchTray: surface(0xb8bec6, { metalness: 0.85, roughness: 0.3 }),
+        // The bench's graphics card, lighter than the ones inside the towers
+        benchGpu: surface(0x4a525e, { metalness: 0.6, roughness: 0.4 }),
+        pcb: surface(0x1b2420, { roughness: 0.7, metalness: 0.2 }),
+        ram: surface(0x23272e, { metalness: 0.5, roughness: 0.4 }),
+        fins: surface(0xc9ccd1, { metalness: 0.85, roughness: 0.3 }),
+        heatpipe: surface(0xdfe2e6, { metalness: 0.95, roughness: 0.15 }),
+        // Noctua's colours: a beige frame and brown blades and pads
+        noctuaFrame: surface(0xd7c5a4, { roughness: 0.6 }),
+        noctuaBlade: surface(0x6e4632, { roughness: 0.6 }),
         wall: surface(0x111a26, { roughness: 0.8, metalness: 0.1 }),
         pole: surface(0x555a66),
         beacon: new THREE.MeshBasicMaterial({ color: 0xff2a1a }),
@@ -797,6 +827,271 @@
         return g;
       }
 
+      // A desktop tower, its front at +z and its smoked glass side panel at +x,
+      // with a graphics card showing through
+      function makeDesktop(state, led) {
+        const g = new THREE.Group();
+        const shell = state === "on" ? MAT.tower : MAT.towerOff;
+        const body = new THREE.Mesh(GEO.box, shell);
+        body.scale.set(0.22, 0.5, 0.48);
+        body.position.y = 0.25;
+        body.castShadow = body.receiveShadow = true;
+        g.add(body);
+        // Behind the smoked side panel, a graphics card: its edge strip lights
+        // while the agent runs a job, the room's red when the agent is missing
+        const card = new THREE.Mesh(GEO.box, MAT.gpu);
+        card.scale.set(0.006, 0.07, 0.32);
+        card.position.set(0.114, 0.22, -0.02);
+        g.add(card);
+        for (const z of [-0.09, 0.05]) {
+          const fan = new THREE.Mesh(GEO.cyl, MAT.gpuFan);
+          fan.scale.set(0.026, 0.004, 0.026);
+          fan.rotation.z = Math.PI / 2;
+          fan.position.set(0.118, 0.22, z);
+          g.add(fan);
+        }
+        const strip = new THREE.Mesh(GEO.box, state === "on" ? MAT.gpuGlow : LED[state]);
+        strip.scale.set(0.004, 0.008, 0.3);
+        strip.position.set(0.118, 0.258, -0.02);
+        g.add(strip);
+        const glass = new THREE.Mesh(GEO.box, MAT.glass);
+        glass.scale.set(0.004, 0.4, 0.38);
+        glass.position.set(0.123, 0.26, -0.01);
+        g.add(glass);
+        // Front grille and a power button that blinks with the row
+        for (let k = 0; k < 4; k++) {
+          const slot = new THREE.Mesh(GEO.box, MAT.rackTrim);
+          slot.scale.set(0.16, 0.012, 0.004);
+          slot.position.set(0, 0.12 + k * 0.05, 0.242);
+          g.add(slot);
+        }
+        const button = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
+        button.scale.set(0.03, 0.03, 0.01);
+        button.position.set(0, 0.43, 0.243);
+        g.add(button);
+        for (const x of [-0.08, 0.08])
+          for (const z of [-0.2, 0.2]) {
+            const foot = new THREE.Mesh(GEO.box, MAT.rackTrim);
+            foot.scale.set(0.04, 0.015, 0.04);
+            foot.position.set(x, -0.0075, z);
+            g.add(foot);
+          }
+        g.position.y = 0.015;
+        return g;
+      }
+
+      // An old grey workstation tower (HP Z420 era): perforated front, a carry
+      // handle on top, a "Xeon inside" sticker, and a side fan that glows red
+      // while it runs a job. A dust bunny keeps it company.
+      let xeonSticker = null;
+      function makeWorkstation(state, led) {
+        const g = new THREE.Group();
+        const shell = state === "on" ? MAT.workstation : MAT.workstationOff;
+        const body = new THREE.Mesh(GEO.box, shell);
+        body.scale.set(0.26, 0.56, 0.54);
+        body.position.y = 0.28;
+        body.castShadow = body.receiveShadow = true;
+        g.add(body);
+        // The perforated front: rows of dark slots
+        for (let r = 0; r < 9; r++) {
+          const slot = new THREE.Mesh(GEO.box, MAT.rackTrim);
+          slot.scale.set(0.2, 0.008, 0.004);
+          slot.position.set(0, 0.06 + r * 0.035, 0.272);
+          g.add(slot);
+        }
+        // An optical drive bay and the power button
+        const bay = new THREE.Mesh(GEO.box, MAT.workstationOff);
+        bay.scale.set(0.2, 0.04, 0.006);
+        bay.position.set(0, 0.47, 0.272);
+        g.add(bay);
+        const button = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
+        button.scale.set(0.025, 0.025, 0.01);
+        button.position.set(0.08, 0.525, 0.273);
+        g.add(button);
+        // The sticker, drawn once
+        xeonSticker ||= new THREE.MeshBasicMaterial({
+          map: canvasTexture(128, 128, (ctx, w, h) => {
+            ctx.fillStyle = "#0068b5";
+            ctx.fillRect(0, 0, w, h);
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 6;
+            ctx.beginPath();
+            ctx.ellipse(w / 2, h / 2, 0.42 * w, 0.3 * h, -0.2, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.textAlign = "center";
+            text(ctx, "Xeon", w / 2, 0.5 * h, 0.28 * h, "#ffffff", "bold");
+            text(ctx, "inside", w / 2, 0.74 * h, 0.14 * h, "#cfe6ff");
+          }),
+        });
+        const sticker = new THREE.Mesh(GEO.box, xeonSticker);
+        sticker.scale.set(0.06, 0.06, 0.002);
+        sticker.position.set(-0.07, 0.12, 0.2735);
+        g.add(sticker);
+        // The carry handle: two posts and a bar along the top
+        for (const z of [-0.18, 0.18]) {
+          const post = new THREE.Mesh(GEO.box, MAT.rackTrim);
+          post.scale.set(0.03, 0.04, 0.03);
+          post.position.set(0, 0.58, z);
+          g.add(post);
+        }
+        const bar = new THREE.Mesh(GEO.box, MAT.rackTrim);
+        bar.scale.set(0.035, 0.025, 0.4);
+        bar.position.set(0, 0.61, 0);
+        g.add(bar);
+        // A side fan behind a grille: the fan glows red while the agent runs
+        // a job, dark when idle, the room's missing red when the agent is gone
+        const FAN = { y: 0.3, z: -0.06, r: 0.09, x: 0.13 };
+        const housing = new THREE.Mesh(GEO.box, shell);
+        housing.scale.set(0.004, 2 * FAN.r + 0.03, 2 * FAN.r + 0.03);
+        housing.position.set(FAN.x + 0.002, FAN.y, FAN.z);
+        housing.receiveShadow = true;
+        g.add(housing);
+        const fan = new THREE.Mesh(GEO.cyl, state === "on" ? MAT.ventOn : state === "gone" ? MAT.plateGone : MAT.gpuFan);
+        fan.scale.set(FAN.r, 0.004, FAN.r);
+        fan.rotation.z = Math.PI / 2;
+        fan.position.set(FAN.x + 0.005, FAN.y, FAN.z);
+        fan.receiveShadow = true;
+        g.add(fan);
+        // The grille: bars across the fan and a hub in the middle
+        for (let k = -3; k <= 3; k++) {
+          const half = Math.sqrt(Math.max(0, FAN.r ** 2 - (k * 0.024) ** 2));
+          const bar = new THREE.Mesh(GEO.box, MAT.workstationOff);
+          bar.scale.set(0.004, 0.006, 2 * half);
+          bar.position.set(FAN.x + 0.009, FAN.y + k * 0.024, FAN.z);
+          bar.castShadow = bar.receiveShadow = true;
+          g.add(bar);
+        }
+        const hub = new THREE.Mesh(GEO.cyl, MAT.workstationOff);
+        hub.scale.set(0.022, 0.006, 0.022);
+        hub.rotation.z = Math.PI / 2;
+        hub.position.set(FAN.x + 0.01, FAN.y, FAN.z);
+        hub.castShadow = hub.receiveShadow = true;
+        g.add(hub);
+        // The dust bunny, at its side
+        for (const [x, z, r] of [[0.19, 0.12, 0.035], [0.215, 0.15, 0.022], [0.17, 0.155, 0.018]]) {
+          const fluff = new THREE.Mesh(GEO.sphere, MAT.dust);
+          fluff.scale.set(r, r * 0.6, r);
+          fluff.position.set(x, r * 0.5, z);
+          g.add(fluff);
+        }
+        return g;
+      }
+
+      // A mesh of size `size` at `at` in `parent`, a box unless `geo` says otherwise
+      function part(parent, mat, size, at = [0, 0, 0], geo = GEO.box) {
+        const m = new THREE.Mesh(geo, mat);
+        m.scale.set(...size);
+        m.position.set(...at);
+        parent.add(m);
+        return m;
+      }
+
+      // A fan facing +z: a hub and tilted blades on a rotor that spins about z,
+      // and, for a case fan, a square frame around it
+      function makeFan(r, bladeMat, frameMat) {
+        const g = new THREE.Group();
+        const rotor = new THREE.Group();
+        part(rotor, bladeMat, [r * 0.32, 0.012, r * 0.32], undefined, GEO.cyl).rotation.x = Math.PI / 2;
+        for (let k = 0; k < 7; k++) {
+          const arm = new THREE.Group();
+          arm.rotation.z = (k / 7) * Math.PI * 2;
+          part(arm, bladeMat, [r * 0.42, r * 0.66, 0.003], [0, r * 0.6, 0]).rotation.y = 0.55;
+          rotor.add(arm);
+        }
+        g.add(rotor);
+        g.userData.rotor = rotor;
+        if (frameMat) {
+          const side = 2 * r + 0.012;
+          const c = (side - 0.012) / 2;
+          for (const [x, y, w, h] of [[0, 1, side, 0.012], [0, -1, side, 0.012], [1, 0, 0.012, side], [-1, 0, 0.012, side]])
+            part(g, frameMat, [w, h, 0.025], [x * c, y * c, 0]);
+          // The anti-vibration pads at the corners
+          for (const x of [-1, 1]) for (const y of [-1, 1]) part(g, MAT.noctuaBlade, [0.016, 0.016, 0.027], [x * c, y * c, 0]);
+        }
+        return g;
+      }
+
+      // An open test bench standing on the table: a bare motherboard on an
+      // aluminium tray, a huge three-fan graphics card at the front (+z) with
+      // its fans facing out, and behind it a Noctua NH-U12S tower cooler with
+      // a fan on each side of its fin stack, pushing and pulling toward the
+      // rear I/O edge at -x. The power supply sits under the tray. The fans
+      // spin while the agent runs a job; they are listed in `userData.fans`.
+      function makeOpenBench(state, led) {
+        const g = new THREE.Group();
+        const fans = [];
+        // The tray on four legs, tall enough for the power supply under it,
+        // and the board on standoffs above it
+        const TRAY_Y = 0.13;
+        const tray = part(g, MAT.benchTray, [0.36, 0.006, 0.4], [0, TRAY_Y, 0]);
+        tray.castShadow = tray.receiveShadow = true;
+        for (const x of [-1, 1]) for (const z of [-1, 1]) part(g, MAT.benchTray, [0.008, TRAY_Y, 0.008], [x * 0.16, TRAY_Y / 2, z * 0.18], GEO.cyl);
+        const B = TRAY_Y + 0.014;
+
+        // The power supply, lying under the tray: modular sockets at its
+        // front, the mains inlet and switch at the back, and the main cable
+        // running out its side, up past the tray's edge and onto the board
+        const PSU = { x: 0.04, z: -0.05, w: 0.165, h: 0.095, d: 0.16 };
+        const psu = part(g, MAT.tower, [PSU.w, PSU.h, PSU.d], [PSU.x, PSU.h / 2, PSU.z]);
+        psu.castShadow = psu.receiveShadow = true;
+        for (let k = 0; k < 4; k++) part(g, MAT.rackTrim, [0.022, 0.014, 0.004], [PSU.x - 0.05 + k * 0.032, 0.03 + (k % 2) * 0.03, PSU.z + PSU.d / 2 + 0.001]);
+        part(g, MAT.rackTrim, [0.03, 0.022, 0.004], [PSU.x + 0.03, 0.05, PSU.z - PSU.d / 2 - 0.001]);
+        part(g, MAT.gpuFan, [0.012, 0.018, 0.006], [PSU.x - 0.01, 0.05, PSU.z - PSU.d / 2 - 0.002]);
+        const CABLE = { x: 0.2, z: -0.07 };
+        for (const [x, y, w, h] of [
+          [(PSU.x + PSU.w / 2 + CABLE.x) / 2, 0.04, CABLE.x - PSU.x - PSU.w / 2, 0.016],
+          [CABLE.x, (0.04 + B + 0.012) / 2, 0.016, B + 0.012 - 0.04],
+          [(CABLE.x + 0.13) / 2, B + 0.012, CABLE.x - 0.13, 0.016],
+        ])
+          part(g, MAT.gpuFan, [w + 0.016, h + (h > 0.02 ? 0.016 : 0), 0.03], [x, y, CABLE.z]).castShadow = true;
+        part(g, MAT.pcb, [0.28, 0.004, 0.35], [0, B - 0.002, 0]).receiveShadow = true;
+        // Four sticks of memory beside the socket
+        for (let k = 0; k < 4; k++) part(g, MAT.ram, [0.006, 0.04, 0.15], [0.075 + k * 0.014, B + 0.02, -0.07]).castShadow = true;
+
+        // The cooler: a base on the socket, heatpipes up through a tall fin stack
+        const CPU = { x: -0.03, z: -0.07 };
+        part(g, MAT.heatpipe, [0.045, 0.02, 0.045], [CPU.x, B + 0.01, CPU.z]);
+        const stack = part(g, MAT.fins, [0.052, 0.15, 0.145], [CPU.x, B + 0.105, CPU.z]);
+        stack.castShadow = stack.receiveShadow = true;
+        // Fins: dark lines across the stack's sides
+        for (let k = 0; k < 10; k++) part(g, MAT.rackTrim, [0.053, 0.002, 0.146], [CPU.x, B + 0.04 + k * 0.014, CPU.z]);
+        // The heatpipes' ends poke out above the stack
+        for (const z of [-0.05, -0.025, 0, 0.025, 0.05])
+          for (const x of [-0.012, 0.012]) part(g, MAT.heatpipe, [0.0035, 0.19, 0.0035], [CPU.x + x, B + 0.105, CPU.z + z], GEO.cyl);
+        // Its two fans, one each side of the stack, both blowing toward -x
+        for (const side of [1, -1]) {
+          const fan = makeFan(0.062, MAT.noctuaBlade, MAT.noctuaFrame);
+          fan.rotation.y = Math.PI / 2;
+          fan.position.set(CPU.x + side * 0.04, B + 0.105, CPU.z);
+          g.add(fan);
+          fans.push(fan.userData.rotor);
+        }
+
+        // The graphics card, standing in its slot and reaching past the
+        // board's edge: a shroud with three fans, a backplate toward the
+        // cooler and a light strip along its top
+        const card = new THREE.Group();
+        card.position.set(0.05, B + 0.085, 0.07);
+        g.add(card);
+        const shroud = part(card, MAT.benchGpu, [0.38, 0.15, 0.065]);
+        shroud.castShadow = shroud.receiveShadow = true;
+        part(card, MAT.benchTray, [0.37, 0.14, 0.004], [0, 0, -0.034]);
+        part(card, MAT.heatpipe, [0.004, 0.14, 0.06], [-0.192, 0, 0]);
+        part(card, state === "on" ? MAT.gpuGlow : state === "gone" ? LED.gone : MAT.gpuFan, [0.3, 0.006, 0.02], [0.02, 0.077, 0.01]);
+        for (const x of [-0.12, 0, 0.12]) {
+          part(card, MAT.gpuFan, [0.054, 0.004, 0.054], [x, -0.002, 0.033], GEO.cyl).rotation.x = Math.PI / 2;
+          const fan = makeFan(0.05, MAT.gpuFan);
+          fan.position.set(x, -0.002, 0.04);
+          card.add(fan);
+          fans.push(fan.userData.rotor);
+        }
+
+        // The bench's power button, at the front of the tray
+        part(g, state === "on" ? led : LED[state], [0.02, 0.01, 0.02], [-0.14, TRAY_Y + 0.008, 0.18]);
+        g.userData.fans = state === "on" ? fans : [];
+        return g;
+      }
+
       // A mug of coffee, essential equipment
       function makeMug() {
         const g = new THREE.Group();
@@ -836,7 +1131,7 @@
       const perLineFor = (width) => Math.max(6, Math.floor((width + 1.2) / 0.32));
 
       function makeRow(c) {
-        const row = { c, group: new THREE.Group(), units: new THREE.Group(), people: [], particles: [], leds: [], lights: [] };
+        const row = { c, group: new THREE.Group(), units: new THREE.Group(), people: [], particles: [], leds: [], lights: [], fans: [] };
         row.accent = new THREE.MeshBasicMaterial({ color: MOODS[c.mood].color });
         const ledSpeed = { asleep: 0, chill: 2, busy: 4, full: 4, sweating: 6, panicking: 10, fire: 16 }[c.mood];
         for (let k = 0; k < 4; k++) {
@@ -913,7 +1208,41 @@
           height = fh + 0.25;
           tops.push({ x: fw / 2, y: height, w: fw, kind: "fridge", n: states.length });
         }
-        if (c.nuc) {
+        if (c.desktop) {
+          // Desktop towers under a table, a little apart, nothing on top but a
+          // mug; a host in HOST_STYLES gets its own case, an open bench on the
+          // table top
+          const units = c.hosts.flatMap((h) => h.states.map((s) => ({ s, style: HOST_STYLES[h.name] })));
+          const span = (u) => (u.style === "openbench" ? 0.5 : 0.4);
+          // Room for the mug beside a bench at the end
+          const tail = units.length && units[units.length - 1].style === "openbench" ? 0.25 : 0;
+          const tw = Math.max(1.0, units.reduce((w, u) => w + span(u), 0) + 0.3 + tail);
+          const table = makeTable(tw);
+          let x = -tw / 2 + 0.12;
+          units.forEach((u, i) => {
+            const led = row.leds[i % 4];
+            const at = x + span(u) / 2;
+            x += span(u);
+            if (u.style === "openbench") {
+              const b = makeOpenBench(u.s, led);
+              b.position.set(at, 0.83, -0.05);
+              row.fans.push(...b.userData.fans);
+              table.add(b);
+              return;
+            }
+            const d = u.style === "workstation" ? makeWorkstation(u.s, led) : makeDesktop(u.s, led);
+            d.position.set(at, 0, 0.1);
+            d.rotation.y = (i % 2 ? -1 : 1) * 0.05;
+            table.add(d);
+          });
+          const mug = makeMug();
+          mug.position.set(tw / 2 - 0.2, 0.83, 0.2);
+          table.add(mug);
+          table.position.x = tw / 2;
+          width = tw;
+          row.units.add(table);
+          tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "desktop", n: units.length });
+        } else if (c.nuc) {
           // Somebody's own machine: a NUC per slot on one table, with coffee
           const states = c.hosts.flatMap((h) => h.states);
           const tw = states.length * 0.4 + 0.6;
@@ -988,7 +1317,7 @@
         row.group.add(row.units);
         row.width = width;
         row.tops = tops;
-        if ((c.mac && !fridgeStates.length) || c.nuc) height = 1.2;
+        if ((c.mac && !fridgeStates.length) || c.nuc || c.desktop) height = 1.2;
 
         // One sign, a panel per queue with the first on top; its bottom edge
         // sits where a single panel's would, and the rest stack above it
@@ -2457,6 +2786,8 @@
           for (const p of r.people) p.position.y = Math.abs(Math.sin(t * 5 + p.userData.phase)) * (mood === "fire" ? 0.12 : 0.05);
           for (const l of r.lights) l.intensity = 4 + Math.sin(t * 13) * 2 + Math.random();
           if (r.beacon) r.beacon.rotation.y = t * 5;
+          // Fans turn faster the harder the row works
+          for (const f of r.fans) f.rotation.z += dt * (4 + 26 * FAN_SPEED[mood]);
           const rate = { fire: 40, panicking: 14, sweating: 6, asleep: 1.2 }[mood] || 0;
           if (rate && Math.random() < rate * dt * Math.min(4, r.tops.length)) spawnParticle(r);
           r.particles = r.particles.filter((s) => {
