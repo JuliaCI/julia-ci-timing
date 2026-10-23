@@ -1647,6 +1647,19 @@ th.sorted .sort-indicator {
   font-size: 12px;
   color: var(--color-fg-muted);
 }
+/* The way into the cartoon server room: easy to miss, on purpose */
+.agents-egg {
+  margin-left: auto;
+  text-decoration: none;
+  opacity: 0.2;
+  filter: grayscale(1);
+  transition: opacity 0.2s, filter 0.2s;
+}
+.agents-egg:hover,
+.agents-egg:focus-visible {
+  opacity: 1;
+  filter: none;
+}
 .agents-title {
   font-size: 13px;
   font-weight: 600;

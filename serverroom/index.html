@@ -1,0 +1,1543 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Julia CI Server Room</title>
+    <meta name="description" content="A live 3D server room of the machines running Julia's CI, drawn from the latest agent snapshot." />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap"
+    />
+    <script type="importmap">
+      {
+        "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" },
+        "integrity": {
+          "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js": "sha384-IDC7sAMAIMB/TZ6dgKKPPAKZ2bXXXP8+FBMBC8cU319eBhKITx+PaalhfDkDNH28"
+        }
+      }
+    </script>
+    <link
+      rel="modulepreload"
+      href="https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js"
+      integrity="sha384-IDC7sAMAIMB/TZ6dgKKPPAKZ2bXXXP8+FBMBC8cU319eBhKITx+PaalhfDkDNH28"
+      crossorigin="anonymous"
+    />
+    <style>
+      /* A control room: always dark, so the lights in the room read */
+      :root {
+        color-scheme: dark;
+        --bg: #05080d;
+        --panel: rgba(9, 15, 24, 0.82);
+        --ink: #d8e6f3;
+        --muted: #7f93a8;
+        --accent: #22d3ee;
+        --edge: rgba(34, 211, 238, 0.35);
+        --sans: "Space Grotesk", "Inter", system-ui, sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+      }
+      #scene {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+        cursor: grab;
+      }
+      #scene:active {
+        cursor: grabbing;
+      }
+      .panel {
+        position: fixed;
+        background: var(--panel);
+        border: 1px solid var(--edge);
+        border-radius: 6px;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 28px rgba(34, 211, 238, 0.12);
+        backdrop-filter: blur(8px);
+      }
+      header.panel {
+        top: 16px;
+        left: 16px;
+        max-width: min(460px, calc(100vw - 32px));
+        padding: 12px 16px;
+      }
+      .eyebrow {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      h1 {
+        margin: 2px 0 0;
+        font-size: 1.35rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+      .sub {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
+      .sub b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .sub a {
+        color: var(--accent);
+      }
+      .hint {
+        margin: 6px 0 0;
+        font-size: 0.75rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      aside.panel {
+        top: 16px;
+        right: 16px;
+        width: 300px;
+        max-height: calc(100vh - 32px);
+        overflow: auto;
+        padding: 8px;
+      }
+      aside h2 {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin: 6px 8px 4px;
+      }
+      aside button {
+        display: grid;
+        grid-template-columns: 10px 1fr auto;
+        width: 100%;
+        gap: 8px;
+        align-items: center;
+        text-align: left;
+        border: 0;
+        border-left: 2px solid transparent;
+        background: none;
+        color: inherit;
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 5px 8px;
+        cursor: pointer;
+      }
+      aside button:hover,
+      aside button:focus-visible {
+        background: rgba(34, 211, 238, 0.08);
+        border-left-color: var(--accent);
+        outline: none;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        box-shadow: 0 0 8px currentColor;
+        background: currentColor;
+      }
+      aside .n {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        white-space: nowrap;
+      }
+      .tag {
+        display: inline-block;
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        padding: 1px 6px;
+        border: 1px solid currentColor;
+        border-radius: 3px;
+      }
+      #tip {
+        position: fixed;
+        pointer-events: none;
+        padding: 10px 12px;
+        max-width: 320px;
+        font-size: 0.82rem;
+        display: none;
+        z-index: 2;
+      }
+      #tip b {
+        font-size: 0.95rem;
+        margin-left: 6px;
+      }
+      #tip .cap {
+        color: var(--muted);
+        margin: 4px 0 6px;
+      }
+      #tip .data {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        line-height: 1.5;
+      }
+      #tip .hosts {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        margin-top: 4px;
+      }
+      .status {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-family: var(--mono);
+        padding: 16px;
+        text-align: center;
+        pointer-events: none;
+      }
+      @media (max-width: 700px) {
+        header.panel {
+          top: 8px;
+          left: 8px;
+          right: 8px;
+          max-width: none;
+        }
+        .hint {
+          display: none;
+        }
+        aside.panel {
+          top: auto;
+          bottom: 8px;
+          left: 8px;
+          right: 8px;
+          width: auto;
+          max-height: 32vh;
+        }
+        #tip {
+          max-width: calc(100vw - 32px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene" aria-label="A 3D server room. The list of clusters beside it has the same information."></canvas>
+    <header class="panel">
+      <div class="eyebrow">perf.julialang.org · live</div>
+      <h1>Julia CI server room</h1>
+      <p class="sub" id="sub">Connecting…</p>
+      <p class="hint">
+        Drag to turn. Scroll or pinch to zoom in on what you point at. Right-drag, shift-drag, two fingers or the
+        arrow keys to move. Click anything to fly to it, and point at a row for its details.
+      </p>
+    </header>
+    <aside class="panel" id="list" aria-label="Clusters"></aside>
+    <div class="panel" id="tip" role="status"></div>
+    <div class="status" id="status">Powering up…</div>
+    <script type="module">
+      import * as THREE from "three";
+
+      // ---------------------------------------------------------------- data
+      // The build, test, launch and default queues start one agent per job, so
+      // their slots come from the hosts; every other queue has resident agents
+      const PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
+      // Resident agents gone this long are not drawn at all
+      const GONE_MS = 3 * 24 * 3600 * 1000;
+      const REFRESH_MS = 5 * 60 * 1000;
+      const OS_NAMES = { linux: "Linux", macos: "macOS", windows: "Windows", freebsd: "FreeBSD" };
+
+      // Each mood's status tag and colour, for the signs, the list and the tooltip
+      const MOODS = {
+        asleep: {
+          tag: "STANDBY",
+          color: "#60a5fa",
+          lines: [
+            "Lights off. Someone left a mug on the rack.",
+            "Sleeping like a type-stable function.",
+            "Dreaming of builds without invalidations.",
+          ],
+        },
+        chill: { tag: "NOMINAL", color: "#34d399", lines: ["Humming along.", "Plenty of elbow room.", "The coffee break rota is in effect."] },
+        busy: { tag: "SATURATED", color: "#22d3ee", lines: ["Every slot taken and nobody waiting. Peak efficiency.", "Full house, no queue."] },
+        // The other queues' waiting jobs are not known, so a full one cannot claim there is no queue
+        full: { tag: "SATURATED", color: "#22d3ee", lines: ["Every agent busy.", "All hands on deck.", "Nobody here is napping."] },
+        sweating: { tag: "QUEUEING", color: "#facc15", lines: ["A queue is forming.", "Please take a number.", "Slightly damp, still cheerful."] },
+        panicking: {
+          tag: "OVERLOAD",
+          color: "#fb923c",
+          lines: ["The kettle is screaming.", "Someone pushed a lot of commits at once.", "Has anyone tried turning the PRs off and on again?"],
+        },
+        fire: { tag: "CRITICAL", color: "#f43f5e", lines: ["This is fine.", "Everything is on fire and the jobs keep coming.", "Send more machines. Or snacks."] },
+      };
+
+      const shortHost = (h) => h.replace(/\.julia\.csail\.mit\.edu$/, "");
+      const esc = (s) =>
+        String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+      const hours = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+      // A stable choice per cluster, so a refresh does not reshuffle the jokes
+      function pick(list, key) {
+        let h = 0;
+        for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+        return list[h % list.length];
+      }
+      function mood(busy, cap, waiting) {
+        if (waiting > 0) {
+          const r = waiting / Math.max(cap, 1);
+          return r > 8 ? "fire" : r > 1 ? "panicking" : "sweating";
+        }
+        if (busy === 0) return "asleep";
+        return busy >= 0.85 * cap ? "busy" : "chill";
+      }
+
+      // Pools that draw on the same hosts are one cluster: a Mac runs one build
+      // or one test at a time
+      function machineGroups(backlog) {
+        const groups = [];
+        for (const p of backlog.pools || []) {
+          if (!p.slots || !p.hosts || !p.hosts.length) continue;
+          const joined = groups.filter((g) => p.hosts.some((h) => g.hosts.has(h)));
+          const g = { pools: [p], hosts: new Set(p.hosts) };
+          for (const o of joined) {
+            g.pools.push(...o.pools);
+            for (const h of o.hosts) g.hosts.add(h);
+            groups.splice(groups.indexOf(o), 1);
+          }
+          groups.push(g);
+        }
+        return groups;
+      }
+
+      // Every cluster with one state per slot: "on" runs a job, "off" is idle,
+      // "gone" is an agent missing from the latest snapshot
+      function buildClusters(latest, backlog) {
+        const agents = latest.agents || {};
+        const latestMs = Date.parse(latest.generated_at);
+        const runningOn = new Map();
+        for (const a of Object.values(agents)) {
+          if (a.state !== "connected" || !PER_JOB_QUEUES.has(a.queue) || !a.hostname) continue;
+          runningOn.set(a.hostname, (runningOn.get(a.hostname) || 0) + 1);
+        }
+        const last = (xs) => (xs && xs.length ? xs[xs.length - 1] : 0);
+        const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+        const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+        const hostSlots = backlog.host_slots || {};
+        const clusters = [];
+        for (const g of machineGroups(backlog)) {
+          const hosts = [...g.hosts]
+            .map((h) => {
+              const busy = runningOn.get(h) || 0;
+              const cap = Math.max(hostSlots[h] || 0, busy, 1);
+              return { name: shortHost(h), states: Array.from({ length: cap }, (_, i) => (i < busy ? "on" : "off")) };
+            })
+            .sort(byName);
+          const os = uniq(g.pools.map((p) => OS_NAMES[p.os] || p.os)).join(", ");
+          const arch = uniq(g.pools.map((p) => p.arch)).join(", ");
+          clusters.push({
+            kind: "ci",
+            title: `${os} ${arch}`.trim(),
+            queues: uniq(g.pools.map((p) => p.queue)).sort().join(" + "),
+            mac: g.pools.every((p) => p.os === "macos"),
+            // The Intel Macs live on top of the fridge
+            fridge: g.pools.every((p) => p.os === "macos" && p.arch === "x86_64"),
+            hosts,
+            waiting: g.pools.reduce((s, p) => s + last(p.waiting), 0),
+            oldest: Math.max(0, ...g.pools.map((p) => last(p.oldest_wait_s))),
+          });
+        }
+        const byQueue = new Map();
+        for (const [name, a] of Object.entries(agents)) {
+          const q = a.queue || "(no queue)";
+          if (PER_JOB_QUEUES.has(q)) continue;
+          const on = a.state === "connected";
+          if (!on && !(latestMs - Date.parse(a.last_seen || "") < GONE_MS)) continue;
+          if (!byQueue.has(q)) byQueue.set(q, { hosts: new Map(), os: new Set() });
+          const entry = byQueue.get(q);
+          entry.os.add(a.os || "");
+          const host = shortHost(a.hostname || name);
+          if (!entry.hosts.has(host)) entry.hosts.set(host, []);
+          entry.hosts.get(host).push(on ? (a.job ? "on" : "off") : "gone");
+        }
+        for (const [q, entry] of byQueue) {
+          clusters.push({
+            kind: "other",
+            title: `${q} queue`,
+            queues: q,
+            mac: entry.os.size === 1 && entry.os.has("macos"),
+            hosts: [...entry.hosts].map(([name, states]) => ({ name, states })).sort(byName),
+            waiting: 0,
+            oldest: 0,
+          });
+        }
+        for (const c of clusters) {
+          const all = c.hosts.flatMap((h) => h.states);
+          c.busy = all.filter((s) => s === "on").length;
+          c.gone = all.filter((s) => s === "gone").length;
+          c.cap = all.length;
+          c.mood = mood(c.busy, c.cap, c.waiting);
+          if (c.kind === "other" && c.mood === "busy") c.mood = "full";
+          c.caption = c.gone && c.mood === "asleep" ? "Someone tripped over a cable." : pick(MOODS[c.mood].lines, c.title + c.mood);
+          c.load = (c.busy + c.waiting) / Math.max(c.cap, 1);
+        }
+        const byLoad = (a, b) => b.load - a.load || a.title.localeCompare(b.title);
+        return {
+          latestMs,
+          ci: clusters.filter((c) => c.kind === "ci").sort(byLoad),
+          other: clusters.filter((c) => c.kind === "other").sort(byLoad),
+        };
+      }
+
+      // ---------------------------------------------------------------- scene
+      const canvas = document.getElementById("scene");
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      } catch (e) {
+        document.getElementById("status").textContent =
+          "This browser cannot draw the room (no WebGL). The list of clusters still works.";
+      }
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
+      if (renderer) {
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      }
+
+      const surface = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.2, ...extra });
+
+      const GEO = {
+        box: new THREE.BoxGeometry(1, 1, 1),
+        sphere: new THREE.SphereGeometry(1, 16, 12),
+        body: new THREE.CapsuleGeometry(0.09, 0.22, 4, 10),
+        cyl: new THREE.CylinderGeometry(1, 1, 1, 16),
+      };
+      const MAT = {
+        rack: surface(0x1a2230, { metalness: 0.6, roughness: 0.35 }),
+        rackTrim: surface(0x0c1118, { metalness: 0.7, roughness: 0.3 }),
+        plateOn: surface(0x2a3546, { metalness: 0.5, roughness: 0.4 }),
+        plateOff: surface(0x3a4556, { metalness: 0.4, roughness: 0.5 }),
+        plateGone: surface(0x5a2530),
+        glow: new THREE.MeshBasicMaterial({ color: 0x22d3ee }),
+        table: surface(0xb98a5a),
+        tableLeg: surface(0x7a5a3a),
+        mini: surface(0xc9ced6, { metalness: 0.8, roughness: 0.3 }),
+        fridge: surface(0xf2f4f7),
+        fridgeTrim: surface(0x9aa1ad),
+        miniOff: surface(0x9da1a8),
+        wall: surface(0x111a26, { roughness: 0.8, metalness: 0.1 }),
+        pole: surface(0x555a66),
+        beacon: new THREE.MeshBasicMaterial({ color: 0xff2a1a }),
+        hit: new THREE.MeshBasicMaterial({ visible: false }),
+        people: [0xcb3c33, 0x389826, 0x9558b2, 0x4063d8].map((c) => surface(c, { emissive: c, emissiveIntensity: 0.25 })),
+        skin: surface(0xe8eef5, { emissive: 0x8899aa, emissiveIntensity: 0.2 }),
+      };
+      const LED = {
+        off: new THREE.MeshBasicMaterial({ color: 0x2b3a30 }),
+        gone: new THREE.MeshBasicMaterial({ color: 0xff3b3b }),
+      };
+
+      function canvasTexture(w, h, draw) {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        draw(c.getContext("2d"), w, h);
+        const t = new THREE.CanvasTexture(c);
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.anisotropy = 4;
+        return t;
+      }
+      const FONT = '"Space Grotesk", system-ui, sans-serif';
+      const MONO = '"JetBrains Mono", ui-monospace, Menlo, monospace';
+
+      // A display above a row: status, counts and the room's commentary
+      function signSprite(c, width) {
+        const m = MOODS[c.mood];
+        const tex = canvasTexture(1024, 300, (ctx, w, h) => {
+          ctx.beginPath();
+          ctx.roundRect(6, 6, w - 12, h - 12, 14);
+          ctx.fillStyle = "rgba(7, 12, 20, 0.88)";
+          ctx.fill();
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = m.color;
+          ctx.shadowColor = m.color;
+          ctx.shadowBlur = 18;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          // The status tag, then the title
+          ctx.font = `600 40px ${MONO}`;
+          const tagW = ctx.measureText(m.tag).width + 36;
+          ctx.strokeStyle = m.color;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(40, 42, tagW, 58);
+          ctx.fillStyle = m.color;
+          ctx.textAlign = "left";
+          ctx.fillText(m.tag, 58, 84);
+          ctx.fillStyle = "#e6f1fb";
+          ctx.font = `700 70px ${FONT}`;
+          ctx.fillText(c.title, 40 + tagW + 28, 96, w - tagW - 120);
+          ctx.font = `500 46px ${MONO}`;
+          ctx.fillStyle = "#cfe3f5";
+          const parts = [`${c.busy}/${c.cap} BUSY`];
+          if (c.waiting) parts.push(`${c.waiting} QUEUED`);
+          if (c.gone) parts.push(`${c.gone} OFFLINE`);
+          ctx.fillText(parts.join("  ·  "), 40, 182, w - 80);
+          ctx.font = `400 36px ${MONO}`;
+          ctx.fillStyle = "#7f93a8";
+          ctx.fillText(`> ${c.caption}`, 40, 246, w - 80);
+        });
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
+        const w = Math.min(3.4, Math.max(2.4, width + 0.6));
+        s.scale.set(w, (w * 300) / 1024, 1);
+        return s;
+      }
+
+      const puffTex = canvasTexture(64, 64, (ctx, w) => {
+        const g = ctx.createRadialGradient(w / 2, w / 2, 2, w / 2, w / 2, w / 2);
+        g.addColorStop(0, "rgba(255,255,255,1)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, w);
+      });
+      const zTex = canvasTexture(64, 64, (ctx) => {
+        ctx.fillStyle = "#93c5fd";
+        ctx.font = `600 52px ${MONO}`;
+        ctx.textAlign = "center";
+        ctx.fillText("z", 32, 48);
+      });
+
+      // ----------------------------------------------------------- furniture
+      const RACK_W = 0.72;
+      const RACK_UNITS = 16;
+      const RACK_H = 2.0;
+
+      // A rack of up to RACK_UNITS slots, its front at +z
+      function makeRack(states, leds, accent) {
+        const g = new THREE.Group();
+        const frame = new THREE.Mesh(GEO.box, MAT.rack);
+        frame.scale.set(RACK_W, RACK_H, 0.9);
+        frame.position.y = RACK_H / 2;
+        frame.castShadow = frame.receiveShadow = true;
+        g.add(frame);
+        const top = new THREE.Mesh(GEO.box, MAT.rackTrim);
+        top.scale.set(RACK_W + 0.04, 0.06, 0.94);
+        top.position.y = RACK_H + 0.03;
+        g.add(top);
+        for (const x of [-1, 1]) {
+          const strip = new THREE.Mesh(GEO.box, accent);
+          strip.scale.set(0.018, RACK_H - 0.1, 0.01);
+          strip.position.set((x * (RACK_W - 0.04)) / 2, RACK_H / 2, 0.455);
+          g.add(strip);
+        }
+        const pitch = (RACK_H - 0.3) / RACK_UNITS;
+        states.forEach((s, i) => {
+          const plate = new THREE.Mesh(GEO.box, s === "on" ? MAT.plateOn : s === "gone" ? MAT.plateGone : MAT.plateOff);
+          plate.scale.set(RACK_W - 0.1, pitch * 0.78, 0.04);
+          plate.position.set(0, 0.15 + pitch * (i + 0.5), 0.46);
+          g.add(plate);
+          for (const [x, k] of [[0.22, 0], [0.15, 2]]) {
+            const led = new THREE.Mesh(GEO.box, s === "on" ? leds[(i + k) % leds.length] : LED[s]);
+            led.scale.set(0.05, Math.min(pitch * 0.4, 0.035), 0.02);
+            led.position.set(x, plate.position.y, 0.49);
+            g.add(led);
+          }
+        });
+        return g;
+      }
+
+      // A Mac mini; a table holds two rows of them
+      function makeMini(state, led) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.mini : MAT.miniOff);
+        body.scale.set(0.34, 0.07, 0.34);
+        body.position.y = 0.035;
+        body.castShadow = true;
+        g.add(body);
+        const l = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
+        l.scale.set(0.03, 0.012, 0.01);
+        l.position.set(0.12, 0.035, 0.172);
+        g.add(l);
+        return g;
+      }
+
+      // One waiting job: a little person in a Julia colour
+      function makePerson(i) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(GEO.body, MAT.people[i % 4]);
+        body.position.y = 0.2;
+        body.castShadow = true;
+        g.add(body);
+        const head = new THREE.Mesh(GEO.sphere, MAT.skin);
+        head.scale.setScalar(0.085);
+        head.position.y = 0.44;
+        head.castShadow = true;
+        g.add(head);
+        return g;
+      }
+
+      // ---------------------------------------------------------------- rows
+      const ROW_GAP = 3.6;
+      const AISLE_W = 13;
+      const MAX_PEOPLE = 90;
+      let rows = [];
+      const perLineFor = (width) => Math.max(6, Math.floor((width + 1.2) / 0.32));
+
+      function makeRow(c) {
+        const row = { c, group: new THREE.Group(), units: new THREE.Group(), people: [], particles: [], leds: [], lights: [] };
+        row.accent = new THREE.MeshBasicMaterial({ color: MOODS[c.mood].color });
+        const ledSpeed = { asleep: 0, chill: 2, busy: 4, full: 4, sweating: 6, panicking: 10, fire: 16 }[c.mood];
+        for (let k = 0; k < 4; k++) {
+          const m = new THREE.MeshBasicMaterial({ color: 0x3fff7a });
+          m.userData.phase = k * 1.7;
+          m.userData.speed = ledSpeed;
+          row.leds.push(m);
+        }
+        let width = 0;
+        let height = RACK_H;
+        const tops = [];
+        if (c.fridge) {
+          // A double-door fridge, the minis stacked on top in wobbly piles of three
+          const states = c.hosts.flatMap((h) => h.states);
+          const piles = Math.ceil(states.length / 3);
+          const fw = Math.max(0.9, piles * 0.4 + 0.15);
+          const fh = 1.8;
+          const fridge = new THREE.Group();
+          const body = new THREE.Mesh(GEO.box, MAT.fridge);
+          body.scale.set(fw, fh, 0.75);
+          body.position.y = fh / 2;
+          body.castShadow = body.receiveShadow = true;
+          fridge.add(body);
+          const seam = new THREE.Mesh(GEO.box, MAT.fridgeTrim);
+          seam.scale.set(fw, 0.02, 0.01);
+          seam.position.set(0, 1.25, 0.38);
+          fridge.add(seam);
+          for (const [y, h] of [[1.5, 0.3], [0.75, 0.6]]) {
+            const handle = new THREE.Mesh(GEO.box, MAT.fridgeTrim);
+            handle.scale.set(0.04, h, 0.05);
+            handle.position.set(fw / 2 - 0.1, y, 0.4);
+            fridge.add(handle);
+          }
+          MAT.people.slice(0, 3).forEach((m, i) => {
+            const magnet = new THREE.Mesh(GEO.cyl, m);
+            magnet.scale.set(0.05, 0.02, 0.05);
+            magnet.rotation.x = Math.PI / 2;
+            magnet.position.set(-fw / 2 + 0.2 + (i === 1 ? 0.07 : i * 0.14), i === 1 ? 1.62 : 1.52, 0.385);
+            fridge.add(magnet);
+          });
+          states.forEach((s, i) => {
+            const m = makeMini(s, row.leds[i % 4]);
+            const pile = Math.floor(i / 3);
+            m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * 0.075, 0);
+            m.rotation.y = Math.sin(i * 2.3) * 0.25;
+            fridge.add(m);
+          });
+          fridge.position.x = fw / 2;
+          row.units.add(fridge);
+          width = fw;
+          height = fh + 0.25;
+          tops.push({ x: fw / 2, y: height, w: fw });
+        } else if (c.mac) {
+          // Two rows of minis per table, eight to a table
+          const states = c.hosts.flatMap((h) => h.states);
+          const perTable = 8;
+          for (let t = 0; t * perTable < states.length; t++) {
+            const chunk = states.slice(t * perTable, (t + 1) * perTable);
+            const table = new THREE.Group();
+            const tw = Math.ceil(chunk.length / 2) * 0.45 + 0.3;
+            const top = new THREE.Mesh(GEO.box, MAT.table);
+            top.scale.set(tw, 0.06, 1.0);
+            top.position.y = 0.8;
+            top.castShadow = top.receiveShadow = true;
+            table.add(top);
+            for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+              const leg = new THREE.Mesh(GEO.box, MAT.tableLeg);
+              leg.scale.set(0.06, 0.8, 0.06);
+              leg.position.set(lx * (tw / 2 - 0.08), 0.4, lz * 0.42);
+              table.add(leg);
+            }
+            chunk.forEach((s, i) => {
+              const m = makeMini(s, row.leds[i % 4]);
+              m.position.set(-tw / 2 + 0.38 + Math.floor(i / 2) * 0.45, 0.83, i % 2 ? 0.22 : -0.22);
+              table.add(m);
+            });
+            table.position.x = width + tw / 2;
+            width += tw + 0.3;
+            row.units.add(table);
+            tops.push({ x: table.position.x, y: 0.95, w: tw });
+          }
+          width -= 0.3;
+        } else {
+          // Each host's slots fill racks of RACK_UNITS, a host's racks side by
+          // side. Hosts of a few slots each (one GPU agent apiece, say) share racks.
+          const packed = c.hosts.length > 2 && c.hosts.every((h) => h.states.length <= 4);
+          const groups = packed ? [{ states: c.hosts.flatMap((h) => h.states) }] : c.hosts;
+          for (const h of groups) {
+            for (let i = 0; i < h.states.length; i += RACK_UNITS) {
+              const rack = makeRack(h.states.slice(i, i + RACK_UNITS), row.leds, row.accent);
+              rack.position.x = width + RACK_W / 2;
+              row.units.add(rack);
+              tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W });
+              width += RACK_W + 0.06;
+            }
+            width += 0.2;
+          }
+          width -= 0.26;
+        }
+        row.units.position.x = -width / 2;
+        for (const t of tops) t.x -= width / 2;
+        row.group.add(row.units);
+        row.width = width;
+        row.tops = tops;
+        if (c.mac && !c.fridge) height = 1.2;
+
+        const sign = signSprite(c, width);
+        row.signW = sign.scale.x;
+        sign.position.set(0, height + 1.0, 0);
+        row.group.add(sign);
+
+        // The queue: lines in front of the row
+        const shown = Math.min(c.waiting, MAX_PEOPLE);
+        const perLine = perLineFor(width);
+        for (let i = 0; i < shown; i++) {
+          const p = makePerson(i);
+          const line = Math.floor(i / perLine);
+          p.position.set(-width / 2 - 0.4 + (i % perLine) * 0.32 + (line % 2) * 0.16, 0, 0.95 + line * 0.34);
+          p.rotation.y = Math.PI;
+          p.userData.phase = Math.random() * Math.PI * 2;
+          row.people.push(p);
+          row.group.add(p);
+        }
+        row.lines = Math.ceil(shown / perLine);
+
+        // Moody lighting: a dim blue night for sleepers, an alarm for the worst
+        if (c.mood === "asleep") {
+          const l = new THREE.PointLight(0x6677ff, 2, 6);
+          l.position.set(0, 2.6, 0.8);
+          row.group.add(l);
+        }
+        if (c.mood === "panicking" || c.mood === "fire") {
+          const l = new THREE.PointLight(c.mood === "fire" ? 0xff3a1a : 0xff9a3a, 6, 8);
+          l.position.set(0, 2.6, 0.8);
+          row.lights.push(l);
+          row.group.add(l);
+        }
+        if (c.mood === "fire") {
+          const pole = new THREE.Mesh(GEO.cyl, MAT.pole);
+          pole.scale.set(0.03, 0.5, 0.03);
+          pole.position.set(width / 2 + 0.3, height + 0.25, 0);
+          row.group.add(pole);
+          const beacon = new THREE.Group();
+          const dome = new THREE.Mesh(GEO.sphere, MAT.beacon);
+          dome.scale.set(0.14, 0.12, 0.14);
+          beacon.add(dome);
+          const spot = new THREE.SpotLight(0xff2a1a, 30, 10, 0.45, 0.4);
+          spot.target.position.set(4, -1.5, 0);
+          beacon.add(spot, spot.target);
+          beacon.position.set(width / 2 + 0.3, height + 0.55, 0);
+          row.beacon = beacon;
+          row.group.add(beacon);
+        }
+
+        // An invisible box to point at
+        const hit = new THREE.Mesh(GEO.box, MAT.hit);
+        hit.scale.set(width + 0.8, height + 1.6, 1.6 + row.lines * 0.34);
+        hit.position.set(0, (height + 1.6) / 2, 0.3 + row.lines * 0.17);
+        hit.userData.row = row;
+        row.hit = hit;
+        row.group.add(hit);
+        return row;
+      }
+
+      // Rising flames, steam or snores, and falling sweat
+      function spawnParticle(row) {
+        const kind = { fire: "flame", panicking: "steam", sweating: "drip", asleep: "z" }[row.c.mood];
+        const t = row.tops[Math.floor(Math.random() * row.tops.length)];
+        if (!kind || !t) return;
+        const s = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: kind === "z" ? zTex : puffTex,
+            color: { flame: Math.random() < 0.5 ? 0xff7a1a : 0xffd23f, steam: 0xffffff, drip: 0x4aa3df, z: 0xffffff }[kind],
+            transparent: true,
+            depthWrite: false,
+            blending: kind === "flame" ? THREE.AdditiveBlending : THREE.NormalBlending,
+          }),
+        );
+        const x = t.x + (Math.random() - 0.5) * t.w * 0.8;
+        if (kind === "drip") s.position.set(x, t.y - 0.1 - Math.random() * 1.2, 0.5);
+        else s.position.set(x, t.y + 0.05, (Math.random() - 0.5) * 0.6);
+        const size = { flame: 0.35, steam: 0.4, drip: 0.08, z: 0.3 }[kind];
+        s.scale.setScalar(size);
+        s.userData = {
+          kind,
+          size,
+          life: 0,
+          max: { flame: 0.8, steam: 1.8, drip: 0.9, z: 2.6 }[kind],
+          vy: { flame: 1.4, steam: 0.6, drip: -1.6, z: 0.35 }[kind],
+        };
+        row.group.add(s);
+        row.particles.push(s);
+      }
+
+      // ----------------------------------------------------------- wall art
+      // A flat picture of `w` by `h` metres, drawn on a canvas of `px` pixels per metre
+      function picture(w, h, draw, px = 220) {
+        const tex = canvasTexture(Math.round(w * px), Math.round(h * px), draw);
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), surface(0xffffff, { map: tex }));
+        m.receiveShadow = true;
+        return m;
+      }
+      const frame = (ctx, w, h, bg, edge = "#2f333d", lw = 10) => {
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, w, h);
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = edge;
+        ctx.strokeRect(lw / 2, lw / 2, w - lw, h - lw);
+      };
+      const text = (ctx, str, x, y, size, color = "#2b2a33", weight = "") => {
+        ctx.fillStyle = color;
+        ctx.font = `${weight} ${size}px ${FONT}`;
+        ctx.fillText(str, x, y);
+      };
+
+      const juliaPoster = () =>
+        picture(2.4, 1.5, (ctx, w, h) => {
+          frame(ctx, w, h, "#0b1220", "#22d3ee", 6);
+          ctx.textAlign = "center";
+          for (const [x, y, col] of [[-0.12, 0.33, "#389826"], [0, 0.18, "#cb3c33"], [0.12, 0.33, "#9558b2"]]) {
+            ctx.beginPath();
+            ctx.arc(w / 2 + x * w, y * h, 0.12 * h, 0, Math.PI * 2);
+            ctx.fillStyle = col;
+            ctx.fill();
+          }
+          text(ctx, "JULIA CI", w / 2, 0.68 * h, 0.13 * h, "#e6f1fb", "bold");
+          text(ctx, "Please do not feed the queue", w / 2, 0.85 * h, 0.075 * h, "#7f93a8");
+        });
+
+      // A real clock: its hands follow the viewer's time
+      const clockHands = [];
+      function wallClock() {
+        const g = new THREE.Group();
+        const face = new THREE.Mesh(
+          new THREE.CircleGeometry(0.36, 40),
+          surface(0xffffff, {
+            map: canvasTexture(256, 256, (ctx, w) => {
+              ctx.fillStyle = "#fffdf8";
+              ctx.beginPath();
+              ctx.arc(128, 128, 124, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.lineWidth = 12;
+              ctx.strokeStyle = "#2f333d";
+              ctx.stroke();
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              for (let i = 1; i <= 12; i++) {
+                const a = (i / 12) * Math.PI * 2;
+                text(ctx, String(i), 128 + Math.sin(a) * 92, 128 - Math.cos(a) * 92, 28, undefined, "bold");
+              }
+            }),
+          }),
+        );
+        g.add(face);
+        for (const [len, wid] of [[0.2, 0.035], [0.29, 0.022], [0.31, 0.008]]) {
+          const geo = new THREE.BoxGeometry(wid, len, 0.01);
+          geo.translate(0, len / 2 - 0.03, 0);
+          const hand = new THREE.Mesh(geo, len > 0.3 ? MAT.beacon : MAT.rackTrim);
+          hand.position.z = 0.01 + clockHands.length * 0.004;
+          g.add(hand);
+          clockHands.push(hand);
+        }
+        return g;
+      }
+      function updateClock() {
+        if (!clockHands.length) return;
+        const d = new Date();
+        const sec = d.getSeconds() + d.getMilliseconds() / 1000;
+        const min = d.getMinutes() + sec / 60;
+        const hr = (d.getHours() % 12) + min / 60;
+        // Every clock built so far shares the hands' order: hour, minute, second
+        for (let i = 0; i < clockHands.length; i += 3) {
+          clockHands[i].rotation.z = -(hr / 12) * Math.PI * 2;
+          clockHands[i + 1].rotation.z = -(min / 60) * Math.PI * 2;
+          clockHands[i + 2].rotation.z = -(sec / 60) * Math.PI * 2;
+        }
+      }
+
+      const flakyBoard = () =>
+        picture(1.5, 1.0, (ctx, w, h) => {
+          // An LED counter
+          frame(ctx, w, h, "#030507", "#1e293b", 14);
+          ctx.textAlign = "center";
+          ctx.font = `600 ${0.085 * h}px ${MONO}`;
+          ctx.fillStyle = "#94a3b8";
+          ctx.fillText("DAYS WITHOUT A FLAKY TEST", w / 2, 0.22 * h, 0.9 * w);
+          ctx.font = `600 ${0.5 * h}px ${MONO}`;
+          ctx.fillStyle = "#3b0d10";
+          ctx.fillText("88", w / 2, 0.82 * h);
+          ctx.shadowColor = "#ff2a3a";
+          ctx.shadowBlur = 24;
+          ctx.fillStyle = "#ff3b4a";
+          ctx.fillText(" 0", w / 2, 0.82 * h);
+        });
+
+      const whiteboard = () =>
+        picture(2.2, 1.3, (ctx, w, h) => {
+          frame(ctx, w, h, "#fbfbf8", "#9aa1ad", 14);
+          ctx.textAlign = "left";
+          const s = h / 10;
+          text(ctx, "TODO", 0.06 * w, 1.4 * s, 1.1 * s, "#2b5bd7", "bold");
+          const items = ["fix flaky tests (again)", "@test_broken → @test", "TTFX ↓↓↓", "buy more Macs??", "do NOT unplug the fridge"];
+          items.forEach((t, i) => text(ctx, `• ${t}`, 0.06 * w, (2.8 + i * 1.3) * s, 0.75 * s, i === 4 ? "#cb3c33" : "#2b2a33"));
+          // A doodle of the queue, going up and to the right
+          ctx.strokeStyle = "#389826";
+          ctx.lineWidth = 5;
+          ctx.beginPath();
+          const x0 = 0.62 * w, y0 = 0.82 * h;
+          ctx.moveTo(x0, y0 - 0.25 * h);
+          ctx.lineTo(x0, y0);
+          ctx.lineTo(x0 + 0.33 * w, y0);
+          ctx.stroke();
+          ctx.strokeStyle = "#cb3c33";
+          ctx.beginPath();
+          ctx.moveTo(x0 + 0.01 * w, y0 - 0.03 * h);
+          for (let i = 1; i <= 10; i++) ctx.lineTo(x0 + i * 0.03 * w, y0 - 0.03 * h - (i * i * 0.0055 + (i % 2) * 0.02) * h);
+          ctx.stroke();
+          text(ctx, "queue :(", x0 + 0.12 * w, y0 - 0.5 * h, 0.7 * s, "#cb3c33");
+        });
+
+      function employeePoster(best) {
+        return picture(1.2, 1.5, (ctx, w, h) => {
+          frame(ctx, w, h, "#fff6d8", "#b8892e", 18);
+          ctx.textAlign = "center";
+          text(ctx, "EMPLOYEE", w / 2, 0.14 * h, 0.08 * h, undefined, "bold");
+          text(ctx, "OF THE MONTH", w / 2, 0.23 * h, 0.08 * h, undefined, "bold");
+          // A portrait: a rack with a smile
+          ctx.fillStyle = "#3d4250";
+          ctx.fillRect(0.32 * w, 0.29 * h, 0.36 * w, 0.4 * h);
+          ctx.fillStyle = "#f7f3e8";
+          ctx.fillRect(0.37 * w, 0.33 * h, 0.26 * w, 0.17 * h);
+          ctx.fillStyle = "#2b2a33";
+          for (const x of [0.45, 0.55]) {
+            ctx.beginPath();
+            ctx.arc(x * w, 0.39 * h, 0.018 * w, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "#2b2a33";
+          ctx.beginPath();
+          ctx.arc(0.5 * w, 0.42 * h, 0.06 * w, 0.15 * Math.PI, 0.85 * Math.PI);
+          ctx.stroke();
+          ctx.fillStyle = "#3fff7a";
+          for (let i = 0; i < 4; i++) ctx.fillRect(0.38 * w, (0.53 + i * 0.035) * h, 0.04 * w, 0.015 * h);
+          text(ctx, best ? best.name : "nobody", w / 2, 0.8 * h, 0.075 * h, undefined, "bold");
+          text(ctx, best ? `${best.n} job${best.n === 1 ? "" : "s"} at once` : "everyone is asleep", w / 2, 0.9 * h, 0.055 * h);
+        });
+      }
+
+      const dispatchPoster = () =>
+        picture(1.4, 1.9, (ctx, w, h) => {
+          frame(ctx, w, h, "#111", "#111", 4);
+          ctx.textAlign = "center";
+          // A dot dispatching to three methods
+          const cx = w / 2, cy = 0.36 * h;
+          const ends = [[0.2, 0.18, "#cb3c33"], [0.8, 0.18, "#9558b2"], [0.5, 0.58, "#389826"]];
+          ctx.lineWidth = 6;
+          for (const [x, y, col] of ends) {
+            ctx.strokeStyle = col;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(x * w, y * h);
+            ctx.stroke();
+            ctx.fillStyle = col;
+            ctx.beginPath();
+            ctx.arc(x * w, y * h, 0.05 * w, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.fillStyle = "#4063d8";
+          ctx.beginPath();
+          ctx.arc(cx, cy, 0.07 * w, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#ddd";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(0.08 * w, 0.06 * h, 0.84 * w, 0.62 * h);
+          text(ctx, "MULTIPLE DISPATCH", w / 2, 0.79 * h, 0.065 * h, "#f2f2f2", "bold");
+          text(ctx, "Because one dispatch", w / 2, 0.87 * h, 0.045 * h, "#bbb");
+          text(ctx, "was never enough.", w / 2, 0.93 * h, 0.045 * h, "#bbb");
+        });
+
+      function revertSign() {
+        const g = new THREE.Group();
+        const sign = picture(0.9, 0.6, (ctx, w, h) => {
+          frame(ctx, w, h, "#cb2a1f", "#fff", 10);
+          ctx.textAlign = "center";
+          text(ctx, "IN CASE OF FIRE", w / 2, 0.36 * h, 0.15 * h, "#fff", "bold");
+          text(ctx, "git revert", w / 2, 0.72 * h, 0.2 * h, "#fff", "bold");
+        });
+        g.add(sign);
+        // The extinguisher below it, on the floor
+        const can = new THREE.Mesh(GEO.cyl, surface(0xd8281c));
+        can.scale.set(0.1, 0.5, 0.1);
+        can.position.set(0, -1.32, 0.12);
+        can.castShadow = true;
+        g.add(can);
+        const cap = new THREE.Mesh(GEO.cyl, MAT.rackTrim);
+        cap.scale.set(0.05, 0.08, 0.05);
+        cap.position.set(0, -1.03, 0.12);
+        g.add(cap);
+        const hose = new THREE.Mesh(GEO.cyl, MAT.rackTrim);
+        hose.scale.set(0.015, 0.35, 0.015);
+        hose.rotation.z = 0.5;
+        hose.position.set(0.1, -1.15, 0.16);
+        g.add(hose);
+        return g;
+      }
+
+      const cablePlan = () =>
+        picture(1.6, 1.1, (ctx, w, h) => {
+          // A blueprint
+          frame(ctx, w, h, "#0a2342", "#7dd3fc", 6);
+          ctx.strokeStyle = "rgba(125, 211, 252, 0.15)";
+          ctx.lineWidth = 1;
+          for (let x = 0; x < w; x += 16) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, h);
+            ctx.stroke();
+          }
+          for (let y = 0; y < h; y += 16) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+          }
+          ctx.textAlign = "center";
+          text(ctx, "CABLE MANAGEMENT PLAN", w / 2, 0.14 * h, 0.075 * h, "#e0f2fe", "bold");
+          text(ctx, "rev. 47 · approved", w / 2, 0.93 * h, 0.055 * h, "#7dd3fc");
+          // Deterministic spaghetti
+          let seed = 7;
+          const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+          const cols = ["#cb3c33", "#389826", "#9558b2", "#4063d8", "#e0a020", "#2b2a33"];
+          ctx.lineWidth = 4;
+          for (let i = 0; i < 18; i++) {
+            ctx.strokeStyle = cols[i % cols.length];
+            ctx.beginPath();
+            ctx.moveTo(0.1 * w, (0.25 + rnd() * 0.55) * h);
+            ctx.bezierCurveTo(rnd() * w, rnd() * h, rnd() * w, rnd() * h, 0.9 * w, (0.25 + rnd() * 0.55) * h);
+            ctx.stroke();
+          }
+        });
+
+      function exitDoor() {
+        const g = new THREE.Group();
+        const door = new THREE.Mesh(GEO.box, surface(0x7f8fa6));
+        door.scale.set(1.0, 2.1, 0.05);
+        door.position.y = 1.05;
+        g.add(door);
+        const knob = new THREE.Mesh(GEO.sphere, surface(0xd9b44a));
+        knob.scale.setScalar(0.045);
+        knob.position.set(0.38, 1.0, 0.06);
+        g.add(knob);
+        const sign = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.7, 0.25),
+          new THREE.MeshBasicMaterial({
+            map: canvasTexture(280, 100, (ctx, w, h) => {
+              ctx.fillStyle = "#16a34a";
+              ctx.fillRect(0, 0, w, h);
+              ctx.textAlign = "center";
+              text(ctx, "EXIT 🏃", w / 2, 0.72 * h, 0.6 * h, "#fff", "bold");
+            }),
+          }),
+        );
+        sign.position.set(0, 2.35, 0.03);
+        g.add(sign);
+        return g;
+      }
+
+      const invalidationsSign = () =>
+        picture(1.2, 1.2, (ctx, w, h) => {
+          ctx.fillStyle = "#e9e2d0";
+          ctx.fillRect(0, 0, w, h);
+          ctx.lineWidth = 0.13 * w;
+          ctx.strokeStyle = "#cb3c33";
+          ctx.beginPath();
+          ctx.arc(w / 2, h / 2, 0.36 * w, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = "#4063d8";
+          ctx.fillRect(0.04 * w, 0.4 * h, 0.92 * w, 0.2 * h);
+          ctx.textAlign = "center";
+          text(ctx, "MIND THE", w / 2, 0.49 * h, 0.075 * h, "#fff", "bold");
+          text(ctx, "INVALIDATIONS", w / 2, 0.575 * h, 0.075 * h, "#fff", "bold");
+        });
+
+      const hotMacsSign = () =>
+        picture(1.0, 1.1, (ctx, w, h) => {
+          ctx.fillStyle = "#e9e2d0";
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = "#ffd000";
+          ctx.strokeStyle = "#111";
+          ctx.lineWidth = 12;
+          ctx.beginPath();
+          ctx.moveTo(w / 2, 0.05 * h);
+          ctx.lineTo(0.95 * w, 0.68 * h);
+          ctx.lineTo(0.05 * w, 0.68 * h);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.textAlign = "center";
+          text(ctx, "!", w / 2, 0.58 * h, 0.4 * h, "#111", "bold");
+          text(ctx, "CAUTION", w / 2, 0.82 * h, 0.11 * h, "#111", "bold");
+          text(ctx, "HOT MACS", w / 2, 0.95 * h, 0.11 * h, "#111", "bold");
+        });
+
+      // ---------------------------------------------------------------- room
+      let roomGroup = null;
+
+      function buildRoom(data) {
+        if (roomGroup) {
+          scene.remove(roomGroup);
+          roomGroup.traverse((o) => {
+            if (o.isSprite || (o.material && o.material.map)) {
+              o.material.map?.dispose();
+              o.material.dispose();
+            }
+          });
+        }
+        roomGroup = new THREE.Group();
+        clockHands.length = 0;
+        rows = [...data.ci, ...data.other].map(makeRow);
+        // Rows stand side by side in aisles about AISLE_W wide, and the other
+        // queues start an aisle of their own
+        const slot = (r) => Math.max(r.width, r.signW) + 1.4;
+        const aisleW = Math.max(AISLE_W, ...rows.map(slot));
+        const aisles = [];
+        for (const r of rows) {
+          const a = aisles[aisles.length - 1];
+          if (!a || a.used + slot(r) > aisleW || a.kind !== r.c.kind) aisles.push({ kind: r.c.kind, rows: [r], used: slot(r) });
+          else {
+            a.rows.push(r);
+            a.used += slot(r);
+          }
+        }
+        let z = 0;
+        let maxUsed = 0;
+        for (const a of aisles) {
+          let x = -a.used / 2;
+          for (const r of a.rows) {
+            r.group.position.set(x + slot(r) / 2, 0, z);
+            x += slot(r);
+            roomGroup.add(r.group);
+          }
+          maxUsed = Math.max(maxUsed, a.used);
+          z += ROW_GAP + Math.max(0, ...a.rows.map((r) => r.lines - 2)) * 0.34;
+        }
+        // Centred on the origin, the queues facing the camera
+        const depth = Math.max(0, z - ROW_GAP);
+        for (const r of rows) r.group.position.z -= depth / 2;
+
+        const W = maxUsed + 4;
+        const D = depth + 7;
+        const floorTex = canvasTexture(128, 128, (ctx, w) => {
+          ctx.fillStyle = "#0d141e";
+          ctx.fillRect(0, 0, w, w);
+          ctx.strokeStyle = "#1c2a3b";
+          ctx.lineWidth = 4;
+          ctx.strokeRect(0, 0, w, w);
+          ctx.fillStyle = "rgba(34, 211, 238, 0.45)";
+          for (const [x, y] of [[2, 2], [126, 2], [2, 126], [126, 126]]) ctx.fillRect(x - 2, y - 2, 4, 4);
+          ctx.fillStyle = "#131c28";
+          for (const [x, y] of [[40, 40], [88, 40], [40, 88], [88, 88]]) ctx.fillRect(x - 6, y - 6, 12, 12);
+        });
+        floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+        floorTex.repeat.set(W / 0.6, D / 0.6);
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), surface(0xffffff, { map: floorTex }));
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        roomGroup.add(floor);
+
+        // A little over a rack and a half, like a real machine room
+        const wallH = 3.0;
+        const back = new THREE.Mesh(new THREE.PlaneGeometry(W, wallH), MAT.wall);
+        back.position.set(0, wallH / 2, -D / 2);
+        back.receiveShadow = true;
+        roomGroup.add(back);
+        const left = new THREE.Mesh(new THREE.PlaneGeometry(D, wallH), MAT.wall);
+        left.rotation.y = Math.PI / 2;
+        left.position.set(-W / 2, wallH / 2, 0);
+        left.receiveShadow = true;
+        roomGroup.add(left);
+
+        const right = new THREE.Mesh(new THREE.PlaneGeometry(D, wallH), MAT.wall);
+        right.rotation.y = -Math.PI / 2;
+        right.position.set(W / 2, wallH / 2, 0);
+        right.receiveShadow = true;
+        roomGroup.add(right);
+        for (const y of [0.04, wallH - 0.04]) {
+          for (const [sx, sz, x, z] of [[W, 0.03, 0, -D / 2 + 0.02], [0.03, D, -W / 2 + 0.02, 0], [0.03, D, W / 2 - 0.02, 0]]) {
+            const strip = new THREE.Mesh(GEO.box, MAT.glow);
+            strip.scale.set(sx, 0.025, sz);
+            strip.position.set(x, y, z);
+            roomGroup.add(strip);
+          }
+        }
+
+        // Art along each wall, spread evenly; `t` runs 0 to 1 along it
+        const hang = (obj, wall, t, y) => {
+          if (wall === "back") obj.position.set(-W / 2 + t * W, y, -D / 2 + 0.02);
+          else if (wall === "left") {
+            obj.position.set(-W / 2 + 0.02, y, -D / 2 + t * D);
+            obj.rotation.y = Math.PI / 2;
+          } else {
+            obj.position.set(W / 2 - 0.02, y, D / 2 - t * D);
+            obj.rotation.y = -Math.PI / 2;
+          }
+          roomGroup.add(obj);
+        };
+        const spread = (wall, items) => items.forEach(([obj, y], i) => hang(obj, wall, (i + 1) / (items.length + 1), y));
+
+        // The host running the most jobs right now gets the frame
+        let best = null;
+        for (const c of data.ci)
+          for (const h of c.hosts) {
+            const n = h.states.filter((x) => x === "on").length;
+            if (!best || n > best.n) best = { name: h.name, n };
+          }
+
+        spread("back", [
+          [juliaPoster(), 2.15],
+          [wallClock(), 2.45],
+          [flakyBoard(), 2.1],
+          [whiteboard(), 2.05],
+          [employeePoster(best), 2.15],
+        ]);
+        spread("left", [
+          [dispatchPoster(), 1.9],
+          [revertSign(), 1.6],
+          [cablePlan(), 2.0],
+        ]);
+        spread("right", [
+          [exitDoor(), 0],
+          [invalidationsSign(), 1.95],
+          [hotMacsSign(), 1.9],
+        ]);
+
+        scene.add(roomGroup);
+        return { W, D };
+      }
+
+      // Lights that stay across refreshes
+      scene.add(new THREE.HemisphereLight(0xb4d4f0, 0x0a0f18, 1.1));
+      const sun = new THREE.DirectionalLight(0xdbeafe, 1.3);
+      sun.position.set(10, 18, 12);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048);
+      scene.add(sun, sun.target);
+
+      // ------------------------------------------------------------- camera
+      // A small orbit control. Drag turns; right-drag, shift-drag or two
+      // fingers move across the floor; the wheel or a pinch zooms towards what
+      // is under the pointer; a click flies there.
+      const MIN_R = 1.5;
+      const MAX_R = 60;
+      const view = { theta: -0.55, phi: 0.95, radius: 20, target: new THREE.Vector3(), goal: null, idle: 0 };
+      let roomSize = { W: 20, D: 20 };
+      function placeCamera() {
+        const { theta, phi, radius, target } = view;
+        camera.position.set(
+          target.x + radius * Math.sin(phi) * Math.sin(theta),
+          target.y + radius * Math.cos(phi),
+          target.z + radius * Math.sin(phi) * Math.cos(theta),
+        );
+        camera.lookAt(target);
+      }
+      function clampTarget(t = view.target) {
+        t.x = Math.min(roomSize.W / 2, Math.max(-roomSize.W / 2, t.x));
+        t.z = Math.min(roomSize.D / 2, Math.max(-roomSize.D / 2, t.z));
+        t.y = Math.min(3, Math.max(0, t.y));
+        return t;
+      }
+      // The point in the room under the screen position: a solid object, else the floor
+      function pickPoint(x, y) {
+        ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+        if (roomGroup) {
+          const hit = ray.intersectObject(roomGroup, true).find((h) => !h.object.isSprite && h.object.material.visible !== false);
+          if (hit) return hit.point.clone();
+        }
+        const t = -ray.ray.origin.y / ray.ray.direction.y;
+        return t > 0 ? ray.ray.at(t, new THREE.Vector3()) : null;
+      }
+      function zoomAt(x, y, factor) {
+        const r = Math.min(MAX_R, Math.max(MIN_R, view.radius * factor));
+        const p = pickPoint(x, y);
+        // Keep the point under the pointer where it is on screen
+        if (p) view.target.lerpVectors(p, view.target, r / view.radius);
+        view.radius = r;
+        clampTarget();
+      }
+      function pan(dx, dy) {
+        const s = view.radius * 0.0016;
+        const right = new THREE.Vector3(Math.cos(view.theta), 0, -Math.sin(view.theta));
+        const forward = new THREE.Vector3(-Math.sin(view.theta), 0, -Math.cos(view.theta));
+        view.target.addScaledVector(right, -dx * s).addScaledVector(forward, dy * s);
+        clampTarget();
+      }
+      function flyTo(p, radius) {
+        const target = clampTarget(p.clone());
+        target.y = Math.min(1.5, Math.max(0.8, target.y));
+        view.goal = { target, radius };
+        view.idle = 0;
+      }
+      const touched = () => {
+        view.idle = 0;
+        view.goal = null;
+      };
+
+      const pointers = new Map();
+      let gesture = null;
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+      canvas.addEventListener("pointerdown", (e) => {
+        canvas.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const panning = e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey;
+        gesture = { panning, x: e.clientX, y: e.clientY, at: performance.now(), moved: false, pinch: 0 };
+        touched();
+      });
+      canvas.addEventListener("pointermove", (e) => {
+        const p = pointers.get(e.pointerId);
+        if (!p || !gesture) return hover(e);
+        const dx = e.clientX - p.x;
+        const dy = e.clientY - p.y;
+        if (Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 6) gesture.moved = true;
+        if (pointers.size === 1) {
+          if (gesture.panning) pan(dx, dy);
+          else {
+            view.theta -= dx * 0.006;
+            view.phi = Math.min(1.45, Math.max(0.2, view.phi - dy * 0.006));
+          }
+        } else if (pointers.size === 2) {
+          // Two fingers: the midpoint moves the view, the spread zooms
+          const [a, b] = [...pointers.values()];
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          pan(dx / 2, dy / 2);
+          if (gesture.pinch) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, gesture.pinch / d);
+          gesture.pinch = d;
+          gesture.moved = true;
+        }
+        p.x = e.clientX;
+        p.y = e.clientY;
+        view.idle = 0;
+      });
+      const release = (e) => {
+        pointers.delete(e.pointerId);
+        if (gesture && pointers.size === 0) {
+          // A click, not a drag: fly to what was clicked
+          if (!gesture.moved && !gesture.panning && e.type === "pointerup" && performance.now() - gesture.at < 500) {
+            const p = pickPoint(e.clientX, e.clientY);
+            if (p) flyTo(p, Math.min(view.radius, 5));
+          }
+          gesture = null;
+        }
+        if (gesture) gesture.pinch = 0;
+      };
+      canvas.addEventListener("pointerup", release);
+      canvas.addEventListener("pointercancel", release);
+      canvas.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          // Trackpads send small steps, a wheel bigger ones
+          zoomAt(e.clientX, e.clientY, Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.0015))));
+          touched();
+        },
+        { passive: false },
+      );
+      addEventListener("keydown", (e) => {
+        if (e.target.closest && e.target.closest("button, a, input")) return;
+        const step = 40;
+        const moves = { ArrowLeft: [step, 0], a: [step, 0], ArrowRight: [-step, 0], d: [-step, 0], ArrowUp: [0, step], w: [0, step], ArrowDown: [0, -step], s: [0, -step] };
+        const m = moves[e.key];
+        if (m) pan(...m);
+        else if (e.key === "+" || e.key === "=") zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
+        else if (e.key === "-") zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
+        else return;
+        e.preventDefault();
+        touched();
+      });
+
+      // ------------------------------------------------------------ tooltip
+      const tip = document.getElementById("tip");
+      const ray = new THREE.Raycaster();
+      const ndc = new THREE.Vector2();
+      function tipHtml(c) {
+        const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
+        if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
+        const lines = [`${c.busy} of ${c.cap} slots busy`];
+        if (c.waiting) lines.push(`${c.waiting} jobs waiting, the longest for ${hours(c.oldest)}`);
+        if (c.gone) lines.push(`${c.gone} agents missing`);
+        return (
+          `<span class="tag" style="color:${MOODS[c.mood].color}">${MOODS[c.mood].tag}</span><b>${esc(c.title)}</b>` +
+          `<div class="cap">${esc(c.caption)}</div>` +
+          `<div class="data">${esc(c.queues)}<br>${lines.map(esc).join("<br>")}</div><div class="hosts">${hosts.join(" · ")}</div>`
+        );
+      }
+      function hover(e) {
+        if (!renderer || !rows.length) return;
+        ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+        const hit = ray.intersectObjects(rows.map((r) => r.hit))[0];
+        if (!hit) {
+          tip.style.display = "none";
+          return;
+        }
+        tip.innerHTML = tipHtml(hit.object.userData.row.c);
+        tip.style.display = "block";
+        const x = Math.min(e.clientX + 16, innerWidth - tip.offsetWidth - 8);
+        const y = Math.min(e.clientY + 16, innerHeight - tip.offsetHeight - 8);
+        tip.style.left = `${Math.max(8, x)}px`;
+        tip.style.top = `${Math.max(8, y)}px`;
+      }
+      canvas.addEventListener("pointerleave", () => (tip.style.display = "none"));
+
+      // -------------------------------------------------------------- panel
+      function renderList(data) {
+        const list = document.getElementById("list");
+        const item = (c, i) =>
+          `<button type="button" data-i="${i}" title="${MOODS[c.mood].tag}: ${esc(c.caption)}">` +
+          `<span class="dot" style="color:${MOODS[c.mood].color}"></span>${esc(c.title)}` +
+          `<span class="n">${c.busy}/${c.cap}${c.waiting ? ` · ${c.waiting} waiting` : ""}</span></button>`;
+        list.innerHTML =
+          `<h2>Julia CI</h2>${data.ci.map((c, i) => item(c, i)).join("")}` +
+          (data.other.length ? `<h2>The neighbours</h2>${data.other.map((c, i) => item(c, data.ci.length + i)).join("")}` : "");
+        list.querySelectorAll("button").forEach((b) =>
+          b.addEventListener("click", () => {
+            const r = rows[Number(b.dataset.i)];
+            if (!r) return;
+            const p = new THREE.Vector3();
+            r.group.getWorldPosition(p);
+            flyTo(p, Math.max(6, r.width * 1.3));
+          }),
+        );
+      }
+
+      // ---------------------------------------------------------------- loop
+      const clock = new THREE.Clock();
+      function resize() {
+        if (!renderer) return;
+        renderer.setSize(innerWidth, innerHeight, false);
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+      }
+      addEventListener("resize", resize);
+
+      function tick() {
+        const dt = Math.min(clock.getDelta(), 0.1);
+        const t = clock.elapsedTime;
+        view.idle += dt;
+        if (view.goal) {
+          view.target.lerp(view.goal.target, Math.min(1, dt * 3));
+          view.radius += (view.goal.radius - view.radius) * Math.min(1, dt * 3);
+          if (view.target.distanceTo(view.goal.target) < 0.01) view.goal = null;
+        } else if (!reduceMotion && view.idle > 6) {
+          view.theta += dt * 0.06;
+        }
+        placeCamera();
+        updateClock();
+        for (const r of rows) {
+          for (const m of r.leds) {
+            const on = m.userData.speed === 0 || Math.sin(t * m.userData.speed + m.userData.phase) > -0.2;
+            m.color.setHex(on ? 0x3fff7a : 0x1d5a2c);
+          }
+          if (reduceMotion) continue;
+          const mood = r.c.mood;
+          // Stressed rows shake
+          const amp = { sweating: 0.004, panicking: 0.012, fire: 0.022 }[mood] || 0;
+          if (amp) r.units.children.forEach((u, i) => (u.rotation.z = Math.sin(t * 30 + i * 1.3) * amp));
+          for (const p of r.people) p.position.y = Math.abs(Math.sin(t * 5 + p.userData.phase)) * (mood === "fire" ? 0.12 : 0.05);
+          for (const l of r.lights) l.intensity = 4 + Math.sin(t * 13) * 2 + Math.random();
+          if (r.beacon) r.beacon.rotation.y = t * 5;
+          const rate = { fire: 40, panicking: 14, sweating: 6, asleep: 1.2 }[mood] || 0;
+          if (rate && Math.random() < rate * dt * Math.min(4, r.tops.length)) spawnParticle(r);
+          r.particles = r.particles.filter((s) => {
+            const u = s.userData;
+            u.life += dt;
+            s.position.y += u.vy * dt;
+            if (u.kind === "z") s.position.x += Math.sin(u.life * 3) * dt * 0.3;
+            const k = u.life / u.max;
+            s.material.opacity = 1 - k;
+            if (u.kind === "flame") s.scale.setScalar(u.size * (1 - k * 0.7));
+            if (u.kind === "steam") s.scale.setScalar(u.size * (1 + k));
+            if (k < 1) return true;
+            r.group.remove(s);
+            s.material.dispose();
+            return false;
+          });
+        }
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+      }
+
+      // ---------------------------------------------------------------- load
+      let first = true;
+      async function load() {
+        // A whole day, so the API answers from its cache
+        const since = new Date().toISOString().slice(0, 10);
+        try {
+          const [latest, backlog] = await Promise.all([
+            fetch("../api/agents/latest").then((r) => r.json()),
+            fetch(`../api/agents/backlog?since=${since}`).then((r) => r.json()),
+          ]);
+          const data = buildClusters(latest, backlog);
+          const total = (k) => data.ci.reduce((s, c) => s + c[k], 0);
+          const mins = Math.round((Date.now() - data.latestMs) / 60000);
+          const age = mins < 1 ? "just now" : mins < 60 ? `${mins} min ago` : `${(mins / 60).toFixed(1)} h ago`;
+          document.getElementById("sub").innerHTML =
+            `SNAPSHOT <b>${age}</b> · SLOTS <b>${total("busy")}/${total("cap")}</b> · QUEUED <b>${total("waiting")}</b><br>` +
+            `Every unit is a real job slot. <a href="../?tab=ci-workers">Workers tab</a>`;
+          renderList(data);
+          if (!renderer) return;
+          // The signs and the art are drawn on canvases, which need the fonts first
+          await Promise.all(
+            ['700 70px "Space Grotesk"', '600 40px "JetBrains Mono"', '400 36px "JetBrains Mono"'].map((f) => document.fonts.load(f)),
+          ).catch(() => {});
+          const { W, D } = buildRoom(data);
+          roomSize = { W, D };
+          sun.shadow.camera.left = -W / 2 - 2;
+          sun.shadow.camera.right = W / 2 + 2;
+          sun.shadow.camera.top = D / 2 + 2;
+          sun.shadow.camera.bottom = -D / 2 - 2;
+          sun.shadow.camera.updateProjectionMatrix();
+          scene.background = new THREE.Color(0x05080d);
+          scene.fog = new THREE.Fog(0x05080d, Math.max(W, D) * 1.2, Math.max(W, D) * 3);
+          if (first) {
+            resize();
+            // Further back on a tall, narrow screen, so the room still fits
+            view.radius = Math.max(W, D) * 0.85 * Math.max(1, 1 / camera.aspect) ** 0.6;
+            first = false;
+            tick();
+          }
+          document.getElementById("status")?.remove();
+        } catch (e) {
+          console.error(e);
+          const s = document.getElementById("status");
+          if (s) s.textContent = "The door is stuck (the agent data did not load). Try again in a bit.";
+        }
+      }
+      load();
+      setInterval(load, REFRESH_MS);
+    </script>
+  </body>
+</html>
