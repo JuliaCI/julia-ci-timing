@@ -367,6 +367,8 @@
       // queue's row: one row of hardware, a sign per queue stacked above it,
       // and the worst of their moods for the row's lights and effects
       const SHARED_MACHINES = { upload: "cuda" };
+      // A queue's own caption, shown in place of the room's commentary on its mood
+      const QUEUE_CAPTIONS = { rocm: "Probably overloaded." };
       // Worst last, for picking a shared row's mood
       const MOOD_RANK = { asleep: 0, chill: 1, busy: 2, full: 2, sweating: 3, panicking: 4, fire: 5 };
       // Resident agents gone this long are not drawn at all
@@ -503,7 +505,9 @@
           c.cap = all.length;
           c.mood = mood(c.busy, c.cap, c.waiting);
           if (c.kind === "other" && c.mood === "busy") c.mood = "full";
-          c.caption = c.gone && c.mood === "asleep" ? "Someone tripped over a cable." : pick(MOODS[c.mood].lines, c.title + c.mood);
+          c.caption =
+            QUEUE_CAPTIONS[c.queues] ??
+            (c.gone && c.mood === "asleep" ? "Someone tripped over a cable." : pick(MOODS[c.mood].lines, c.title + c.mood));
           c.load = (c.busy + c.waiting) / Math.max(c.cap, 1);
         }
         // Queues on a shared machine join the row of the queue they share it
