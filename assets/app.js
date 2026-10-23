@@ -512,6 +512,7 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   }
   const filterEl = document.getElementById("workers-filter");
   if (filterEl) filterEl.classList.toggle("view-hidden", !isWorkers);
+  document.getElementById("serverroom-link")?.classList.toggle("view-hidden", !isWorkers);
   const toggleEl = document.getElementById("timing-view-toggle");
   if (toggleEl) toggleEl.classList.toggle("view-hidden", !isJobs);
   // The worker time view has a fixed window
