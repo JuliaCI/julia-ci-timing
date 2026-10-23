@@ -363,6 +363,9 @@
       // The build, test, launch and default queues start one agent per job, so
       // their slots come from the hosts; every other queue has resident agents
       const PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
+      // Queues served by somebody's own machine rather than a rack: drawn as an
+      // Intel NUC on a table, one per slot
+      const NUC_QUEUES = new Set(["oneapi"]);
       // Queues whose agents run on another queue's machine, drawn in that
       // queue's row: one row of hardware, a sign per queue stacked above it,
       // and the worst of their moods for the row's lights and effects
@@ -493,6 +496,7 @@
             title: `${q} queue`,
             queues: q,
             mac: entry.os.size === 1 && entry.os.has("macos"),
+            nuc: NUC_QUEUES.has(q),
             hosts: [...entry.hosts].map(([name, states]) => ({ name, states })).sort(byName),
             waiting: 0,
             oldest: 0,
@@ -584,6 +588,10 @@
         fridge: surface(0xf2f4f7),
         fridgeTrim: surface(0x9aa1ad),
         miniOff: surface(0x9da1a8),
+        nuc: surface(0x4a5059, { metalness: 0.7, roughness: 0.35 }),
+        nucOff: surface(0x353a42, { metalness: 0.5, roughness: 0.5 }),
+        nucLid: surface(0x14171c, { metalness: 0.3, roughness: 0.15 }),
+        mug: surface(0xf5f5f4, { roughness: 0.4 }),
         wall: surface(0x111a26, { roughness: 0.8, metalness: 0.1 }),
         pole: surface(0x555a66),
         beacon: new THREE.MeshBasicMaterial({ color: 0xff2a1a }),
@@ -751,6 +759,59 @@
         return g;
       }
 
+      // A table of width `tw`, its top surface at y = 0.83
+      function makeTable(tw) {
+        const table = new THREE.Group();
+        const top = new THREE.Mesh(GEO.box, MAT.table);
+        top.scale.set(tw, 0.06, 1.0);
+        top.position.y = 0.8;
+        top.castShadow = top.receiveShadow = true;
+        table.add(top);
+        for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          const leg = new THREE.Mesh(GEO.box, MAT.tableLeg);
+          leg.scale.set(0.06, 0.8, 0.06);
+          leg.position.set(lx * (tw / 2 - 0.08), 0.4, lz * 0.42);
+          table.add(leg);
+        }
+        return table;
+      }
+
+      // An Intel NUC: a little smaller than a Mac mini and taller, a glossy black
+      // lid on top and the power light at the front (+z)
+      function makeNuc(state, led) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.nuc : MAT.nucOff);
+        body.scale.set(0.26, 0.11, 0.26);
+        body.position.y = 0.055;
+        body.castShadow = true;
+        g.add(body);
+        const lid = new THREE.Mesh(GEO.box, MAT.nucLid);
+        lid.scale.set(0.264, 0.014, 0.264);
+        lid.position.y = 0.11;
+        lid.castShadow = true;
+        g.add(lid);
+        const l = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
+        l.scale.set(0.025, 0.012, 0.01);
+        l.position.set(0.09, 0.07, 0.132);
+        g.add(l);
+        return g;
+      }
+
+      // A mug of coffee, essential equipment
+      function makeMug() {
+        const g = new THREE.Group();
+        const cup = new THREE.Mesh(GEO.cyl, MAT.mug);
+        cup.scale.set(0.04, 0.085, 0.04);
+        cup.position.y = 0.0425;
+        cup.castShadow = true;
+        g.add(cup);
+        const handle = new THREE.Mesh(GEO.box, MAT.mug);
+        handle.scale.set(0.012, 0.045, 0.03);
+        handle.position.set(0.05, 0.045, 0);
+        g.add(handle);
+        return g;
+      }
+
       // One waiting job: a little person in a Julia colour
       function makePerson(i) {
         const g = new THREE.Group();
@@ -852,25 +913,32 @@
           height = fh + 0.25;
           tops.push({ x: fw / 2, y: height, w: fw, kind: "fridge", n: states.length });
         }
-        if (c.mac) {
+        if (c.nuc) {
+          // Somebody's own machine: a NUC per slot on one table, with coffee
+          const states = c.hosts.flatMap((h) => h.states);
+          const tw = states.length * 0.4 + 0.6;
+          const table = makeTable(tw);
+          states.forEach((s, i) => {
+            const n = makeNuc(s, row.leds[i % 4]);
+            n.position.set(-tw / 2 + 0.35 + i * 0.4, 0.83, 0);
+            n.rotation.y = (i % 2 ? -1 : 1) * 0.08;
+            table.add(n);
+          });
+          const mug = makeMug();
+          mug.position.set(tw / 2 - 0.15, 0.83, 0.28);
+          table.add(mug);
+          table.position.x = tw / 2;
+          width = tw;
+          row.units.add(table);
+          tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "nuc", n: states.length });
+        } else if (c.mac) {
           // Two rows of minis per table, eight to a table
           const states = c.hosts.filter((h) => !onFridge(h)).flatMap((h) => h.states);
           const perTable = 8;
           for (let t = 0; t * perTable < states.length; t++) {
             const chunk = states.slice(t * perTable, (t + 1) * perTable);
-            const table = new THREE.Group();
             const tw = Math.ceil(chunk.length / 2) * 0.45 + 0.3;
-            const top = new THREE.Mesh(GEO.box, MAT.table);
-            top.scale.set(tw, 0.06, 1.0);
-            top.position.y = 0.8;
-            top.castShadow = top.receiveShadow = true;
-            table.add(top);
-            for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-              const leg = new THREE.Mesh(GEO.box, MAT.tableLeg);
-              leg.scale.set(0.06, 0.8, 0.06);
-              leg.position.set(lx * (tw / 2 - 0.08), 0.4, lz * 0.42);
-              table.add(leg);
-            }
+            const table = makeTable(tw);
             chunk.forEach((s, i) => {
               const m = makeMini(s, row.leds[i % 4]);
               m.position.set(-tw / 2 + 0.38 + Math.floor(i / 2) * 0.45, 0.83, i % 2 ? 0.22 : -0.22);
@@ -920,7 +988,7 @@
         row.group.add(row.units);
         row.width = width;
         row.tops = tops;
-        if (c.mac && !fridgeStates.length) height = 1.2;
+        if ((c.mac && !fridgeStates.length) || c.nuc) height = 1.2;
 
         // One sign, a panel per queue with the first on top; its bottom edge
         // sits where a single panel's would, and the rest stack above it
@@ -2024,8 +2092,8 @@
       // grows steeply with speed, and many fans add up by power, not amplitude.
       function fanParams(kind, gpu, speed, n) {
         const loud = (0.4 + 0.6 * speed) ** 2.5 * Math.sqrt(Math.max(1, n));
-        // Mac minis are nearly silent; GPU servers have bigger, slower fans than 1U boxes
-        if (kind === "mac" || kind === "fridge") return { f: 160 + 260 * speed, cut: 900 + 2500 * speed, noise: 0.012 * loud, tone: 0.0015 * loud };
+        // Mac minis and NUCs are nearly silent; GPU servers have bigger, slower fans than 1U boxes
+        if (kind === "mac" || kind === "fridge" || kind === "nuc") return { f: 160 + 260 * speed, cut: 900 + 2500 * speed, noise: 0.012 * loud, tone: 0.0015 * loud };
         if (gpu) return { f: 260 + 700 * speed, cut: 2500 + 4500 * speed, noise: 0.05 * loud, tone: 0.006 * loud };
         return { f: 480 + 1300 * speed, cut: 3500 + 6000 * speed, noise: 0.045 * loud, tone: 0.005 * loud };
       }
