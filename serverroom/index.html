@@ -717,17 +717,32 @@
           // side. Hosts of a few slots each (one GPU agent apiece, say) share racks.
           const packed = c.hosts.length > 2 && c.hosts.every((h) => h.states.length <= 4);
           const groups = packed ? [{ states: c.hosts.flatMap((h) => h.states) }] : c.hosts;
+          const racks = [];
           for (const h of groups) {
             for (let i = 0; i < h.states.length; i += RACK_UNITS) {
               const rack = makeRack(h.states.slice(i, i + RACK_UNITS), row.leds, row.accent);
               rack.position.x = width + RACK_W / 2;
               row.units.add(rack);
+              racks.push(rack);
               tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W });
               width += RACK_W + 0.06;
             }
             width += 0.2;
           }
           width -= 0.26;
+          if (c.queues === "yggdrasil" && racks.length) {
+            // The Yggdrasil logo, stuck on the outer side of each end rack
+            const sticker = new THREE.TextureLoader().load("yggdrasil.png");
+            sticker.colorSpace = THREE.SRGBColorSpace;
+            // A little glow, so it reads on the shaded side of the rack
+            const mat = surface(0xffffff, { map: sticker, emissive: 0xffffff, emissiveMap: sticker, emissiveIntensity: 0.4, transparent: true, roughness: 0.4, metalness: 0 });
+            for (const [rack, side] of [[racks[0], -1], [racks[racks.length - 1], 1]]) {
+              const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), mat);
+              m.position.set(side * (RACK_W / 2 + 0.003), 1.3, 0.05);
+              m.rotation.set(0, (side * Math.PI) / 2, side * 0.08);
+              rack.add(m);
+            }
+          }
         }
         row.units.position.x = -width / 2;
         for (const t of tops) t.x -= width / 2;
@@ -1134,6 +1149,49 @@
           text(ctx, "HOT MACS", w / 2, 0.95 * h, 0.11 * h, "#111", "bold");
         });
 
+      // After the "all the things" drawing, for the queue that builds every binary package
+      const buildAllPoster = () =>
+        picture(1.3, 1.7, (ctx, w, h) => {
+          frame(ctx, w, h, "#ffffff", "#2f333d", 8);
+          ctx.textAlign = "center";
+          text(ctx, "BUILD ALL", w / 2, 0.15 * h, 0.12 * h, "#111", "bold");
+          text(ctx, "THE THINGS!", w / 2, 0.93 * h, 0.12 * h, "#111", "bold");
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "#111";
+          ctx.lineJoin = "round";
+          const shape = (fill, pts) => {
+            ctx.fillStyle = fill;
+            ctx.beginPath();
+            pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * w, y * h) : ctx.moveTo(x * w, y * h)));
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          };
+          // A wrench held high, then the arm holding it
+          shape("#9aa1ad", [[0.7, 0.2], [0.76, 0.2], [0.77, 0.25], [0.74, 0.27], [0.7, 0.42], [0.67, 0.41], [0.71, 0.26], [0.68, 0.23]]);
+          shape("#fbe3c9", [[0.56, 0.52], [0.66, 0.36], [0.71, 0.38], [0.6, 0.56]]);
+          // A triangle of a body and a dangling arm
+          shape("#e0322a", [[0.5, 0.5], [0.64, 0.76], [0.36, 0.76]]);
+          shape("#fbe3c9", [[0.4, 0.58], [0.3, 0.72], [0.33, 0.74], [0.43, 0.62]]);
+          // The head with its spike of yellow hair
+          shape("#ffd400", [[0.44, 0.3], [0.5, 0.17], [0.56, 0.3]]);
+          ctx.fillStyle = "#fbe3c9";
+          ctx.beginPath();
+          ctx.ellipse(0.5 * w, 0.4 * h, 0.13 * w, 0.1 * h, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#111";
+          for (const x of [0.45, 0.55]) {
+            ctx.beginPath();
+            ctx.arc(x * w, 0.37 * h, 0.018 * w, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.beginPath();
+          ctx.ellipse(0.5 * w, 0.44 * h, 0.05 * w, 0.035 * h, 0, 0, Math.PI * 2);
+          ctx.fill();
+          text(ctx, "Yggdrasil", w / 2, 0.98 * h - 2, 0.035 * h, "#7f93a8");
+        });
+
       // ---------------------------------------------------------------- room
       let roomGroup = null;
 
@@ -1258,6 +1316,7 @@
           [dispatchPoster(), 1.9],
           [revertSign(), 1.6],
           [cablePlan(), 2.0],
+          [buildAllPoster(), 1.95],
         ]);
         spread("right", [
           [exitDoor(), 0],
