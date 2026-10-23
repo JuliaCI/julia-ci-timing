@@ -22,7 +22,7 @@ using CITiming.Store, CITiming.Render
 using JSON3, CodecZlib, DataStructures, Dates
 
 const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents"]
-# A little under an hour, so the half-hourly runs export every other time
+# A little under an hour, so a run that comes an hour later is not skipped by a few seconds
 const EXPORT_INTERVAL = Minute(55)
 
 function parse_args(args)

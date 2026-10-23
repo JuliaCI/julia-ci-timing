@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the fast ci-timing ingest between the half-hourly full ones
+
+[Timer]
+# The full ingest runs at :05 and :35 and fetches these sources too
+OnCalendar=*-*-* *:15,25,45,55:00 UTC
+RandomizedDelaySec=1m
+
+[Install]
+WantedBy=timers.target

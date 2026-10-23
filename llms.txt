@@ -1,6 +1,6 @@
 # Julia Performance Tracking (perf.julialang.org)
 
-> Performance and health data for the Julia language, refreshed every half hour: CI job and
+> Performance and health data for the Julia language, refreshed every 10 to 30 minutes: CI job and
 > build timing from Buildkite (julia-ci master builds), Nanosoldier benchmark reports,
 > PkgEval runs of the package ecosystem, TTFX (time to first X) of a set of package
 > tasks on every master build and open pull request, the size of the binary distribution

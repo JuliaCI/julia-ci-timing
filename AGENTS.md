@@ -8,7 +8,9 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 ## Where the data lives
 
 The source of truth is a SQLite database on the site's host; the eight
-`fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC). `docs/querying.md` is the
+`fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC), and
+`fetch_timing.jl`, `fetch_agents.jl` and `fetch_github.jl` also at :15, :25, :45
+and :55. `docs/querying.md` is the
 guide to reading it (tables by topic, example queries, conventions), and
 `llms.txt`, served at `https://perf.julialang.org/llms.txt`, is the short
 version for agents arriving at the site. Four ways in, cheapest first:

@@ -1,0 +1,14 @@
+[Unit]
+Description=ci-timing fast ingest: the sources that change every few minutes
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/var/lib/ci-timing
+
+[Service]
+Type=oneshot
+Environment=CI_TIMING_INGEST_CONTAINER=ci-timing-ingest-fast
+ExecStart=/usr/local/bin/ci-timing-ingest fetch_timing.jl fetch_agents.jl fetch_github.jl
+# As in ci-timing-ingest.service: a hung run's container goes with it
+ExecStopPost=-/usr/bin/docker rm -f ci-timing-ingest-fast
+TimeoutStartSec=20min

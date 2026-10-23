@@ -1,10 +1,16 @@
 #!/bin/bash
-# One ingest run: the fetchers and the export inside the image. Started by
-# ci-timing-ingest.timer every half hour and by ci-timing-deploy after a new
-# image. The backup is ci-timing-backup.timer's, once a week.
+# One ingest run: the fetchers and the export inside the image. With no
+# arguments it runs every fetcher; arguments name the ones to run. Started by
+# ci-timing-ingest.timer every half hour (all of them), by
+# ci-timing-ingest-fast.timer in between (the fast changing sources) and by
+# ci-timing-deploy after a new image. Both units take the same lock, so runs
+# never overlap. The backup is ci-timing-backup.timer's, once a week.
 set -uo pipefail
 set -a; . /etc/ci-timing.host.env; set +a
 lock_file="/var/lock/ci-timing-ingest.lock"
+# Each unit names its own container, so a unit that times out while waiting
+# for the lock does not remove the container of the run that holds it
+container="${CI_TIMING_INGEST_CONTAINER:-ci-timing-ingest}"
 exec 9>"$lock_file"
 flock 9
 
@@ -20,9 +26,9 @@ export BUILDKITE_API_TOKEN
 
 # A run the unit's timeout killed can leave its container behind (the CLI
 # dies, the container does not), and its name would refuse every later run
-docker rm -f ci-timing-ingest >/dev/null 2>&1 || true
+docker rm -f "$container" >/dev/null 2>&1 || true
 # --init: a PID 1 that forwards the CLI's proxied SIGTERM to the fetchers
-docker run --rm --name ci-timing-ingest --init \
+docker run --rm --name "$container" --init \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
@@ -31,7 +37,7 @@ docker run --rm --name ci-timing-ingest --init \
   --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
   --env CI_TIMING_EXPORT_DIR=/data/export \
   --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
-  "$CI_TIMING_IMAGE_REF" ingest
+  "$CI_TIMING_IMAGE_REF" ingest "$@"
 rc=$?
 unset BUILDKITE_API_TOKEN
 exit $rc

@@ -30,7 +30,10 @@ On the host (all from cloud-init, files under `files/`):
   one of the two ports Caddy lists; a deploy starts the new image's server on
   the other port and switches once it answers `/api/ready`.
 - `ci-timing-ingest.timer`: every half hour, runs the image (`fetch_*.jl`,
-  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`. The
+  then `db/export.jl`) against `/var/lib/ci-timing/ci-timing.sqlite`.
+  `ci-timing-ingest-fast.timer` runs `fetch_timing.jl`, `fetch_agents.jl` and
+  `fetch_github.jl` in between, so those change every 10 minutes. Both take the
+  same lock, so runs never overlap. The
   "Ingest now" workflow (`.github/workflows/ingest.yml`) starts one by hand
   over SSM and waits for it (`gh workflow run ingest.yml`).
 - `ci-timing-backup.timer`: weekly, `ci-timing-backup` uploads

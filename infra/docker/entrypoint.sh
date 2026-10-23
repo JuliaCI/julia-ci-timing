@@ -15,6 +15,9 @@ fi
 # A git transfer that stalls is dropped rather than left to hang the run
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
 
+# The fetchers of a whole ingest; `ingest` runs these unless given others
+ALL_FETCHERS=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl fetch_github.jl)
+
 fetch_all() {
   # One process runs the fetchers (db/ingest.jl), so they share its compiled
   # code. One failing source must not stop the others; the export then
@@ -22,7 +25,7 @@ fetch_all() {
   # slowest takes about 10 minutes): one that hangs ends the process, which is
   # started again with the fetchers that had not started. The outer timeout
   # is for a process that hangs where its own limit cannot stop it.
-  local todo=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl fetch_github.jl)
+  local todo=("$@")
   local failed=0 progress started
   progress="$(mktemp)"
   while ((${#todo[@]})); do
@@ -50,8 +53,11 @@ export_all() {
 
 case "${1:-ingest}" in
   ingest)
+    # `ingest fetch_timing.jl fetch_agents.jl` runs only those fetchers
     [ -s "$CI_TIMING_DB" ] || { echo "No database at $CI_TIMING_DB; restore or seed it first" >&2; exit 2; }
-    fetch_all; rc=$?
+    shift
+    if (($#)); then fetch_all "$@"; else fetch_all "${ALL_FETCHERS[@]}"; fi
+    rc=$?
     export_all || exit 1
     exit $rc
     ;;

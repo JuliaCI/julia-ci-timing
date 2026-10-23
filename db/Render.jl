@@ -1691,7 +1691,8 @@ const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited
 
 # The pipelines whose jobs pool_jobs records
 const POOL_PIPELINES = ("julia-pr", "julia-ci")
-# How long a snapshot's count of other pipelines' jobs stands; ingests run every half hour
+# How long a snapshot's count of other pipelines' jobs stands; agents are fetched
+# every 10 minutes, and this covers a missed run or two
 const SNAPSHOT_HOLD = Minute(45)
 
 """
