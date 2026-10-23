@@ -11,9 +11,9 @@ using JSON3
 using Dates
 using CodecZlib: GzipDecompressor
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const SOURCE_URL =

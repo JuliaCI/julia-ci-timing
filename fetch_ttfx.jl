@@ -31,9 +31,9 @@ using Dates
 using CodecZlib: GzipDecompressor
 using Tar
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const CI_PIPELINE = "julia-ci"
@@ -201,7 +201,7 @@ function fetch_job_artifacts(build, job; pipeline=CI_PIPELINE, paths=("ttfx/resu
 end
 
 # New rows for finished TTFX jobs not in `known`. Builds are listed newest first; stop
-# once a page holds nothing new and is older than everything already known, or, before
+# once a page reaches the builds counted as captured, or, before
 # any row exists, once a page has no TTFX job at all (the job only exists from a point on).
 # `refetch` names the known jobs being fetched again for the metrics their row lacks;
 # one whose artifacts have expired keeps its row (returned in `expired`, so the caller
@@ -255,7 +255,7 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
         end
         @info "Fetched page $page" new=new_in_page ttfx_jobs=ttfx_in_page oldest
         seen_any |= ttfx_in_page > 0
-        if oldest < min_known && new_in_page == 0
+        if oldest < min_known
             @info "Reached fully captured region, stopping early"
             return :stop
         end
@@ -454,9 +454,13 @@ end
 
 const PR_PIPELINE = "julia-pr"
 # Builds listed per run: the first fill reaches back a month, later runs only need the
-# builds since the last one, with a margin for jobs still running then
+# builds since the last one, with a margin for jobs still running then. A TTFX job has
+# finished at most 16 hours after its build was created, behind the macOS queue. Once a
+# day the whole lookback is listed again, for a job that finished later still.
 const PR_BACKFILL_DAYS = 30
 const PR_LOOKBACK_DAYS = 3
+const PR_MARGIN = Day(1)
+const PR_FULL_KEY = "ttfx:pr_full_listed_at"
 const PR_COLS = ["title", "author", "draft", "pr_head_sha", "build", "job_uuid", "job_state", "build_created_at", "finished_at",
                  "web_url", "head_commit", "head_version", "base_commit", "base_version", "blocks", "n_tasks", "verdict",
                  "n_improvements", "n_regressions", "suite", "tasks"]
@@ -505,11 +509,16 @@ function confirm_missing!(pulls, numbers)
 end
 
 # Finished TTFX jobs of julia-pr builds created since `since`, by pull request number,
-# newest first.
+# newest first, and the newest of those builds of each commit as (number, state, web_url).
 function pr_ttfx_jobs(since::DateTime)
     jobs = Dict{Int,Vector{Any}}()
+    ci = Dict{String,Any}()
     buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds", ["created_from" => Store.iso(since)]; max_pages=50) do builds, _
         for build in builds
+            sha = String(something(get(build, :commit, ""), ""))
+            if !isempty(sha) && (!haskey(ci, sha) || ci[sha][1] < build.number)
+                ci[sha] = (Int(build.number), String(build.state), str_or_missing(get(build, :web_url, nothing)))
+            end
             pr = get(build, :pull_request, nothing)
             n = pr === nothing ? nothing : tryparse(Int, string(get(pr, :id, "")))
             n === nothing && continue
@@ -524,7 +533,7 @@ function pr_ttfx_jobs(since::DateTime)
             end
         end
     end
-    return jobs
+    return jobs, ci
 end
 
 function pr_row(pull, build, job, compare, meta)
@@ -565,9 +574,16 @@ function refresh_prs!(db)
     existing = Dict(Int(r.pr_number) => r for r in query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs"))
     pulls, listed_at, fresh = open_pulls(db)
     fresh && confirm_missing!(pulls, keys(existing))
-    since = now(Dates.UTC) - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
+    now_time = now(Dates.UTC)
+    since = now_time - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
+    f = query(db, "SELECT value FROM meta WHERE key = ?", (PR_FULL_KEY,))
+    full = isempty(existing) || isempty(f) || now_time - Store.parse_upstream(String(f[1].value)) >= Day(1)
+    r = query(db, "SELECT started_at FROM source_runs WHERE source = 'ttfx' AND ok = 1 ORDER BY id DESC LIMIT 1")
+    full || isempty(r) || (since = max(since, Store.parse_upstream(String(r[1].started_at)) - PR_MARGIN))
+    jobs, ci = pr_ttfx_jobs(since)
+    full && Store.setmeta!(db, PR_FULL_KEY, Store.iso(now_time))
     rows = Any[]
-    for (n, list) in pr_ttfx_jobs(since)
+    for (n, list) in jobs
         known = get(existing, n, nothing)
         isknown(build, job) = known !== nothing && (String(job.id) == known.job_uuid || build.number < known.build)
         isknown(list[1]...) && continue
@@ -619,7 +635,7 @@ function refresh_prs!(db)
         end
     end
     fresh && DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES ('ttfx:open_prs_at', ?)", (Store.iso(listed_at),))
-    refresh_ci!(db)
+    refresh_ci!(db, ci)
     @info "Open pull requests with a TTFX comparison" updated=length(rows) total=query(db, "SELECT count(*) AS n FROM ttfx_prs")[1].n
     return length(rows)
 end
@@ -638,15 +654,16 @@ function pr_ci_build(sha::String)
 end
 
 # Whether CI passes on each pull request's current head: the state of the newest
-# julia-pr build of that commit. One request per pull request whose head moved or whose
-# build had not finished at the last look, so a quiet hour costs a few requests.
-function refresh_ci!(db)
+# julia-pr build of that commit. `listed` has the builds of the commits built recently;
+# the others cost a request each, for a pull request whose head moved or whose build
+# had not finished at the last look.
+function refresh_ci!(db, listed=Dict{String,Any}())
     stale = query(db, "SELECT pr_number, pr_head_sha FROM ttfx_prs WHERE ci_commit IS NOT pr_head_sha " *
                       "OR ci_state IS NULL OR ci_state NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(CI_FINAL_STATES)),))
     updates = Any[]
     for r in stale
         sha = String(r.pr_head_sha)
-        b = pr_ci_build(sha)
+        b = haskey(listed, sha) ? listed[sha] : pr_ci_build(sha)
         b === missing && continue
         number, state, url = b === nothing ? (missing, "none", missing) : b
         push!(updates, (number, state, url, sha, Int(r.pr_number)))

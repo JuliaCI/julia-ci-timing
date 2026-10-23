@@ -10,18 +10,20 @@
 #
 # A source whose sequence has not moved since its last export, by the same
 # code, is skipped, so its files keep the generated_at of the last run that
-# changed its rows. --force renders every source anyway.
+# changed its rows. So is one exported within the last hour: the site
+# reads the API, and rendering timing alone takes about 20 s on the host,
+# which every run would pay. --force renders every source anyway.
 
 using Pkg
 Pkg.activate(dirname(@__DIR__); io=devnull)
 
-include(joinpath(@__DIR__, "Store.jl"))
-using .Store
-include(joinpath(@__DIR__, "Render.jl"))
-using .Render
+# The package has the store and the renderer precompiled
+using CITiming.Store, CITiming.Render
 using JSON3, CodecZlib, DataStructures, Dates
 
 const SOURCES = ["timing", "benchmarks", "pkgeval", "ttfx", "sizes", "packages", "agents"]
+# A little under an hour, so the half-hourly runs export every other time
+const EXPORT_INTERVAL = Minute(55)
 
 function parse_args(args)
     opts = Dict{String,Any}("db" => Store.db_path(args), "out" => nothing, "only" => SOURCES, "force" => false)
@@ -151,11 +153,16 @@ function main(args)
     code = string(hash(read(joinpath(@__DIR__, "Render.jl")), hash(read(@__FILE__))); base=16)
     previous = isfile(seqs_path) ? JSON3.read(read(seqs_path, String)) : nothing
     exported = Dict{String,Int}()
+    exported_at = Dict{String,String}()
     if previous !== nothing && get(previous, :code, "") == code
         for (k, v) in previous.seqs
             exported[String(k)] = v
         end
+        for (k, v) in get(previous, :at, Dict())
+            exported_at[String(k)] = String(v)
+        end
     end
+    now_utc = now(UTC)
     # One source failing to render leaves its files as they were; the others
     # and the health file are still written
     failed = String[]
@@ -165,16 +172,23 @@ function main(args)
             @info "skipped $source: unchanged since its last export"
             continue
         end
+        last_at = get(exported_at, source, nothing)
+        if !opts["force"] && haskey(exported, source) && last_at !== nothing &&
+           now_utc - DateTime(last_at, dateformat"yyyy-mm-ddTHH:MM:SS") < EXPORT_INTERVAL
+            @info "skipped $source: exported at $last_at"
+            continue
+        end
         try
             t = @elapsed EXPORTERS[source](db, opts["out"])
             exported[source] = seq
+            exported_at[source] = Dates.format(now_utc, dateformat"yyyy-mm-ddTHH:MM:SS")
             @info "exported $source" seconds=round(t; digits=1)
         catch e
             @error "export of $source failed" exception=(e, catch_backtrace())
             push!(failed, source)
         end
     end
-    write_atomic(io -> JSON3.write(io, Dict("code" => code, "seqs" => exported)), seqs_path)
+    write_atomic(io -> JSON3.write(io, Dict("code" => code, "seqs" => exported, "at" => exported_at)), seqs_path)
     export_health(db, opts["out"])
     close(db)
     return isempty(failed) ? 0 : 1

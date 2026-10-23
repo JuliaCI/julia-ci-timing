@@ -9,9 +9,9 @@ using HTTP
 using JSON3
 using Dates
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const PIPELINE = "julia-master"
@@ -39,8 +39,8 @@ function fetch_pipeline_builds(pipeline; branch="master", max_pages=30, fully_ca
         end
         @info "Fetched page $page ($pipeline)" new_or_updated=new_in_page skipped=length(data)-new_in_page oldest=oldest_in_page threshold=fully_captured_below
 
-        # If we've gone past the threshold and all builds are known, we can stop
-        if oldest_in_page < fully_captured_below && new_in_page == 0
+        # Builds are listed newest first, so the next pages are all below the threshold
+        if oldest_in_page < fully_captured_below
             @info "Reached fully captured region, stopping early"
             return :stop
         end
@@ -223,7 +223,7 @@ end
 function fetch_coverage_data(db; max_pages=20)
     coverage = Dict{String, Any}()
     for r in rows(db, "SELECT commit_sha, measured_at, codecov, coveralls FROM coverage")
-        coverage[String(r.commit_sha)] = Dict(
+        coverage[String(r.commit_sha)] = Dict{String,Any}(
             "coveralls" => r.coveralls === missing ? nothing : r.coveralls,
             "codecov" => r.codecov === missing ? nothing : r.codecov,
             "date" => r.measured_at === missing ? nothing : String(r.measured_at)
@@ -254,7 +254,7 @@ function fetch_coverage_data(db; max_pages=20)
                 
                 # Add or update entry
                 if !haskey(coverage, commit)
-                    coverage[commit] = Dict(
+                    coverage[commit] = Dict{String,Any}(
                         "coveralls" => get(build, :covered_percent, nothing),
                         "codecov" => nothing,
                         "date" => get(build, :created_at, nothing)
@@ -301,7 +301,7 @@ function fetch_coverage_data(db; max_pages=20)
                 
                 # Add or update entry
                 if !haskey(coverage, commit)
-                    coverage[commit] = Dict(
+                    coverage[commit] = Dict{String,Any}(
                         "coveralls" => nothing,
                         "codecov" => cov_percent,
                         "date" => get(commit_data, :timestamp, nothing)

@@ -28,7 +28,7 @@ version for agents arriving at the site. Four ways in, cheapest first:
   and run any SQL locally with `sqlite3`, no limits and no load on the host.
 - **The extracts**: the gzipped JSON files described below, at
   `https://perf.julialang.org/data/<file>`, rendered from the database
-  by `db/export.jl` after each ingest that changed them. The site itself reads the API, not
+  by `db/export.jl` at most hourly, after an ingest that changed them. The site itself reads the API, not
   these. `julia --project analysis/fetch_data.jl` downloads
   them all into `data/` (revalidating by ETag), which is what the analysis
   scripts and `tools/inspect-bench.mjs` read.

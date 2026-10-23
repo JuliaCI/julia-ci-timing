@@ -32,9 +32,9 @@ using CodecZlib
 using Tar
 using Dates
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 include(joinpath(@__DIR__, "tools", "measure_sizes.jl"))
@@ -55,8 +55,12 @@ const PR_PIPELINE = "julia-pr"
 const BUILD_JOB = ":linux: build x86_64-linux-gnu"
 const JOB_TARBALL = r"^julia-[0-9a-f]+-linux-x86_64\.tar\.gz$"
 # How far back julia-pr builds are listed: a pull request without a build since then is
-# not measured
+# not measured. Other runs list only the builds since the last successful run, with a
+# margin for build jobs that finish late; once a day the whole lookback is listed again,
+# for a build that finished later still or that a run's time budget left behind.
 const PR_LOOKBACK_DAYS = 14
+const PR_MARGIN = Day(1)
+const PR_FULL_KEY = "sizes:pr_full_listed_at"
 const PULLS_REFRESH = Hour(2)
 const RELEASE_VERSIONS = "https://julialang-s3.julialang.org/bin/versions.json"
 const RELEASES_SINCE = v"1.10.0"
@@ -439,9 +443,16 @@ end
 function measure_prs!(db, bucket; deadline)
     pulls = open_prs!(db)
     known = Dict(Int(r.pr_number) => Int(r.build) for r in query(db, "SELECT pr_number, build FROM size_prs"))
-    todo = sort!([(n, b, j) for (n, (b, j)) in pr_builds(now(UTC) - Day(PR_LOOKBACK_DAYS))
+    now_time = now(UTC)
+    since = now_time - Day(PR_LOOKBACK_DAYS)
+    f = query(db, "SELECT value FROM meta WHERE key = ?", (PR_FULL_KEY,))
+    full = isempty(known) || isempty(f) || now_time - Store.parse_upstream(String(f[1].value)) >= Day(1)
+    r = query(db, "SELECT started_at FROM source_runs WHERE source = 'sizes' AND ok = 1 ORDER BY id DESC LIMIT 1")
+    full || isempty(r) || (since = max(since, Store.parse_upstream(String(r[1].started_at)) - PR_MARGIN))
+    todo = sort!([(n, b, j) for (n, (b, j)) in pr_builds(since)
                   if haskey(pulls, n) && b.number > get(known, n, 0)];
                  by=t -> -t[2].number)
+    full && Store.setmeta!(db, PR_FULL_KEY, Store.iso(now_time))
     @info "Open pull requests with an unmeasured build" count=length(todo)
     n = 0
     for (pr, build, job) in todo

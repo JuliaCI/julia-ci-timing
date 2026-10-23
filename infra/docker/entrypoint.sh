@@ -16,18 +16,24 @@ fi
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
 
 fetch_all() {
-  # One failing source must not stop the others; the export then renders
-  # that source as it was (the same rule the Actions workflow had). Each
-  # fetcher gets its own time limit (the slowest takes about 10 minutes), so
-  # one that hangs does not use up the whole run's.
-  local failed=0
-  for f in fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl fetch_github.jl; do
-    echo "==> $f"
-    if ! timeout --kill-after=1m 30m julia --color=no --project "/app/$f"; then
-      echo "!! $f failed" >&2
-      failed=1
-    fi
+  # One process runs the fetchers (db/ingest.jl), so they share its compiled
+  # code. One failing source must not stop the others; the export then
+  # renders that source as it was. Each fetcher gets its own time limit (the
+  # slowest takes about 10 minutes): one that hangs ends the process, which is
+  # started again with the fetchers that had not started. The outer timeout
+  # is for a process that hangs where its own limit cannot stop it.
+  local todo=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_agents.jl fetch_github.jl)
+  local failed=0 progress started
+  progress="$(mktemp)"
+  while ((${#todo[@]})); do
+    : > "$progress"
+    timeout --kill-after=1m 60m julia --color=no --project /app/db/ingest.jl --progress "$progress" --timeout 30 "${todo[@]}" || failed=1
+    started=$(wc -l < "$progress")
+    # A process that died before its first fetcher would only die again
+    ((started > 0)) || break
+    todo=("${todo[@]:started}")
   done
+  rm -f "$progress"
   return $failed
 }
 

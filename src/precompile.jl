@@ -35,5 +35,15 @@ end
         handle(s, HTTP.Request("GET", "/index.html"))
         refresh_stale!(s)
         fill_landing!(s)
+        # The fetchers load the store from this package, so its write path is compiled here too
+        db = Store.open_db(":memory:")
+        Store.source_run(db, "timing") do
+            Store.transaction(db) do
+                stmt = Store.upsert_stmt(db, "coverage", ["commit_sha"], ["measured_at", "codecov", "coveralls"])
+                Store.upsert!(stmt, ("0"^40, Store.iso_now(), 1.0, missing, Store.next_seq!(db)))
+            end
+            length(Store.query(db, "SELECT * FROM coverage"))
+        end
+        close(db)
     end
 end

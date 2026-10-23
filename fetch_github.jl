@@ -26,9 +26,9 @@ using JSON3
 using Dates
 using CodecZlib
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const ITEM_COLS = ["kind", "title", "author", "labels", "created_at", "closed_at", "merged_at", "gh_updated_at"]

@@ -14,9 +14,9 @@ using JSON3
 using HTTP
 using Dates
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const CLONE_DIR = joinpath(@__DIR__, ".cache", "NanosoldierReports")

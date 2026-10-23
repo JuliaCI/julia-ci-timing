@@ -34,9 +34,9 @@ using JSON3
 using Dates
 using DataStructures: OrderedDict
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 const RETAIN_MONTHS = 12   # applied by the export, not by deletion

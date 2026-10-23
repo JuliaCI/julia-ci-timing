@@ -12,9 +12,9 @@ using Statistics
 using CodecZstd
 using Tar
 
-include(joinpath(@__DIR__, "db", "Store.jl"))
+# The package has the store precompiled
+using CITiming.Store
 include(joinpath(@__DIR__, "db", "Fetch.jl"))
-using .Store
 using SQLite, DBInterface
 
 # Persistent on the ingest host, so a run only fetches the new commits
@@ -282,7 +282,12 @@ function ingest!(db, args)
     all_dates = enumerate_report_dates(by_date_dir)
 
     required = backfill_all ? STATS : LEGACY_STATS
-    new_dates = filter(d -> !issubset(required, get(known, date_path_to_date(d), Set{String}())), all_dates)
+    # Reports whose tarball holds no estimates would otherwise be parsed again on every run
+    empty_key = "benchmarks:no_estimates"
+    r = query(db, "SELECT value FROM meta WHERE key = ?", (empty_key,))
+    no_estimates = Set{String}(isempty(r) ? String[] : JSON3.read(String(r[1].value), Vector{String}))
+    new_dates = filter(d -> !issubset(required, get(known, date_path_to_date(d), Set{String}())) &&
+                            (backfill_all || d ∉ no_estimates), all_dates)
     @info "Reports to parse" count=length(new_dates)
 
     names = Dict{Tuple,Int}()
@@ -296,7 +301,9 @@ function ingest!(db, args)
             transaction(db) do
                 written += write_report!(db, date_path, md, parsed, names, next_seq!(db))
             end
+            isempty(parsed[1]) && push!(no_estimates, date_path)
         end
+        isempty(no_estimates) || Store.setmeta!(db, empty_key, JSON3.write(sort!(collect(no_estimates))))
         # Geomeans of the other estimates for group summaries written before
         # the columns existed, from the stored results (once per row)
         transaction(db) do
