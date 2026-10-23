@@ -732,7 +732,8 @@
           width -= 0.26;
           if (c.queues === "yggdrasil" && racks.length) {
             // The Yggdrasil logo, stuck on the outer side of each end rack
-            const sticker = new THREE.TextureLoader().load("yggdrasil.png");
+            // The page is also served at /serverroom, without the slash, so a bare relative path would miss
+            const sticker = new THREE.TextureLoader().load("../serverroom/yggdrasil.png");
             sticker.colorSpace = THREE.SRGBColorSpace;
             // A little glow, so it reads on the shaded side of the rack
             const mat = surface(0xffffff, { map: sticker, emissive: 0xffffff, emissiveMap: sticker, emissiveIntensity: 0.4, transparent: true, roughness: 0.4, metalness: 0 });
