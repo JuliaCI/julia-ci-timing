@@ -104,11 +104,110 @@
       .sub a {
         color: var(--accent);
       }
-      .hint {
-        margin: 6px 0 0;
+      .toggles {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .toggle {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        background: none;
+        border: 1px solid var(--edge);
+        border-radius: 3px;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      .toggle[aria-pressed="true"] {
+        background: rgba(34, 211, 238, 0.12);
+      }
+      #walk-help {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        padding: 8px 14px;
+        font-family: var(--mono);
         font-size: 0.75rem;
         color: var(--muted);
-        line-height: 1.45;
+        text-align: center;
+        max-width: calc(100vw - 32px);
+      }
+      #walk-help b {
+        color: var(--ink);
+      }
+      #crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 14px;
+        height: 14px;
+        margin: -7px 0 0 -7px;
+        pointer-events: none;
+        background:
+          linear-gradient(var(--accent), var(--accent)) center / 2px 100% no-repeat,
+          linear-gradient(var(--accent), var(--accent)) center / 100% 2px no-repeat;
+        opacity: 0.8;
+      }
+      #hp {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      #hp .bar {
+        width: 140px;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #hp .bar i {
+        display: block;
+        height: 100%;
+        width: 100%;
+        background: #34d399;
+        box-shadow: 0 0 10px currentColor;
+      }
+      #hurt {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(ellipse at center, transparent 35%, rgba(220, 20, 30, 0.75) 100%);
+      }
+      #dead {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        text-align: center;
+        pointer-events: none;
+        background: rgba(60, 0, 6, 0.55);
+        font-family: var(--mono);
+      }
+      #dead h2 {
+        margin: 0;
+        font-family: var(--sans);
+        font-size: clamp(1.8rem, 6vw, 3.6rem);
+        letter-spacing: 0.08em;
+        color: #f43f5e;
+        text-shadow: 0 0 24px rgba(244, 63, 94, 0.6);
+      }
+      #dead p {
+        margin: 8px 0 0;
+        color: var(--ink);
+      }
+      [hidden] {
+        display: none !important;
       }
       aside.panel {
         top: 16px;
@@ -218,9 +317,6 @@
           right: 8px;
           max-width: none;
         }
-        .hint {
-          display: none;
-        }
         aside.panel {
           top: auto;
           bottom: 8px;
@@ -241,12 +337,23 @@
       <div class="eyebrow">perf.julialang.org · live</div>
       <h1>Julia CI server room</h1>
       <p class="sub" id="sub">Connecting…</p>
-      <p class="hint">
-        Drag to turn. Scroll or pinch to zoom in on what you point at. Right-drag, shift-drag, two fingers or the
-        arrow keys to move. Click anything to fly to it, and point at a row for its details.
-      </p>
+      <div class="toggles">
+        <button type="button" class="toggle" id="sound" aria-pressed="true">SOUND: ON</button>
+        <button type="button" class="toggle" id="walk" aria-pressed="false">WALK: OFF</button>
+      </div>
     </header>
     <aside class="panel" id="list" aria-label="Clusters"></aside>
+    <div class="panel" id="walk-help" hidden>
+      <b>WASD</b> or arrows to walk · <b>Shift</b> to run · <b>click</b> to look with the mouse · <b>Esc</b> to stop
+    </div>
+    <div id="crosshair" hidden></div>
+    <div id="hurt"></div>
+    <div class="panel" id="hp" hidden>HP <span class="bar"><i></i></span><span id="hp-n">100</span></div>
+    <div id="dead" hidden>
+      <h2>SEGMENTATION FAULT</h2>
+      <p>You walked into a burning build. (core dumped)</p>
+      <p>Respawning at the exit…</p>
+    </div>
     <div class="panel" id="tip" role="status"></div>
     <div class="status" id="status">Powering up…</div>
     <script type="module">
@@ -602,6 +709,7 @@
       const AISLE_W = 13;
       const MAX_PEOPLE = 90;
       let rows = [];
+      const ROOM_H = 3.0;
       const perLineFor = (width) => Math.max(6, Math.floor((width + 1.2) / 0.32));
 
       function makeRow(c) {
@@ -680,7 +788,7 @@
           row.units.add(fridge);
           width = fw + 0.3;
           height = fh + 0.25;
-          tops.push({ x: fw / 2, y: height, w: fw });
+          tops.push({ x: fw / 2, y: height, w: fw, kind: "fridge", n: states.length });
         }
         if (c.mac) {
           // Two rows of minis per table, eight to a table
@@ -709,7 +817,7 @@
             table.position.x = width + tw / 2;
             width += tw + 0.3;
             row.units.add(table);
-            tops.push({ x: table.position.x, y: 0.95, w: tw });
+            tops.push({ x: table.position.x, y: 0.95, w: tw, kind: "mac", n: chunk.length });
           }
           width -= 0.3;
         } else {
@@ -724,7 +832,7 @@
               rack.position.x = width + RACK_W / 2;
               row.units.add(rack);
               racks.push(rack);
-              tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W });
+              tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W, kind: "rack", n: Math.min(RACK_UNITS, h.states.length - i) });
               width += RACK_W + 0.06;
             }
             width += 0.2;
@@ -1193,8 +1301,43 @@
           text(ctx, "Yggdrasil", w / 2, 0.98 * h - 2, 0.035 * h, "#7f93a8");
         });
 
+      // A cooling unit; its display shows a supply temperature that rises with the load
+      function coolingUnit(temp) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(GEO.box, surface(0xd5dae1, { metalness: 0.3 }));
+        body.scale.set(1.6, 2.1, 0.8);
+        body.position.y = 1.05;
+        body.castShadow = body.receiveShadow = true;
+        g.add(body);
+        const grille = picture(1.3, 1.1, (ctx, w, h) => {
+          ctx.fillStyle = "#2a313b";
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = "#11161d";
+          for (let y = 8; y < h - 8; y += 14) ctx.fillRect(8, y, w - 16, 7);
+        });
+        grille.position.set(0, 0.75, 0.401);
+        g.add(grille);
+        const screen = picture(0.56, 0.24, (ctx, w, h) => {
+          ctx.fillStyle = "#04110a";
+          ctx.fillRect(0, 0, w, h);
+          ctx.textAlign = "center";
+          ctx.font = `600 ${0.36 * h}px ${MONO}`;
+          ctx.fillStyle = "#3fff7a";
+          ctx.fillText("SUPPLY AIR", w / 2, 0.36 * h);
+          ctx.font = `600 ${0.44 * h}px ${MONO}`;
+          ctx.fillText(`${temp.toFixed(1)}°C`, w / 2, 0.86 * h);
+        }, 500);
+        screen.material = new THREE.MeshBasicMaterial({ map: screen.material.map });
+        screen.position.set(0, 1.72, 0.401);
+        g.add(screen);
+        return g;
+      }
+
       // ---------------------------------------------------------------- room
       let roomGroup = null;
+      let coolerSpot = null;
+      let obstacles = [];
+      let respawnSpot = null;
 
       function buildRoom(data) {
         if (roomGroup) {
@@ -1259,7 +1402,7 @@
         roomGroup.add(floor);
 
         // A little over a rack and a half, like a real machine room
-        const wallH = 3.0;
+        const wallH = ROOM_H;
         const back = new THREE.Mesh(new THREE.PlaneGeometry(W, wallH), MAT.wall);
         back.position.set(0, wallH / 2, -D / 2);
         back.receiveShadow = true;
@@ -1305,6 +1448,22 @@
             const n = h.states.filter((x) => x === "on").length;
             if (!best || n > best.n) best = { name: h.name, n };
           }
+
+        // In the back corner of the left wall, blowing into the room
+        const busy = data.ci.reduce((s, c) => s + c.busy, 0);
+        const cap = data.ci.reduce((s, c) => s + c.cap, 0);
+        const cooler = coolingUnit(17.5 + (6 * busy) / Math.max(1, cap));
+        cooler.position.set(-W / 2 + 0.42, 0, -D / 2 + 1.1);
+        cooler.rotation.y = Math.PI / 2;
+        roomGroup.add(cooler);
+        coolerSpot = new THREE.Vector3(-W / 2 + 0.9, 1.0, -D / 2 + 1.1);
+        // What a walker bumps into: each row's machines and the cooling unit
+        obstacles = rows.map((r) => {
+          const p = r.group.position;
+          return { x0: p.x - r.width / 2 - 0.1, x1: p.x + r.width / 2 + 0.1, z0: p.z - 0.55, z1: p.z + 0.55 };
+        });
+        obstacles.push({ x0: -W / 2, x1: -W / 2 + 0.85, z0: -D / 2 + 0.25, z1: -D / 2 + 1.95 });
+        respawnSpot = new THREE.Vector3(W / 2 - 1.2, EYE, D / 4);
 
         spread("back", [
           [juliaPoster(), 2.15],
@@ -1387,6 +1546,7 @@
         clampTarget();
       }
       function flyTo(p, radius) {
+        setWalk(false);
         const target = clampTarget(p.clone());
         target.y = Math.min(1.5, Math.max(0.8, target.y));
         view.goal = { target, radius };
@@ -1409,11 +1569,14 @@
       });
       canvas.addEventListener("pointermove", (e) => {
         const p = pointers.get(e.pointerId);
-        if (!p || !gesture) return hover(e);
+        if (!p || !gesture) return walk.on ? null : hover(e);
         const dx = e.clientX - p.x;
         const dy = e.clientY - p.y;
         if (Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 6) gesture.moved = true;
-        if (pointers.size === 1) {
+        if (walk.on) {
+          // Dragging looks around, for touch screens and when the mouse is not captured
+          if (document.pointerLockElement !== canvas) look(dx, dy);
+        } else if (pointers.size === 1) {
           if (gesture.panning) pan(dx, dy);
           else {
             view.theta -= dx * 0.006;
@@ -1436,7 +1599,9 @@
         pointers.delete(e.pointerId);
         if (gesture && pointers.size === 0) {
           // A click, not a drag: fly to what was clicked
-          if (!gesture.moved && !gesture.panning && e.type === "pointerup" && performance.now() - gesture.at < 500) {
+          if (walk.on) {
+            if (!gesture.moved && e.pointerType === "mouse") canvas.requestPointerLock?.();
+          } else if (!gesture.moved && !gesture.panning && e.type === "pointerup" && performance.now() - gesture.at < 500) {
             const p = pickPoint(e.clientX, e.clientY);
             if (p) flyTo(p, Math.min(view.radius, 5));
           }
@@ -1450,6 +1615,7 @@
         "wheel",
         (e) => {
           e.preventDefault();
+          if (walk.on) return;
           // Trackpads send small steps, a wheel bigger ones
           zoomAt(e.clientX, e.clientY, Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.0015))));
           touched();
@@ -1458,8 +1624,17 @@
       );
       addEventListener("keydown", (e) => {
         if (e.target.closest && e.target.closest("button, a, input")) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (walk.on && e.key === "Shift") walk.keys.add(e.code);
+        if (WALK_KEYS[e.code] && (walk.on || !e.code.startsWith("Arrow"))) {
+          setWalk(true);
+          walk.keys.add(e.code);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === "Escape" && walk.on) return setWalk(false);
         const step = 40;
-        const moves = { ArrowLeft: [step, 0], a: [step, 0], ArrowRight: [-step, 0], d: [-step, 0], ArrowUp: [0, step], w: [0, step], ArrowDown: [0, -step], s: [0, -step] };
+        const moves = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
         const m = moves[e.key];
         if (m) pan(...m);
         else if (e.key === "+" || e.key === "=") zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
@@ -1468,6 +1643,169 @@
         e.preventDefault();
         touched();
       });
+
+      // ---------------------------------------------------------------- walk
+      // At eye height among the racks: WASD or the arrows move, the mouse looks
+      const EYE = 1.65;
+      const BODY = 0.4;
+      const WALK_KEYS = {
+        KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1],
+        KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0],
+      };
+      const walk = { on: false, pos: new THREE.Vector3(), yaw: 0, pitch: 0, keys: new Set(), saved: null, hoverIn: 0, hp: 100, hurtAgo: 99, ouchIn: 0, dead: 0 };
+      const hpEl = document.getElementById("hp");
+      const hurtEl = document.getElementById("hurt");
+      const deadEl = document.getElementById("dead");
+      const walkButton = document.getElementById("walk");
+      const walkHelp = document.getElementById("walk-help");
+      const crosshair = document.getElementById("crosshair");
+
+      const inside = (x, z, o) => x > o.x0 - BODY && x < o.x1 + BODY && z > o.z0 - BODY && z < o.z1 + BODY;
+      // A step is blocked by a wall, or by something the walker was not already inside
+      function blocked(x0, z0, x, z) {
+        const m = 0.3;
+        if (Math.abs(x) > roomSize.W / 2 - m || Math.abs(z) > roomSize.D / 2 - m) return true;
+        return obstacles.some((o) => inside(x, z, o) && !inside(x0, z0, o));
+      }
+
+      function setWalk(on) {
+        if (walk.on === on) return;
+        walk.on = on;
+        walk.keys.clear();
+        if (on) {
+          // Start a few steps back from where the overview was looking, facing the same way
+          walk.saved = { theta: view.theta, phi: view.phi, radius: view.radius, target: view.target.clone() };
+          view.goal = null;
+          const back = Math.min(view.radius * Math.sin(view.phi), 4);
+          const m = 0.4;
+          walk.pos.set(
+            Math.min(roomSize.W / 2 - m, Math.max(-roomSize.W / 2 + m, view.target.x + Math.sin(view.theta) * back)),
+            EYE,
+            Math.min(roomSize.D / 2 - m, Math.max(-roomSize.D / 2 + m, view.target.z + Math.cos(view.theta) * back)),
+          );
+          walk.yaw = view.theta;
+          walk.pitch = -0.12;
+        } else {
+          Object.assign(view, walk.saved, { goal: null, idle: 0 });
+          if (document.pointerLockElement === canvas) document.exitPointerLock();
+        }
+        walkButton.setAttribute("aria-pressed", String(on));
+        walkButton.textContent = on ? "WALK: ON" : "WALK: OFF";
+        walkHelp.hidden = !on;
+        hpEl.hidden = !on;
+        hurtEl.style.opacity = 0;
+        if (!on && walk.dead) respawn();
+        crosshair.hidden = true;
+        tip.style.display = "none";
+        canvas.style.cursor = on ? "crosshair" : "";
+      }
+      walkButton.addEventListener("click", () => setWalk(!walk.on));
+
+      function look(dx, dy) {
+        walk.yaw -= dx * 0.0025;
+        walk.pitch = Math.min(1.3, Math.max(-1.3, walk.pitch - dy * 0.0025));
+      }
+      document.addEventListener("mousemove", (e) => {
+        if (walk.on && document.pointerLockElement === canvas) look(e.movementX, e.movementY);
+      });
+      document.addEventListener("pointerlockchange", () => {
+        const locked = document.pointerLockElement === canvas;
+        crosshair.hidden = !locked;
+        if (!locked) tip.style.display = "none";
+      });
+      addEventListener("keyup", (e) => walk.keys.delete(e.code));
+      addEventListener("blur", () => walk.keys.clear());
+
+      function showHp() {
+        const hp = Math.max(0, Math.round(walk.hp));
+        hpEl.querySelector("i").style.width = `${hp}%`;
+        hpEl.querySelector("i").style.background = hp > 60 ? "#34d399" : hp > 30 ? "#facc15" : "#f43f5e";
+        document.getElementById("hp-n").textContent = String(hp);
+      }
+      function respawn() {
+        walk.dead = 0;
+        walk.hp = 100;
+        deadEl.hidden = true;
+        if (respawnSpot) walk.pos.copy(respawnSpot);
+        // Facing into the room, away from the door
+        walk.yaw = Math.PI / 2;
+        walk.pitch = -0.1;
+        showHp();
+      }
+      // How close the walker stands to a burning row: 1 touching it, 0 at 1.5 m or more
+      function heatAt(p) {
+        let heat = 0;
+        rows.forEach((r, i) => {
+          const o = obstacles[i];
+          if (r.c.mood !== "fire" || !o) return;
+          const d = Math.hypot(Math.max(o.x0 - p.x, 0, p.x - o.x1), Math.max(o.z0 - p.z, 0, p.z - o.z1));
+          heat = Math.max(heat, 1 - d / 1.5);
+        });
+        return heat;
+      }
+
+      function updateWalk(dt) {
+        if (walk.dead) {
+          // Slumped on the floor until the respawn
+          walk.dead = Math.max(0, walk.dead - dt);
+          camera.position.set(walk.pos.x, 0.35, walk.pos.z);
+          camera.rotation.set(-0.3, walk.yaw, 0.5, "YXZ");
+          if (!walk.dead) respawn();
+          return;
+        }
+        let f = 0, s = 0;
+        for (const k of walk.keys) {
+          const [x, y] = WALK_KEYS[k] || [0, 0];
+          s += x;
+          f += y;
+        }
+        const len = Math.hypot(f, s);
+        if (len) {
+          const speed = (walk.keys.has("ShiftLeft") || walk.keys.has("ShiftRight") ? 4.5 : 2) * dt;
+          const sin = Math.sin(walk.yaw), cos = Math.cos(walk.yaw);
+          const dx = ((-sin * f + cos * s) / len) * speed;
+          const dz = ((-cos * f - sin * s) / len) * speed;
+          const { x, z } = walk.pos;
+          // Slide along whatever is in the way
+          if (!blocked(x, z, x + dx, z)) walk.pos.x += dx;
+          if (!blocked(walk.pos.x, z, walk.pos.x, z + dz)) walk.pos.z += dz;
+        }
+        camera.position.copy(walk.pos);
+        // A gentle bob while walking
+        if (len) camera.position.y += Math.sin(performance.now() / 160) * 0.025;
+        camera.rotation.set(walk.pitch, walk.yaw, 0, "YXZ");
+
+        // Flames hurt, more the closer you stand; out of the heat you heal
+        const heat = heatAt(walk.pos);
+        walk.hurtAgo += dt;
+        if (heat > 0) {
+          walk.hp -= 45 * heat * dt;
+          walk.hurtAgo = 0;
+          camera.rotation.x += (Math.random() - 0.5) * 0.04 * heat;
+          camera.rotation.z += (Math.random() - 0.5) * 0.05 * heat;
+          walk.ouchIn -= dt;
+          if (walk.ouchIn <= 0) {
+            walk.ouchIn = 0.7 + Math.random() * 0.4;
+            ouch();
+          }
+        } else if (walk.hurtAgo > 3) walk.hp = Math.min(100, walk.hp + 10 * dt);
+        hurtEl.style.opacity = String(Math.min(0.9, heat * 1.1 + (1 - walk.hp / 100) * 0.35));
+        showHp();
+        if (walk.hp <= 0) {
+          walk.dead = 3.5;
+          walk.keys.clear();
+          deadEl.hidden = false;
+          hurtEl.style.opacity = 0.6;
+          ouch(true);
+          if (document.pointerLockElement === canvas) document.exitPointerLock();
+        }
+        // With the mouse captured, the tooltip follows the crosshair
+        walk.hoverIn -= dt;
+        if (document.pointerLockElement === canvas && walk.hoverIn <= 0) {
+          walk.hoverIn = 0.2;
+          hover({ clientX: innerWidth / 2, clientY: innerHeight / 2 });
+        }
+      }
 
       // ------------------------------------------------------------ tooltip
       const tip = document.getElementById("tip");
@@ -1524,6 +1862,404 @@
         );
       }
 
+      // --------------------------------------------------------------- sound
+      // All synthesised. Each rack's fans are a hiss and a blade tone that rise
+      // with its row's load; the sources stand along each row and blow out of
+      // the back, and the room's echo is worked out from its size and surfaces.
+      const FAN_SPEED = { asleep: 0.08, chill: 0.35, busy: 0.6, full: 0.6, sweating: 0.75, panicking: 0.9, fire: 1 };
+      const GPU_QUEUES = new Set(["cuda", "rocm", "oneapi"]);
+      const sound = { ctx: null, on: true, voices: new Map(), master: null, verbIn: null, verb: null, cooler: null };
+
+      function noiseBuffer(ctx, secs) {
+        // Pink-ish noise, which sounds more like moving air than white noise does
+        const b = ctx.createBuffer(1, Math.round(ctx.sampleRate * secs), ctx.sampleRate);
+        const d = b.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0;
+        for (let i = 0; i < d.length; i++) {
+          const w = Math.random() * 2 - 1;
+          b0 = 0.997 * b0 + 0.029591 * w;
+          b1 = 0.985 * b1 + 0.032534 * w;
+          b2 = 0.95 * b2 + 0.048056 * w;
+          d[i] = (b0 + b1 + b2 + w * 0.1) * 2;
+        }
+        return b;
+      }
+
+      // Sabine's reverberation time, at low and high frequencies. Hard floor
+      // tiles and walls reflect; the ceiling tiles and the racks' perforated
+      // doors absorb, and more so at high frequencies, as does the air.
+      function reverbTimes(W, D, racks) {
+        const V = W * D * ROOM_H;
+        const walls = 2 * (W + D) * ROOM_H;
+        const rackArea = racks * 6.5;
+        const lo = W * D * (0.03 + 0.3) + walls * 0.05 + rackArea * 0.3;
+        const hi = W * D * (0.05 + 0.5) + walls * 0.07 + rackArea * 0.5 + 0.04 * V;
+        const clamp = (x) => Math.min(1.6, Math.max(0.25, x));
+        return { V, lo: clamp((0.161 * V) / lo), hi: clamp((0.161 * V) / hi) };
+      }
+
+      // A few early reflections, then a tail whose highs die away first
+      function roomImpulse(ctx, W, D, rt) {
+        const rate = ctx.sampleRate;
+        const len = Math.round(rate * rt.lo * 1.2);
+        const b = ctx.createBuffer(2, len, rate);
+        // The tail fills in over the room's mean free path
+        const mfp = (4 * rt.V) / (2 * (W * D + (W + D) * ROOM_H));
+        const fill = Math.max(1, Math.round((rate * mfp) / 343));
+        const k = Math.exp((-2 * Math.PI * 1500) / rate);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = b.getChannelData(ch);
+          let lp = 0;
+          for (let i = 0; i < len; i++) {
+            const n = Math.random() * 2 - 1;
+            lp = lp * k + n * (1 - k);
+            const t = i / rate;
+            d[i] = (lp * 1.5 * Math.exp((-6.9 * t) / rt.lo) + (n - lp) * Math.exp((-6.9 * t) / rt.hi)) * Math.min(1, i / (2 * fill)) * 0.4;
+          }
+          // The floor, the ceiling, then the walls, at slightly different times in each ear
+          const paths = [1.8, 2 * ROOM_H - 1.2, Math.min(W, D) * 0.4, Math.min(W, D) * 0.7, Math.max(W, D) * 0.5, Math.max(W, D) * 0.8];
+          paths.forEach((m, j) => {
+            const at = Math.round(((m * (1 + (ch ? 0.03 : -0.03) * (j % 2 ? 1 : -1))) / 343) * rate);
+            if (at < len) d[at] += 0.5 * Math.exp((-6.9 * at) / (rate * rt.lo)) * (j < 2 ? 1 : 0.7);
+          });
+        }
+        return b;
+      }
+
+      function startSound() {
+        const ctx = (sound.ctx = new AudioContext());
+        sound.noise = noiseBuffer(ctx, 6);
+        // Fan noise is close to flat up to a few kHz, so the fans get white noise
+        sound.white = ctx.createBuffer(1, ctx.sampleRate * 6, ctx.sampleRate);
+        sound.white.getChannelData(0).forEach((_, i, d) => (d[i] = (Math.random() * 2 - 1) * 0.5));
+        sound.click = ctx.createBuffer(1, Math.round(ctx.sampleRate * 0.006), ctx.sampleRate);
+        sound.click.getChannelData(0).forEach((_, i, d) => (d[i] = (Math.random() * 2 - 1) * (1 - i / d.length) ** 3));
+        // A fan's blade tone has a few harmonics; a motor's hum has more
+        sound.blade = ctx.createPeriodicWave(new Float32Array(6), new Float32Array([0, 1, 0.35, 0.15, 0.07, 0.03]));
+        sound.hum = ctx.createPeriodicWave(new Float32Array(8), new Float32Array([0, 1, 0.7, 0.4, 0.25, 0.15, 0.1, 0.05]));
+        const limiter = new DynamicsCompressorNode(ctx, { threshold: -10, knee: 6, ratio: 8 });
+        limiter.connect(ctx.destination);
+        sound.master = new GainNode(ctx, { gain: 0 });
+        sound.master.connect(limiter);
+        sound.verb = ctx.createConvolver();
+        sound.verbIn = new GainNode(ctx, { gain: 0 });
+        sound.verbIn.connect(sound.verb).connect(sound.master);
+      }
+
+      // How a unit of `n` machines sounds at a fan speed from 0 to 1. Fan noise
+      // grows steeply with speed, and many fans add up by power, not amplitude.
+      function fanParams(kind, gpu, speed, n) {
+        const loud = (0.4 + 0.6 * speed) ** 2.5 * Math.sqrt(Math.max(1, n));
+        // Mac minis are nearly silent; GPU servers have bigger, slower fans than 1U boxes
+        if (kind === "mac" || kind === "fridge") return { f: 160 + 260 * speed, cut: 900 + 2500 * speed, noise: 0.012 * loud, tone: 0.0015 * loud };
+        if (gpu) return { f: 260 + 700 * speed, cut: 2500 + 4500 * speed, noise: 0.05 * loud, tone: 0.006 * loud };
+        return { f: 480 + 1300 * speed, cut: 3500 + 6000 * speed, noise: 0.045 * loud, tone: 0.005 * loud };
+      }
+
+      // One sound source: noise and tones, a send to the room, then distance and direction
+      function makeSource(ctx, pos, rear) {
+        const src = { pos, stops: [], tones: [] };
+        src.mix = new GainNode(ctx, { gain: 0 });
+        src.air = new BiquadFilterNode(ctx, { type: "lowpass", frequency: 8000, Q: 0.5 });
+        src.panner = new PannerNode(ctx, {
+          panningModel: "HRTF",
+          distanceModel: "inverse",
+          refDistance: 1,
+          rolloffFactor: 1,
+          maxDistance: 200,
+          positionX: pos.x,
+          positionY: pos.y,
+          positionZ: pos.z,
+          // Racks blow their hot air out of the back
+          ...(rear ? { orientationX: 0, orientationY: 0, orientationZ: -1, coneInnerAngle: 160, coneOuterAngle: 320, coneOuterGain: 0.7 } : {}),
+        });
+        src.mix.connect(src.air).connect(src.panner).connect(sound.master);
+        // The room hears every source at full strength, wherever the listener is
+        src.mix.connect(sound.verbIn);
+        return src;
+      }
+
+      function addNoise(ctx, src, type, freq, q, gain, buffer = sound.noise, low = 60) {
+        const n = new AudioBufferSourceNode(ctx, { buffer, loop: true });
+        const hp = new BiquadFilterNode(ctx, { type: "highpass", frequency: low });
+        const f = new BiquadFilterNode(ctx, { type, frequency: freq, Q: q });
+        const g = new GainNode(ctx, { gain });
+        n.connect(hp).connect(f).connect(g).connect(src.mix);
+        n.start(ctx.currentTime, Math.random() * 6);
+        src.stops.push(n);
+        return { f, g };
+      }
+
+      // Three fans a little apart in speed, each drifting slowly, so they beat
+      function addTones(ctx, src, wave, freq, gain, spread = [1, 1.013, 0.988]) {
+        const g = new GainNode(ctx, { gain });
+        g.connect(src.mix);
+        for (const k of spread) {
+          const o = new OscillatorNode(ctx, { periodicWave: wave, frequency: freq * k });
+          const lfo = new OscillatorNode(ctx, { frequency: 0.05 + Math.random() * 0.15 });
+          const depth = new GainNode(ctx, { gain: freq * k * 0.004 });
+          lfo.connect(depth).connect(o.frequency);
+          o.connect(g);
+          o.start();
+          lfo.start();
+          src.stops.push(o, lfo);
+          src.tones.push({ o, depth, k });
+        }
+        return g;
+      }
+
+      // Where a row's sound comes from: up to three spots along it, the fridge on its own
+      function rowSpots(r) {
+        const spots = [];
+        const fridge = r.tops.filter((u) => u.kind === "fridge");
+        const rest = r.tops.filter((u) => u.kind !== "fridge");
+        const per = Math.ceil(rest.length / 3) || 1;
+        for (const chunk of [...fridge.map((u) => [u]), ...Array.from({ length: Math.ceil(rest.length / per) }, (_, i) => rest.slice(i * per, (i + 1) * per))]) {
+          const kind = chunk[0].kind;
+          spots.push({
+            kind,
+            n: chunk.reduce((s, u) => s + u.n, 0),
+            x: chunk.reduce((s, u) => s + u.x, 0) / chunk.length,
+            y: kind === "rack" ? 1.0 : kind === "fridge" ? 1.0 : 0.9,
+            z: kind === "rack" ? -0.4 : 0,
+          });
+        }
+        return spots;
+      }
+
+      function setSourcePos(src, p, t) {
+        src.pos = p;
+        src.panner.positionX.setTargetAtTime(p.x, t, 0.5);
+        src.panner.positionY.setTargetAtTime(p.y, t, 0.5);
+        src.panner.positionZ.setTargetAtTime(p.z, t, 0.5);
+      }
+
+      function dropVoice(v, t) {
+        for (const src of v.sources) {
+          src.mix.gain.setTargetAtTime(0, t, 0.4);
+          src.stops.forEach((n) => n.stop(t + 3));
+        }
+      }
+
+      function stopVoices() {
+        const t = sound.ctx.currentTime;
+        for (const v of sound.voices.values()) dropVoice(v, t);
+        sound.voices.clear();
+        sound.cooler = null;
+      }
+
+      // Gives every row its sources, or retunes the ones it has; called whenever the room is rebuilt
+      function syncSound() {
+        if (!sound.on || !sound.ctx) return;
+        const ctx = sound.ctx;
+        const t = ctx.currentTime;
+        const racks = rows.reduce((s, r) => s + r.tops.filter((u) => u.kind === "rack").length, 0);
+        const rt = reverbTimes(roomSize.W, roomSize.D, racks);
+        sound.verb.buffer = roomImpulse(ctx, roomSize.W, roomSize.D, rt);
+        // The echo matches the direct sound at the critical distance, which
+        // the racks' directional airflow (a directivity of about 4) pushes out
+        const critical = 0.057 * Math.sqrt((4 * rt.V) / rt.lo);
+        sound.verbIn.gain.setTargetAtTime(1 / critical, t, 0.5);
+
+        const seen = new Set();
+        for (const r of rows) {
+          const key = r.c.title;
+          seen.add(key);
+          const spots = rowSpots(r);
+          const shape = spots.map((s) => s.kind).join();
+          let v = sound.voices.get(key);
+          if (v && v.shape !== shape) {
+            dropVoice(v, t);
+            v = null;
+          }
+          const origin = r.group.position;
+          const speed = FAN_SPEED[r.c.mood];
+          const gpu = GPU_QUEUES.has(r.c.queues);
+          const fresh = !v;
+          if (!v) {
+            v = { shape, sources: [] };
+            for (const spot of spots) {
+              const src = makeSource(ctx, new THREE.Vector3(), spot.kind === "rack");
+              src.hiss = addNoise(ctx, src, "lowpass", 2000, 0.6, 0, sound.white, 150);
+              src.toneGain = addTones(ctx, src, sound.blade, 500, 0);
+              if (spot.kind === "fridge") {
+                // The fridge's compressor: a mains hum, and a rattle in its housing
+                addTones(ctx, src, sound.hum, 50, 0.035, [1]);
+                addNoise(ctx, src, "bandpass", 120, 2, 0.04);
+              }
+              src.mix.gain.setTargetAtTime(1, t, 0.2);
+              v.sources.push(src);
+            }
+            sound.voices.set(key, v);
+          }
+          v.row = r;
+          v.clicks = r.c.busy * 0.06;
+          v.nextBeep ??= t + Math.random();
+          spots.forEach((spot, i) => {
+            const src = v.sources[i];
+            setSourcePos(src, new THREE.Vector3(origin.x + spot.x, spot.y, origin.z + spot.z), t);
+            const p = fanParams(spot.kind, gpu, speed, spot.n);
+            // New fans are already running; running ones drift to a new load over a few seconds
+            const to = (param, x) => (fresh ? param.setValueAtTime(x, t) : param.setTargetAtTime(x, t, 3));
+            to(src.hiss.f.frequency, p.cut);
+            to(src.hiss.g.gain, p.noise);
+            to(src.toneGain.gain, p.tone);
+            for (const tone of src.tones.slice(0, 3)) {
+              to(tone.o.frequency, p.f * tone.k);
+              to(tone.depth.gain, p.f * tone.k * 0.004);
+            }
+          });
+        }
+        for (const [key, v] of sound.voices)
+          if (!seen.has(key)) {
+            dropVoice(v, t);
+            sound.voices.delete(key);
+          }
+
+        // The cooling unit: a deep rumble, the rush of air, and its blower
+        if (coolerSpot) {
+          if (!sound.cooler) {
+            const src = makeSource(ctx, coolerSpot.clone(), false);
+            addNoise(ctx, src, "lowpass", 220, 0.7, 0.05);
+            addNoise(ctx, src, "bandpass", 1100, 0.4, 0.06, sound.white, 150);
+            addTones(ctx, src, sound.blade, 96, 0.01);
+            src.mix.gain.setTargetAtTime(1, t, 0.2);
+            sound.cooler = src;
+          }
+          setSourcePos(sound.cooler, coolerSpot.clone(), t);
+        }
+      }
+
+      // A grunt: a falling tone through a thump of noise, from right where the listener is
+      function ouch(dying = false) {
+        if (!sound.on || !sound.ctx || sound.ctx.state !== "running") return;
+        const ctx = sound.ctx;
+        const t = ctx.currentTime;
+        const len = dying ? 0.9 : 0.28;
+        const o = new OscillatorNode(ctx, { type: "sawtooth", frequency: dying ? 210 : 260 });
+        o.frequency.exponentialRampToValueAtTime(dying ? 60 : 120, t + len);
+        const f = new BiquadFilterNode(ctx, { type: "lowpass", frequency: 900, Q: 4 });
+        const g = new GainNode(ctx, { gain: 0 });
+        g.gain.setTargetAtTime(dying ? 0.5 : 0.35, t, 0.01);
+        g.gain.setTargetAtTime(0, t + len * 0.6, len * 0.2);
+        o.connect(f).connect(g).connect(sound.master);
+        o.start(t);
+        o.stop(t + len * 1.5);
+        const n = new AudioBufferSourceNode(ctx, { buffer: sound.noise });
+        const ng = new GainNode(ctx, { gain: 0 });
+        ng.gain.setValueAtTime(0.4, t);
+        ng.gain.setTargetAtTime(0, t, 0.04);
+        n.connect(new BiquadFilterNode(ctx, { type: "lowpass", frequency: 300 })).connect(ng).connect(sound.master);
+        n.start(t, Math.random() * 5);
+        n.stop(t + 0.3);
+      }
+
+      const fwd = new THREE.Vector3();
+      function updateSound(dt) {
+        if (!sound.on || !sound.ctx) return;
+        const ctx = sound.ctx;
+        const t = ctx.currentTime;
+        const L = ctx.listener;
+        camera.getWorldDirection(fwd);
+        const set = (p, v) => p.setTargetAtTime(v, t, 0.03);
+        set(L.positionX, camera.position.x);
+        set(L.positionY, camera.position.y);
+        set(L.positionZ, camera.position.z);
+        set(L.forwardX, fwd.x);
+        set(L.forwardY, fwd.y);
+        set(L.forwardZ, fwd.z);
+        set(L.upX, camera.up.x);
+        set(L.upY, camera.up.y);
+        set(L.upZ, camera.up.z);
+        // Far sources lose their highs, to the air and to the racks in between
+        const dull = (src) => set(src.air.frequency, (20000 * 10) / (10 + camera.position.distanceTo(src.pos)));
+        if (sound.cooler) dull(sound.cooler);
+        for (const v of sound.voices.values()) {
+          v.sources.forEach(dull);
+          const src = v.sources[Math.floor(Math.random() * v.sources.length)];
+          // Now and then a disk seeks on a busy machine
+          if (Math.random() < v.clicks * dt) {
+            const c = new AudioBufferSourceNode(ctx, { buffer: sound.click, playbackRate: 0.6 + Math.random() * 0.8 });
+            const g = new GainNode(ctx, { gain: 0.04 + Math.random() * 0.06 });
+            c.connect(g).connect(src.mix);
+            c.start(t);
+          }
+          // Burning rows crackle
+          if (v.row.c.mood === "fire" && Math.random() < 25 * dt) {
+            const c = new AudioBufferSourceNode(ctx, { buffer: sound.click, playbackRate: 0.3 + Math.random() * 1.5 });
+            const g = new GainNode(ctx, { gain: 0.1 + Math.random() * 0.25 });
+            c.connect(new BiquadFilterNode(ctx, { type: "bandpass", frequency: 1500 + Math.random() * 3000, Q: 1 })).connect(g).connect(src.mix);
+            c.start(t);
+          }
+          // A row on fire sets off its alarm
+          if (v.row.c.mood === "fire" && t > v.nextBeep) {
+            v.nextBeep = t + 1.2;
+            const o = new OscillatorNode(ctx, { type: "square", frequency: 1760 });
+            const g = new GainNode(ctx, { gain: 0 });
+            g.gain.setValueAtTime(0.03, t);
+            g.gain.setValueAtTime(0, t + 0.12);
+            o.connect(g).connect(src.mix);
+            o.start(t);
+            o.stop(t + 0.15);
+          }
+        }
+      }
+
+      // On unless the viewer turned it off last time. Browsers only let a page
+      // play sound after a click or key press, so it starts at the first one.
+      const soundButton = document.getElementById("sound");
+      const SOUND_KEY = "serverroom-sound";
+      try {
+        sound.on = localStorage.getItem(SOUND_KEY) !== "off";
+      } catch {}
+      function showSound() {
+        soundButton.setAttribute("aria-pressed", String(sound.on));
+        soundButton.textContent = sound.on ? "SOUND: ON" : "SOUND: OFF";
+      }
+      async function playSound() {
+        if (!sound.ctx) startSound();
+        await sound.ctx.resume();
+        syncSound();
+        sound.master.gain.setTargetAtTime(3, sound.ctx.currentTime, 0.3);
+      }
+      // Some gestures do not count, so keep listening until the sound really plays
+      async function firstTouch(e) {
+        if (e.target === soundButton || !sound.on) return;
+        await playSound();
+        if (sound.ctx.state !== "running") return;
+        removeEventListener("pointerdown", firstTouch, true);
+        removeEventListener("keydown", firstTouch, true);
+      }
+      addEventListener("pointerdown", firstTouch, true);
+      addEventListener("keydown", firstTouch, true);
+      soundButton.addEventListener("click", () => {
+        // Before the first gesture the sound is on but silent: this click starts it
+        sound.on = sound.ctx ? !sound.on : true;
+        showSound();
+        try {
+          localStorage.setItem(SOUND_KEY, sound.on ? "on" : "off");
+        } catch {}
+        if (sound.on) return playSound();
+        sound.master.gain.setTargetAtTime(0, sound.ctx.currentTime, 0.2);
+        setTimeout(() => {
+          if (sound.on) return;
+          stopVoices();
+          sound.ctx.suspend();
+        }, 1000);
+      });
+      showSound();
+      // Quiet while the page is in the background: another tab, a minimised window, or gone
+      document.addEventListener("visibilitychange", () => {
+        if (!sound.ctx || !sound.on) return;
+        if (document.hidden) {
+          sound.master.gain.cancelScheduledValues(sound.ctx.currentTime);
+          sound.master.gain.setValueAtTime(0, sound.ctx.currentTime);
+          sound.ctx.suspend();
+        } else playSound();
+      });
+      addEventListener("pagehide", () => sound.ctx?.suspend());
+      if (!window.AudioContext) soundButton.remove();
+
       // ---------------------------------------------------------------- loop
       const clock = new THREE.Clock();
       function resize() {
@@ -1542,11 +2278,13 @@
           view.target.lerp(view.goal.target, Math.min(1, dt * 3));
           view.radius += (view.goal.radius - view.radius) * Math.min(1, dt * 3);
           if (view.target.distanceTo(view.goal.target) < 0.01) view.goal = null;
-        } else if (!reduceMotion && view.idle > 6) {
+        } else if (!reduceMotion && view.idle > 6 && !walk.on) {
           view.theta += dt * 0.06;
         }
-        placeCamera();
+        if (walk.on) updateWalk(dt);
+        else placeCamera();
         updateClock();
+        updateSound(dt);
         for (const r of rows) {
           for (const m of r.leds) {
             const on = m.userData.speed === 0 || Math.sin(t * m.userData.speed + m.userData.phase) > -0.2;
@@ -1606,6 +2344,7 @@
           ).catch(() => {});
           const { W, D } = buildRoom(data);
           roomSize = { W, D };
+          syncSound();
           sun.shadow.camera.left = -W / 2 - 2;
           sun.shadow.camera.right = W / 2 + 2;
           sun.shadow.camera.top = D / 2 + 2;
