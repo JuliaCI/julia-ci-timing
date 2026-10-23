@@ -496,7 +496,14 @@
           const parts = [`${c.busy}/${c.cap} BUSY`];
           if (c.waiting) parts.push(`${c.waiting} QUEUED`);
           if (c.gone) parts.push(`${c.gone} OFFLINE`);
-          ctx.fillText(parts.join("  ·  "), 40, 182, w - 80);
+          const line = parts.join("  ·  ");
+          ctx.fillText(line, 40, 182, w - 80);
+          if (c.kind === "other") {
+            const x = 40 + Math.min(ctx.measureText(line).width, w - 80) + 20;
+            ctx.font = `400 32px ${MONO}`;
+            ctx.fillStyle = "#7f93a8";
+            ctx.fillText("(queue not monitored here)", x, 180, w - 40 - x);
+          }
           ctx.font = `400 36px ${MONO}`;
           ctx.fillStyle = "#7f93a8";
           ctx.fillText(`> ${c.caption}`, 40, 246, w - 80);
@@ -1409,7 +1416,7 @@
       function tipHtml(c) {
         const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
         if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
-        const lines = [`${c.busy} of ${c.cap} slots busy`];
+        const lines = [`${c.busy} of ${c.cap} slots busy${c.kind === "other" ? " (queue not monitored here)" : ""}`];
         if (c.waiting) lines.push(`${c.waiting} jobs waiting, the longest for ${hours(c.oldest)}`);
         if (c.gone) lines.push(`${c.gone} agents missing`);
         return (
@@ -1442,7 +1449,7 @@
         const item = (c, i) =>
           `<button type="button" data-i="${i}" title="${MOODS[c.mood].tag}: ${esc(c.caption)}">` +
           `<span class="dot" style="color:${MOODS[c.mood].color}"></span>${esc(c.title)}` +
-          `<span class="n">${c.busy}/${c.cap}${c.waiting ? ` · ${c.waiting} waiting` : ""}</span></button>`;
+          `<span class="n">${c.busy}/${c.cap}${c.waiting ? ` · ${c.waiting} waiting` : ""}${c.kind === "other" ? " · queue n/a" : ""}</span></button>`;
         list.innerHTML =
           `<h2>Julia CI</h2>${data.ci.map((c, i) => item(c, i)).join("")}` +
           (data.other.length ? `<h2>The neighbours</h2>${data.other.map((c, i) => item(c, data.ci.length + i)).join("")}` : "");
