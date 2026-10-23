@@ -363,6 +363,12 @@
       // The build, test, launch and default queues start one agent per job, so
       // their slots come from the hosts; every other queue has resident agents
       const PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
+      // Queues whose agents run on another queue's machine, drawn in that
+      // queue's row: one row of hardware, a sign per queue stacked above it,
+      // and the worst of their moods for the row's lights and effects
+      const SHARED_MACHINES = { upload: "cuda" };
+      // Worst last, for picking a shared row's mood
+      const MOOD_RANK = { asleep: 0, chill: 1, busy: 2, full: 2, sweating: 3, panicking: 4, fire: 5 };
       // Resident agents gone this long are not drawn at all
       const GONE_MS = 3 * 24 * 3600 * 1000;
       const REFRESH_MS = 5 * 60 * 1000;
@@ -500,6 +506,33 @@
           c.caption = c.gone && c.mood === "asleep" ? "Someone tripped over a cable." : pick(MOODS[c.mood].lines, c.title + c.mood);
           c.load = (c.busy + c.waiting) / Math.max(c.cap, 1);
         }
+        // Queues on a shared machine join the row of the queue they share it
+        // with; each keeps its own counts and mood under `parts`
+        for (const [q, host] of Object.entries(SHARED_MACHINES)) {
+          const guest = clusters.find((c) => c.queues === q);
+          const owner = clusters.find((c) => c !== guest && (c.parts || [c]).some((p) => p.queues === host));
+          if (!guest || !owner) continue;
+          const parts = [...(owner.parts || [owner]), { ...guest, guest: true }];
+          const worst = parts.reduce((a, b) => (MOOD_RANK[b.mood] > MOOD_RANK[a.mood] ? b : a));
+          const sum = (k) => parts.reduce((n, p) => n + p[k], 0);
+          const merged = {
+            ...owner,
+            parts,
+            title: `${parts.map((p) => p.queues).join(" + ")} queues`,
+            queues: parts.map((p) => p.queues).join(" + "),
+            hosts: parts.flatMap((p) => p.hosts),
+            busy: sum("busy"),
+            gone: sum("gone"),
+            cap: sum("cap"),
+            waiting: sum("waiting"),
+            oldest: Math.max(...parts.map((p) => p.oldest)),
+            mood: worst.mood,
+            caption: worst.caption,
+          };
+          merged.load = (merged.busy + merged.waiting) / Math.max(merged.cap, 1);
+          clusters.splice(clusters.indexOf(owner), 1, merged);
+          clusters.splice(clusters.indexOf(guest), 1);
+        }
         const byLoad = (a, b) => b.load - a.load || a.title.localeCompare(b.title);
         return {
           latestMs,
@@ -572,10 +605,35 @@
       const FONT = '"Space Grotesk", system-ui, sans-serif';
       const MONO = '"JetBrains Mono", ui-monospace, Menlo, monospace';
 
-      // A display above a row: status, counts and the room's commentary
-      function signSprite(c, width) {
+      // A display above a row: status, counts and the room's commentary, one
+      // panel per queue stacked in a single sprite, so the panels of a shared
+      // machine stay together from every angle
+      const PANEL_H = 300;
+      // A guest's panel ends below its counts line
+      const GUEST_PANEL_H = 225;
+      function signSprite(parts, width) {
+        const heights = parts.map((c) => (c.guest ? GUEST_PANEL_H : PANEL_H));
+        const total = heights.reduce((a, b) => a + b, 0);
+        const tex = canvasTexture(1024, total, (ctx, w) => {
+          let y = 0;
+          parts.forEach((c, k) => {
+            ctx.save();
+            ctx.translate(0, y);
+            drawPanel(ctx, c, w, heights[k]);
+            ctx.restore();
+            y += heights[k];
+          });
+        });
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
+        const w = Math.min(3.4, Math.max(2.4, width + 0.6));
+        s.scale.set(w, (w * total) / 1024, 1);
+        // How much taller it is than a single panel, for stacking it upward
+        s.userData.extra = (w * (total - PANEL_H)) / 1024;
+        return s;
+      }
+      function drawPanel(ctx, c, w, h) {
         const m = MOODS[c.mood];
-        const tex = canvasTexture(1024, 300, (ctx, w, h) => {
+        {
           ctx.beginPath();
           ctx.roundRect(6, 6, w - 12, h - 12, 14);
           ctx.fillStyle = "rgba(7, 12, 20, 0.88)";
@@ -611,14 +669,14 @@
             ctx.fillStyle = "#7f93a8";
             ctx.fillText("(queue not monitored here)", x, 180, w - 40 - x);
           }
-          ctx.font = `400 36px ${MONO}`;
-          ctx.fillStyle = "#7f93a8";
-          ctx.fillText(`> ${c.caption}`, 40, 246, w - 80);
-        });
-        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
-        const w = Math.min(3.4, Math.max(2.4, width + 0.6));
-        s.scale.set(w, (w * 300) / 1024, 1);
-        return s;
+          // A guest queue on another queue's machine has no caption: the row's
+          // commentary is its host's
+          if (!c.guest) {
+            ctx.font = `400 36px ${MONO}`;
+            ctx.fillStyle = "#7f93a8";
+            ctx.fillText(`> ${c.caption}`, 40, 246, w - 80);
+          }
+        }
       }
 
       const puffTex = canvasTexture(64, 64, (ctx, w) => {
@@ -860,9 +918,12 @@
         row.tops = tops;
         if (c.mac && !fridgeStates.length) height = 1.2;
 
-        const sign = signSprite(c, width);
+        // One sign, a panel per queue with the first on top; its bottom edge
+        // sits where a single panel's would, and the rest stack above it
+        const sign = signSprite(c.parts || [c], width);
+        const stack = sign.userData.extra;
+        sign.position.set(0, height + 1.0 + stack / 2, 0);
         row.signW = sign.scale.x;
-        sign.position.set(0, height + 1.0, 0);
         row.group.add(sign);
 
         // The queue: lines in front of the row
@@ -910,8 +971,8 @@
 
         // An invisible box to point at
         const hit = new THREE.Mesh(GEO.box, MAT.hit);
-        hit.scale.set(width + 0.8, height + 1.6, 1.6 + row.lines * 0.34);
-        hit.position.set(0, (height + 1.6) / 2, 0.3 + row.lines * 0.17);
+        hit.scale.set(width + 0.8, height + 1.6 + stack, 1.6 + row.lines * 0.34);
+        hit.position.set(0, (height + 1.6 + stack) / 2, 0.3 + row.lines * 0.17);
         hit.userData.row = row;
         row.hit = hit;
         row.group.add(hit);
@@ -1811,16 +1872,25 @@
       const tip = document.getElementById("tip");
       const ray = new THREE.Raycaster();
       const ndc = new THREE.Vector2();
-      function tipHtml(c) {
-        const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
-        if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
+      function tipLines(c) {
         const lines = [`${c.busy} of ${c.cap} slots busy${c.kind === "other" ? " (queue not monitored here)" : ""}`];
         if (c.waiting) lines.push(`${c.waiting} jobs waiting, the longest for ${hours(c.oldest)}`);
         if (c.gone) lines.push(`${c.gone} agents missing`);
+        return lines.map(esc).join("<br>");
+      }
+      function tipHtml(c) {
+        const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
+        if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
+        // A shared machine: each queue's status and counts, under the worst one's
+        const data = c.parts
+          ? c.parts
+              .map((p) => `<div class="data"><span class="tag" style="color:${MOODS[p.mood].color}">${MOODS[p.mood].tag}</span>${esc(p.queues)}<br>${tipLines(p)}</div>`)
+              .join("")
+          : `<div class="data">${esc(c.queues)}<br>${tipLines(c)}</div>`;
         return (
           `<span class="tag" style="color:${MOODS[c.mood].color}">${MOODS[c.mood].tag}</span><b>${esc(c.title)}</b>` +
           `<div class="cap">${esc(c.caption)}</div>` +
-          `<div class="data">${esc(c.queues)}<br>${lines.map(esc).join("<br>")}</div><div class="hosts">${hosts.join(" · ")}</div>`
+          `${data}<div class="hosts">${hosts.join(" · ")}</div>`
         );
       }
       function hover(e) {
