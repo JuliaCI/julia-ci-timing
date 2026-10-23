@@ -352,7 +352,7 @@
             title: `${os} ${arch}`.trim(),
             queues: uniq(g.pools.map((p) => p.queue)).sort().join(" + "),
             mac: g.pools.every((p) => p.os === "macos"),
-            // The Intel Macs live on top of the fridge
+            // Its Mac minis live on top of the fridge
             fridge: g.pools.every((p) => p.os === "macos" && p.arch === "x86_64"),
             hosts,
             waiting: g.pools.reduce((s, p) => s + last(p.waiting), 0),
@@ -610,9 +610,12 @@
         let width = 0;
         let height = RACK_H;
         const tops = [];
-        if (c.fridge) {
+        // The Intel cluster's Mac minis live on a fridge; every other Mac is on a table
+        const onFridge = (h) => c.fridge && h.name.startsWith("macmini");
+        const fridgeStates = c.mac ? c.hosts.filter(onFridge).flatMap((h) => h.states) : [];
+        if (fridgeStates.length) {
           // A double-door fridge, the minis stacked on top in wobbly piles of three
-          const states = c.hosts.flatMap((h) => h.states);
+          const states = fridgeStates;
           const piles = Math.ceil(states.length / 3);
           const fw = Math.max(0.9, piles * 0.4 + 0.15);
           const fh = 1.8;
@@ -639,6 +642,26 @@
             magnet.position.set(-fw / 2 + 0.2 + (i === 1 ? 0.07 : i * 0.14), i === 1 ? 1.62 : 1.52, 0.385);
             fridge.add(magnet);
           });
+          // A souvenir from the hosts at MIT, slightly crooked on the lower door
+          const mit = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.18, 0.1),
+            surface(0xffffff, {
+              roughness: 0.35,
+              map: canvasTexture(180, 100, (ctx, w, h) => {
+                ctx.fillStyle = "#a31f34";
+                ctx.beginPath();
+                ctx.roundRect(0, 0, w, h, 14);
+                ctx.fill();
+                ctx.fillStyle = "#fff";
+                ctx.textAlign = "center";
+                ctx.font = `700 64px ${FONT}`;
+                ctx.fillText("MIT", w / 2, 74);
+              }),
+            }),
+          );
+          mit.position.set(-fw / 2 + 0.24, 0.98, 0.38);
+          mit.rotation.z = 0.12;
+          fridge.add(mit);
           states.forEach((s, i) => {
             const m = makeMini(s, row.leds[i % 4]);
             const pile = Math.floor(i / 3);
@@ -648,12 +671,13 @@
           });
           fridge.position.x = fw / 2;
           row.units.add(fridge);
-          width = fw;
+          width = fw + 0.3;
           height = fh + 0.25;
           tops.push({ x: fw / 2, y: height, w: fw });
-        } else if (c.mac) {
+        }
+        if (c.mac) {
           // Two rows of minis per table, eight to a table
-          const states = c.hosts.flatMap((h) => h.states);
+          const states = c.hosts.filter((h) => !onFridge(h)).flatMap((h) => h.states);
           const perTable = 8;
           for (let t = 0; t * perTable < states.length; t++) {
             const chunk = states.slice(t * perTable, (t + 1) * perTable);
@@ -703,7 +727,7 @@
         row.group.add(row.units);
         row.width = width;
         row.tops = tops;
-        if (c.mac && !c.fridge) height = 1.2;
+        if (c.mac && !fridgeStates.length) height = 1.2;
 
         const sign = signSprite(c, width);
         row.signW = sign.scale.x;
