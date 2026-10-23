@@ -2155,22 +2155,31 @@
       }
 
       const fwd = new THREE.Vector3();
+      const up = new THREE.Vector3();
       function updateSound(dt) {
         if (!sound.on || !sound.ctx) return;
         const ctx = sound.ctx;
         const t = ctx.currentTime;
         const L = ctx.listener;
         camera.getWorldDirection(fwd);
+        up.set(0, 1, 0).applyQuaternion(camera.quaternion);
         const set = (p, v) => p.setTargetAtTime(v, t, 0.03);
-        set(L.positionX, camera.position.x);
-        set(L.positionY, camera.position.y);
-        set(L.positionZ, camera.position.z);
-        set(L.forwardX, fwd.x);
-        set(L.forwardY, fwd.y);
-        set(L.forwardZ, fwd.z);
-        set(L.upX, camera.up.x);
-        set(L.upY, camera.up.y);
-        set(L.upZ, camera.up.z);
+        const { x, y, z } = camera.position;
+        if (L.positionX) {
+          set(L.positionX, x);
+          set(L.positionY, y);
+          set(L.positionZ, z);
+          set(L.forwardX, fwd.x);
+          set(L.forwardY, fwd.y);
+          set(L.forwardZ, fwd.z);
+          set(L.upX, up.x);
+          set(L.upY, up.y);
+          set(L.upZ, up.z);
+        } else {
+          // Firefox only has the older methods
+          L.setPosition(x, y, z);
+          L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
+        }
         // Far sources lose their highs, to the air and to the racks in between
         const dull = (src) => set(src.air.frequency, (20000 * 10) / (10 + camera.position.distanceTo(src.pos)));
         if (sound.cooler) dull(sound.cooler);
@@ -2284,7 +2293,15 @@
         if (walk.on) updateWalk(dt);
         else placeCamera();
         updateClock();
-        updateSound(dt);
+        // A sound problem must not stop the room from drawing
+        try {
+          updateSound(dt);
+        } catch (e) {
+          console.error(e);
+          sound.on = false;
+          sound.master?.gain.setTargetAtTime(0, sound.ctx.currentTime, 0.1);
+          showSound();
+        }
         for (const r of rows) {
           for (const m of r.leds) {
             const on = m.userData.speed === 0 || Math.sin(t * m.userData.speed + m.userData.phase) > -0.2;
