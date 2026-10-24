@@ -1567,6 +1567,11 @@ const BALANCE_MAX_POINTS = 300;
 // Demand below this multiple of the slots is drawn at it, on the log scale
 const BALANCE_MIN = 0.1;
 
+// The group line divides every pool's jobs by the slots of the hosts, so it is
+// not the sum of the pool lines: pools with their own slots average out
+const BALANCE_ALL_LABEL = "All pools (shared capacity)";
+const BALANCE_ALL_HELP = ["Every pool's jobs over all the slots on these hosts,", "not the sum of the pool lines. A pool above it", "is busier than the hosts as a whole."];
+
 // "0.4×", "2×", "35×"
 const balanceMultiple = (x) => `${x < 10 ? Number(x.toFixed(1)) : Math.round(x)}×`;
 
@@ -1632,7 +1637,7 @@ function renderBalanceCharts(d) {
     g.shared = g.pools.some((p) => p.shared_with?.length);
     g.capacity = [...g.hosts].reduce((acc, h) => acc + (d.host_slots?.[h] || 0), 0);
     const sum = (key) => Array.from({ length: d.n }, (_, i) => g.pools.reduce((acc, p) => acc + p[key][i], 0));
-    g.all = { label: "All pools", slots: g.capacity, running: sum("running"), waiting: sum("waiting") };
+    g.all = { label: BALANCE_ALL_LABEL, slots: g.capacity, running: sum("running"), waiting: sum("waiting") };
     g.queued = g.pools.reduce((acc, p) => acc + p.waiting.slice(i0).reduce((a, b) => a + b, 0), 0);
   }
   groups.sort((a, b) => b.queued - a.queued);
@@ -1641,7 +1646,7 @@ function renderBalanceCharts(d) {
     const pools = g.shown || g.pools;
     g.series = pools.map((p, j) => ({ p, label: backlogPoolLabel(p), color: sameQueue ? palette[j % palette.length] : queueColors[p.queue] || palette[j] }));
     // The group's total only reads right beside all of its pools
-    if (g.capacity && pools.length === g.pools.length) g.series.push({ p: g.all, label: "All pools", color: textColor, all: true });
+    if (g.capacity && pools.length === g.pools.length) g.series.push({ p: g.all, label: BALANCE_ALL_LABEL, color: textColor, all: true });
   }
   const stats = (p, idleKnown) => {
     let queued = 0, idle = 0, busy = 0;
@@ -1660,7 +1665,7 @@ function renderBalanceCharts(d) {
       // The table is the chart's legend: a pool's name toggles its line
       const rows = g.series.map(
         ({ p, label, color, all }, i) =>
-          `<tr${all ? ' class="balance-all"' : ""}><th><button type="button" data-chart="${k}" data-index="${i}" aria-pressed="true"><span class="balance-swatch${all ? " balance-swatch-all" : ""}" style="--swatch:${color}"></span>${escapeHtml(label)}</button></th>${stats(p, all || !g.shared)}</tr>`,
+          `<tr${all ? ' class="balance-all"' : ""}><th><button type="button" data-chart="${k}" data-index="${i}" aria-pressed="true"${all ? ` title="${BALANCE_ALL_HELP.join(" ")}"` : ""}><span class="balance-swatch${all ? " balance-swatch-all" : ""}" style="--swatch:${color}"></span>${escapeHtml(label)}</button></th>${stats(p, all || !g.shared)}</tr>`,
       );
       return (
         `<section class="balance-card"><div class="balance-chart"><canvas id="balance-chart-${k}"></canvas></div>` +
@@ -1683,7 +1688,7 @@ function renderBalanceCharts(d) {
         waiting /= end - i;
         data.push({ x: t0 + i * stepMs, y: Math.max(BALANCE_MIN, (running + waiting) / p.slots), running, waiting });
       }
-      return { label, data, borderColor: color, backgroundColor: color, borderWidth: all ? 2 : 1.5, borderDash: all ? [5, 3] : [], pointRadius: 0, pointHitRadius: 6, tension: 0.2, _slots: p.slots };
+      return { label, data, borderColor: color, backgroundColor: color, borderWidth: all ? 2 : 1.5, borderDash: all ? [5, 3] : [], pointRadius: 0, pointHitRadius: 6, tension: 0.2, _slots: p.slots, _all: all };
     });
     balanceCharts.push(
       new Chart(document.getElementById(`balance-chart-${k}`).getContext("2d"), {
@@ -1702,6 +1707,7 @@ function renderBalanceCharts(d) {
                   const f = (v) => (bucket > 1 ? v.toFixed(1) : String(v));
                   return `${item.dataset.label}: ${f(running)} running, ${f(waiting)} waiting, ${item.dataset._slots} slots (${balanceMultiple((running + waiting) / item.dataset._slots)})`;
                 },
+                afterLabel: (item) => (item.dataset._all ? BALANCE_ALL_HELP : ""),
               },
             },
             annotation: {

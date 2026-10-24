@@ -858,7 +858,9 @@
               <span class="agents-help"
                 >Pools whose agents run on the same machines, with each pool's
                 jobs running and waiting as a multiple of its slots. Above 1× a
-                pool has a queue; below it has idle slots.</span
+                pool has a queue; below it has idle slots. The dashed line puts
+                every pool's jobs over all the hosts' slots, so a pool above it
+                is busier than its hosts as a whole.</span
               >
             </div>
             <div class="balance-grid" id="balance-grid">
