@@ -1620,6 +1620,7 @@ function renderBalanceCharts(d) {
   const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const queueColors = AGENTS_QUEUE_COLORS[isDark ? "dark" : "light"];
   const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
+  const status = statusColors();
   const t0 = Date.parse(d.start);
   const stepMs = d.step_s * 1000;
   const range = workersTimeRange(d);
@@ -1718,7 +1719,12 @@ function renderBalanceCharts(d) {
               afterBuildTicks: (axis) => {
                 axis.ticks = [0.1, 0.3, 1, 3, 10, 30, 100].filter((v) => v <= axis.max).map((value) => ({ value }));
               },
-              ticks: { color: textColor, callback: (v) => `${v}×` },
+              // Each chart scales to its own peak, so the labels' colour shows how oversubscribed it gets
+              ticks: {
+                color: ({ tick }) => (tick.value >= 30 ? status.fail : tick.value >= 10 ? status.crash : tick.value > 1 ? status.timedOut : textColor),
+                font: ({ tick }) => (tick.value > 1 ? { weight: "bold" } : undefined),
+                callback: (v) => `${v}×`,
+              },
               grid: { color: gridColor },
               title: { display: true, text: "Demand per slot", color: textColor },
             },
