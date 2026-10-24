@@ -13711,6 +13711,20 @@ function ttfxPrCi(p) {
   };
 }
 
+// Why a pull request's result is from an older commit than its head, and
+// whether a newer one is on its way
+function ttfxPrOutdatedText(p) {
+  const s = p.ci && p.ci.state;
+  const next = !s
+    ? ""
+    : s === "none"
+      ? " The newest commit has no julia-pr build yet."
+      : ["running", "scheduled", "failing"].includes(s)
+        ? ` A julia-pr build of the newest commit is running (#${p.ci.build}); its TTFX result should replace this one.`
+        : ` The julia-pr build of the newest commit (#${p.ci.build}, ${s.replace(/_/g, " ")}) has no TTFX result.`;
+  return `Measured on ${p.head.commit.slice(0, 10)}, but the pull request has newer commits, so this result may not match it.${next}`;
+}
+
 function ttfxScorePct(score) {
   return score == null ? "—" : formatSignedPct((score - 1) * 100);
 }
@@ -13917,7 +13931,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
     "Score",
     `<b>${ttfxScorePct(p.score)}</b>${st ? ` for the stack against master; on its own against ${parent}: ${ttfxScorePct(p.own_score)}` : ""}`,
   );
-  if (p.outdated) html += '<div class="ttfx-popup-note">Note: measured on an older commit; the pull request has newer commits.</div>';
+  if (p.outdated) html += `<div class="ttfx-popup-note">${escapeHtml(ttfxPrOutdatedText(p))}</div>`;
   if (st) {
     html += row("Stack", ttfxPrStackBadge(p).trim());
     html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(ttfxPrStackTitle(p))}</div>`;
@@ -14043,12 +14057,12 @@ function renderTtfxPrsList() {
       const meta = [
         escapeHtml(p.author),
         p.draft ? "draft" : "",
-        p.outdated ? "older commit" : "",
+        p.outdated ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(ttfxPrOutdatedText(p))}">older commit</span>` : "",
         ttfxPrStackBadge(p).trim(),
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
         timeHtml(p.date, { relative: true }),
       ].filter(Boolean);
-      return `${toggle}<tr class="m-list-row" data-pr="${p.pr}"><td><div class="m-item">
+      return `${toggle}<tr class="m-list-row${p.outdated ? " ttfx-pr-outdated" : ""}" data-pr="${p.pr}"><td><div class="m-item">
         <span class="m-item-rank">${i + 1}</span>
         <div class="m-item-main">
           <div class="m-item-title"><span class="ttfx-pr-ci">${ttfxPrCi(p).dot}</span> <b>#${p.pr}</b> ${escapeHtml(p.title)}</div>
@@ -14139,12 +14153,12 @@ function renderTtfxPrsTable() {
       if (!(i > 0 && ttfxPrIsFlat(rows[i - 1].p))) html += ttfxPrsFlatToggleRow(cols);
       if (!ttfxPrsShowFlat) return;
     }
-    html += `<tr tabindex="0" data-pr="${p.pr}">`;
+    html += `<tr tabindex="0" data-pr="${p.pr}"${p.outdated ? ' class="ttfx-pr-outdated"' : ""}>`;
     html += `<td class="num">${rank}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
       (p.outdated
-        ? `<span class="ttfx-pr-badge" title="Measured on ${escapeHtml(p.head.commit.slice(0, 10))}; the pull request has newer commits">older commit</span> `
+        ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(ttfxPrOutdatedText(p))}">older commit</span> `
         : "") +
       ttfxPrStackBadge(p);
     const ci = ttfxPrCi(p);
@@ -18633,7 +18647,8 @@ function prCardTtfxHtml(p, rank, total) {
     </div>
     ${prCardMetricsTable(p)}
     <div class="pr-card-muted">Robust task changes: <span class="${better ? "pr-card-down" : ""}">${better} better</span>, <span class="${worse ? "pr-card-up" : ""}">${worse} worse</span></div>
-    <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}${p.outdated ? "; the pull request has newer commits" : ""}</div>
+    <div class="pr-card-muted">Measured ${escapeHtml(timeAgo(p.date))}: ${escapeHtml(p.head.version)} (${escapeHtml(p.head.commit.slice(0, 10))}) against ${escapeHtml(p.base.version)}</div>
+    ${p.outdated ? `<div class="pr-card-muted">${escapeHtml(ttfxPrOutdatedText(p))}</div>` : ""}
     ${p.stack ? `<div class="pr-card-muted">${escapeHtml(ttfxPrStackTitle(p))}</div>` : ""}
     <div><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}">Copy summary for GitHub</button></div>
     ${prCardOpenLink(p.pr)}

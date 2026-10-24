@@ -3094,6 +3094,18 @@ th.sorted .sort-indicator {
   font-size: 10px;
   line-height: 15px;
 }
+.ttfx-pr-badge.ttfx-pr-old {
+  cursor: help;
+}
+/* A result from an older commit than the pull request's head is muted until
+   pointed at, since a newer commit may have changed it */
+tr.ttfx-pr-outdated > td {
+  opacity: 0.55;
+}
+tr.ttfx-pr-outdated:hover > td,
+tr.ttfx-pr-outdated:focus-within > td {
+  opacity: 1;
+}
 .ttfx-pr-badge.ttfx-pr-stacked {
   border-color: var(--color-attention-emphasis);
   background: var(--color-attention-emphasis);
