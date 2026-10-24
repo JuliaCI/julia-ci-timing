@@ -65,33 +65,40 @@ jobs:
 
       # The runner starts with no layer cache, so the Julia instantiate and
       # precompile layer (about 110 s of a 150 s build) would be rebuilt on
-      # every push. The newest image in ECR carries its layers as inline
-      # cache metadata (--cache-to type=inline below), so a build whose
-      # Project.toml and Manifest.toml are unchanged reuses that layer. No
-      # cache found (a first build, an expired image) means a full build.
+      # every push. The layers are kept in GitHub's Actions cache, so a build
+      # whose Project.toml and Manifest.toml are unchanged reuses that layer.
+      # The cache used to be the previous image in ECR, but pulling it to the
+      # runner was billed as internet egress, about 1 GB a push.
+      - name: Tag the image
+        id: tag
+        run: |
+          git rev-parse HEAD > BUILD_COMMIT
+          echo "tag=sha-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
+      # A single image manifest (no provenance index), so the digest the host
+      # pulls is the image itself
       - name: Build and push the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: Look up the image's digest
         id: build
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          git rev-parse HEAD > BUILD_COMMIT
-          tag="sha-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
-          image="$REGISTRY/$ECR_REPOSITORY:$tag"
-          previous=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
-            --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' --output text 2>/dev/null || true)
-          cache_from=()
-          if [ -n "$previous" ] && [ "$previous" != "None" ]; then
-            cache_from=(--cache-from "type=registry,ref=$REGISTRY/$ECR_REPOSITORY:$previous")
-            echo "Layer cache from $previous"
-          fi
-          # A single image manifest (no provenance index), so the digest the
-          # host pulls is the image itself
-          docker buildx build --platform linux/arm64 -t "$image" --push \
-            "${cache_from[@]}" --cache-to type=inline --provenance=false --sbom=false .
-          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$tag" \
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$TAG" \
             --query 'imageDetails[0].imageDigest' --output text)
           echo "image_ref=$REGISTRY/$ECR_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
-          echo "Pushed $image ($digest)"
+          echo "Pushed $REGISTRY/$ECR_REPOSITORY:$TAG ($digest)"
 
       - name: Deploy on the host
         env:
