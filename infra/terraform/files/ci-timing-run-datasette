@@ -11,6 +11,9 @@ docker rm -f ci-timing-datasette >/dev/null 2>&1 || true
 # The data directory is mounted writable: a reader of a WAL database needs
 # to create the -shm file when the writer (the ingest) is not running.
 # Datasette itself never writes; the container filesystem is read-only.
+# A crawler following facet links scanned the large tables until the host
+# ran out of memory, so facets and CSV streams are off and at most two
+# queries run at once.
 exec docker run --name ci-timing-datasette \
   --publish "127.0.0.1:${CI_TIMING_DATASETTE_PORT}:${CI_TIMING_DATASETTE_PORT}" \
   --log-opt max-size=50m --log-opt max-file=3 \
@@ -29,4 +32,8 @@ exec docker run --name ci-timing-datasette \
   --setting sql_time_limit_ms 2000 \
   --setting max_returned_rows 5000 \
   --setting default_page_size 100 \
+  --setting num_sql_threads 2 \
+  --setting allow_facet off \
+  --setting suggest_facets off \
+  --setting allow_csv_stream off \
   --cors

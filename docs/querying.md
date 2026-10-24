@@ -7,7 +7,7 @@ public and read-only. Pick by the size of the answer:
 | Need | Use |
 |---|---|
 | What one page of the site shows, or one commit, package or task | the API, `https://perf.julialang.org/api/` |
-| A few rows or an aggregate | Datasette SQL, `https://perf.julialang.org/db/` (2 s and 5000 rows per query) |
+| A few rows or an aggregate | Datasette SQL, `https://perf.julialang.org/db/` (2 s and 5000 rows per query, 120 requests a minute per client) |
 | Many queries, or scans of the large tables | the snapshot, `https://perf.julialang.org/data/ci-timing.sqlite.gz` |
 | A whole history in one file, for scripts | the extracts, `https://perf.julialang.org/data/*.json.gz` |
 

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Builds the Caddy image once per version of its Dockerfile and prints its tag.
+# The first build compiles Caddy, which takes a few minutes.
+set -eu
+dockerfile=/usr/local/share/ci-timing/caddy.Dockerfile
+tag="ci-timing-caddy:$(sha256sum "$dockerfile" | cut -c1-12)"
+if ! docker image inspect "$tag" >/dev/null 2>&1; then
+  docker build --quiet --tag "$tag" - < "$dockerfile" >&2
+fi
+echo "$tag"

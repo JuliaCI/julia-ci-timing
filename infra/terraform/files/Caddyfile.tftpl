@@ -1,3 +1,7 @@
+{
+  order rate_limit before basic_auth
+}
+
 (site_common) {
   # The site and its data files are static; .json.gz files must reach a
   # client as gzip bytes (the analysis scripts decompress them), which the
@@ -9,10 +13,27 @@
     Referrer-Policy strict-origin-when-cross-origin
   }
 
+  # Who asked for what. /data is Caddy's own directory on the host.
+  log {
+    output file /data/access.log {
+      roll_size 50MiB
+      roll_keep 5
+    }
+  }
+
   redir /db /db/ 308
   # Datasette adds its base_url to the path it is given when it builds
   # absolute links, so it must see the path without /db
   handle_path /db/* {
+    # Per client, so one crawler cannot keep the queries busy. A Datasette
+    # page is one query plus a few static files.
+    rate_limit {
+      zone db {
+        key {remote_host}
+        events 120
+        window 1m
+      }
+    }
     reverse_proxy 127.0.0.1:${datasette_port}
   }
   # The site's own reads (db/serve.jl); its responses are already gzipped.
@@ -22,6 +43,14 @@
   handle /api/* {
     # Public, read-only data, so a notebook or another site may fetch it
     header Access-Control-Allow-Origin *
+    # A page of the site makes up to a few dozen requests
+    rate_limit {
+      zone api {
+        key {remote_host}
+        events 600
+        window 1m
+      }
+    }
     reverse_proxy ${api_upstreams} {
       lb_policy first
       lb_try_duration 5s

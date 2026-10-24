@@ -22,7 +22,8 @@ version for agents arriving at the site. Four ways in, cheapest first:
   one commit across every source. The shapes are the site's own and can
   change with it.
 - **SQL over HTTP**: Datasette at `https://perf.julialang.org/db/`, public
-  and read-only, limited to 2 s and 5000 rows per query. Table and column
+  and read-only, limited to 2 s and 5000 rows per query and 120 requests a
+  minute per client. Table and column
   descriptions and a set of saved queries come from
   `db/datasette-metadata.json` (passed by `infra/docker/entrypoint.sh`).
 - **The whole database**: `https://perf.julialang.org/data/ci-timing.sqlite.gz`,

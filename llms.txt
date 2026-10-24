@@ -71,7 +71,8 @@ The response shapes are the site's own and can change; the database schema is st
 ## 2. SQL: Datasette at /db/
 
 `https://perf.julialang.org/db/ci-timing` answers read-only SQL. Each query is limited to
-2 seconds and 5000 rows, so aggregate in SQL rather than paging through rows.
+2 seconds and 5000 rows, and each client to 120 requests a minute, so aggregate in SQL
+rather than paging through rows. The API allows 600 requests a minute per client.
 
 - Every table and its main columns are described in
   `https://perf.julialang.org/db/-/metadata.json`.

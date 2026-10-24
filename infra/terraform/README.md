@@ -20,7 +20,9 @@ On the host (all from cloud-init, files under `files/`):
 - `ci-timing-caddy`: Caddy serving the static site from `/var/lib/ci-timing/site`,
   the rendered data files from `/var/lib/ci-timing/export` at `/data/`,
   `/healthz`, and proxying `/db/` to Datasette. HTTPS is automatic once
-  `site_hostname` is set and pointed at the Elastic IP.
+  `site_hostname` is set and pointed at the Elastic IP. The host builds its
+  own Caddy image with the rate limit plugin (`ci-timing-build-caddy`), once
+  per version of `caddy.Dockerfile`; it limits `/db/` and `/api/` per client.
 - `ci-timing-datasette`: public read-only SQL over the database, run from the
   ingest image. Its `ExecStartPre` restores the database, export and Caddy's
   certificates from the latest S3 backup on a fresh host.
@@ -92,7 +94,7 @@ both were run once on 2026-09-21.)
 
 Shell on the host: `aws ssm start-session --target <instance_id>`. Logs:
 `journalctl -u ci-timing-ingest`, `-u ci-timing-datasette`, `-u ci-timing-api`,
-`-u ci-timing-caddy`.
+`-u ci-timing-caddy`. Caddy's access log is `/var/lib/caddy/data/access.log`.
 
 State is local (`terraform.tfstate`, ignored by git). Losing it means
 re-importing the resources; the data lives in the backup bucket.

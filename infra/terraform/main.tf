@@ -25,7 +25,6 @@ locals {
   site_dir         = "site"   # under data_mount_path; the static site
   datasette_port   = 8001     # served from the ingest image, see files/ci-timing-run-datasette
   api_ports        = [8002, 8003] # db/serve.jl from the same image, one server at a time; a deploy warms the new one on the other port, see files/ci-timing-deploy
-  caddy_image      = "caddy:2.8.4-alpine"
   caddy_data_dir   = "/var/lib/caddy/data"
   caddy_config_dir = "/var/lib/caddy/config"
 
@@ -450,6 +449,8 @@ data "aws_ssm_parameter" "al2023_ami" {
 locals {
   plain_files = {
     "/usr/local/bin/ci-timing-run-caddy"                   = "0755"
+    "/usr/local/bin/ci-timing-build-caddy"                 = "0755"
+    "/usr/local/share/ci-timing/caddy.Dockerfile"          = "0644"
     "/usr/local/bin/ci-timing-run-datasette"               = "0755"
     "/usr/local/bin/ci-timing-run-api"                     = "0755"
     "/usr/local/bin/ci-timing-ingest"                      = "0755"
@@ -491,7 +492,6 @@ locals {
         backup_prefix      = local.backup_prefix
         backup_archive_dir = local.backup_archive_dir
         backup_latest_name = local.backup_latest_name
-        caddy_image        = local.caddy_image
         caddy_data_dir     = local.caddy_data_dir
         caddy_config_dir   = local.caddy_config_dir
         token_parameter    = local.token_parameter
