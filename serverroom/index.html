@@ -1340,6 +1340,32 @@
           row.group.add(p);
         }
         row.lines = Math.ceil(shown / perLine);
+        // A critical queue: somebody has given up on the line and swings from
+        // the ceiling above it, holding on to a rope with both hands, back and
+        // forth along a line that turns a little at the end of every swing; the
+        // rope hangs a little in front of the queue's middle, so the swing stays
+        // clear of the machines
+        if (c.mood === "fire" && shown) {
+          const ROPE = 1.25;
+          const swing = new THREE.Group();
+          swing.position.set(0, ROOM_H, 1.2 + ((row.lines - 1) * 0.34) / 2);
+          part(swing, MAT.pole, [0.008, ROPE, 0.008], [0, -ROPE / 2, 0], GEO.cyl);
+          const guy = makePerson(shown);
+          guy.position.y = -ROPE - 0.62;
+          // Arms from the shoulders up to the hands on the rope
+          for (const side of [-1, 1]) part(guy, MAT.people[shown % 4], [0.022, 0.24, 0.022], [side * 0.045, 0.51, 0], GEO.cyl).rotation.z = side * 0.35;
+          swing.add(guy);
+          // Each swinger keeps their own time: a speed, a place in the swing,
+          // a first direction and which way, and how far, the line turns
+          swing.userData = {
+            speed: 2.3 + Math.random() * 0.6,
+            start: Math.random() * 20,
+            angle: Math.random() * Math.PI,
+            turn: (Math.random() < 0.5 ? -1 : 1) * (0.15 + Math.random() * 0.1),
+          };
+          row.swing = swing;
+          row.group.add(swing);
+        }
 
         // Moody lighting: a dim blue night for sleepers, an alarm for the worst
         if (c.mood === "asleep") {
@@ -2786,6 +2812,22 @@
           for (const p of r.people) p.position.y = Math.abs(Math.sin(t * 5 + p.userData.phase)) * (mood === "fire" ? 0.12 : 0.05);
           for (const l of r.lights) l.intensity = 4 + Math.sin(t * 13) * 2 + Math.random();
           if (r.beacon) r.beacon.rotation.y = t * 5;
+          if (r.swing) {
+            // Each swing runs from one end to the next, opposite but turned a
+            // little further round, slowing to a stop at both; the tilts reach
+            // 0.35 rad
+            const u = r.swing.userData;
+            const phase = (t * u.speed) / Math.PI + u.start;
+            const k = Math.floor(phase);
+            const end = (n) => {
+              const a = u.angle + n * u.turn;
+              const sign = n % 2 ? -1 : 1;
+              return [Math.cos(a) * 0.35 * sign, Math.sin(a) * 0.35 * sign];
+            };
+            const [a, b] = [end(k), end(k + 1)];
+            const f = (1 - Math.cos(Math.PI * (phase - k))) / 2;
+            r.swing.rotation.set(a[0] + (b[0] - a[0]) * f, 0, a[1] + (b[1] - a[1]) * f);
+          }
           // Fans turn faster the harder the row works
           for (const f of r.fans) f.rotation.z += dt * (4 + 26 * FAN_SPEED[mood]);
           const rate = { fire: 40, panicking: 14, sweating: 6, asleep: 1.2 }[mood] || 0;
