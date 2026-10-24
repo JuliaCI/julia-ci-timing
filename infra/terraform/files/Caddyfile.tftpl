@@ -1,5 +1,6 @@
 {
-  order rate_limit before basic_auth
+  # After respond, so a turned-away crawler does not use up the limits
+  order rate_limit before reverse_proxy
 }
 
 (site_common) {
@@ -25,6 +26,10 @@
   # Datasette adds its base_url to the path it is given when it builds
   # absolute links, so it must see the path without /db
   handle_path /db/* {
+    # Crawlers seen walking every link here despite robots.txt: Meta's, and
+    # one from many cloud addresses that claims to be a two-year-old Chrome
+    @crawlers header_regexp User-Agent `meta-externalagent|^Mozilla/5\.0 \(Macintosh; Intel Mac OS X 10_15_7\) AppleWebKit/537\.36 \(KHTML, like Gecko\) Chrome/120\.0\.0\.0 Safari/537\.36$`
+    respond @crawlers 403
     # Per client, so one crawler cannot keep the queries busy. A Datasette
     # page is one query plus a few static files. The second zone counts
     # every client together: a crawler spread over many addresses still
