@@ -26,11 +26,18 @@
   # absolute links, so it must see the path without /db
   handle_path /db/* {
     # Per client, so one crawler cannot keep the queries busy. A Datasette
-    # page is one query plus a few static files.
+    # page is one query plus a few static files. The second zone counts
+    # every client together: a crawler spread over many addresses still
+    # stops there, and real users are rarely more than two at a time.
     rate_limit {
       zone db {
         key {remote_host}
         events 120
+        window 1m
+      }
+      zone db_all {
+        key static
+        events 240
         window 1m
       }
     }
