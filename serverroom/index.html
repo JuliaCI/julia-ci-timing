@@ -1452,7 +1452,7 @@
         // In the back corner of the left wall, blowing into the room
         const busy = data.ci.reduce((s, c) => s + c.busy, 0);
         const cap = data.ci.reduce((s, c) => s + c.cap, 0);
-        const cooler = coolingUnit(17.5 + (6 * busy) / Math.max(1, cap));
+        const cooler = coolingUnit(20 + (6 * busy) / Math.max(1, cap));
         cooler.position.set(-W / 2 + 0.42, 0, -D / 2 + 1.1);
         cooler.rotation.y = Math.PI / 2;
         roomGroup.add(cooler);
