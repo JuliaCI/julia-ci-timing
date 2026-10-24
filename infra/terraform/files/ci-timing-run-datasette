@@ -13,10 +13,12 @@ docker rm -f ci-timing-datasette >/dev/null 2>&1 || true
 # Datasette itself never writes; the container filesystem is read-only.
 # A crawler following facet links scanned the large tables until the host
 # ran out of memory, so facets and CSV streams are off and at most two
-# queries run at once.
+# queries run at once. Its memory, which counts the page cache its reads
+# fill, is capped too, so a flood thrashes or kills Datasette, not the host.
 exec docker run --name ci-timing-datasette \
   --publish "127.0.0.1:${CI_TIMING_DATASETTE_PORT}:${CI_TIMING_DATASETTE_PORT}" \
   --log-opt max-size=50m --log-opt max-file=3 \
+  --memory 1g \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \

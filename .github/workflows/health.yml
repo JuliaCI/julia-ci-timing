@@ -2,12 +2,14 @@ name: Host health
 
 # Once a day: every source on the host fetched within 6 hours and holding
 # data newer than its own allowance, the API and Datasette answering, the
-# disk under 80%, the latest backup in S3 under a day old. A failed run
-# emails the repository's watchers.
+# disk under 80%, the latest backup in S3 under a day old. Every 15 minutes:
+# the site, the API and Datasette answering. A failed run emails the
+# repository's watchers.
 
 on:
   schedule:
     - cron: '30 6 * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,7 +20,28 @@ env:
   SITE_URL: ${{ vars.CI_TIMING_SITE_URL || 'https://perf.julialang.org' }}
 
 jobs:
+  # A host that stops answering passes the daily check for up to a day
+  up:
+    if: github.event.schedule != '30 6 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Site, API and Datasette answering
+        shell: bash
+        run: |
+          # Three tries over two minutes, since the API is not ready for a
+          # minute or so after a reboot
+          for try in 1 2 3; do
+            curl -sSf --max-time 30 -o /dev/null "$SITE_URL/" \
+              && curl -sSf --max-time 30 -o /dev/null "$SITE_URL/api/ready" \
+              && curl -sSf --max-time 30 -o /dev/null "$SITE_URL/db/ci-timing.json?sql=select+1" \
+              && exit 0
+            [ "$try" = 3 ] || sleep 45
+          done
+          echo "::error::$SITE_URL is not answering"
+          exit 1
+
   check:
+    if: github.event.schedule != '*/15 * * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Sources fresh, data current, disk not full
