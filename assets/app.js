@@ -1060,7 +1060,10 @@ let agentsData = null;
 let agentsDataPromise = null;
 
 async function loadAgentsData() {
-  const [latest, snapshots] = await Promise.all([apiGet("agents/latest"), apiGet("agents/snapshots")]);
+  // Only the newest snapshot is shown. A date, rather than a time, keeps the URL
+  // the same all day, so the browser and the API cache can reuse the response.
+  const since = apiSince(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  const [latest, snapshots] = await Promise.all([apiGet("agents/latest"), apiGet("agents/snapshots", { since })]);
   return { generated_at: latest.generated_at, agents: latest.agents || {}, snapshots };
 }
 const AGENTS_MISSING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1202,7 +1205,7 @@ async function renderAgentsSection() {
   if (agentsData.error || snapshots.length === 0) {
     tableEl.innerHTML = agentsData.error
       ? '<div class="workers-empty">Failed to load the agent snapshots; try reloading the page.</div>'
-      : '<div class="workers-empty">No agent snapshots yet.</div>';
+      : '<div class="workers-empty">No agent snapshot in the last day.</div>';
     summaryEl.textContent = "";
     updatedEl.textContent = "";
     section.classList.add("agents-section-empty");

@@ -23,6 +23,7 @@
   }
 
   redir /db /db/ 308
+  redir /serverroom /serverroom/ 308
   # Datasette adds its base_url to the path it is given when it builds
   # absolute links, so it must see the path without /db
   handle_path /db/* {
