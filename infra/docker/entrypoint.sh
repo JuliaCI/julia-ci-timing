@@ -47,7 +47,7 @@ export_all() {
   # reads them from the API (api/notes/<name>), which always has the deployed
   # code's; these copies, from whatever image this run started on, are for
   # readers of /data/ and can lag a deploy by a run.
-  cp /app/data/ttfx_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
+  cp /app/data/ttfx_annotations.json /app/data/sysimage_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
   return $rc
 }
 

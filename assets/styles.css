@@ -2857,7 +2857,7 @@ th.sorted .sort-indicator {
     grid-template-rows: 1fr 1fr 1fr;
   }
 }
-/* The Sysimage tab's nine panels: the stacked stages, then one per stage */
+/* The Build stages tab's nine panels: the stacked stages, then one per stage */
 .ttfx-summary-grid.sysimage-grid {
   grid-template-columns: 1fr 1fr 1fr;
   grid-template-rows: 1fr 1fr 1fr;

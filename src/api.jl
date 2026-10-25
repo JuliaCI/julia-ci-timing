@@ -219,7 +219,7 @@ end
 const ROUTES = [
     Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, and the server's time. Never cached, so it is the cheap thing to poll.",
           (db, _, _) -> status(db)),
-    Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
+    Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts), sysimage_annotations (notes on julia-ci builds where how CI builds julia changed, drawn on the Build stages charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
           (_, a, _) -> JSON3.read(note_file(a[1]))),
     Route("ready", [], "Whether this server has finished warming up: 200 once the routes the site loads on landing are rendered into its cache, 503 before. A deploy starts the new server beside the old one and switches to it when this answers 200.",
           (db, _, _) -> Dict("ready" => true)),
@@ -577,9 +577,9 @@ end
 # The hand-maintained files in data/. They ship with the code, so they are
 # served from it rather than from the ingest's export, which a run started
 # before a deploy would write from the old code.
-const NOTE_FILES = Set(["ttfx_annotations", "methodology_changes"])
+const NOTE_FILES = Set(["ttfx_annotations", "sysimage_annotations", "methodology_changes"])
 function note_file(name)
-    name in NOTE_FILES || throw(BadRequest("notes are ttfx_annotations or methodology_changes"))
+    name in NOTE_FILES || throw(BadRequest("notes are ttfx_annotations, sysimage_annotations or methodology_changes"))
     return read(joinpath(dirname(@__DIR__), "data", name * ".json"))
 end
 
@@ -651,7 +651,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "sysimage", "downloads", "pkgeval", "activity"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "build-stages", "downloads", "pkgeval", "activity"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)

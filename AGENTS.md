@@ -199,7 +199,7 @@ trailing 30 days the distinct commit authors and PR openers and the median
 days to merge. A reopened item keeps only its latest close, so the open
 counts are slightly off for items that were closed and reopened.
 
-Sysimage build times (the CI → Sysimage tab) come from `fetch_sysimage.jl`, which
+Sysimage build times (the CI → Build stages tab) come from `fetch_sysimage.jl`, which
 parses the log of the x86_64 and aarch64 Linux, aarch64 macOS and x86_64 Windows
 build jobs of every julia-ci master build into `sysimage_jobs`: the seconds of each
 stage of making the system image (compiling the compiler, emitting basecompiler,
@@ -208,8 +208,17 @@ sys) and of the stdlib pkgimages after it, with each stdlib's load in
 `sysimage_stdlibs`. The build prints most of these; the two emit stages it prints
 nothing for are timed from Buildkite's line timestamps. `api/sysimage/summary`
 serves them per platform. The Linux jobs share their machine with other jobs, so
-compare medians over several builds; the stdlib pkgimages went from 22 to 55 at
-build 1002, which is not a regression.
+compare medians over several builds.
+
+Hand-written notes on julia-ci builds where how CI builds julia changed live in
+`data/sysimage_annotations.json`, served like the TTFX notes from
+`api/notes/sysimage_annotations`: each names a `build` plus a short `label` and a
+fuller `description`, with an optional `kind` (`build` for a change to what the
+build job does, `runner` for the CI machines), `url`, `stages` (the stages it
+affected; every one when left out) and `platforms` (build triplets). The tab draws
+a dashed line at that build in the panels of those stages and shows the note in
+the build's popup. Use it for a step that is not the commit being slower, such as
+build 1002, from which the build precompiles 55 stdlib pkgimages instead of 22.
 
 ## Analysis helpers (`analysis/`)
 

@@ -1,8 +1,9 @@
 # The data lives in the database on the host (docs/database-migration.md);
-# analysis/fetch_data.jl fills data/ with the extracts. Only the two
+# analysis/fetch_data.jl fills data/ with the extracts. Only the
 # hand-maintained files are tracked.
 data/*
 !data/ttfx_annotations.json
+!data/sysimage_annotations.json
 !data/methodology_changes.json
 
 # Julia (Manifest.toml is tracked: the image instantiates from it)

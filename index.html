@@ -255,15 +255,15 @@
             </button>
             <button
               class="tab-btn"
-              id="tab-ci-sysimage"
+              id="tab-ci-build-stages"
               role="tab"
               aria-selected="false"
               aria-controls="sysimage-view"
               tabindex="-1"
-              onclick="switchTab('ci-sysimage')"
+              onclick="switchTab('ci-build-stages')"
               title="How long the build job of every master build spends making the system image, stage by stage"
             >
-              Sysimage
+              Build stages
             </button>
           </div>
         </div>
@@ -1509,7 +1509,7 @@
       class="ttfx-main view-hidden"
       id="sysimage-view"
       role="tabpanel"
-      aria-labelledby="tab-ci-sysimage"
+      aria-labelledby="tab-ci-build-stages"
       tabindex="0"
     >
       <div class="ttfx-toolbar">

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "annotations": [
+    {
+      "build": 1002,
+      "kind": "build",
+      "label": "Bounds-checked stdlib pkgimages",
+      "description": "The build also precompiles the stdlibs with bounds checking on, to distribute those pkgimages separately: 55 stdlib pkgimages from this build on instead of 22, so that stage takes longer without anything getting slower.",
+      "url": "https://github.com/JuliaLang/julia/pull/60054",
+      "stages": ["stdlib_pkgimages"]
+    }
+  ]
+}

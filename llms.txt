@@ -59,6 +59,7 @@ Sizes:
 
 Sysimage:
 - `/api/sysimage/summary?since=`: how long the build job of every master build spent making the system image, stage by stage (compiling the compiler, emitting basecompiler, Base, the sysimage's stdlibs, emitting sysbase, the precompile statements, emitting sys, then the stdlib pkgimages), per platform, from the job logs
+- `/api/notes/sysimage_annotations`: notes on builds where how CI builds julia changed, so a step there is not a commit's
 
 Downloads:
 - `/api/downloads/top?days=7`: the 50 most requested packages over the window
