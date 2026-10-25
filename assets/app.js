@@ -18070,7 +18070,7 @@ const SYSIMAGE_STAGES = {
   sys_output: { label: "Write sys", title: "Emitting the final image (Output ──)" },
   stdlib_pkgimages: {
     label: "Stdlib pkgimages",
-    title: "Precompiling the stdlib pkgimages after the image: 22 of them before build 1002, 55 since, so the step there is not a regression",
+    title: "Precompiling the stdlib pkgimages after the image: about 110 of them before build 1002, both bounds-checking configurations, and 55 since",
   },
 };
 // The stages of the image itself, which the stacked panel and the total add up

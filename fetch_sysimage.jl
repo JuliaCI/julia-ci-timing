@@ -61,7 +61,13 @@ const LINK_BASECOMPILER = r"-o \S*basecompiler\.(?:so|dylib|dll)\b"
 const LINK_SYSBASE = r"-o \S*sysbase\.(?:so|dylib|dll)\b"
 # Linked by Base.Linking since October 2026, by the compiler driver before
 const LINK_SYS = r"link_image\(.*is_sysimage=true|-o \S*/sys\.(?:so|dylib|dll)(?: |$)"
-const PKGIMAGES_LINE = r"(\d+) dependencies successfully precompiled in (\d+) seconds"
+# Precompiling the stdlibs after the image, which says "dependency configurations"
+# when it makes more than one configuration of each (both bounds-checking settings
+# before build 1002) and ends at the release.image stamp. A later precompile in the
+# job (the docs build's) prints the same summary.
+const PKGIMAGES_COMMAND = r"\bprecompilepkgs\("
+const PKGIMAGES_LINE = r"(\d+) (?:dependencies|dependency configurations) successfully precompiled in (\d+) seconds"
+const PKGIMAGES_END = r"\bstdlib/release\.image\b"
 
 const STAGES = (:compiler_s, :compiler_output_s, :base_s, :stdlibs_s, :sysbase_output_s, :precompile_s, :sys_output_s)
 
@@ -80,6 +86,7 @@ function parse_log(text::AbstractString)
     in_modules = false
     totals = 0
     marks = Dict{Symbol,Float64}()
+    pkgimages = :before
     secs(m, i=1) = parse(Float64, m.captures[i])
     for raw in eachsplit(text, '\n')
         m = match(TIMESTAMP, raw)
@@ -119,9 +126,14 @@ function parse_log(text::AbstractString)
             r[:sys_output_s] = secs(m)
         elseif occursin(LINK_SYS, line)
             marks[:sys] = something(t, NaN)
-        elseif haskey(marks, :sys) && !haskey(r, :stdlib_pkgimages) && (m = match(PKGIMAGES_LINE, line)) !== nothing
+        elseif haskey(marks, :sys) && pkgimages === :before && occursin(PKGIMAGES_COMMAND, line)
+            pkgimages = :running
+        elseif pkgimages === :running && occursin(PKGIMAGES_END, line)
+            pkgimages = :done
+        elseif pkgimages === :running && (m = match(PKGIMAGES_LINE, line)) !== nothing
             r[:stdlib_pkgimages] = parse(Int, m.captures[1])
             r[:stdlib_pkgimages_s] = secs(m, 2)
+            pkgimages = :done
         end
     end
     haskey(marks, :compiler) && haskey(marks, :basecompiler) && (r[:compiler_output_s] = marks[:basecompiler] - marks[:compiler])
@@ -257,6 +269,40 @@ function fetch_jobs!(db, jobs; deadline=nothing)
     return written
 end
 
+# Once: the stdlib pkgimages of the jobs recorded before the parser read the
+# "dependency configurations" summary, when it took the docs build's precompile
+# instead. Their logs are fetched again, newest build first, and only those two
+# columns are rewritten; a job whose log Buildkite has dropped keeps its row. The
+# meta key holds the oldest build done, so a run that runs out of time resumes.
+const REPARSED_KEY = "sysimage:pkgimages_reparsed_below"
+
+function reparse_pkgimages!(db; deadline)
+    done = query(db, "SELECT value FROM meta WHERE key = ?", (REPARSED_KEY,))
+    below = isempty(done) ? typemax(Int) : parse(Int, done[1].value)
+    builds = [Int(r.build) for r in query(db, "SELECT DISTINCT build FROM sysimage_jobs WHERE state = 'ok' AND build < ? ORDER BY build DESC", (below,))]
+    fixed = 0
+    for build in builds
+        now(UTC) > deadline && break
+        jobs = [(job=String(r.job_uuid), build) for r in query(db, "SELECT job_uuid FROM sysimage_jobs WHERE state = 'ok' AND build = ?", (build,))]
+        logs = asyncmap(fetch_log, jobs)
+        # Tried again next run
+        any(ismissing, logs) && break
+        transaction(db) do
+            seq = next_seq!(db)
+            for (job, text) in zip(jobs, logs)
+                text === nothing && continue
+                stages, _ = parse_log(text)
+                DBInterface.execute(db, "UPDATE sysimage_jobs SET stdlib_pkgimages_s = ?, stdlib_pkgimages = ?, change_seq = ? WHERE job_uuid = ?",
+                                    (get(stages, :stdlib_pkgimages_s, missing), get(stages, :stdlib_pkgimages, missing), seq, job.job))
+                fixed += 1
+            end
+            DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES (?, ?)", (REPARSED_KEY, string(build)))
+        end
+    end
+    fixed > 0 && @info "Read the stdlib pkgimages of recorded jobs again" jobs=fixed
+    return fixed
+end
+
 function main(args=ARGS)
     db = open_db(Store.db_path(args); create=false)
     source_run(db, "sysimage") do
@@ -269,7 +315,9 @@ function main(args=ARGS)
         end
         jobs = pending_jobs(db)
         @info "Build jobs to fetch" count=length(jobs)
-        fetch_jobs!(db, jobs; deadline=now(UTC) + TIME_BUDGET)
+        deadline = now(UTC) + TIME_BUDGET
+        fetch_jobs!(db, jobs; deadline)
+        reparse_pkgimages!(db; deadline)
     end
     close(db)
     return 0

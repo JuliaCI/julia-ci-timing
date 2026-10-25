@@ -312,7 +312,7 @@
             "precompile_statements": "how many precompile statements that ran",
             "sys_output_s": "emitting sys (the Output line)",
             "stdlib_pkgimages_s": "precompiling the stdlib pkgimages after the image, as the log rounds it to whole seconds",
-            "stdlib_pkgimages": "how many stdlib pkgimages that precompiled: 22 before build 1002, 55 since, when bounds-checked ones were added"
+            "stdlib_pkgimages": "how many stdlib pkgimages that precompiled: about 110 before build 1002, both bounds-checking configurations, and 55 since"
           }
         },
         "sysimage_stdlibs": {

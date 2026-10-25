@@ -218,7 +218,7 @@ build job does, `runner` for the CI machines), `url`, `stages` (the stages it
 affected; every one when left out) and `platforms` (build triplets). The tab draws
 a dashed line at that build in the panels of those stages and shows the note in
 the build's popup. Use it for a step that is not the commit being slower, such as
-build 1002, from which the build precompiles 55 stdlib pkgimages instead of 22.
+build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
 
 ## Analysis helpers (`analysis/`)
 

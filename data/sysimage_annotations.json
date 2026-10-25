@@ -4,8 +4,8 @@
     {
       "build": 1002,
       "kind": "build",
-      "label": "Bounds-checked stdlib pkgimages",
-      "description": "The build also precompiles the stdlibs with bounds checking on, to distribute those pkgimages separately: 55 stdlib pkgimages from this build on instead of 22, so that stage takes longer without anything getting slower.",
+      "label": "No bounds-checked stdlib pkgimages",
+      "description": "The build stops precompiling a second, bounds-checked configuration of each stdlib, which is now distributed separately: 55 stdlib pkgimages from this build on instead of 110, so that stage takes about half as long.",
       "url": "https://github.com/JuliaLang/julia/pull/60054",
       "stages": ["stdlib_pkgimages"]
     }
