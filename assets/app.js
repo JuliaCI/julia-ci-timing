@@ -6844,7 +6844,7 @@ const DASHBOARD_PARAMS = new Set([
   "iw", // sysimage smoothing
   "at", // activity time range
   "aw", // activity averaging window
-  "pop", // the TTFX or Sizes tab's open details popup
+  "pop", // the TTFX, Sizes or Sysimage tab's open details popup
   "perf", // legacy: full iframe path
 ]);
 
@@ -11917,7 +11917,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
   el.innerHTML = html;
 }
 
-// The TTFX and Sizes tabs' details popup. `key` names what it shows, so an
+// The TTFX, Sizes and Sysimage tabs' details popup. `key` names what it shows, so an
 // answer that arrives after it moved on to something else is dropped, and
 // the URL carries it (`pop`) so a link opens the same popup.
 // `wide` gives the room a pull request's tables need.
@@ -11961,7 +11961,7 @@ async function reopenDetailPopup(tab) {
   const key = new URLSearchParams(window.location.search).get("pop");
   if (!key || activeTab !== tab) return;
   if (key === "ttfx-method") return showTtfxMethodPopup();
-  const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit)-(.+)$/);
+  const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit|sysimage-job)-(.+)$/);
   const kind = m?.[1];
   const id = m?.[2];
   if (kind === "ttfx-job") {
@@ -11980,6 +11980,11 @@ async function reopenDetailPopup(tab) {
   } else if (kind === "sizes-commit") {
     const i = sizesData.commits.indexOf(id);
     if (i >= 0) return showSizesCommitPopup(i, null);
+  } else if (kind === "sysimage-job") {
+    for (const [platform, p] of Object.entries(sysimageData.platforms)) {
+      const i = p.jobs.indexOf(id);
+      if (i >= 0) return showSysimageJobPopup(platform, i);
+    }
   }
   // Gone from the data (a closed pull request, say)
   setDetailPopupURL("");
@@ -18377,6 +18382,7 @@ async function loadSysimageData() {
     populateSysimagePlatforms();
     updateSysimageCharts();
     updateSysimageTable();
+    reopenDetailPopup("ci-sysimage");
   } catch (err) {
     console.error("Failed to load sysimage data:", err);
     document.getElementById("sysimage-chart-loading").innerHTML =
@@ -18521,7 +18527,7 @@ function updateSysimageCharts() {
     const e = elements[0];
     if (!e) return;
     const k = chart.data.datasets[e.datasetIndex].data[e.index].k;
-    window.open(sysimageJobURL(p, idx[k]), "_blank", "noopener");
+    showSysimageJobPopup(sysimagePlatform, idx[k]);
   });
   const axes = (stacked) => ({
     x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd HH:mm", min: xMin, max: xMax }),
@@ -18697,8 +18703,6 @@ function updateSysimageTable() {
       now: idx.filter((i) => t(i) > last - span),
     };
   }
-  const value = (p, s, i) =>
-    s === "total" ? SYSIMAGE_IMAGE_STAGES.reduce((sum, st) => (sum == null || p.stages[st][i] == null ? null : sum + p.stages[st][i]), 0) : p.stages[s][i];
   const rows = [...SYSIMAGE_IMAGE_STAGES, "total", "stdlib_pkgimages"];
   let html = "";
   for (const s of rows) {
@@ -18712,8 +18716,8 @@ function updateSysimageTable() {
         html += `<td class="num${sel}">—</td><td class="num col-secondary${sel}"></td>`;
         continue;
       }
-      const now = sysimageMedian(w.now.map((i) => value(w.p, s, i)));
-      const before = sysimageMedian(w.before.map((i) => value(w.p, s, i)));
+      const now = sysimageMedian(w.now.map((i) => sysimageValue(w.p, s, i)));
+      const before = sysimageMedian(w.before.map((i) => sysimageValue(w.p, s, i)));
       const pct = now == null || !before ? null : ((now - before) / before) * 100;
       const cls = pct == null || Math.abs(pct) < 3 ? "" : pct > 0 ? " ttfx-up" : " ttfx-down";
       html +=
@@ -18727,6 +18731,100 @@ function updateSysimageTable() {
   const span = spanDays >= 1 ? `${Math.round(spanDays)} days` : `${Math.max(1, Math.round(spanDays * 24))} hours`;
   document.getElementById("sysimage-stats-caption").innerHTML =
     `<b>Now against the start of the range</b> <span class="col-secondary">The median of each stage over the last ${span} of ${days}, and its change from the first ${span}. Linux jobs share their machine with other jobs, so expect noise there.</span>`;
+}
+
+// One build's level is compared with the median of this many builds before it
+// as well as with the build right before it, which alone is too noisy to read
+const SYSIMAGE_POPUP_BASELINE = 10;
+
+// A stage's seconds in a job of `p`, or the image's total
+function sysimageValue(p, s, i) {
+  if (s !== "total") return p.stages[s][i];
+  let sum = 0;
+  for (const st of SYSIMAGE_IMAGE_STAGES) {
+    if (p.stages[st][i] == null) return null;
+    sum += p.stages[st][i];
+  }
+  return sum;
+}
+
+// "+12.3s (+8%)" from `before` to `now`, with its class
+function sysimageChangeCell(now, before) {
+  if (now == null || before == null) return '<td class="num"></td>';
+  const d = now - before;
+  const pct = before ? (d / before) * 100 : null;
+  const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+  const text = `${sign}${formatDuration(Math.abs(d))}${pct == null ? "" : ` (${formatSignedPct(pct, { digits: 0 })})`}`;
+  // A tenth of a second on a stage that takes less than one is not a change worth a colour
+  const cls = Math.abs(d) < 0.5 ? "" : ttfxPctClass(pct);
+  return `<td class="num ${cls}" title="From ${formatDuration(before).replace(/<[^>]*>/g, "")}">${text}</td>`;
+}
+
+// Details of one build job, in the TTFX tab's popup: its links, every stage
+// against the job of the build before it and against the median of the
+// SYSIMAGE_POPUP_BASELINE builds before it, and the stdlibs loaded into the image
+function showSysimageJobPopup(platform, i) {
+  const p = sysimageData.platforms[platform];
+  const sha = p.commits[i];
+  const subject = sysimageData.subjects?.[sha] || "";
+  const pr = ttfxBuildPr({ message: subject });
+  const prev = i > 0 ? i - 1 : null;
+  const base = [];
+  for (let j = i - 1; j >= 0 && base.length < SYSIMAGE_POPUP_BASELINE; j--) base.push(j);
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+
+  let html = '<div class="ttfx-popup-actions">';
+  html += allStatsButton(sha);
+  html += extLink(sysimageJobURL(p, i), "Buildkite job", 'class="btn"');
+  if (pr) html += extLink(githubPrURL(pr), `GitHub PR #${pr}`, 'class="btn"');
+  html += extLink(githubCommitURL(sha), "GitHub commit", 'class="btn"');
+  // A build can come several commits after the one before it
+  if (prev != null && p.commits[prev] !== sha)
+    html += extLink(githubCompareURL(p.commits[prev], sha), "Commits since the previous build", 'class="btn" title="What changed between the build before this one and this one"');
+  html += "</div>";
+  html += row("Title", escapeHtml(subject));
+  html += row("Commit", `${commitShaLink(sha)} ${githubCommitLink(sha)}`);
+  html += row("Started", timeHtml(p.started_at[i]));
+  html += row("Build", `#${p.builds[i]}, ${escapeHtml(platform)}`);
+  html += row("Agent", escapeHtml(p.agents[i] || ""));
+  if (prev != null) html += row("Previous", `#${p.builds[prev]}, <code>${escapeHtml(p.commits[prev].slice(0, 10))}</code>, ${escapeHtml(p.started_at[prev].slice(0, 16).replace("T", " "))}`);
+
+  html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">This build</th>';
+  html += '<th class="num">vs previous</th>';
+  html += `<th class="num" title="Against the median of the ${base.length} builds before this one">vs median of ${base.length} before</th></tr></thead><tbody>`;
+  for (const s of [...SYSIMAGE_IMAGE_STAGES, "total", "stdlib_pkgimages"]) {
+    const v = sysimageValue(p, s, i);
+    const label = s === "total" ? "The sysimage" : SYSIMAGE_STAGES[s].label;
+    const tip = s === "total" ? "The stages above added up" : SYSIMAGE_STAGES[s].title;
+    let extra = "";
+    if (s === "precompile" && p.precompile_statements[i] != null) extra = ` <span class="ttfx-popup-muted">${p.precompile_statements[i]} statements</span>`;
+    if (s === "stdlib_pkgimages" && p.stdlib_pkgimages_count[i] != null) extra = ` <span class="ttfx-popup-muted">${p.stdlib_pkgimages_count[i]} of them</span>`;
+    html += `<tr${s === "total" ? ' class="sysimage-total"' : ""}><th title="${escapeHtml(tip)}">${s === "total" ? `<b>${label}</b>` : escapeHtml(label)}</th>`;
+    html += `<td class="num">${formatDuration(v)}${extra}</td>`;
+    html += sysimageChangeCell(v, prev == null ? null : sysimageValue(p, s, prev));
+    html += sysimageChangeCell(v, sysimageMedian(base.map((j) => sysimageValue(p, s, j))));
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+
+  const stdlibs = Object.entries(p.stdlibs || {}).filter(([, vals]) => vals[i] != null).sort((a, b) => b[1][i] - a[1][i]);
+  if (stdlibs.length) {
+    html += '<div class="ttfx-popup-section" title="Each stdlib loaded into the image, from the lines before the Sysimage built summary">Sysimage stdlibs</div>';
+    html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">This build</th><th class="num">vs previous</th>';
+    html += `<th class="num">vs median of ${base.length} before</th></tr></thead><tbody>`;
+    for (const [name, vals] of stdlibs) {
+      html += `<tr><th>${escapeHtml(name)}</th><td class="num">${formatDuration(vals[i])}</td>`;
+      html += sysimageChangeCell(vals[i], prev == null ? null : vals[prev]);
+      html += sysimageChangeCell(vals[i], sysimageMedian(base.map((j) => vals[j])));
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+  }
+  html += `<div class="ttfx-popup-muted ttfx-popup-hint">Previous: the ${escapeHtml(platform)} job of the build before this one. ${
+    platform.includes("linux") ? "The Linux jobs share their machine with other jobs, so one build against another is noisy; the median is the steadier comparison." : ""
+  }</div>`;
+
+  openDetailPopup({ title: `Sysimage of build #${p.builds[i]} on ${platform}`, html, key: `sysimage-job-${p.jobs[i]}` });
 }
 
 // === Phone shell ===
