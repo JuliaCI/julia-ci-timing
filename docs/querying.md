@@ -101,6 +101,11 @@ only the files that changed. `AGENTS.md` describes their shapes.
   libraries by ELF section, the stdlib pkgimages), `size_files` (every file of at least
   1 MiB), `size_prs` (each open pull request's measured build and the master commit to
   compare it with). Compare within a source: the manyjulias builds have fewer CPU targets.
+- **Sysimage.** `sysimage_jobs` (one build job of a julia-ci master build, for the x86_64
+  and aarch64 Linux, aarch64 macOS and x86_64 Windows build jobs: how long each stage of
+  making the system image took, in seconds, parsed from the job's log) and
+  `sysimage_stdlibs` (each stdlib loaded into the image). The Linux jobs share their
+  machine with other jobs, so compare medians over several builds rather than two builds.
 - **Downloads.** `dl_series` (requests per day), `dl_mix` (by Julia version and release
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.
@@ -194,6 +199,15 @@ SELECT b.merged_at, b.commit_sha, b.version, m.value AS bytes
 FROM size_metrics m JOIN size_builds b ON b.id = m.size_build_id
 WHERE m.metric = 'sysimg' AND b.source = 'ci' AND b.merged_at >= date('now', '-90 days')
 ORDER BY b.merged_at
+```
+
+How long compiling the compiler and emitting sys took on x86_64 Linux, per day:
+
+```sql
+SELECT date(started_at) AS day, count(*) AS jobs,
+  round(avg(compiler_s)) AS compiler_s, round(avg(sys_output_s)) AS sys_output_s
+FROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'
+GROUP BY day ORDER BY day
 ```
 
 One package's downloads per day, user and CI:

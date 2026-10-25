@@ -515,6 +515,49 @@ CREATE TABLE IF NOT EXISTS size_open_prs (
     head_ref  TEXT NOT NULL DEFAULT ''   -- its branch, '' when it is not in JuliaLang/julia
 );
 
+-- -------------------------------------------------------------- sysimage --
+-- How long the build jobs of julia-ci master builds spend making the system
+-- image, stage by stage, from their logs (fetch_sysimage.jl). Seconds. The
+-- stages the build prints a time for are as printed; compiler_output_s and
+-- sysbase_output_s, which it prints nothing for, are the time from the
+-- summary line before them to the link of the image, from Buildkite's line
+-- timestamps. A log without the stage lines (expired, or a build that
+-- printed something else) is kept as state 'unparsed' with NULL stages, so it
+-- is not fetched again. A 'pending' row is a job listed from the Buildkite API
+-- (the builds the jobs table has no UUIDs for) whose log is still to fetch.
+
+CREATE TABLE IF NOT EXISTS sysimage_jobs (
+    job_uuid              TEXT PRIMARY KEY,
+    build                 INTEGER NOT NULL,   -- the julia-ci build
+    commit_sha            TEXT NOT NULL,
+    job_name              TEXT NOT NULL,      -- e.g. ":linux: build x86_64-linux-gnu"
+    triplet               TEXT NOT NULL,      -- from the job's name, e.g. x86_64-linux-gnu
+    agent                 TEXT,
+    started_at            TEXT,
+    finished_at           TEXT,
+    state                 TEXT NOT NULL,      -- ok | unparsed | pending
+    compiler_s            REAL,               -- Base_compiler.jl: "Base.Compiler ──"
+    compiler_output_s     REAL,               -- from that line to the link of basecompiler
+    base_s                REAL,               -- sysimg.jl: "Base ──" of the Sysimage built summary
+    stdlibs_s             REAL,               -- "Stdlibs ──" of that summary
+    sysbase_output_s      REAL,               -- from that summary to the link of sysbase
+    precompile_s          REAL,               -- generate_precompile.jl: "Precompilation complete"
+    precompile_statements INTEGER,            -- "Executed N precompile statements"
+    sys_output_s          REAL,               -- "Output ──": emitting sys
+    stdlib_pkgimages_s    REAL,               -- the stdlib pkgimages after the image
+    stdlib_pkgimages      INTEGER,            -- how many that precompiled
+    change_seq            INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sysimage_jobs_started ON sysimage_jobs (started_at);
+
+-- The time of each stdlib loaded into the image, where the log has it
+CREATE TABLE IF NOT EXISTS sysimage_stdlibs (
+    job_uuid TEXT NOT NULL REFERENCES sysimage_jobs (job_uuid),
+    stdlib   TEXT NOT NULL,
+    seconds  REAL NOT NULL,
+    PRIMARY KEY (job_uuid, stdlib)
+) WITHOUT ROWID;
+
 -- ------------------------------------------------------------- downloads --
 -- Rollup rows from julialang-logs public_outputs, stored as published.
 -- request_addrs counts distinct addresses within its own row only and must

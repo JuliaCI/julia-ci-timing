@@ -5033,6 +5033,11 @@ makeResizablePanel({
   storageKey: "sizes-stats-height",
 });
 makeResizablePanel({
+  handleId: "sysimage-resize-handle",
+  targetId: "sysimage-stats",
+  storageKey: "sysimage-stats-height",
+});
+makeResizablePanel({
   handleId: "activity-resize-handle",
   targetId: "activity-stats",
   storageKey: "activity-stats-height",
@@ -6609,6 +6614,7 @@ const SOURCE_VIEWS = {
   pkgeval: ["pkgeval"],
   ttfx: ["ttfx"],
   sizes: ["sizes"],
+  sysimage: ["sysimage"],
   packages: ["packages"],
   agents: ["agents", "backlog", "usage"],
   github: ["activity"],
@@ -6631,6 +6637,7 @@ function reloadStaleView(tab) {
   if (tab === "pkgeval" && takeStale("pkgeval") && pkgevalData) loadPkgevalData();
   if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
   if (tab === "ci-sizes" && takeStale("sizes") && sizesData) reloadSizesData();
+  if (tab === "ci-sysimage" && takeStale("sysimage") && sysimageData) loadSysimageData();
   if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
   if (tab === "activity" && takeStale("activity") && activityData) loadActivityData();
   // The Workers view loads what is marked whenever it draws
@@ -6646,6 +6653,7 @@ const TAB_SOURCES = {
   "ci-workers": "agents",
   "ci-ttfx": "ttfx",
   "ci-sizes": "sizes",
+  "ci-sysimage": "sysimage",
   benchmarks: "benchmarks",
   packages: "packages",
   pkgeval: "pkgeval",
@@ -6660,6 +6668,7 @@ function setUpdatedLabels() {
     pkgeval: pkgevalData?.generated_at,
     ttfx: ttfxData?.generated_at,
     sizes: sizesData?.generated_at,
+    sysimage: sysimageData?.generated_at,
     benchmarks: benchData?.generated_at,
     packages: packagesDownloadsData?.generated_at,
     agents: agentsData?.generated_at,
@@ -6719,6 +6728,7 @@ const TAB_URL_MAP = {
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
   "ci-sizes": "ci-sizes",
+  "ci-sysimage": "ci-sysimage",
   packages: "ecosystem-downloads",
   pkgeval: "ecosystem-pkgeval",
   activity: "repo-activity",
@@ -6736,6 +6746,7 @@ const TAB_SHORT_PATH = {
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
   "ci-sizes": "/sizes",
+  "ci-sysimage": "/sysimage",
   packages: "/downloads",
   pkgeval: "/pkgeval",
   activity: "/activity",
@@ -6828,6 +6839,9 @@ const DASHBOARD_PARAMS = new Set([
   "zn", // sizes normalized (% change) toggle
   "zm", // sizes selected metrics
   "zv", // sizes table view (open pull requests or master commits)
+  "it", // sysimage time range
+  "ip", // sysimage platform
+  "iw", // sysimage smoothing
   "at", // activity time range
   "aw", // activity averaging window
   "pop", // the TTFX or Sizes tab's open details popup
@@ -6917,6 +6931,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
     "ci-sizes": "tab-ci-sizes",
+    "ci-sysimage": "tab-ci-sysimage",
     packages: "tab-packages",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
@@ -6965,6 +6980,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
     .getElementById("sizes-view")
     .classList.toggle("view-hidden", tab !== "ci-sizes");
   document
+    .getElementById("sysimage-view")
+    .classList.toggle("view-hidden", tab !== "ci-sysimage");
+  document
     .getElementById("activity-view")
     .classList.toggle("view-hidden", tab !== "activity");
   document
@@ -6995,6 +7013,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "pkgeval" && !pkgevalData) loadTabOnce(tab, loadPkgevalData);
   if (tab === "ci-ttfx" && !ttfxData) loadTabOnce(tab, loadTtfxData);
   if (tab === "ci-sizes" && !sizesData) loadTabOnce(tab, loadSizesData);
+  if (tab === "ci-sysimage" && !sysimageData) loadTabOnce(tab, loadSysimageData);
   if (tab === "packages" && !packagesDownloadsData) loadTabOnce(tab, loadPackagesDownloadsData);
   if (tab === "activity" && !activityData) loadTabOnce(tab, loadActivityData);
   reloadStaleView(tab);
@@ -7025,6 +7044,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "benchmarks" && benchData) updateBenchURL();
   if (tab === "ci-ttfx" && ttfxData) updateTtfxURL();
   if (tab === "ci-sizes") updateSizesURL();
+  if (tab === "ci-sysimage") updateSysimageURL();
   if (tab === "packages") updatePackagesURL();
   if (tab === "pkgeval") updatePkgevalURL();
   if (tab === "activity") updateActivityURL();
@@ -7049,6 +7069,7 @@ const TAB_URL_KEYS = {
   benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
   "ci-ttfx": ["tm", "tt", "tn", "th", "tg", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
+  "ci-sysimage": ["it", "ip", "iw"],
   activity: ["at", "aw"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
   pkgeval: ["pt", "pp", "pkg", "pr", "pv", "pl", "pd", "pk", "pf"],
@@ -18255,6 +18276,459 @@ function updateActivityTable() {
   document.getElementById("activity-stats-tbody").innerHTML = html;
 }
 
+// === Sysimage ===
+// How long the build job of each julia-ci master build spends making the
+// system image, stage by stage, from api/sysimage/summary. The first panel
+// stacks the smoothed stages of the image into its total; the others draw one
+// stage each, a dot per build and the smoothed level through them.
+let sysimageData = null;
+let sysimageCharts = [];
+let sysimageTimeRangeDays = 90;
+let sysimageSince = null; // the start of the window loaded or on its way, "" for all time
+// macOS by default: its times are the least noisy
+let sysimagePlatform = "aarch64-apple-darwin";
+let sysimageSmoothing = 11;
+const SYSIMAGE_SMOOTHINGS = [1, 5, 11, 25];
+const SYSIMAGE_PLATFORMS = ["aarch64-apple-darwin", "x86_64-linux-gnu", "aarch64-linux-gnu", "x86_64-w64-mingw32"];
+const SYSIMAGE_STAGES = {
+  compiler: { label: "Compile the compiler", title: "Base_compiler.jl: loading and compiling Base.Compiler" },
+  compiler_output: {
+    label: "Write basecompiler",
+    title: "Emitting basecompiler's native code: from the end of the compiler's compile to the link of the image",
+  },
+  base: { label: "Base", title: "sysimg.jl: loading Base into the compiler image" },
+  stdlibs: { label: "Sysimage stdlibs", title: "Loading the stdlibs that go into the sysimage" },
+  sysbase_output: {
+    label: "Write sysbase",
+    title: "Emitting sysbase's native code: from the Sysimage built summary to the link of the image",
+  },
+  precompile: { label: "Precompile statements", title: "generate_precompile.jl: collecting and running the precompile statements" },
+  sys_output: { label: "Write sys", title: "Emitting the final image (Output ──)" },
+  stdlib_pkgimages: {
+    label: "Stdlib pkgimages",
+    title: "Precompiling the stdlib pkgimages after the image: 22 of them before build 1002, 55 since, so the step there is not a regression",
+  },
+};
+// The stages of the image itself, which the stacked panel and the total add up
+const SYSIMAGE_IMAGE_STAGES = Object.keys(SYSIMAGE_STAGES).filter((s) => s !== "stdlib_pkgimages");
+// The table compares the medians of the first and the last this many days of
+// the range, or of a quarter of it when it is shorter than four times that
+const SYSIMAGE_TABLE_DAYS = 14;
+
+// Fixed hues in build order, stepped for each theme; the order keeps the
+// neighbours in the stacked panel apart for colour-blind readers too
+const SYSIMAGE_COLORS = {
+  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
+  dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+};
+
+function sysimageColors() {
+  const colors = SYSIMAGE_COLORS[isDarkMode() ? "dark" : "light"];
+  return Object.fromEntries(Object.keys(SYSIMAGE_STAGES).map((s, i) => [s, colors[i]]));
+}
+
+function sysimageWantedSince() {
+  if (sysimageTimeRangeDays <= 0) return "";
+  return apiSince(new Date(Date.now() - (sysimageTimeRangeDays + 7) * 864e5));
+}
+
+function applySysimageURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const it = params.get("it");
+  if (it !== null) {
+    const days = nearestTimeRange(it);
+    if (days !== null) {
+      sysimageTimeRangeDays = days;
+      document.getElementById("sysimage-time-range").value = days;
+    }
+  }
+  const ip = params.get("ip");
+  if (ip) sysimagePlatform = ip;
+  const iw = parseInt(params.get("iw"), 10);
+  if (SYSIMAGE_SMOOTHINGS.includes(iw)) {
+    sysimageSmoothing = iw;
+    document.getElementById("sysimage-smoothing").value = iw;
+  }
+}
+
+function updateSysimageURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  const setOrDelete = (k, v, isDefault) => {
+    if (isDefault) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  };
+  setOrDelete("it", sysimageTimeRangeDays, sysimageTimeRangeDays === 90);
+  setOrDelete("ip", sysimagePlatform, sysimagePlatform === "aarch64-apple-darwin");
+  setOrDelete("iw", sysimageSmoothing, sysimageSmoothing === 11);
+  history.replaceState(null, "", url);
+}
+
+async function loadSysimageData() {
+  const since = sysimageWantedSince();
+  sysimageSince = since;
+  try {
+    const d = await apiGet("sysimage/summary", { since });
+    // A wider window was asked for meanwhile
+    if (since !== sysimageSince) return;
+    sysimageData = d;
+    setUpdatedLabels();
+    document.getElementById("sysimage-chart-loading").style.display = "none";
+    populateSysimagePlatforms();
+    updateSysimageCharts();
+    updateSysimageTable();
+  } catch (err) {
+    console.error("Failed to load sysimage data:", err);
+    document.getElementById("sysimage-chart-loading").innerHTML =
+      '<span class="error">Failed to load the sysimage data; try reloading the page.</span>';
+    document.getElementById("sysimage-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+  }
+}
+
+// The platforms with data, the usual ones first
+function sysimagePlatforms() {
+  const have = Object.keys(sysimageData?.platforms || {});
+  const rank = (p) => (SYSIMAGE_PLATFORMS.includes(p) ? SYSIMAGE_PLATFORMS.indexOf(p) : SYSIMAGE_PLATFORMS.length);
+  return have.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+function populateSysimagePlatforms() {
+  const select = document.getElementById("sysimage-platform");
+  const platforms = sysimagePlatforms();
+  if (!platforms.includes(sysimagePlatform) && platforms.length) sysimagePlatform = platforms[0];
+  select.innerHTML = platforms
+    .map((p) => `<option value="${escapeHtml(p)}"${p === sysimagePlatform ? " selected" : ""}>${escapeHtml(p)}</option>`)
+    .join("");
+}
+
+function setSysimageTimeRange(val) {
+  sysimageTimeRangeDays = parseInt(val, 10);
+  updateSysimageURL();
+  const since = sysimageWantedSince();
+  // A longer range than the one loaded needs the jobs before it
+  if (sysimageData && sysimageSince !== "" && (since === "" || since < sysimageSince)) {
+    loadSysimageData();
+    return;
+  }
+  updateSysimageCharts();
+  updateSysimageTable();
+}
+
+function setSysimagePlatform(val) {
+  sysimagePlatform = val;
+  updateSysimageURL();
+  updateSysimageCharts();
+  updateSysimageTable();
+}
+
+function setSysimageSmoothing(val) {
+  sysimageSmoothing = parseInt(val, 10);
+  updateSysimageURL();
+  updateSysimageCharts();
+}
+
+const sysimageMedian = (vals) => {
+  const s = vals.filter((v) => v != null).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// The median of the `w` builds centred on each one, so a step shows where it
+// happened rather than half a window later
+function sysimageRolling(vals, w) {
+  if (w <= 1) return vals;
+  const h = w >> 1;
+  return vals.map((_, i) => sysimageMedian(vals.slice(Math.max(0, i - h), i + h + 1)));
+}
+
+// The jobs of a platform in the range as indices into its arrays
+function sysimageIndices(p) {
+  const start = sysimageTimeRangeDays > 0 ? Date.now() - sysimageTimeRangeDays * 864e5 : -Infinity;
+  const out = [];
+  p.started_at.forEach((t, i) => {
+    if (t && Date.parse(t) >= start) out.push(i);
+  });
+  return out;
+}
+
+// What a point's tooltip says about its build
+function sysimageBuildLines(p, i) {
+  const subject = sysimageData.subjects?.[p.commits[i]];
+  const lines = [];
+  if (subject) lines.push(subject.length > 80 ? subject.slice(0, 79) + "…" : subject);
+  if (p.agents[i]) lines.push(p.agents[i].replace(/\..*/, ""));
+  return lines;
+}
+
+function sysimageJobURL(p, i) {
+  return `https://buildkite.com/julialang/julia-ci/builds/${p.builds[i]}#${p.jobs[i]}`;
+}
+
+// Zooming one panel zooms them all to the same days
+function syncSysimageZoom({ chart }) {
+  const { min, max } = chart.scales.x;
+  for (const c of sysimageCharts) {
+    if (c === chart) continue;
+    c.options.scales.x.min = min;
+    c.options.scales.x.max = max;
+    c.update("none");
+  }
+  document.getElementById("sysimage-btn-reset-zoom").style.display = "";
+}
+
+function resetSysimageZoom() {
+  document.getElementById("sysimage-btn-reset-zoom").style.display = "none";
+  updateSysimageCharts();
+}
+
+function updateSysimageCharts() {
+  if (!sysimageData) return;
+  for (const c of sysimageCharts) c.destroy();
+  sysimageCharts = [];
+  document.getElementById("sysimage-btn-reset-zoom").style.display = "none";
+  const grid = document.getElementById("sysimage-grid");
+  const p = sysimageData.platforms[sysimagePlatform];
+  const idx = p ? sysimageIndices(p) : [];
+  if (!idx.length) {
+    grid.innerHTML = '<div class="workers-empty">No build jobs of this platform in the selected time range.</div>';
+    return;
+  }
+  const stages = Object.keys(SYSIMAGE_STAGES);
+  grid.innerHTML =
+    `<div class="ttfx-panel"><canvas id="sysimage-chart-total"></canvas></div>` +
+    stages.map((s) => `<div class="ttfx-panel" title="${escapeHtml(SYSIMAGE_STAGES[s].title)}"><canvas id="sysimage-chart-${s}"></canvas></div>`).join("");
+  const theme = chartTheme();
+  const colors = sysimageColors();
+  const xs = idx.map((i) => Date.parse(p.started_at[i]));
+  const xMin = xs[0];
+  const xMax = xs[xs.length - 1];
+  const smooth = Object.fromEntries(stages.map((s) => [s, sysimageRolling(idx.map((i) => p.stages[s][i]), sysimageSmoothing)]));
+  const smoothText = sysimageSmoothing > 1 ? ` (median of ${sysimageSmoothing} builds)` : "";
+  const title = (text) => ({
+    display: true,
+    text,
+    color: theme.text,
+    font: { size: 12, weight: "600" },
+    padding: { top: 2, bottom: 6 },
+  });
+  const tooltipTitle = (items) => {
+    if (!items.length) return "";
+    const i = idx[items[0].raw.k];
+    return `#${p.builds[i]} · ${p.commits[i].slice(0, 10)} · ${p.started_at[i].slice(0, 16).replace("T", " ")}`;
+  };
+  const open = tapAgainToOpen((evt, elements, chart) => {
+    const e = elements[0];
+    if (!e) return;
+    const k = chart.data.datasets[e.datasetIndex].data[e.index].k;
+    window.open(sysimageJobURL(p, idx[k]), "_blank", "noopener");
+  });
+  const axes = (stacked) => ({
+    x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd HH:mm", min: xMin, max: xMax }),
+    y: {
+      stacked,
+      beginAtZero: true,
+      ticks: { color: theme.text, callback: (v) => formatDuration(v) },
+      grid: { color: theme.grid },
+    },
+  });
+
+  // The image's stages stacked: the smoothed level of each, so the top is the total
+  const stacked = SYSIMAGE_IMAGE_STAGES.map((s, n) => ({
+    label: SYSIMAGE_STAGES[s].label,
+    data: xs.map((x, k) => ({ x, y: smooth[s][k], k })),
+    borderColor: colors[s],
+    backgroundColor: colorToRgba(colors[s], 0.55),
+    borderWidth: 1,
+    pointRadius: 0,
+    pointHoverRadius: 3,
+    fill: n === 0 ? "origin" : "-1",
+  }));
+  sysimageCharts.push(
+    new Chart(document.getElementById("sysimage-chart-total"), {
+      type: "line",
+      data: { datasets: stacked },
+      options: {
+        ...baseChartOptions(),
+        parsing: false,
+        normalized: true,
+        interaction: { mode: "index", intersect: false },
+        elements: { line: { tension: 0 } },
+        onClick: open,
+        plugins: {
+          title: title(`The sysimage, stage by stage${smoothText}`),
+          legend: { labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8, font: { size: 11 } } },
+          zoom: zoomOptions(syncSysimageZoom),
+          tooltip: {
+            usePointStyle: true,
+            boxPadding: 4,
+            itemSort: (a, b) => b.datasetIndex - a.datasetIndex,
+            callbacks: {
+              title: tooltipTitle,
+              label: (ctx) => ` ${ctx.dataset.label}: ${formatDuration(ctx.raw.y)}`,
+              footer: (items) => {
+                if (!items.length) return "";
+                const k = items[0].raw.k;
+                const total = SYSIMAGE_IMAGE_STAGES.reduce((sum, s) => sum + (smooth[s][k] ?? 0), 0);
+                return [`Total: ${formatDuration(total)}`, ...sysimageBuildLines(p, idx[k])];
+              },
+            },
+          },
+        },
+        scales: axes(true),
+      },
+    }),
+  );
+
+  for (const s of stages) {
+    const raw = idx.map((i) => p.stages[s][i]);
+    const vals = raw.filter((v) => v != null).sort((a, b) => a - b);
+    // An outlier past the 99th percentile is drawn at the top rather than
+    // squashing every other build into the bottom of the panel
+    const top = vals.length ? vals[Math.floor((vals.length - 1) * 0.99)] * 1.15 : undefined;
+    const datasets = [
+      {
+        label: SYSIMAGE_STAGES[s].label,
+        data: xs.map((x, k) => (raw[k] == null ? null : { x, y: Math.min(raw[k], top), k, v: raw[k] })).filter(Boolean),
+        showLine: false,
+        borderColor: colorToRgba(colors[s], 0.5),
+        backgroundColor: colorToRgba(colors[s], 0.5),
+        pointRadius: 1.5,
+        pointHoverRadius: 4,
+        _raw: true,
+      },
+      {
+        label: `Median of ${sysimageSmoothing}`,
+        data: xs.map((x, k) => ({ x, y: smooth[s][k], k })),
+        borderColor: colors[s],
+        backgroundColor: colors[s],
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        hidden: sysimageSmoothing <= 1,
+      },
+    ];
+    const extra = (i) => {
+      if (s === "stdlibs") {
+        const each = Object.entries(p.stdlibs || {})
+          .map(([name, v]) => [name, v[i]])
+          .filter(([, v]) => v != null)
+          .sort((a, b) => b[1] - a[1]);
+        return each.map(([name, v]) => `${name}: ${formatDuration(v)}`);
+      }
+      if (s === "precompile" && p.precompile_statements[i] != null) return [`${p.precompile_statements[i]} statements`];
+      if (s === "stdlib_pkgimages" && p.stdlib_pkgimages_count[i] != null) return [`${p.stdlib_pkgimages_count[i]} pkgimages`];
+      return [];
+    };
+    sysimageCharts.push(
+      new Chart(document.getElementById(`sysimage-chart-${s}`), {
+        type: "line",
+        data: { datasets },
+        options: {
+          ...baseChartOptions(),
+          parsing: false,
+          normalized: true,
+          interaction: { mode: "nearest", intersect: false },
+          elements: { line: { tension: 0 } },
+          onClick: (evt, elements, chart) => open(evt, elements.filter((e) => chart.data.datasets[e.datasetIndex]._raw), chart),
+          onHover: (evt, elements, chart) => {
+            evt.native.target.style.cursor = elements.some((e) => chart.data.datasets[e.datasetIndex]._raw) ? "pointer" : "";
+          },
+          plugins: {
+            title: title(SYSIMAGE_STAGES[s].label),
+            legend: { display: false },
+            zoom: zoomOptions(syncSysimageZoom),
+            tooltip: {
+              filter: (item) => item.dataset._raw,
+              callbacks: {
+                title: tooltipTitle,
+                label: (ctx) => {
+                  const k = ctx.raw.k;
+                  const lines = [` ${SYSIMAGE_STAGES[s].label}: ${formatDuration(ctx.raw.v)}`];
+                  if (sysimageSmoothing > 1) lines.push(` Median of ${sysimageSmoothing}: ${formatDuration(smooth[s][k])}`);
+                  return lines;
+                },
+                afterBody: (items) => (items.length ? [...extra(idx[items[0].raw.k]), ...sysimageBuildLines(p, idx[items[0].raw.k])] : []),
+              },
+            },
+          },
+          scales: { ...axes(false), y: { ...axes(false).y, max: top } },
+        },
+      }),
+    );
+  }
+}
+
+// One row per stage and the image's total: per platform, the median over the
+// last SYSIMAGE_TABLE_DAYS of the range against the first as many
+function updateSysimageTable() {
+  if (!sysimageData) return;
+  const platforms = sysimagePlatforms();
+  const thead = document.getElementById("sysimage-stats-thead");
+  thead.innerHTML =
+    `<tr><th>Stage</th>` +
+    platforms
+      .map((pl) => {
+        const sel = pl === sysimagePlatform ? " sysimage-selected" : "";
+        return `<th class="num${sel}" colspan="2"><button class="btn-link" data-platform="${escapeHtml(pl)}" title="Show ${escapeHtml(pl)}">${escapeHtml(pl)}</button></th>`;
+      })
+      .join("") +
+    `</tr>`;
+  thead.querySelectorAll("button[data-platform]").forEach((b) => {
+    b.onclick = () => {
+      document.getElementById("sysimage-platform").value = b.dataset.platform;
+      setSysimagePlatform(b.dataset.platform);
+    };
+  });
+  const windows = {};
+  let spanDays = SYSIMAGE_TABLE_DAYS;
+  for (const pl of platforms) {
+    const p = sysimageData.platforms[pl];
+    const idx = sysimageIndices(p);
+    if (!idx.length) continue;
+    const t = (i) => Date.parse(p.started_at[i]);
+    const first = t(idx[0]);
+    const last = t(idx[idx.length - 1]);
+    const span = Math.min(SYSIMAGE_TABLE_DAYS * 864e5, (last - first) / 4);
+    if (pl === sysimagePlatform) spanDays = span / 864e5;
+    windows[pl] = {
+      p,
+      before: idx.filter((i) => t(i) < first + span),
+      now: idx.filter((i) => t(i) > last - span),
+    };
+  }
+  const value = (p, s, i) =>
+    s === "total" ? SYSIMAGE_IMAGE_STAGES.reduce((sum, st) => (sum == null || p.stages[st][i] == null ? null : sum + p.stages[st][i]), 0) : p.stages[s][i];
+  const rows = [...SYSIMAGE_IMAGE_STAGES, "total", "stdlib_pkgimages"];
+  let html = "";
+  for (const s of rows) {
+    const label = s === "total" ? "<b>The sysimage</b>" : escapeHtml(SYSIMAGE_STAGES[s].label);
+    const tip = s === "total" ? "The seven stages above added up" : SYSIMAGE_STAGES[s].title;
+    html += `<tr${s === "total" ? ' class="sysimage-total"' : ""}><td title="${escapeHtml(tip)}">${label}</td>`;
+    for (const pl of platforms) {
+      const w = windows[pl];
+      const sel = pl === sysimagePlatform ? " sysimage-selected" : "";
+      if (!w) {
+        html += `<td class="num${sel}">—</td><td class="num col-secondary${sel}"></td>`;
+        continue;
+      }
+      const now = sysimageMedian(w.now.map((i) => value(w.p, s, i)));
+      const before = sysimageMedian(w.before.map((i) => value(w.p, s, i)));
+      const pct = now == null || !before ? null : ((now - before) / before) * 100;
+      const cls = pct == null || Math.abs(pct) < 3 ? "" : pct > 0 ? " ttfx-up" : " ttfx-down";
+      html +=
+        `<td class="num${sel}" title="Median of the last ${w.now.length} builds">${formatDuration(now)}</td>` +
+        `<td class="num${cls}${sel}" title="Against ${formatDuration(before).replace(/<[^>]*>/g, "")}, the median of the first ${w.before.length} builds">${pct == null ? "" : formatSignedPct(pct, { digits: 0 })}</td>`;
+    }
+    html += "</tr>";
+  }
+  document.getElementById("sysimage-stats-tbody").innerHTML = html;
+  const days = sysimageTimeRangeDays > 0 ? `the last ${sysimageTimeRangeDays} days` : "all the history";
+  const span = spanDays >= 1 ? `${Math.round(spanDays)} days` : `${Math.max(1, Math.round(spanDays * 24))} hours`;
+  document.getElementById("sysimage-stats-caption").innerHTML =
+    `<b>Now against the start of the range</b> <span class="col-secondary">The median of each stage over the last ${span} of ${days}, and its change from the first ${span}. Linux jobs share their machine with other jobs, so expect noise there.</span>`;
+}
+
 // === Phone shell ===
 // On a phone the page gets an app's frame: a bottom bar of the five
 // sections, the open section's pages as pills under the header, and each
@@ -18264,7 +18738,7 @@ const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx", "ci-sizes"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx", "ci-sizes", "ci-sysimage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 // The view holding each tab's toolbar; the three CI pages share one
@@ -18274,6 +18748,7 @@ const PHONE_TOOLBAR_VIEWS = {
   "ci-workers": "ci-timing-view",
   "ci-ttfx": "ttfx-view",
   "ci-sizes": "sizes-view",
+  "ci-sysimage": "sysimage-view",
   benchmarks: "benchmarks-view",
   packages: "packages-view",
   pkgeval: "pkgeval-view",
@@ -18484,6 +18959,7 @@ applyPkgevalURLParams();
 applyTtfxURLParams();
 applySizesURLParams();
 applyActivityURLParams();
+applySysimageURLParams();
 applyCommitURLParams();
 const perfDeepLink = applyPerfURLParams();
 
@@ -18595,6 +19071,7 @@ function applyTheme() {
   if (ttfxData) updateTtfxChart();
   if (sizesChart) updateSizesChart();
   if (activityData) updateActivityCharts();
+  if (sysimageData) updateSysimageCharts();
   if (buildsChart) drawBuildsView();
   if (backlogData && !backlogData.error) {
     renderBacklogChart(backlogData);
