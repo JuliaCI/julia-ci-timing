@@ -454,9 +454,10 @@ end
 
 const PR_PIPELINE = "julia-pr"
 # Builds listed per run: the first fill reaches back a month, later runs only need the
-# builds since the last one, with a margin for jobs still running then. A TTFX job has
-# finished at most 16 hours after its build was created, behind the macOS queue. Once a
-# day the whole lookback is listed again, for a job that finished later still.
+# builds since the last one, with a margin. A TTFX job can finish more than a day after
+# its build was created, behind the macOS queue, so they also reach back to the oldest
+# build whose TTFX job was runnable but unfinished at the last run. Once a day the whole
+# lookback is listed again, for a job the agents ingest had not seen yet.
 const PR_BACKFILL_DAYS = 30
 const PR_LOOKBACK_DAYS = 3
 const PR_MARGIN = Day(1)
@@ -579,7 +580,15 @@ function refresh_prs!(db)
     f = query(db, "SELECT value FROM meta WHERE key = ?", (PR_FULL_KEY,))
     full = isempty(existing) || isempty(f) || now_time - Store.parse_upstream(String(f[1].value)) >= Day(1)
     r = query(db, "SELECT started_at FROM source_runs WHERE source = 'ttfx' AND ok = 1 ORDER BY id DESC LIMIT 1")
-    full || isempty(r) || (since = max(since, Store.parse_upstream(String(r[1].started_at)) - PR_MARGIN))
+    if !full && !isempty(r)
+        last_run = Store.parse_upstream(String(r[1].started_at))
+        # A build's first job is runnable when it is created, give or take the queue rules
+        w = query(db, "SELECT min(runnable_at) AS t FROM pool_jobs WHERE pipeline = ?1 AND build IN " *
+                      "(SELECT build FROM pool_jobs WHERE pipeline = ?1 AND name LIKE '%TTFX%' AND (finished_at IS NULL OR finished_at >= ?2))",
+                  (PR_PIPELINE, Store.iso(last_run - PR_MARGIN)))
+        oldest = w[1].t === missing ? last_run : Store.parse_upstream(String(w[1].t)) - Hour(1)
+        since = max(since, min(last_run - PR_MARGIN, oldest))
+    end
     jobs, ci = pr_ttfx_jobs(since)
     full && Store.setmeta!(db, PR_FULL_KEY, Store.iso(now_time))
     rows = Any[]
