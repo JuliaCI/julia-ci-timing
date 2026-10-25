@@ -11582,7 +11582,9 @@ const TTFX_OUTLIER_ROWS = 10;
 
 // The selected tasks whose change from their last run before `b` in `series`
 // departs most from the suite's change, per metric: times first, ranked by how
-// far the task's ratio is from the suite's, then counts by their difference
+// far the task's ratio is from the suite's, then counts by their difference.
+// A time with a GC-off twin carries it from the same two runs (`offPrev`,
+// `off`), which tells a change in the GC's share from one in the work.
 function ttfxBuildOutliers(b, series, tasks, suiteRows) {
   const i = series.indexOf(b);
   if (i <= 0) return [];
@@ -11596,9 +11598,14 @@ function ttfxBuildOutliers(b, series, tasks, suiteRows) {
       const v = ttfxValue(b, t, key);
       if (v == null) continue;
       let prev = null;
-      for (let j = i - 1; j >= 0 && prev == null; j--) prev = ttfxValue(series[j], t, key);
+      let j = i - 1;
+      for (; j >= 0; j--) if ((prev = ttfxValue(series[j], t, key)) != null) break;
       if (prev == null) continue;
       const row = { task: t, key, v, prev, change: ttfxChange(v, prev, key) };
+      if (ttfxShowsTwin("gcoff", key)) {
+        row.off = ttfxValue(b, t, key, "gcoff");
+        row.offPrev = ttfxValue(series[j], t, key, "gcoff");
+      }
       if (ttfxIsCount(key)) {
         if (Math.abs(v - prev) >= TTFX_OUTLIER_MIN_COUNT) counts.push({ ...row, score: Math.abs(v - prev) });
       } else if (prev > 0 && Math.abs(v / prev - 1) * 100 >= TTFX_OUTLIER_MIN_PCT && Math.abs(v - prev) >= TTFX_OUTLIER_MIN_S) {
@@ -11671,13 +11678,22 @@ function showTtfxBuildPopup(b, task) {
   if (!outliers.length) {
     html += `<div class="ttfx-popup-muted">None moved ${TTFX_OUTLIER_MIN_PCT}% and ${TTFX_OUTLIER_MIN_S}s, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
   } else {
-    html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th></tr></thead><tbody>';
+    const offs = outliers.some((o) => o.off != null || o.offPrev != null);
+    html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th>';
+    if (offs) html += '<th class="num" title="The change in the same task and phase from the repeats with the GC off">GC off</th>';
+    html += "</tr></thead><tbody>";
     for (const o of outliers) {
       html += `<tr><td class="ttfx-compile-stmt">${escapeHtml(o.task)}</td><td class="ttfx-outlier-metric">${escapeHtml(ttfxMetricLabel(o.key))}</td>`;
-      html += `<td class="num">${formatTtfxValue(o.prev, o.key)}</td><td class="num">${formatTtfxValue(o.v, o.key)}</td><td class="num ${o.change.cls}">${o.change.text}</td></tr>`;
+      html += `<td class="num">${formatTtfxValue(o.prev, o.key)}</td><td class="num">${formatTtfxValue(o.v, o.key)}</td><td class="num ${o.change.cls}">${o.change.text}</td>`;
+      if (offs) {
+        const c = ttfxChange(o.off, o.offPrev, o.key);
+        const title = o.off != null || o.offPrev != null ? ` title="GC off: ${formatTtfxSeconds(o.offPrev)} → ${formatTtfxSeconds(o.off)}"` : "";
+        html += `<td class="num ${c.cls}"${title}>${o.off != null || o.offPrev != null ? c.text : ""}</td>`;
+      }
+      html += "</tr>";
     }
     html += "</tbody></table>";
-    html += '<div class="ttfx-popup-muted ttfx-popup-hint">Ranked by how far each task\'s change is from the suite\'s.</div>';
+    html += `<div class="ttfx-popup-muted ttfx-popup-hint">Ranked by how far each task's change is from the suite's.${offs ? " GC off: the change with the GC disabled; a time that moved only with the GC on moved in the GC." : ""}</div>`;
   }
 
   for (const a of ttfxAnnotationsFor(b)) {
@@ -11745,9 +11761,15 @@ function ttfxBuildMarkdown(b, task) {
   }
   const outliers = ttfxBuildOutliers(b, series, tasks, suiteRows);
   if (outliers.length) {
-    lines.push("", "Tasks that moved most against their previous run, ranked by how far their change is from the suite's:", "", "| task | metric | previous | this | change |", "|---|---|---|---|---|");
-    for (const o of outliers)
-      lines.push(`| ${o.task} | ${ttfxMetricLabel(o.key)} | ${formatTtfxValue(o.prev, o.key)} | ${formatTtfxValue(o.v, o.key)} | **${o.change.text}** |`);
+    const offs = outliers.some((o) => o.off != null);
+    lines.push("", "Tasks that moved most against their previous run, ranked by how far their change is from the suite's:", "",
+      `| task | metric | previous | this | change |${offs ? " GC off: previous | this | change |" : ""}`, `|---|---|---|---|---|${offs ? "---|---|---|" : ""}`);
+    for (const o of outliers) {
+      const off = o.off != null || o.offPrev != null
+        ? ` ${formatTtfxSeconds(o.offPrev)} | ${formatTtfxSeconds(o.off)} | ${ttfxChange(o.off, o.offPrev, o.key).text} |`
+        : offs ? " | | |" : "";
+      lines.push(`| ${o.task} | ${ttfxMetricLabel(o.key)} | ${formatTtfxValue(o.prev, o.key)} | ${formatTtfxValue(o.v, o.key)} | **${o.change.text}** |${off}`);
+    }
   } else {
     lines.push("", "No task moved much against its previous run.");
   }
