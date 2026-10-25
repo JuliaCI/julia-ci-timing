@@ -1564,6 +1564,62 @@ function size_pr(db, number)
     return e
 end
 
+# --- sysimage ----------------------------------------------------------------
+
+# The sysimage_jobs columns of the stages, as the route names them: the seven of
+# the image in build order, then the stdlib pkgimages made after it
+const SYSIMAGE_STAGES = ["compiler", "compiler_output", "base", "stdlibs", "sysbase_output", "precompile", "sys_output",
+                         "stdlib_pkgimages"]
+
+# Per triplet, the build jobs that started in the window in time order, with one
+# array per stage aligned with them, and the subject of each commit
+function sysimage(db; since="")
+    window = isempty(since) ? "" : " AND s.started_at >= ?"
+    params = isempty(since) ? () : (since,)
+    jobs = rows(db, "SELECT s.*, c.subject FROM sysimage_jobs s LEFT JOIN commits c ON c.sha = s.commit_sha " *
+                   "WHERE s.state = 'ok'" * window * " ORDER BY s.started_at, s.build", params)
+    libs = Dict{String,Vector{Tuple{String,Float64}}}()
+    for r in rows(db, "SELECT t.job_uuid, t.stdlib, t.seconds FROM sysimage_stdlibs t JOIN sysimage_jobs s USING (job_uuid) " *
+                      "WHERE s.state = 'ok'" * window, params)
+        push!(get!(libs, String(r.job_uuid), Tuple{String,Float64}[]), (String(r.stdlib), Float64(r.seconds)))
+    end
+    platforms = OrderedDict{String,Any}()
+    subjects = OrderedDict{String,Any}()
+    for r in jobs
+        t = String(r.triplet)
+        p = get!(platforms, t) do
+            OrderedDict{String,Any}("jobs" => String[], "builds" => Int[], "commits" => String[], "started_at" => Any[],
+                                    "agents" => Any[], "stages" => OrderedDict(s => Any[] for s in SYSIMAGE_STAGES),
+                                    "precompile_statements" => Any[], "stdlib_pkgimages_count" => Any[],
+                                    "stdlibs" => OrderedDict{String,Any}())
+        end
+        n = length(p["jobs"])
+        push!(p["jobs"], String(r.job_uuid))
+        push!(p["builds"], Int(r.build))
+        push!(p["commits"], String(r.commit_sha))
+        push!(p["started_at"], js(r.started_at))
+        push!(p["agents"], js(r.agent))
+        for s in SYSIMAGE_STAGES
+            v = getproperty(r, Symbol(s, "_s"))
+            push!(p["stages"][s], v === missing ? nothing : round(v; digits=1))
+        end
+        push!(p["precompile_statements"], js(r.precompile_statements))
+        push!(p["stdlib_pkgimages_count"], js(r.stdlib_pkgimages))
+        # A stdlib a job did not load is null there, as is every stdlib for a log
+        # without the per-module lines
+        for (name, s) in get(libs, String(r.job_uuid), ())
+            col = get!(() -> Vector{Any}(nothing, n), p["stdlibs"], name)
+            push!(col, round(s; digits=2))
+        end
+        for col in values(p["stdlibs"])
+            length(col) == n && push!(col, nothing)
+        end
+        r.subject === missing || (subjects[String(r.commit_sha)] = String(r.subject))
+    end
+    return OrderedDict("generated_at" => generated_at(db, "sysimage"), "pipeline" => "julia-ci", "branch" => "master",
+                       "stages" => SYSIMAGE_STAGES, "platforms" => platforms, "subjects" => subjects)
+end
+
 # --- downloads ---------------------------------------------------------------
 
 const DL_SOURCE = "https://julialang-logs.s3.amazonaws.com/public_outputs/current/resource_types_by_date.csv.gz"

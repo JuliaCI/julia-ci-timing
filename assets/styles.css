@@ -2857,6 +2857,38 @@ th.sorted .sort-indicator {
     grid-template-rows: 1fr 1fr 1fr;
   }
 }
+/* The Build stages tab's nine panels: the stacked stages, then one per stage */
+.ttfx-summary-grid.sysimage-grid {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+}
+@media (max-width: 1200px) {
+  .ttfx-summary-grid.sysimage-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: repeat(5, minmax(180px, 1fr));
+  }
+}
+@media (max-width: 768px), (max-height: 500px) {
+  .ttfx-summary-grid.sysimage-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(9, minmax(160px, 1fr));
+  }
+}
+/* The platform the charts show, in the table's columns */
+.ttfx-stats .sysimage-selected {
+  background: var(--color-accent-subtle);
+}
+.ttfx-stats th button.btn-link {
+  font: inherit;
+  color: var(--color-accent-fg);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.ttfx-stats tr.sysimage-total td {
+  border-top: 1px solid var(--color-border-default);
+}
 .ttfx-stats {
   flex-shrink: 0;
   min-height: 50px;

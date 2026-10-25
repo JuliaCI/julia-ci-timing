@@ -293,6 +293,30 @@
           "columns": {
             "head_ref": "the pull request's branch, '' when it is not in JuliaLang/julia; a pull request whose base_ref is this branch is stacked on this one"
           }
+        },
+        "sysimage_jobs": {
+          "description": "How long the build job of each julia-ci master build spent making the system image, stage by stage, in seconds, parsed from the job's log by fetch_sysimage.jl (the x86_64 and aarch64 Linux, aarch64 macOS and x86_64 Windows build jobs, from July 2026). The stages the build prints a time for are as printed; compiler_output_s and sysbase_output_s are the time from the summary line before them to the link of the image, from Buildkite's line timestamps. A log without the stage lines has state unparsed and NULL stages. Linux jobs share their machine with other jobs, so expect noise.",
+          "columns": {
+            "job_uuid": "the build job, as in jobs.job_uuid",
+            "build": "the julia-ci build number",
+            "job_name": "the build job's name, e.g. :linux: build x86_64-linux-gnu",
+            "triplet": "the build job's platform, from its name (x86_64-linux-gnu, aarch64-linux-gnu, aarch64-apple-darwin, x86_64-w64-mingw32)",
+            "agent": "the agent's hostname",
+            "state": "ok; unparsed when the log had no stage lines (expired, or the build printed something else); pending for a job listed from the Buildkite API whose log is still to fetch",
+            "compiler_s": "compiling the compiler, Base_compiler.jl (the Base.Compiler line)",
+            "compiler_output_s": "emitting basecompiler: from the Base.Compiler line to the link of basecompiler",
+            "base_s": "loading Base, sysimg.jl (Base in the Sysimage built summary)",
+            "stdlibs_s": "loading the sysimage's stdlibs (Stdlibs in that summary); each one is in sysimage_stdlibs",
+            "sysbase_output_s": "emitting sysbase: from that summary to the link of sysbase",
+            "precompile_s": "running the precompile statements, generate_precompile.jl (Precompilation complete)",
+            "precompile_statements": "how many precompile statements that ran",
+            "sys_output_s": "emitting sys (the Output line)",
+            "stdlib_pkgimages_s": "precompiling the stdlib pkgimages after the image, as the log rounds it to whole seconds",
+            "stdlib_pkgimages": "how many stdlib pkgimages that precompiled: 22 before build 1002, 55 since, when bounds-checked ones were added"
+          }
+        },
+        "sysimage_stdlibs": {
+          "description": "Seconds each stdlib took to load into the system image in a sysimage_jobs row, from the per-module lines before the Sysimage built summary."
         }
       },
       "queries": {
@@ -360,6 +384,10 @@
         "size_open_prs": {
           "title": "Open pull requests by how much their latest build changes the total size",
           "sql": "SELECT p.pr_number, p.title, p.build, h.value - b.value AS total_change\nFROM size_prs p\nJOIN size_builds hb ON hb.source = 'pr' AND hb.commit_sha = p.head_commit\nJOIN size_metrics h ON h.size_build_id = hb.id AND h.metric = 'total'\nJOIN size_builds bb ON bb.source = 'ci' AND bb.commit_sha = p.base_commit\nJOIN size_metrics b ON b.size_build_id = bb.id AND b.metric = 'total'\nORDER BY abs(total_change) DESC"
+        },
+        "sysimage_stages_by_week": {
+          "title": "Median sysimage stages per week on x86_64 Linux",
+          "sql": "SELECT strftime('%Y-%W', started_at) AS week, count(*) AS jobs,\n  round(avg(compiler_s)) AS compiler_s, round(avg(base_s)) AS base_s, round(avg(sys_output_s)) AS sys_output_s,\n  round(avg(compiler_s + compiler_output_s + base_s + stdlibs_s + sysbase_output_s + precompile_s + sys_output_s)) AS total_s\nFROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'\nGROUP BY week ORDER BY week"
         }
       }
     }

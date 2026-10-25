@@ -57,6 +57,10 @@ Sizes:
 - `/api/sizes/prs`: the size of each open pull request's latest build against the master commit it branched from
 - `/api/sizes/pr/<number>`: one open pull request's size against its merge-base, every metric and every file of at least 1 MiB
 
+Sysimage:
+- `/api/sysimage/summary?since=`: how long the build job of every master build spent making the system image, stage by stage (compiling the compiler, emitting basecompiler, Base, the sysimage's stdlibs, emitting sysbase, the precompile statements, emitting sys, then the stdlib pkgimages), per platform, from the job logs
+- `/api/notes/sysimage_annotations`: notes on builds where how CI builds julia changed, so a step there is not a commit's
+
 Downloads:
 - `/api/downloads/top?days=7`: the 50 most requested packages over the window
 - `/api/downloads/package/<Name>`: one package's daily downloads

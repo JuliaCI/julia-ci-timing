@@ -2,7 +2,7 @@
 
 Dashboard for Julia language performance: daily Nanosoldier benchmark reports,
 [CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, distribution size,
-PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
+sysimage build time, PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), and the other tabs go deep.
 
 **Live:** <https://perf.julialang.org/>
@@ -13,7 +13,7 @@ Short paths open a tab directly and forward any other query parameters:
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
 [/timing](https://perf.julialang.org/timing), [/builds](https://perf.julialang.org/builds),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
-[/sizes](https://perf.julialang.org/sizes),
+[/sizes](https://perf.julialang.org/sizes), [/build-stages](https://perf.julialang.org/build-stages),
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),
 [/activity](https://perf.julialang.org/activity).
 Each is a small redirect page under a directory of that name; the `?tab=` URLs
@@ -24,7 +24,7 @@ they resolve to keep working as before.
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Eight fetchers write a SQLite database every half hour, and the CI timing,
+- Nine fetchers write a SQLite database every half hour, and the CI timing,
   agent and GitHub ones every 10 minutes (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
@@ -45,6 +45,10 @@ container image (`Dockerfile`):
     the latest `julia-pr` build of every open pull request, from its build job's
     artifact (the token needs `read_artifacts`). `db/import_sizes.jl` imported the
     history before that from manyjulias builds
+  - `fetch_sysimage.jl`: how long the build job of every `julia-ci` master build
+    spends making the system image, stage by stage (compiling the compiler, Base, the
+    stdlibs, the precompile statements, emitting each image), parsed from the job's
+    log; the jobs come from `fetch_timing.jl`'s rows and the logs need no token
   - `fetch_packages.jl`: package-server download rollups, per package too,
     with names from the General registry
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every

@@ -7,7 +7,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host; the eight
+The source of truth is a SQLite database on the site's host; the nine
 `fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC), and
 `fetch_timing.jl`, `fetch_agents.jl` and `fetch_github.jl` also at :15, :25, :45
 and :55. `docs/querying.md` is the
@@ -198,6 +198,27 @@ from them: open counts, opened/closed/merged and commits per day, and over a
 trailing 30 days the distinct commit authors and PR openers and the median
 days to merge. A reopened item keeps only its latest close, so the open
 counts are slightly off for items that were closed and reopened.
+
+Sysimage build times (the CI → Build stages tab) come from `fetch_sysimage.jl`, which
+parses the log of the x86_64 and aarch64 Linux, aarch64 macOS and x86_64 Windows
+build jobs of every julia-ci master build into `sysimage_jobs`: the seconds of each
+stage of making the system image (compiling the compiler, emitting basecompiler,
+Base, the sysimage's stdlibs, emitting sysbase, the precompile statements, emitting
+sys) and of the stdlib pkgimages after it, with each stdlib's load in
+`sysimage_stdlibs`. The build prints most of these; the two emit stages it prints
+nothing for are timed from Buildkite's line timestamps. `api/sysimage/summary`
+serves them per platform. The Linux jobs share their machine with other jobs, so
+compare medians over several builds.
+
+Hand-written notes on julia-ci builds where how CI builds julia changed live in
+`data/sysimage_annotations.json`, served like the TTFX notes from
+`api/notes/sysimage_annotations`: each names a `build` plus a short `label` and a
+fuller `description`, with an optional `kind` (`build` for a change to what the
+build job does, `runner` for the CI machines), `url`, `stages` (the stages it
+affected; every one when left out) and `platforms` (build triplets). The tab draws
+a dashed line at that build in the panels of those stages and shows the note in
+the build's popup. Use it for a step that is not the commit being slower, such as
+build 1002, from which the build precompiles 55 stdlib pkgimages instead of 22.
 
 ## Analysis helpers (`analysis/`)
 
