@@ -11,7 +11,7 @@ Short paths open a tab directly and forward any other query parameters:
 [/overview](https://perf.julialang.org/overview),
 [/commit](https://perf.julialang.org/commit),
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
-[/timing](https://perf.julialang.org/timing), [/builds](https://perf.julialang.org/builds),
+[/timing](https://perf.julialang.org/timing),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
 [/sizes](https://perf.julialang.org/sizes), [/build-stages](https://perf.julialang.org/build-stages),
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),

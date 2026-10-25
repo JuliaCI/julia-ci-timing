@@ -207,18 +207,6 @@
             </button>
             <button
               class="tab-btn"
-              id="tab-ci-builds"
-              role="tab"
-              aria-selected="false"
-              aria-controls="ci-timing-view"
-              tabindex="-1"
-              onclick="switchTab('ci-builds')"
-              title="Wall time and queue wait of every master build"
-            >
-              Builds
-            </button>
-            <button
-              class="tab-btn"
               id="tab-ci-workers"
               role="tab"
               aria-selected="false"
@@ -581,7 +569,7 @@
       class="main view-hidden"
       id="ci-timing-view"
       role="tabpanel"
-      aria-labelledby="tab-ci-timing tab-ci-builds tab-ci-workers"
+      aria-labelledby="tab-ci-timing tab-ci-workers"
       tabindex="0"
     >
       <div class="ci-toolbar" id="ci-timing-controls">
@@ -933,27 +921,6 @@
           </div>
           <div class="usage-filters" id="usage-filters"></div>
           <div class="usage-grid" id="usage-grid">
-            <div class="loading">Loading...</div>
-          </div>
-        </div>
-        <div class="commits-view view-hidden" id="builds-view">
-          <div class="commits-chart-container">
-            <div class="chart-wrapper">
-              <canvas
-                id="builds-chart"
-                role="img"
-                aria-label="Wall time and median queue wait per master build"
-              ></canvas>
-            </div>
-          </div>
-          <div
-            class="resize-handle"
-            id="builds-resize-handle"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize builds table"
-          ></div>
-          <div class="commits-regressions" id="builds-table">
             <div class="loading">Loading...</div>
           </div>
         </div>

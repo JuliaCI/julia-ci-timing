@@ -128,4 +128,4 @@ the API with `since` is smaller. `analysis/fetch_data.jl` in the repository down
   are in the first report after it.
 - Queue waits and build wall times exist only for builds since September 2026.
 - To show a result, link the site with its view in the URL, for example
-  `https://perf.julialang.org/commit?c=<sha>`, `/pkgeval?pkg=<Name>` or `/builds?t=30`.
+  `https://perf.julialang.org/commit?c=<sha>`, `/pkgeval?pkg=<Name>` or `/timing?t=30`.

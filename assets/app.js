@@ -485,10 +485,9 @@ function refreshAllUI() {
   updateStatsTable();
   updateToolbarButtons();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "builds") renderBuildsView();
 }
 
-// CI Timing sub-view: 'jobs' (default), 'commits', or 'workers'
+// CI Timing sub-view: 'jobs' (default) or 'workers'
 let ciSubview = "jobs";
 const CI_WORKER_HIDDEN_CONTROL_IDS = [
   "line-type",
@@ -502,13 +501,12 @@ const CI_WORKER_HIDDEN_CONTROL_IDS = [
 let timingView = "history";
 
 function setCITimingSubview(name, { updateUrl = true } = {}) {
-  if (name !== "jobs" && name !== "workers" && name !== "builds") name = "jobs";
+  if (name !== "jobs" && name !== "workers") name = "jobs";
   ciSubview = name;
   const isJobs = name === "jobs";
   const isHistory = isJobs && timingView === "history";
   const isUsage = isJobs && timingView === "usage";
   const isWorkers = name === "workers";
-  const isBuilds = name === "builds";
 
   const view = document.getElementById("ci-timing-view");
   if (view) {
@@ -521,12 +519,10 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   }
   const workersView = document.getElementById("workers-view");
   if (workersView) workersView.classList.toggle("view-hidden", !isWorkers);
-  const buildsView = document.getElementById("builds-view");
-  if (buildsView) buildsView.classList.toggle("view-hidden", !isBuilds);
   const usageView = document.getElementById("usage-view");
   if (usageView) usageView.classList.toggle("view-hidden", !isUsage);
 
-  // Hide controls that don't apply to the workers/builds views
+  // Hide controls that don't apply to the workers view
   for (const id of CI_WORKER_HIDDEN_CONTROL_IDS) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("view-hidden", !isHistory);
@@ -544,7 +540,6 @@ function setCITimingSubview(name, { updateUrl = true } = {}) {
   }
 
   if (isWorkers) renderWorkerPresence();
-  if (isBuilds) renderBuildsView();
   if (isUsage) renderUsageView();
   updatePhoneChips();
   if (updateUrl && typeof updateURL === "function") updateURL();
@@ -813,243 +808,7 @@ function setWorkersFilter(value, { immediate = false } = {}) {
   else workersFilterTimer = setTimeout(apply, 150);
 }
 
-// === Builds (CI → Builds tab) ===
-// api/timing/builds: every master build fetched from the Buildkite API with
-// its wall time and the queue wait of its jobs. Only from the API: the
-// files carry no timestamps.
-let buildsData = null; // { since, changeSeq, builds }
-let buildsLoading = null;
-let buildsChart = null;
-
-function buildsLoadError(message) {
-  const tableEl = document.getElementById("builds-table");
-  if (tableEl) tableEl.innerHTML = `<div class="workers-empty">${escapeHtml(message)}</div>`;
-  if (buildsChart) {
-    buildsChart.destroy();
-    buildsChart = null;
-  }
-}
-
-async function renderBuildsView() {
-  const since = apiSince(getTimeRangeCutoff());
-  const stale = !buildsData || buildsData.changeSeq !== timingChangeSeq || (since !== buildsData.since && (since === "" || since < buildsData.since));
-  if (stale && !buildsLoading) {
-    buildsLoading = apiGet("timing/builds", { since })
-      .then((builds) => {
-        buildsData = { since, changeSeq: timingChangeSeq, builds };
-        buildsLoading = null;
-        // The range may have widened meanwhile: check again rather than draw
-        if (ciSubview === "builds") renderBuildsView();
-      })
-      .catch((err) => {
-        // Tried again on the next refresh or range change, not at once
-        buildsLoading = null;
-        console.error("Failed to load builds:", err);
-        buildsLoadError("Failed to load builds.");
-      });
-    if (!buildsData) return;
-  }
-  drawBuildsView();
-}
-
 const buildkiteBuildUrl = (b) => b.url || `https://buildkite.com/julialang/${b.pipeline}/builds/${b.build}`;
-const buildRunning = (b) => !b.finished_at;
-
-function drawBuildsView() {
-  const canvas = document.getElementById("builds-chart");
-  const tableEl = document.getElementById("builds-table");
-  if (!canvas || !tableEl || !buildsData) return;
-  const cutoff = getVisibleCutoff();
-  const cutoffMs = cutoff ? cutoff.getTime() : -Infinity;
-  const builds = buildsData.builds
-    .filter((b) => Date.parse(b.created_at) >= cutoffMs)
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
-  if (builds.length === 0) {
-    buildsLoadError("No builds with timestamps in the selected time range.");
-    return;
-  }
-  const { isDark, text: textColor, grid: gridColor } = chartTheme();
-  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
-  const point = (b, y) => ({ x: Date.parse(b.created_at), y, build: b });
-  const minutes = (s) => (s == null ? null : s / 60);
-  // A phone fits a build into a pixel or two; full-size markers merge
-  const radius = PHONE_WIDTH.matches ? 1.5 : 3;
-  const datasets = [
-    {
-      label: "Wall time",
-      data: builds.filter((b) => b.wall_s != null).map((b) => point(b, minutes(b.wall_s))),
-      borderColor: colors.build,
-      backgroundColor: colors.build,
-      pointRadius: radius,
-      pointHoverRadius: 5,
-      borderWidth: 1.5,
-      tension: 0.1,
-      yAxisID: "y",
-    },
-    {
-      label: "Queue wait (median job)",
-      data: builds.filter((b) => b.queue_median_s != null).map((b) => point(b, minutes(b.queue_median_s))),
-      borderColor: colors.test,
-      backgroundColor: colors.test,
-      pointRadius: radius,
-      pointHoverRadius: 5,
-      borderWidth: 1.5,
-      tension: 0.1,
-      yAxisID: "y",
-    },
-    {
-      label: "Job time (sum, right axis)",
-      data: builds.filter((b) => b.run_total_s != null).map((b) => point(b, b.run_total_s / 3600)),
-      borderColor: colors.regression,
-      backgroundColor: colors.regression,
-      pointRadius: (radius * 2) / 3,
-
-      pointHoverRadius: 5,
-      borderWidth: 1,
-      borderDash: [4, 3],
-      tension: 0.1,
-      yAxisID: "y2",
-    },
-  ];
-  // A build still running has partial job time and queue waits: its points
-  // are hollow and faded, and so are the lines to them
-  for (const ds of datasets) {
-    const color = ds.borderColor;
-    const faded = colorToRgba(color, 0.3);
-    ds.pointBackgroundColor = (ctx) => (ctx.raw && buildRunning(ctx.raw.build) ? "transparent" : color);
-    ds.pointBorderColor = (ctx) => (ctx.raw && buildRunning(ctx.raw.build) ? faded : color);
-    ds.segment = {
-      borderColor: (ctx) => {
-        const data = ctx.chart.data.datasets[ctx.datasetIndex].data;
-        return buildRunning(data[ctx.p0DataIndex].build) || buildRunning(data[ctx.p1DataIndex].build) ? faded : undefined;
-      },
-    };
-  }
-  if (buildsChart) buildsChart.destroy();
-  buildsChart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { datasets },
-    options: {
-      ...baseChartOptions(),
-      interaction: { mode: "near", intersect: false },
-      plugins: {
-        title: { display: true, text: "Master builds", color: textColor },
-        legend: { labels: { color: textColor, usePointStyle: true } },
-        tooltip: {
-          callbacks: {
-            footer: TAP_AGAIN_FOOTER,
-            title: (items) => {
-              const b = items.length && items[0].raw.build;
-              return b ? [`#${b.build} ${b.commit}`, ...wrapTooltipText(b.message || "")] : "";
-            },
-            label: (ctx) => {
-              const b = ctx.raw.build;
-              const partial = buildRunning(b) ? " so far, still running" : "";
-              if (ctx.datasetIndex === 2) return [`Job time: ${formatDuration(b.run_total_s)} over ${countText(b.jobs, "job")}${partial}`];
-              const lines = [`${ctx.dataset.label}: ${formatDuration(ctx.raw.y * 60)}`];
-              if (ctx.datasetIndex === 0) {
-                lines.push(`${countText(b.jobs, "job")}, ${formatDuration(b.run_total_s)} of job time, ${b.state}`);
-              } else {
-                lines.push(`longest wait ${formatDuration(b.queue_max_s)}, ${formatDuration(b.queue_total_s)} in total${partial}`);
-              }
-              return lines;
-            },
-          },
-        },
-      },
-      onClick: tapAgainToOpen((evt, elements) => {
-        if (!elements.length) return;
-        const b = buildsChart.data.datasets[elements[0].datasetIndex].data[elements[0].index].build;
-        window.open(buildkiteBuildUrl(b), "_blank", "noopener");
-      }),
-      scales: {
-        x: timeAxis({ textColor, gridColor }),
-        y: {
-          beginAtZero: true,
-          title: { display: true, text: "Wall time and queue wait", color: textColor },
-          ticks: { color: textColor, callback: (v) => formatDuration(v * 60) },
-          afterBuildTicks: durationTicks(60),
-          grid: { color: gridColor },
-        },
-        y2: {
-          position: "right",
-          beginAtZero: true,
-          title: { display: true, text: "Job time (hours)", color: textColor },
-          ticks: { color: textColor },
-          grid: { drawOnChartArea: false },
-        },
-      },
-    },
-  });
-  renderBuildsTable(builds);
-}
-
-// The builds under the chart, newest first until a header is clicked; at
-// most BUILDS_TABLE_ROWS of them
-const BUILDS_TABLE_ROWS = 100;
-let buildsTableSort = { col: "created_at", asc: false };
-
-function renderBuildsTable(builds) {
-  const tableEl = document.getElementById("builds-table");
-  const recent = sortRows(builds.slice(), buildsTableSort, "created_at").slice(0, BUILDS_TABLE_ROWS);
-  const sortedBy = buildsTableSort.col === "created_at" && !buildsTableSort.asc ? "newest first" : "sorted";
-  const rows = recent
-    .map((b) => {
-      const url = escapeHtml(buildkiteBuildUrl(b));
-      return `<tr tabindex="0" data-url="${url}"${buildRunning(b) ? ' class="builds-running"' : ""}>
-        <td>${timeHtml(b.created_at)}</td>
-        <td><a href="${url}" target="_blank" rel="noopener noreferrer">#${b.build}</a></td>
-        <td class="commits-reg-msg">${commitShaLink(b.commit)} ${escapeHtml(b.message || "")}</td>
-        <td>${escapeHtml(b.state)}</td>
-        <td class="num">${formatDuration(b.wall_s)}</td>
-        <td class="num">${b.jobs}</td>
-        <td class="num">${formatDuration(b.run_total_s)}</td>
-        <td class="num">${formatDuration(b.queue_median_s)}</td>
-        <td class="num">${formatDuration(b.queue_max_s)}</td>
-      </tr>`;
-    })
-    .join("");
-  const list = phoneListHtml(
-    recent.map((b) => ({
-      attrs: `data-url="${escapeHtml(buildkiteBuildUrl(b))}"`,
-      title: escapeHtml(b.message || b.commit),
-      meta: `#${b.build} · <code>${escapeHtml(b.commit.slice(0, 8))}</code> · ${timeHtml(b.created_at, { relative: true })} · ${countText(b.jobs, "job")}${b.queue_median_s != null ? ` · queue ${formatDuration(b.queue_median_s)}` : ""}`,
-      value: b.wall_s != null ? formatDuration(b.wall_s) : escapeHtml(b.state),
-      valueClass: b.state === "failed" ? "m-bad" : b.state === "passed" ? "" : "m-muted",
-    })),
-  );
-  tableEl.innerHTML = `
-    <h3 class="commits-reg-title">Builds (${sortedBy}${builds.length > recent.length ? `, ${recent.length} of ${builds.length}` : ""})</h3>
-    ${list}
-    <table class="commits-reg-table m-desktop-only">
-      <thead>${sortableHeaderRow(
-        [
-          ["created_at", "Created"],
-          ["build", "Build"],
-          ["commit", "Commit"],
-          ["state", "State"],
-          ["wall_s", "Wall", "num", "First job started to last job finished"],
-          ["jobs", "Jobs", "num"],
-          ["run_total_s", "Job time", "num", "Sum of the jobs' durations"],
-          ["queue_median_s", "Queue (median)", "num", "Median wait from runnable to started across the build's jobs"],
-          ["queue_max_s", "Queue (max)", "num"],
-        ],
-        buildsTableSort,
-      )}</thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  bindSortHeaders(tableEl.querySelector("thead"), (col) => {
-    buildsTableSort = nextSort(buildsTableSort, col, (c) => c === "commit" || c === "state");
-    renderBuildsTable(builds);
-  });
-
-  tableEl.querySelectorAll("[data-url]").forEach((tr) => {
-    tr.onclick = (e) => {
-      if (e.target.closest("a")) return;
-      window.open(tr.dataset.url, "_blank", "noopener");
-    };
-  });
-}
 
 // === Agent snapshots (Workers tab) ===
 // api/agents/latest holds the latest details per agent and
@@ -3170,11 +2929,10 @@ function updateURL() {
   saveToLocalStorage();
 }
 
-// The CI parameters the shown view reads. The Timing, Builds and Workers tabs
+// The CI parameters the shown view reads. The Timing and Workers tabs
 // share their state, but each URL only carries what its view uses.
 function ciViewURLKeys() {
   if (ciSubview === "workers") return ["wq"];
-  if (ciSubview === "builds") return ["t", "x"];
   if (timingView === "usage") return ["jv", "jf"];
   return ["s", "t", "x", "y", "l", "e", "st", "jq"];
 }
@@ -3341,7 +3099,6 @@ function setTimeRange(days) {
   updateChart();
   updateStatsTable();
   if (ciSubview === "workers") renderWorkerPresence();
-  if (ciSubview === "builds") renderBuildsView();
   updateURL();
 }
 
@@ -5012,12 +4769,6 @@ makeResizablePanel({
   defaultHeight: 320,
 });
 makeResizablePanel({
-  handleId: "builds-resize-handle",
-  targetId: "builds-table",
-  storageKey: "builds-table-height",
-  defaultHeight: 300,
-});
-makeResizablePanel({
   handleId: "packages-top-handle",
   targetId: "packages-top",
   storageKey: "packages-top-height",
@@ -6649,7 +6400,6 @@ function reloadStaleView(tab) {
 // Overview and Commit tabs draw on all of them and say so themselves.
 const TAB_SOURCES = {
   "ci-timing": "timing",
-  "ci-builds": "timing",
   "ci-workers": "agents",
   "ci-ttfx": "ttfx",
   "ci-sizes": "sizes",
@@ -6724,7 +6474,6 @@ const TAB_URL_MAP = {
   perf: "benchmarks-diff",
   benchmarks: "benchmarks-history",
   "ci-timing": "ci-timing",
-  "ci-builds": "ci-builds",
   "ci-workers": "ci-workers",
   "ci-ttfx": "ci-ttfx",
   "ci-sizes": "ci-sizes",
@@ -6742,7 +6491,6 @@ const TAB_SHORT_PATH = {
   perf: "/diff",
   benchmarks: "/history",
   "ci-timing": "/timing",
-  "ci-builds": "/builds",
   "ci-workers": "/workers",
   "ci-ttfx": "/ttfx",
   "ci-sizes": "/sizes",
@@ -6779,7 +6527,8 @@ function tabFromURLValue(value) {
   for (const [tabName, path] of Object.entries(TAB_SHORT_PATH)) {
     if (path === "/" + value) return tabName;
   }
-  if (value === "ci-commits") return "ci-builds"; // the Commits tab was folded into Builds
+  // The Builds tab, into which the Commits tab had been folded, was removed
+  if (value === "ci-builds" || value === "ci-commits") return "ci-timing";
   return null;
 }
 
@@ -6918,8 +6667,6 @@ function switchTab(tab, { pushHistory = true } = {}) {
   const previousTab = activeTab;
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
-  } else if (tab === "ci-builds") {
-    setCITimingSubview("builds", { updateUrl: false });
   } else if (tab === "ci-timing") {
     setCITimingSubview("jobs", { updateUrl: false });
   }
@@ -6927,7 +6674,6 @@ function switchTab(tab, { pushHistory = true } = {}) {
   activeTab = tab;
   const tabIds = {
     "ci-timing": "tab-ci-timing",
-    "ci-builds": "tab-ci-builds",
     "ci-workers": "tab-ci-workers",
     "ci-ttfx": "tab-ci-ttfx",
     "ci-sizes": "tab-ci-sizes",
@@ -6953,7 +6699,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     group.classList.toggle("active-group", hasActiveTab);
   });
 
-  const isCITab = tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers";
+  const isCITab = tab === "ci-timing" || tab === "ci-workers";
 
   document
     .getElementById("ci-timing-view")
@@ -7074,7 +6820,7 @@ const TAB_URL_KEYS = {
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
   pkgeval: ["pt", "pp", "pkg", "pr", "pv", "pl", "pd", "pk", "pf"],
 };
-const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-builds" || tab === "ci-workers" ? "ci" : tab);
+const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-workers" ? "ci" : tab);
 const perfOwnsKey = (k) => k === "perf" || !DASHBOARD_PARAMS.has(k);
 let tabShown = false;
 // The Diff tab's parameters while another tab is shown, to put back on return
@@ -16341,7 +16087,7 @@ function overviewCICard() {
     const before = weekBefore.length ? `, ${formatDuration(median(weekBefore.map((b) => b.wall_s)))} the week before` : "";
     rows.push([
       "Build wall time",
-      `${overviewTabLink("ci-builds", formatDuration(median(thisWeek.map((b) => b.wall_s))))} median over ${thisWeek.length} passed push build${thisWeek.length === 1 ? "" : "s"} this week${before}; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
+      `${overviewTabLink("ci-timing", formatDuration(median(thisWeek.map((b) => b.wall_s))))} median over ${thisWeek.length} passed push build${thisWeek.length === 1 ? "" : "s"} this week${before}; latest #${newest.build} ${formatDuration(newest.wall_s)}`,
     ]);
     const queue = queueMedian(thisWeek);
     const queueBefore = queueMedian(weekBefore);
@@ -17778,7 +17524,7 @@ function commitCIHtml(data) {
   const j = data.jobs;
   if (j && j.jobs.length) parts.push(commitJobsHtml(j));
   if (!parts.length) parts.push('<p class="commit-line text-muted">No CI builds recorded for this commit.</p>');
-  const links = `${overviewTabLink("ci-builds", "Builds")} · ${overviewTabLink("ci-timing", "Timing")}`;
+  const links = overviewTabLink("ci-timing", "Timing");
   return commitCard("CI", parts.join(""), { links });
 }
 
@@ -18912,13 +18658,12 @@ const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-builds", "ci-workers", "ci-ttfx", "ci-sizes", "ci-build-stages"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-ttfx", "ci-sizes", "ci-build-stages"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
-// The view holding each tab's toolbar; the three CI pages share one
+// The view holding each tab's toolbar; the two CI pages share one
 const PHONE_TOOLBAR_VIEWS = {
   "ci-timing": "ci-timing-view",
-  "ci-builds": "ci-timing-view",
   "ci-workers": "ci-timing-view",
   "ci-ttfx": "ttfx-view",
   "ci-sizes": "sizes-view",
@@ -19246,7 +18991,6 @@ function applyTheme() {
   if (sizesChart) updateSizesChart();
   if (activityData) updateActivityCharts();
   if (sysimageData) updateSysimageCharts();
-  if (buildsChart) drawBuildsView();
   if (backlogData && !backlogData.error) {
     renderBacklogChart(backlogData);
     renderBalanceCharts(backlogData);
