@@ -18601,6 +18601,8 @@ function updateSysimageCharts() {
         backgroundColor: colorToRgba(colors[s], 0.5),
         pointRadius: 1.5,
         pointHoverRadius: 4,
+        // The dots are small; the pointer counts as on one within a few pixels
+        pointHitRadius: 5,
         _raw: true,
       },
       {
@@ -18634,7 +18636,8 @@ function updateSysimageCharts() {
           ...baseChartOptions(),
           parsing: false,
           normalized: true,
-          interaction: { mode: "nearest", intersect: false },
+          // Only a build under the pointer, not the nearest one wherever it is
+          interaction: { mode: "nearest", intersect: true },
           elements: { line: { tension: 0 } },
           onClick: (evt, elements, chart) => open(evt, elements.filter((e) => chart.data.datasets[e.datasetIndex]._raw), chart),
           onHover: (evt, elements, chart) => {
