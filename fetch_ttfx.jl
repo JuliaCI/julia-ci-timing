@@ -464,7 +464,7 @@ const PR_MARGIN = Day(1)
 const PR_FULL_KEY = "ttfx:pr_full_listed_at"
 const PR_COLS = ["title", "author", "draft", "pr_head_sha", "build", "job_uuid", "job_state", "build_created_at", "finished_at",
                  "web_url", "head_commit", "head_version", "base_commit", "base_version", "blocks", "n_tasks", "verdict",
-                 "n_improvements", "n_regressions", "suite", "tasks"]
+                 "n_improvements", "n_regressions", "suite", "tasks", "counts"]
 
 # The open pull request list costs about a dozen requests of the 60 an hour GitHub allows
 # an anonymous address, so it is fetched at most this often and kept in meta between
@@ -565,7 +565,9 @@ function pr_row(pull, build, job, compare, meta)
             something(get(compare, :blocks, nothing), missing),
             settings === nothing ? missing : something(get(settings, :n_tasks, nothing), missing),
             String(compare.verdict), Int(compare.n_improvements), Int(compare.n_regressions),
-            JSON3.write(something(get(compare, :suite, nothing), Dict())), JSON3.write(flagged))
+            JSON3.write(something(get(compare, :suite, nothing), Dict())), JSON3.write(flagged),
+            # A new job's counts are fetched by refresh_pr_counts!
+            missing)
 end
 
 # Bring ttfx_prs up to date: a row for every open pull request whose latest finished
@@ -647,6 +649,84 @@ function refresh_prs!(db)
     refresh_ci!(db, ci)
     @info "Open pull requests with a TTFX comparison" updated=length(rows) total=query(db, "SELECT count(*) AS n FROM ttfx_prs")[1].n
     return length(rows)
+end
+
+# The invalidations and recompiled methods of each pull request's job, which
+# compare.json leaves out: the job's untimed trace run logs both for each arm, in
+# results.json and the trace logs. A row's counts are NULL until looked at, and {}
+# when the job has neither artifact (it expired, or the job predates them).
+const PR_COUNTS_PER_RUN = 40
+# The tasks kept per pull request, those whose counts differ most between the arms
+const PR_COUNT_TASKS = 10
+
+# Per metric, the head and base totals over the tasks both arms have a count for,
+# and the tasks whose counts differ most
+function pr_counts(results, traces)
+    per = Dict{String,Dict{String,Vector{Any}}}()
+    put!(task, metric, i, n) = (get!(get!(per, task, Dict{String,Vector{Any}}()), metric, Any[nothing, nothing])[i] = n)
+    for (i, arm) in enumerate(("head", "base"))
+        if results !== nothing
+            _, _, inv = summarize_records(results, arm)
+            for (task, v) in inv
+                put!(task, "invalidated", i, v.invalidated)
+            end
+        end
+        if traces !== nothing
+            for (task, tr) in parse_trace_tarball(traces, arm)
+                put!(task, "recompiled", i, length(tr.recompiles))
+            end
+        end
+    end
+    both(v) = v[1] !== nothing && v[2] !== nothing
+    out = Dict{String,Any}()
+    for metric in ("invalidated", "recompiled")
+        vs = [m[metric] for m in values(per) if haskey(m, metric) && both(m[metric])]
+        isempty(vs) && continue
+        out[metric] = Dict("head" => sum(v[1] for v in vs), "base" => sum(v[2] for v in vs), "n_tasks" => length(vs))
+    end
+    diff(m) = maximum((abs(v[1] - v[2]) for v in values(m) if both(v)); init=0)
+    changed = sort!([(task, m) for (task, m) in per if diff(m) > 0]; by=x -> (-diff(x[2]), x[1]))
+    out["tasks"] = [Dict("name" => task, (k => v for (k, v) in m if both(v))...) for (task, m) in first(changed, PR_COUNT_TASKS)]
+    return out
+end
+
+# Fill in the counts of the rows not looked at yet, newest job first. A row whose
+# artifact listing or download fails is left for the next run.
+function refresh_pr_counts!(db; limit=PR_COUNTS_PER_RUN)
+    todo = query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs WHERE counts IS NULL ORDER BY build DESC LIMIT ?", (limit,))
+    isempty(todo) && return 0
+    done = Any[]
+    for r in todo
+        uuid = String(r.job_uuid)
+        artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds/$(r.build)/jobs/$uuid/artifacts")
+        artifacts === nothing && continue
+        function artifact(path)
+            i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
+            i === nothing && return nothing
+            body = download_artifact(String(artifacts[i].download_url))
+            return body === nothing ? missing : body
+        end
+        results = artifact("ttfx/results.json")
+        traces = artifact(TRACE_ARTIFACT)
+        (results === missing || traces === missing) && continue
+        counts = try
+            pr_counts(results === nothing ? nothing : JSON3.read(results), traces)
+        catch e
+            @warn "Unreadable artifacts; the counts are left empty" pr=r.pr_number build=r.build exception=e
+            Dict{String,Any}()
+        end
+        push!(done, (JSON3.write(counts), Int(r.pr_number), uuid))
+    end
+    isempty(done) && return 0
+    transaction(db) do
+        seq = next_seq!(db)
+        stmt = DBInterface.prepare(db, "UPDATE ttfx_prs SET counts = ?, change_seq = ? WHERE pr_number = ? AND job_uuid = ?")
+        for (counts, pr, uuid) in done
+            DBInterface.execute(stmt, (counts, seq, pr, uuid))
+        end
+    end
+    @info "Pull request invalidation and recompile counts" rows=length(done)
+    return length(done)
 end
 
 # Build states that no longer change; any other state is looked up again next run
@@ -736,6 +816,11 @@ function run!(db)
         refresh_prs!(db)
     catch e
         @error "Updating the pull request comparisons failed" exception=(e, catch_backtrace())
+    end
+    try
+        refresh_pr_counts!(db)
+    catch e
+        @error "Updating the pull request counts failed" exception=(e, catch_backtrace())
     end
     return length(new_rows)
 end

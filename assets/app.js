@@ -13394,6 +13394,7 @@ function updateTtfxTaskChart() {
 }
 
 function updateTtfxTable() {
+  document.getElementById("ttfx-stats-thead").parentElement.classList.toggle("ttfx-prs-table", ttfxTableView === "prs");
   document.getElementById("ttfx-stats-caption").hidden = ttfxTableView !== "prs";
   if (ttfxTableView === "prs") return renderTtfxPrsTable();
   if (!ttfxData) return;
@@ -13837,6 +13838,7 @@ function ttfxPrsFlatToggleRow(cols) {
 // The phone layout of the ranked pull requests: two lines each, the title
 // and the score, then who, what state and when. A tap opens the card.
 function renderTtfxPrsList() {
+  document.getElementById("ttfx-stats-caption").hidden = false;
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   thead.innerHTML = "";
@@ -13886,12 +13888,84 @@ function renderTtfxPrsList() {
 // then best first.
 let ttfxPrsSort = { col: "rank", asc: true };
 
+// The suite columns of the table under their group headers: the scored metrics,
+// then the cold ones again with the GC off and with every stdlib loaded first,
+// which only count as detail. Warm is one total, as the job only judges that.
+// Last come the counts from the job's untimed trace run, as head less base:
+// exact numbers, so they have no blocks and no verdict.
+const TTFX_PR_COLUMNS = [
+  { key: "precompile", label: "Precompile", group: "" },
+  { key: "load", label: "Load", group: "Cold" },
+  { key: "run", label: "Run", group: "Cold" },
+  { key: "warm", label: "Load+run", group: "Warm" },
+  { key: "load_gcoff", label: "Load", group: "Cold, GC off" },
+  { key: "run_gcoff", label: "Run", group: "Cold, GC off" },
+  { key: "load_stdlibs", label: "Load", group: "Cold, stdlibs first" },
+  { key: "run_stdlibs", label: "Run", group: "Cold, stdlibs first" },
+  { key: "invalidated", label: "Invalidations", group: "Compiler, head − base", count: true },
+  { key: "recompiled", label: "Recompiled", group: "Compiler, head − base", count: true },
+];
+
+// A count column's head less base, null when the job has no count for it
+function ttfxPrCountDiff(p, key) {
+  const c = p.counts?.[key];
+  return c ? c.head - c.base : null;
+}
+
+function ttfxPrCountCell(p, key, cls) {
+  if (!p.counts) return `<td class="num${cls}" title="Not fetched yet">…</td>`;
+  const c = p.counts[key];
+  if (!c) return `<td class="num${cls}" title="The job's artifacts have no ${key === "invalidated" ? "invalidation" : "trace"} logs">–</td>`;
+  const d = c.head - c.base;
+  const n = (v) => v.toLocaleString("en-US");
+  const tasks = (p.counts.tasks || [])
+    .filter((t) => t[key] && t[key][0] !== t[key][1])
+    .map((t) => `${t.name}: ${n(t[key][0])} vs ${n(t[key][1])}`);
+  const title = [`Head ${n(c.head)}, base ${n(c.base)}, over ${c.n_tasks} tasks`, ...(tasks.length ? ["Changed most:", ...tasks] : [])].join("\n");
+  const color = d > 0 ? " ttfx-up" : d < 0 ? " ttfx-down" : "";
+  return `<td class="num${color}${cls}" title="${escapeHtml(title)}">${d > 0 ? "+" : ""}${n(d)}</td>`;
+}
+// The first column of each group, which draws a rule down its left edge
+const ttfxPrGroupStart = (i) => i === 0 || TTFX_PR_COLUMNS[i].group !== TTFX_PR_COLUMNS[i - 1].group;
+
+// The header row above the column names that spans each group, with the
+// table's caption over the columns before them
+function ttfxPrGroupRow(before, after) {
+  const n = ttfxPrs?.prs?.length;
+  const title = "Each pull request's latest TTFX CI job, head against master. A stacked pull request is measured against the one below it; its score chains the stack down to master.";
+  let html =
+    `<tr class="ttfx-prs-groups"><th colspan="${before}" class="ttfx-prs-caption" title="${escapeHtml(title)}">` +
+    `<b>🚀 Open PRs by TTFX, best first</b>${n ? ` (${n})` : ""} · head vs master; negative is faster, colour is a robust change</th>`;
+  for (let i = 0; i < TTFX_PR_COLUMNS.length; ) {
+    const g = TTFX_PR_COLUMNS[i].group;
+    let n = 1;
+    while (i + n < TTFX_PR_COLUMNS.length && TTFX_PR_COLUMNS[i + n].group === g) n++;
+    html += `<th colspan="${n}" class="ttfx-prs-group-start"><span${g ? ' class="ttfx-prs-group"' : ""}>${escapeHtml(g)}</span></th>`;
+    i += n;
+  }
+  return html + `<th colspan="${after}" class="ttfx-prs-group-start"></th></tr>`;
+}
+
+function ttfxPrColumnTitle(c) {
+  if (c.key === "invalidated")
+    return "MethodInstances the task scripts invalidated, by method definitions or as package-image code rejected on load, summed over the tasks: head less base. From the job's untimed trace run, so an exact count with no blocks; the totals and the tasks that changed most are in the tooltip.";
+  if (c.key === "recompiled")
+    return "Methods compiled again because an invalidation had dropped their code, from the task scripts' trace logs, summed over the tasks: head less base. The totals and the tasks that changed most are in the tooltip.";
+  const base = c.key.replace(/_gcoff$/, "");
+  const what = c.key.endsWith("_gcoff")
+    ? `${ttfxMetricLabel(base)} with the GC off, from the first of the GC-off repeats`
+    : ttfxMetricLabel(c.key) + (ttfxIsDetail(c.key) ? ", the first run in a copy of the task's project with every stdlib loaded first; not in the score" : "");
+  return `${what}. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. Coloured when the job judged the change robust.`;
+}
+
 function renderTtfxPrsTable() {
   if (PHONE_WIDTH.matches) return renderTtfxPrsList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
-  const metrics = ["precompile", "load", "run", "warm"];
-  thead.innerHTML = sortableHeaderRow(
+  thead.parentElement.classList.add("ttfx-prs-table");
+  // The caption is in the header's top row here; the phone list keeps it above
+  document.getElementById("ttfx-stats-caption").hidden = true;
+  thead.innerHTML = ttfxPrGroupRow(4, 3) + sortableHeaderRow(
     [
       ["rank", "#", "num"],
       ["pr", "Pull request"],
@@ -13902,13 +13976,8 @@ function renderTtfxPrsTable() {
         "num",
         "Weighted geometric mean of the metric changes: a third each for precompile (once per install), cold load and run (the first session) and warm (every later session), taking the block nearer no change. Rows are ranked by it.",
       ],
-      ...metrics.map((m) => [
-        m,
-        ttfxMetricLabel(m),
-        "num",
-        `Suite geometric mean of head against base, per ABBA block, over every task. Coloured when the job judged the change robust${TTFX_METRICS[m].gcoffIndex != null ? " (with the GC on or off; the GC-off numbers are in the tooltip)" : ""}. Sorts on the geometric mean of the blocks.`,
-      ]),
-      ["tasks", "Tasks", "num", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
+      ...TTFX_PR_COLUMNS.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
+      ["tasks", "Tasks", "num ttfx-prs-group-start", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
       ["date", "Measured", "col-secondary"],
       [null, ""],
     ],
@@ -13918,7 +13987,7 @@ function renderTtfxPrsTable() {
     ttfxPrsSort = nextSort(ttfxPrsSort, col, (c) => c === "rank" || c === "author");
     renderTtfxPrsTable();
   });
-  const cols = 7 + metrics.length;
+  const cols = 7 + TTFX_PR_COLUMNS.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
@@ -13944,7 +14013,7 @@ function renderTtfxPrsTable() {
       tasks: p.tasks.filter((t) => t.regressions.length).length - p.tasks.filter((t) => t.improvements.length).length,
       date: p.date,
     };
-    for (const m of metrics) r[m] = blocksMean(p.suite[m]);
+    for (const c of TTFX_PR_COLUMNS) r[c.key] = c.count ? ttfxPrCountDiff(p, c.key) : blocksMean(p.suite[c.key]);
     return r;
   });
   sortRows(rows, ttfxPrsSort, "rank");
@@ -13973,27 +14042,29 @@ function renderTtfxPrsTable() {
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     const scoreTitle = p.stack ? ` title="${escapeHtml(ttfxPrStackTitle(p))}"` : "";
     html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "—" : ttfxRatioPct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
-    for (const m of metrics) {
-      const on = p.suite[m];
-      const off = p.suite[m + "_gcoff"];
-      if (!on) {
-        html += '<td class="num">–</td>';
-        continue;
+    TTFX_PR_COLUMNS.forEach((c, i) => {
+      const x = p.suite[c.key];
+      const start = ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : "";
+      if (c.count) {
+        html += ttfxPrCountCell(p, c.key, start);
+        return;
       }
-      const title = off
-        ? `GC off: ${off.geomeans.map(ttfxRatioPct).join(", ")} (${off.verdict})`
-        : `${on.n_tasks} tasks`;
-      html += `<td class="num ${ttfxVerdictClass(ttfxVerdict(on.verdict, off && off.verdict))}" title="${escapeHtml(title)}">${on.geomeans.map(ttfxRatioPct).join(", ")}</td>`;
-    }
+      if (!x || !x.geomeans.length) {
+        html += `<td class="num${start}">–</td>`;
+        return;
+      }
+      const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${x.verdict}), ${x.n_tasks} tasks`;
+      html += `<td class="num ${ttfxVerdictClass(x.verdict)}${start}" title="${escapeHtml(title)}">${ttfxRatioPct(blocksMean(x))}</td>`;
+    });
     const better = p.tasks.filter((t) => t.improvements.length);
     const worse = p.tasks.filter((t) => t.regressions.length);
     const tasksTitle = [
       ...better.map((t) => `+ ${t.name}: ${ttfxTaskChanges(t, t.improvements)}`),
       ...worse.map((t) => `- ${t.name}: ${ttfxTaskChanges(t, t.regressions)}`),
     ].join("\n");
-    html += `<td class="num" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
+    html += `<td class="num ttfx-prs-group-start" title="${escapeHtml(tasksTitle || "No robust per-task change")}"><span class="${better.length ? "ttfx-down" : ""}">${better.length}</span> / <span class="${worse.length ? "ttfx-up" : ""}">${worse.length}</span></td>`;
     html += `<td class="col-secondary" title="${escapeHtml(`${formatUtc(p.date)}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
-    html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button></td>`;
+    html += `<td><button type="button" class="ttfx-pr-copy" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy</button></td>`;
     html += "</tr>";
   });
   tbody.innerHTML = html;

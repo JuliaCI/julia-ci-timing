@@ -425,7 +425,8 @@ CREATE TABLE IF NOT EXISTS ttfx_prs (
     ci_commit        TEXT,                       -- the head the CI columns were looked up for
     ci_build         INTEGER,                    -- newest julia-pr build of ci_commit, NULL if none
     ci_state         TEXT,                       -- its Buildkite state, or 'none' when the commit has no build
-    ci_url           TEXT
+    ci_url           TEXT,
+    counts           TEXT                        -- JSON: invalidations and recompiled methods per arm; NULL until fetched
 );
 
 -- Buildkite artifacts expire; keep the pair we parsed.

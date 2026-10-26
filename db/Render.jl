@@ -785,7 +785,9 @@ function ttfx_prs(db)
             # CI on the pull request's current head, which may be newer than the measured commit
             "ci" => r.ci_state === missing || !isequal(r.ci_commit, r.pr_head_sha) ? nothing :
                     OrderedDict("state" => String(r.ci_state), "build" => js(r.ci_build), "url" => js(r.ci_url)),
-            "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks)))
+            "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks),
+            # The column is added by the next ingest after a deploy, not by the server
+            "counts" => coalesce(get(r, :counts, missing), nothing) === nothing ? nothing : JSON3.read(String(r.counts))))
     end
     sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => "julia-pr", "metrics" => TTFX_PR_METRICS, "prs" => prs)

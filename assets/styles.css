@@ -2904,6 +2904,51 @@ th.sorted .sort-indicator {
   opacity: 0.7;
   font-size: 10px;
 }
+/* The ranked pull requests have many suite columns, so they sit closer */
+.ttfx-stats .ttfx-prs-table th,
+.ttfx-stats .ttfx-prs-table td {
+  padding: 6px 6px;
+}
+@media (max-width: 1640px) {
+  .ttfx-stats .ttfx-prs-table td.msg {
+    max-width: 200px;
+  }
+}
+/* Two header rows, so the head sticks as one rather than each cell at the top */
+.ttfx-stats .ttfx-prs-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ttfx-stats .ttfx-prs-table th {
+  position: static;
+}
+.ttfx-stats .ttfx-prs-table .ttfx-prs-groups th {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+/* Each group's name sits over a line spanning just its columns, and a rule
+   runs down the left of the group */
+.ttfx-stats .ttfx-prs-table .ttfx-prs-groups th {
+  text-align: center;
+}
+.ttfx-stats .ttfx-prs-table .ttfx-prs-groups th.ttfx-prs-caption {
+  text-align: left;
+  vertical-align: top;
+  font-weight: 400;
+  color: var(--color-fg-default);
+  white-space: normal;
+  user-select: text;
+}
+.ttfx-prs-table .ttfx-prs-group {
+  display: block;
+  padding-bottom: 3px;
+  color: var(--color-fg-default);
+  border-bottom: 2px solid var(--color-fg-muted);
+}
+.ttfx-stats .ttfx-prs-table .ttfx-prs-group-start {
+  border-left: 1px solid var(--color-border-default);
+}
 .ttfx-stats td.msg {
   max-width: 320px;
   overflow: hidden;

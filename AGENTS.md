@@ -118,7 +118,9 @@ paths it watches, comparing the head with the master build of the merge-base
 and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
 comparison of each open pull request, in `ttfx_prs` (no history: a closed
 pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
-tab's "Open PRs" table. It lists the open pull requests from GitHub
+tab's "Open PRs" table. `compare.json` has no invalidation or recompile counts, so
+each job's `results.json` and trace logs are fetched too, once, into `ttfx_prs.counts`:
+the head and base totals and the tasks that changed most. It lists the open pull requests from GitHub
 anonymously, which makes it the largest user of the 60 requests an hour GitHub
 allows the host (`GITHUB_TOKEN` is used if set).
 

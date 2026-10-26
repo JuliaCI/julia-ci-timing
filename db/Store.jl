@@ -98,6 +98,7 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_samples", "load_stdlibs_s", "TEXT"),
     ("ttfx_samples", "run_stdlibs_s", "TEXT"),
     ("ttfx_results", "run_stdlibs", "REAL"),
+    ("ttfx_prs", "counts", "TEXT"),
 ]
 
 function apply_schema!(db::SQLite.DB)
