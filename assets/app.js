@@ -15819,7 +15819,7 @@ function overviewLegendHtml({ items, caption }) {
 // never colour alone), one headline figure with its week-over-week delta, an
 // optional sparkline, then label/value rows beside an optional donut with
 // its legend
-function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, legend, spark, bars, donut, rows }) {
+function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, figures, legend, spark, bars, donut, rows }) {
   const charts = [];
   const parts = [`<section class="overview-card overview-card-${status.level}" data-tab="${tab}">`];
   parts.push('<header class="overview-card-header">');
@@ -15829,8 +15829,9 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
   );
   parts.push("</header>");
   if (description) parts.push(`<p class="overview-card-desc">${description}</p>`);
-  if (headline != null || donut || legend) parts.push('<div class="overview-card-top">');
-  if (headline != null) {
+  const top = headline != null || donut || legend || (figures && figures.length);
+  if (top) parts.push('<div class="overview-card-top">');
+  const figureHtml = (headline, delta, headlineLabel) => {
     parts.push('<div class="overview-headline-figure">');
     parts.push(`<span class="overview-figure">${headline}</span>`);
     if (delta) {
@@ -15839,6 +15840,12 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
       );
     }
     if (headlineLabel) parts.push(`<span class="overview-figure-label">${headlineLabel}</span>`);
+    parts.push("</div>");
+  };
+  if (headline != null) figureHtml(headline, delta, headlineLabel);
+  if (figures && figures.length) {
+    parts.push('<div class="overview-figures">');
+    for (const f of figures) figureHtml(f.headline, f.delta, f.label);
     parts.push("</div>");
   }
   if (donut) {
@@ -15869,7 +15876,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     charts.push({ id, kind: "donut", spec: donut });
   }
   if (legend) parts.push(overviewLegendHtml(legend));
-  if (headline != null || donut || legend) parts.push("</div>");
+  if (top) parts.push("</div>");
   if (spark) {
     const id = `overview-chart-${++overviewChartSeq}`;
     parts.push(`<div class="overview-spark"><canvas id="${id}" role="img" aria-label="${escapeHtml(spark.label)}"></canvas></div>`);
@@ -15883,7 +15890,11 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
   const rowsHtml = (rows) =>
     rows
       .map((row) => {
-        if (row.heading) return `<dt class="overview-rows-heading">${escapeHtml(row.heading)}</dt>`;
+        if (row.heading) {
+          const text = escapeHtml(row.heading);
+          const html = row.link ? extLink(row.link.href, text, `title="${escapeHtml(row.link.title)}"`) : text;
+          return `<dt class="overview-rows-heading">${html}</dt>`;
+        }
         if (row.table) return `<div class="overview-compare">${rowsHtml(row.table)}</div>`;
         const [label, value, labelClass] = row;
         if (value == null || value === "") return "";
@@ -16324,7 +16335,6 @@ function overviewTtfxCard(src, prs) {
   }
   const newlyFailing = failed.filter((name) => firstFailing[name] === latest.build);
   const lastWeek = builds.filter((b) => ttfxBuildTime(b) >= Date.now() - OVERVIEW_WEEK_MS);
-  const measured = Object.keys(latest.tasks || {});
   // A line per metric over the last month, each on the snippets every build
   // measured and on its own scale, so their trends overlap
   const sparkBuilds = builds.filter((b) => ttfxBuildTime(b) >= Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS);
@@ -16350,12 +16360,50 @@ function overviewTtfxCard(src, prs) {
           : null,
     };
   });
+  // A new user's first session pays precompile, load and the first run; each
+  // following session pays load and the first run. Each is the geomean of the
+  // per-snippet sums, over the snippets every build of the month measured.
+  const sumGeomean = (b, tasks, metrics) => {
+    if (!tasks.length) return null;
+    let acc = 0;
+    for (const t of tasks) {
+      let x = 0;
+      for (const m of metrics) {
+        const v = ttfxValue(b, t, m);
+        if (v == null) return null;
+        x += v;
+      }
+      acc += Math.log(x);
+    }
+    return Math.exp(acc / tasks.length);
+  };
+  const figure = (metrics, label) => {
+    const tasks = metrics.reduce((ts, m) => ts.filter((t) => ttfxCommonTasks(sparkBuilds, src.tasks || [], m).includes(t)), src.tasks || []);
+    const now = sumGeomean(latest, tasks, metrics);
+    if (now == null) return null;
+    const before = weekAgo ? sumGeomean(weekAgo, tasks, metrics) : null;
+    const what = metrics.map((m) => TTFX_PILL_LABELS[m].toLowerCase()).join(" + ");
+    return {
+      headline: formatTtfxSeconds(now),
+      label: `${label}<br>${what}`,
+      delta: before
+        ? overviewDelta({
+            value: (100 * (now - before)) / before,
+            unit: "%",
+            upIsGood: false,
+            vs: "",
+            detail: `Geomean of ${what} over ${tasks.length} snippets: ${formatTtfxSeconds(now)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxSeconds(before)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
+          })
+        : null,
+    };
+  };
+  const figures = [figure(["precompile", "load", "run"], "First session"), figure(["load", "run"], "Following sessions")].filter(Boolean);
   const shown = lines.filter((l) => l.now != null);
   const weekDays = weekAgo ? Math.round((latestMs - ttfxBuildTime(weekAgo)) / OVERVIEW_DAY_MS) : null;
   const legend = shown.length
     ? {
         items: shown.map((l) => ({ label: l.label, color: l.color, value: formatTtfxSeconds(l.now), delta: l.delta })),
-        caption: `geomeans over the snippets of the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
+        caption: `each metric's geomean in the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
       }
     : null;
   const spark = overviewSparkLines(lines, {
@@ -16373,22 +16421,18 @@ function overviewTtfxCard(src, prs) {
   } else {
     status = overviewStatus("ok", "Current");
   }
-  const builtAt = new Date(latestMs).toISOString();
   return overviewCard({
     tab: "ci-ttfx",
     title: "TTFX",
     status,
     description:
       "Time to precompile, load and first run a set of packages, measured on every master build. The chart draws each metric on its own scale. Each comparison below is over the snippets both of its runs measured, so it can differ from the TTFX tab, which uses the snippets every run in its range measured.",
+    figures,
     legend,
     spark,
     rows: [
       ...overviewTtfxCompare(src, latest),
-      ["Latest build", `${overviewExtLink(ttfxJobUrl(latest), `#${latest.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(latest.version || "")}`],
-      ...overviewTtfxOptBuild(src),
-      ["Snippets", `${measured.length} measured of ${(src.tasks || []).length}${latest.triplet ? ` on ${escapeHtml(latest.triplet)}` : ""}`],
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
-      ["Failing", failed.length ? overviewList(failed.filter((n) => firstFailing[n] !== latest.build).map((n) => `${n} since #${firstFailing[n]}`)) : ""],
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
       ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
@@ -16433,11 +16477,10 @@ function overviewTtfxOpt(src) {
   return runs[runs.length - 1] || null;
 }
 
-function overviewTtfxOptBuild(src) {
-  const opt = overviewTtfxOpt(src);
-  if (!opt) return [];
-  const builtAt = new Date(ttfxBuildTime(opt)).toISOString();
-  return [["Latest optimized", `${overviewExtLink(ttfxJobUrl(opt), `#${opt.build}`)} (${overviewAgo(builtAt)}) ${escapeHtml(opt.version || "")}`]];
+// A group heading's link to the TTFX job of the build it compares
+function overviewTtfxBuildLink(b) {
+  const at = new Date(ttfxBuildTime(b)).toISOString();
+  return { href: ttfxJobUrl(b), title: `Build #${b.build}, ${b.version || ""}, ${formatUtc(at)}` };
 }
 
 // The latest master build, and the latest optimized (PGO and ThinLTO) build,
@@ -16454,8 +16497,8 @@ function overviewTtfxCompare(src, latest) {
     rel && [`vs ${rel.version}`, overviewTtfxRelease(src, b, rel)],
     lts && [`vs ${lts.version} (LTS)`, overviewTtfxRelease(src, b, lts)],
   ];
-  groups.push(["Nightly", against(latest)]);
-  if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)]]);
+  groups.push(["Nightly", against(latest), overviewTtfxBuildLink(latest)]);
+  if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)], overviewTtfxBuildLink(opt)]);
   return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups);
 }
 
@@ -16474,14 +16517,14 @@ function overviewCompareText(c) {
 // (which colours it), `title` and optionally `text`.
 function overviewCompareRows(columns, groups) {
   const shown = groups
-    .map(([name, comps]) => [name, comps.filter((c) => c && c[1].some(Boolean))])
+    .map(([name, comps, link]) => [name, comps.filter((c) => c && c[1].some(Boolean)), link])
     .filter(([, comps]) => comps.length);
   if (!shown.length) return [];
   const cellsHtml = (cells) =>
     `<span class="overview-compare-cells" style="grid-template-columns: repeat(${columns.length}, minmax(0, 1fr))">${cells.join("")}</span>`;
   const rows = [["", cellsHtml(columns.map((c) => `<span>${escapeHtml(c)}</span>`))]];
-  for (const [name, comps] of shown) {
-    rows.push({ heading: name });
+  for (const [name, comps, link] of shown) {
+    rows.push({ heading: name, link });
     for (const [label, cells] of comps) {
       const tones = cells.filter(Boolean).map((c) => overviewReleaseClass(c.pct));
       rows.push([

@@ -3675,6 +3675,15 @@ tr.ttfx-pr-outdated:focus-within > td {
 .overview-legend-with-delta {
   grid-template-columns: auto max-content max-content;
 }
+.overview-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  flex-basis: 100%;
+}
+.overview-figures .overview-headline-figure {
+  flex: 1 1 0;
+}
 .overview-line-legend {
   display: flex;
   flex-direction: column;
@@ -3818,7 +3827,8 @@ tr.ttfx-pr-outdated:focus-within > td {
     flex-direction: column;
   }
   /* In a column the desktop flex basis would become a 220px height */
-  .overview-headline-figure {
+  .overview-headline-figure,
+  .overview-figures {
     flex: none;
   }
 }
