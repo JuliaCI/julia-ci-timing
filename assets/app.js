@@ -16429,7 +16429,7 @@ function overviewTtfxCard(src, prs) {
     title: "TTFX",
     status,
     description:
-      "Time to precompile, load and first run a set of packages, measured on every master build. The chart draws each metric on its own scale. Each comparison below is over the snippets both of its runs measured, so it can differ from the TTFX tab, which uses the snippets every run in its range measured.",
+      "Time to precompile, load and run a set of packages and representative workloads.",
     figures,
     legend,
     spark,
