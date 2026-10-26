@@ -15778,13 +15778,14 @@ function overviewSpark(points, { color, label, format = (v) => String(v), zero =
   return { points: kept, color, label, format, zero };
 }
 
-// Sparkline spec with several series: [{ label, color, points }], one line each
-function overviewSparkLines(series, { label, format = (v) => String(v), zero = false }) {
+// Sparkline spec with several series: [{ label, color, points }], one line each.
+// `independent` gives each line its own scale, so lines of different sizes overlap.
+function overviewSparkLines(series, { label, format = (v) => String(v), zero = false, independent = false }) {
   const kept = series
     .map((s) => ({ ...s, points: s.points.filter((p) => !isNaN(p.x) && p.y != null && !isNaN(p.y)).sort((a, b) => a.x - b.x) }))
     .filter((s) => s.points.length >= 2);
   if (!kept.length) return null;
-  return { series: kept, points: kept[0].points, color: kept[0].color, label, format, zero };
+  return { series: kept, points: kept[0].points, color: kept[0].color, label, format, zero, independent };
 }
 
 // Diverging bar spec: points [{ x: ms, up, down }], `up` drawn above the
@@ -15798,11 +15799,27 @@ function overviewBars(points, { upColor, downColor, upLabel, downLabel, label })
 
 let overviewChartSeq = 0;
 
+// Legend spec: { items: [{ label, color, value, delta }], caption }, one row
+// per line of a several-line sparkline, in place of a headline figure
+function overviewLegendHtml({ items, caption }) {
+  const hasDelta = items.some((s) => s.delta);
+  const li = items.map((s) => {
+    let deltaHtml = "";
+    if (s.delta) {
+      deltaHtml = `<span class="overview-legend-delta overview-delta-${s.delta.tone}" title="${escapeHtml(s.delta.detail || s.delta.vs)}"><span aria-hidden="true">${s.delta.arrow}</span> ${escapeHtml(s.delta.text)}</span>`;
+    } else if (hasDelta) {
+      deltaHtml = '<span class="overview-legend-delta"></span>';
+    }
+    return `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(s.value)}</span>${deltaHtml}</li>`;
+  });
+  return `<div class="overview-line-legend"><ul class="overview-legend overview-legend-lines${hasDelta ? " overview-legend-with-delta" : ""}">${li.join("")}</ul>${caption ? `<span class="overview-figure-label">${caption}</span>` : ""}</div>`;
+}
+
 // A card: title linking to the source's tab, a status badge (icon + label,
 // never colour alone), one headline figure with its week-over-week delta, an
 // optional sparkline, then label/value rows beside an optional donut with
 // its legend
-function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, spark, bars, donut, rows }) {
+function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, legend, spark, bars, donut, rows }) {
   const charts = [];
   const parts = [`<section class="overview-card overview-card-${status.level}" data-tab="${tab}">`];
   parts.push('<header class="overview-card-header">');
@@ -15812,7 +15829,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
   );
   parts.push("</header>");
   if (description) parts.push(`<p class="overview-card-desc">${description}</p>`);
-  if (headline != null || donut) parts.push('<div class="overview-card-top">');
+  if (headline != null || donut || legend) parts.push('<div class="overview-card-top">');
   if (headline != null) {
     parts.push('<div class="overview-headline-figure">');
     parts.push(`<span class="overview-figure">${headline}</span>`);
@@ -15851,7 +15868,8 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     parts.push("</ul></div>");
     charts.push({ id, kind: "donut", spec: donut });
   }
-  if (headline != null || donut) parts.push("</div>");
+  if (legend) parts.push(overviewLegendHtml(legend));
+  if (headline != null || donut || legend) parts.push("</div>");
   if (spark) {
     const id = `overview-chart-${++overviewChartSeq}`;
     parts.push(`<div class="overview-spark"><canvas id="${id}" role="img" aria-label="${escapeHtml(spark.label)}"></canvas></div>`);
@@ -16307,26 +16325,44 @@ function overviewTtfxCard(src, prs) {
   const newlyFailing = failed.filter((name) => firstFailing[name] === latest.build);
   const lastWeek = builds.filter((b) => ttfxBuildTime(b) >= Date.now() - OVERVIEW_WEEK_MS);
   const measured = Object.keys(latest.tasks || {});
-  // The suite line over the last month, on the snippets every build measured
+  // A line per metric over the last month, each on the snippets every build
+  // measured and on its own scale, so their trends overlap
   const sparkBuilds = builds.filter((b) => ttfxBuildTime(b) >= Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS);
-  const common = ttfxCommonTasks(sparkBuilds, src.tasks || [], "precompile");
-  const geomean = ttfxGeomean(latest, common, "precompile");
   const weekAgo = overviewWeekBefore(sparkBuilds, latestMs, ttfxBuildTime);
-  const weekAgoGeomean = weekAgo ? ttfxGeomean(weekAgo, common, "precompile") : null;
-  const delta =
-    geomean != null && weekAgoGeomean
-      ? overviewDelta({
-          value: (100 * (geomean - weekAgoGeomean)) / weekAgoGeomean,
-          unit: "%",
-          upIsGood: false,
-          ...overviewReportDelta(overviewDateOnly(latestMs), overviewDateOnly(ttfxBuildTime(weekAgo)), "build"),
-          detail: `Latest build #${latest.build} (${latest.date} UTC) against the last build at least a week older, #${weekAgo.build} (${weekAgo.date} UTC)`,
-        })
-      : null;
-  const spark = overviewSpark(
-    sparkBuilds.map((b) => ({ x: ttfxBuildTime(b), y: ttfxGeomean(b, common, "precompile") })),
-    { color: colors.accent, label: "Precompile geomean per build", format: formatTtfxSeconds },
-  );
+  const lines = OVERVIEW_TTFX_METRICS.map((m, k) => {
+    const common = ttfxCommonTasks(sparkBuilds, src.tasks || [], m);
+    const now = ttfxGeomean(latest, common, m);
+    const before = weekAgo ? ttfxGeomean(weekAgo, common, m) : null;
+    return {
+      label: TTFX_PILL_LABELS[m],
+      color: colors.categorical[k],
+      n: common.length,
+      now,
+      points: sparkBuilds.map((b) => ({ x: ttfxBuildTime(b), y: ttfxGeomean(b, common, m) })),
+      delta:
+        now != null && before
+          ? overviewDelta({
+              value: (100 * (now - before)) / before,
+              unit: "%",
+              upIsGood: false,
+              detail: `${TTFX_PILL_LABELS[m]} geomean over ${common.length} snippets: ${formatTtfxSeconds(now)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxSeconds(before)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
+            })
+          : null,
+    };
+  });
+  const shown = lines.filter((l) => l.now != null);
+  const weekDays = weekAgo ? Math.round((latestMs - ttfxBuildTime(weekAgo)) / OVERVIEW_DAY_MS) : null;
+  const legend = shown.length
+    ? {
+        items: shown.map((l) => ({ label: l.label, color: l.color, value: formatTtfxSeconds(l.now), delta: l.delta })),
+        caption: `geomeans over the snippets of the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
+      }
+    : null;
+  const spark = overviewSparkLines(lines, {
+    label: "Geomean per build of precompile, load, run and warm, each on its own scale",
+    format: formatTtfxSeconds,
+    independent: true,
+  });
   let status;
   if (ageMs > OVERVIEW_TTFX_STALE_MS) {
     status = overviewStatus("warn", `No result for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`);
@@ -16343,10 +16379,8 @@ function overviewTtfxCard(src, prs) {
     title: "TTFX",
     status,
     description:
-      "Time to precompile, load and first run a set of packages, measured on every master build. Each comparison below is over the snippets both of its runs measured, so it can differ from the TTFX tab, which uses the snippets every run in its range measured.",
-    headline: geomean != null ? formatTtfxSeconds(geomean) : null,
-    headlineLabel: geomean != null ? `precompile geomean over ${common.length} snippets in the latest build` : null,
-    delta,
+      "Time to precompile, load and first run a set of packages, measured on every master build. The chart draws each metric on its own scale. Each comparison below is over the snippets both of its runs measured, so it can differ from the TTFX tab, which uses the snippets every run in its range measured.",
+    legend,
     spark,
     rows: [
       ...overviewTtfxCompare(src, latest),
@@ -16906,9 +16940,10 @@ function overviewSparkChart(canvas, spark) {
   return new Chart(canvas, {
     type: "line",
     data: {
-      datasets: series.map((s) => ({
+      datasets: series.map((s, i) => ({
         label: s.label,
         data: s.points,
+        yAxisID: spark.independent ? `y${i}` : "y",
         borderColor: s.color,
         backgroundColor: multi ? s.color : colorToRgba(s.color, 0.12),
         fill: !multi,
@@ -16926,7 +16961,9 @@ function overviewSparkChart(canvas, spark) {
       interaction: { mode: "nearIndex", intersect: false },
       scales: {
         x: { type: "time", display: false },
-        y: { display: false, beginAtZero: spark.zero },
+        ...Object.fromEntries(
+          (spark.independent ? series.map((_, i) => `y${i}`) : ["y"]).map((id) => [id, { display: false, beginAtZero: spark.zero }]),
+        ),
       },
       plugins: {
         legend: { display: false },

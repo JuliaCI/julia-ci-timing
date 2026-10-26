@@ -3675,6 +3675,19 @@ tr.ttfx-pr-outdated:focus-within > td {
 .overview-legend-with-delta {
   grid-template-columns: auto max-content max-content;
 }
+.overview-line-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.overview-legend-lines.overview-legend-with-delta {
+  font-size: 12px;
+  column-gap: 12px;
+  grid-template-columns: repeat(3, max-content);
+}
+.overview-legend-lines .overview-legend-delta {
+  font-size: 11px;
+}
 .overview-legend li {
   display: contents;
 }
