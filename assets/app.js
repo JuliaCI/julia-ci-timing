@@ -13585,6 +13585,50 @@ function ttfxPrStackBadge(p) {
   return prStackBadge(st.parents[0], st.base_ref, ttfxPrStackTitle(p), st.complete && !st.exact);
 }
 
+const TTFX_COUNT_KINDS = [
+  ["invalidated", "Invalidations"],
+  ["recompiled", "Recompiled methods"],
+];
+const ttfxCount = (v) => v.toLocaleString("en-US");
+const ttfxCountChange = (d) => `${d > 0 ? "+" : ""}${ttfxCount(d)}`;
+
+// The invalidations and recompiled methods of two runs, `head` against `base`
+// (a pull request's job, or a commit's against the previous one), then the
+// tasks whose counts changed most. `counts` null means not fetched yet.
+function ttfxCountsHtml(counts, { head, base, hint }) {
+  if (!counts) return '<div class="ttfx-popup-muted ttfx-popup-hint">Invalidations and recompiled methods: not fetched yet.</div>';
+  const kinds = TTFX_COUNT_KINDS.filter(([k]) => counts[k]);
+  if (!kinds.length) return '<div class="ttfx-popup-muted ttfx-popup-hint">No invalidation or trace logs to count.</div>';
+  const cls = (d) => (d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "");
+  let html = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">${escapeHtml(head)}</th><th class="num">${escapeHtml(base)}</th><th class="num">Change</th></tr></thead><tbody>`;
+  for (const [k, label] of kinds) {
+    const c = counts[k];
+    const d = c.head - c.base;
+    html += `<tr><th title="Summed over the ${c.n_tasks} tasks both have">${label}</th><td class="num">${ttfxCount(c.head)}</td><td class="num">${ttfxCount(c.base)}</td><td class="num ${cls(d)}">${ttfxCountChange(d)}</td></tr>`;
+  }
+  html += "</tbody></table>";
+  const tasks = counts.tasks || [];
+  if (tasks.length) {
+    html += `<table class="ttfx-popup-table"><thead><tr><th>Task whose counts changed most</th>`;
+    html += kinds.map(([, label]) => `<th class="num">${label}</th>`).join("");
+    html += "</tr></thead><tbody>";
+    for (const t of tasks) {
+      html += `<tr><th>${escapeHtml(t.name)}</th>`;
+      for (const [k] of kinds) {
+        const v = t[k];
+        const d = v ? v[0] - v[1] : 0;
+        html += v
+          ? `<td class="num ${cls(d)}" title="${escapeHtml(`${head} ${ttfxCount(v[0])}, ${base.toLowerCase()} ${ttfxCount(v[1])}`)}">${ttfxCount(v[0])}${d ? ` <span class="ttfx-popup-muted">${ttfxCountChange(d)}</span>` : ""}</td>`
+          : '<td class="num">—</td>';
+      }
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+  }
+  if (hint) html += `<div class="ttfx-popup-muted ttfx-popup-hint">${escapeHtml(hint)}${tasks.length ? " Per task: the count, and muted its change." : ""}</div>`;
+  return html;
+}
+
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
 // stacked one it adds the estimate of the whole stack against master.
 function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
@@ -13608,16 +13652,31 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
         : `This PR targets \`${st.base_ref}\`, which has no TTFX comparison recorded, so these numbers are against that branch ` +
             "and there is no estimate against master.",
     );
-  const head = ["suite geomean", st ? `this PR vs ${parent}` : "change per block"];
+  const head = ["suite geomean", st ? `this PR vs ${parent}` : "change per block", "GC off"];
   if (chained) head.push("stack vs master (est.)");
   lines.push("", `| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`);
+  const cell = (x) => (!x ? "—" : x.verdict !== "same" ? `**${blocks(x)}** (${x.verdict})` : blocks(x));
   for (const m of metrics) {
     const on = p.suite[m];
     if (!on) continue;
-    const off = p.suite[m + "_gcoff"];
-    const verdict = ttfxVerdict(on.verdict, off && off.verdict);
-    const own = verdict !== "same" ? `**${blocks(on)}** (${verdict})` : blocks(on);
-    lines.push(`| ${ttfxMetricLabel(m)} | ${own} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "—"} |` : ""}`);
+    lines.push(`| ${ttfxMetricLabel(m)} | ${cell(on)} | ${cell(p.suite[m + "_gcoff"])} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "—"} |` : ""}`);
+  }
+  const counts = p.counts && TTFX_COUNT_KINDS.filter(([k]) => p.counts[k]);
+  if (counts && counts.length) {
+    lines.push("");
+    for (const [k, label] of counts) {
+      const c = p.counts[k];
+      lines.push(`${label}: ${ttfxCount(c.base)} → ${ttfxCount(c.head)} (${ttfxCountChange(c.head - c.base)}) over ${c.n_tasks} tasks.`);
+    }
+    const tasks = p.counts.tasks || [];
+    if (tasks.length) {
+      lines.push("", `<details><summary>Tasks whose counts changed most (${tasks.length})</summary>`, "");
+      for (const t of tasks) {
+        const parts = counts.filter(([k]) => t[k] && t[k][0] !== t[k][1]).map(([k, label]) => `${label.toLowerCase()} ${ttfxCount(t[k][1])} → ${ttfxCount(t[k][0])}`);
+        lines.push(`- ${t.name}: ${parts.join(", ")}`);
+      }
+      lines.push("", "</details>");
+    }
   }
   const scope = st ? ` against ${parent}` : "";
   for (const [key, label] of [
@@ -13759,6 +13818,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   }
   html += "</tbody></table>";
   html += '<div class="ttfx-popup-muted ttfx-popup-hint">One value per ABBA block. Muted: the same with the GC off.</div>';
+  html += ttfxCountsHtml(p.counts, { head: "Head", base: "Base", hint: "From the job's untimed trace run, once per arm, so exact counts." });
 
   const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
   // A detail metric gets a column when a task changed in it
@@ -17647,15 +17707,18 @@ function commitTtfxHtml(data) {
   const t = data.ttfx;
   if (!t) return commitCard("TTFX", '<p class="commit-line text-muted">No TTFX job recorded for this commit.</p>');
   const metrics = t.metrics;
+  // The GC-off values follow the metrics in each task's arrays, for the overall changes only
+  const all = [...metrics, ...(t.gcoff_metrics || [])];
   const tasks = t.tasks.map((x) => ({
     ...x,
-    pcts: metrics.map((_, i) => commitPct(x.now?.[i], x.previous?.[i])),
+    pcts: all.map((_, i) => commitPct(x.now?.[i], x.previous?.[i])),
   }));
   // Geometric mean of the ratios over the tasks with both, per metric
-  const figures = metrics.map((m, i) => {
+  const figures = all.map((m, i) => {
     const logs = tasks.map((x) => x.pcts[i]).filter((p) => p != null).map((p) => Math.log(1 + p / 100));
     const pct = logs.length ? (Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length) - 1) * 100 : null;
-    return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(ttfxShortName(m))}</span>${commitPctHtml(pct, 2)}</div>`;
+    const label = m.endsWith("_gcoff") ? `${ttfxShortName(m.slice(0, -6))}, GC off` : ttfxShortName(m);
+    return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`;
   });
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";
@@ -17663,7 +17726,7 @@ function commitTtfxHtml(data) {
     const names = failed.map((x) => `${escapeHtml(x.task)}${x.failed_before ? "" : ' <span class="commit-worse">new</span>'}`);
     failedHtml = `<p class="commit-line"><span class="commit-worse">${failed.length} failed:</span> ${names.join(", ")}</p>`;
   }
-  const worst = (x) => Math.max(...x.pcts.map((p) => Math.abs(p ?? 0)));
+  const worst = (x) => Math.max(...x.pcts.slice(0, metrics.length).map((p) => Math.abs(p ?? 0)));
   const row = (x) => `<tr>
     <td>${escapeHtml(x.task)}</td>
     ${metrics.map((_, i) => `<td class="num col-secondary"${dataV(x.now?.[i])}>${commitSeconds(x.now?.[i])}</td><td class="num"${dataV(x.pcts[i])}>${commitPctHtml(x.pcts[i])}</td>`).join("")}
@@ -17686,7 +17749,9 @@ function commitTtfxHtml(data) {
   const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
   return commitCard(
     "TTFX",
-    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}${ttfxReleasesHtml(metrics, t.releases)}`,
+    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}` +
+      (t.previous ? `<div class="popup-info">${ttfxCountsHtml(t.counts, { head: "This commit", base: "Previous", hint: "From each job's untimed trace run, so exact counts, summed over the tasks both jobs have." })}</div>` : "") +
+      ttfxReleasesHtml(metrics, t.releases),
     { links },
   );
 }

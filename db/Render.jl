@@ -950,7 +950,11 @@ function commit_ttfx(db, prefix, sha)
         !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
     end
     metrics = [TTFX_METRICS[1:4]; stdlibs]
-    results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in metrics]
+    # Only in the overall changes, so after the metrics the task rows show
+    gcoff = filter(["load_gcoff", "run_gcoff", "warm_gcoff"]) do m
+        !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
+    end
+    results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in [metrics; gcoff]]
                          for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (uuid,)))
     failures(uuid) = Dict(String(r.task) => String(r.error) for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ?", (uuid,)))
     now_ = results(String(j.job_uuid))
@@ -963,9 +967,35 @@ function commit_ttfx(db, prefix, sha)
                                  "failed" => get(failed, task, nothing), "failed_before" => haskey(failed_before, task)))
     end
     return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
-                       "url" => js(j.web_url), "metrics" => metrics,
+                       "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff,
                        "previous" => isempty(prev) ? nothing : OrderedDict("build" => Int(prev[1].build), "commit" => first(String(prev[1].commit_sha), 8)),
+                       "counts" => isempty(prev) ? nothing : ttfx_job_counts(db, String(j.job_uuid), String(prev[1].job_uuid)),
                        "tasks" => tasks, "releases" => isempty(now_) ? Any[] : ttfx_release_ratios(db, String(j.job_uuid), metrics))
+end
+
+const TTFX_COUNT_TASKS = 10
+
+# The invalidations and recompiled methods of a TTFX job against an earlier one,
+# shaped like a pull request's counts (head is `uuid`, base `prev`): per metric
+# the totals over the tasks both have, and the tasks whose counts differ most
+function ttfx_job_counts(db, uuid, prev)
+    invalidated(u) = Dict(String(r.task) => Int(r.invalidated)
+                          for r in rows(db, "SELECT task, invalidated FROM ttfx_results WHERE job_uuid = ? AND invalidated IS NOT NULL", (u,)))
+    recompiled(u) = Dict(String(r.task) => Int(r.recompiled) for r in rows(db, "SELECT task, recompiled FROM ttfx_traces WHERE job_uuid = ?", (u,)))
+    out = OrderedDict{String,Any}()
+    per = Dict{String,OrderedDict{String,Any}}()
+    for (key, f) in (("invalidated", invalidated), ("recompiled", recompiled))
+        head, base = f(uuid), f(prev)
+        both = [t for t in keys(head) if haskey(base, t)]
+        isempty(both) && continue
+        out[key] = OrderedDict("head" => sum(head[t] for t in both), "base" => sum(base[t] for t in both), "n_tasks" => length(both))
+        for t in both
+            get!(per, t, OrderedDict{String,Any}("name" => t))[key] = [head[t], base[t]]
+        end
+    end
+    diff(m) = maximum((abs(v[1] - v[2]) for (k, v) in m if k != "name"); init=0)
+    out["tasks"] = first(sort!([m for m in values(per) if diff(m) > 0]; by=m -> (-diff(m), m["name"])), TTFX_COUNT_TASKS)
+    return out
 end
 
 # The daily report run on the commit, or failing that the first one run on a
