@@ -16360,9 +16360,10 @@ function overviewTtfxCard(src, prs) {
           : null,
     };
   });
-  // A new user's first session pays precompile, load and the first run; each
-  // following session pays load and the first run. Each is the geomean of the
-  // per-snippet sums, over the snippets every build of the month measured.
+  // A new user's first session pays precompile and the cold load and run; each
+  // following session pays the warm load and run, which reuse the object cache
+  // the first one filled. Each is the geomean of the per-snippet sums, over the
+  // snippets every build of the month measured.
   const sumGeomean = (b, tasks, metrics) => {
     if (!tasks.length) return null;
     let acc = 0;
@@ -16377,12 +16378,11 @@ function overviewTtfxCard(src, prs) {
     }
     return Math.exp(acc / tasks.length);
   };
-  const figure = (metrics, label) => {
+  const figure = (metrics, label, what) => {
     const tasks = metrics.reduce((ts, m) => ts.filter((t) => ttfxCommonTasks(sparkBuilds, src.tasks || [], m).includes(t)), src.tasks || []);
     const now = sumGeomean(latest, tasks, metrics);
     if (now == null) return null;
     const before = weekAgo ? sumGeomean(weekAgo, tasks, metrics) : null;
-    const what = metrics.map((m) => TTFX_PILL_LABELS[m].toLowerCase()).join(" + ");
     return {
       headline: formatTtfxSeconds(now),
       label: `${label}<br>${what}`,
@@ -16397,7 +16397,10 @@ function overviewTtfxCard(src, prs) {
         : null,
     };
   };
-  const figures = [figure(["precompile", "load", "run"], "First session"), figure(["load", "run"], "Following sessions")].filter(Boolean);
+  const figures = [
+    figure(["precompile", "load", "run"], "First session", "precompile + load + run"),
+    figure(["warm"], "Following sessions", "load + run"),
+  ].filter(Boolean);
   const shown = lines.filter((l) => l.now != null);
   const weekDays = weekAgo ? Math.round((latestMs - ttfxBuildTime(weekAgo)) / OVERVIEW_DAY_MS) : null;
   const legend = shown.length
