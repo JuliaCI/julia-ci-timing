@@ -364,7 +364,7 @@ function tapAgainToOpen(open) {
   onClick.open = open;
   return onClick;
 }
-const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap here or the point again to open" : "");
+const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap here or the marker again to open" : "");
 
 // On a touchscreen a tap on the tooltip opens what it shows, as a second tap
 // on its point does. The tap is kept from the tooltip, which would otherwise
@@ -12837,7 +12837,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(...wrapTooltipText(b.message));
             for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-            lines.push(IS_TOUCH ? "Tap here or the point again for details and links" : "Click for details and links");
+            lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click marker for details and links");
             return lines;
           },
         },
@@ -15007,7 +15007,7 @@ function updateSizesChart() {
               const span = sizesSpan(sizesPrevious(d.values.total || [], i), i);
               if (span > 1) lines.push(`${span} commits since the previous measured one`);
               if (d.messages[i]) lines.push(...wrapTooltipText(span > 1 ? `Last: ${d.messages[i]}` : d.messages[i]));
-              lines.push(IS_TOUCH ? "Tap here or the point again for details and links" : "Click for details and links");
+              lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click marker for details and links");
               return lines;
             },
           },
