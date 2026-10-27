@@ -12312,6 +12312,27 @@ function ttfxSuiteTasks(builds, tasks, metric = ttfxMetric) {
   return out;
 }
 
+// The build-to-build noise of the suite line in seconds, at its level over
+// the last 20 builds. It is a robust spread of the change from one build to
+// the next, so a step in the line does not count as noise. Null for a count,
+// or with too few builds to tell.
+function ttfxSuiteNoise(builds, common, metric) {
+  if (ttfxIsCount(metric) || !common.length) return null;
+  const logs = builds
+    .map((b) => ttfxSuiteValue(b, common, metric))
+    .filter((v) => v > 0)
+    .map(Math.log);
+  if (logs.length < 10) return null;
+  const spread = (median(logs.slice(1).map((v, i) => Math.abs(v - logs[i]))) * 1.4826) / Math.SQRT2;
+  return Math.exp(median(logs.slice(-20))) * spread;
+}
+
+function formatTtfxNoise(s) {
+  if (s >= 1) return s.toFixed(2) + " s";
+  const ms = s * 1000;
+  return (ms >= 10 ? ms.toFixed(0) : ms.toFixed(1)) + " ms";
+}
+
 function formatTtfxSeconds(s) {
   if (s == null) return "—";
   if (s >= 100) return s.toFixed(0) + "s";
@@ -12700,7 +12721,40 @@ function highlightTtfxRow(build) {
 // Chart options shared by the per-task chart and the summary panels.
 // `normalized` series are % change from the first build in range.
 // `legendSummary`: group the tasks' lines in the legend (see TTFX_LEGEND_TASKS_MAX)
-function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
+// A title with a `tail` drawn lighter than the rest. Chart.js draws a title
+// in one style, so it lays out the whole text in a transparent colour and
+// this draws the two parts over it.
+Chart.register({
+  id: "mutedTitleTail",
+  afterDraw(chart) {
+    const opts = chart.options.plugins.title;
+    const box = chart.titleBlock;
+    if (!opts?.display || !opts.tail || !box) return;
+    const { toFont, toPadding } = Chart.helpers;
+    const head = opts.text.slice(0, -opts.tail.length);
+    const headFont = toFont(opts.font);
+    const tailFont = toFont({ ...opts.font, weight: "normal" });
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.font = headFont.string;
+    const headWidth = ctx.measureText(head).width;
+    ctx.font = tailFont.string;
+    const tailWidth = ctx.measureText(opts.tail).width;
+    const x = box.left + (box.width - headWidth - tailWidth) / 2;
+    const y = box.top + toPadding(opts.padding).top + headFont.lineHeight / 2;
+    ctx.fillStyle = opts.headColor;
+    ctx.font = headFont.string;
+    ctx.fillText(head, x, y);
+    ctx.fillStyle = colorToRgba(opts.headColor, 0.65);
+    ctx.font = tailFont.string;
+    ctx.fillText(opts.tail, x + headWidth, y);
+    ctx.restore();
+  },
+});
+
+function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail = "", legendDisplay, legendSummary = false, onZoomChange, builds = [] }) {
   const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const normalized = ttfxNormalizedFor(metric);
   const count = ttfxIsCount(metric);
@@ -12717,7 +12771,15 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
     elements: { line: { tension: 0 } },
     plugins: {
       title: title
-        ? { display: true, text: title, color: textColor, font: { size: 12, weight: "600" }, padding: { top: 2, bottom: 6 } }
+        ? {
+            display: true,
+            text: title + titleTail,
+            color: titleTail ? "transparent" : textColor,
+            tail: titleTail,
+            headColor: textColor,
+            font: { size: 12, weight: "600" },
+            padding: { top: 2, bottom: 6 },
+          }
         : { display: false },
       legend: {
         display: legendDisplay,
@@ -13380,12 +13442,14 @@ function updateTtfxSummaryCharts() {
     const common = ttfxSuiteTasks(builds, tasks, metric);
     const label = ttfxMetricLabel(metric);
     const datasets = ttfxSuiteDatasets(builds, common, metric);
+    const noise = ttfxSuiteNoise(builds, common, metric);
     const options = ttfxChartOptions({
       metric,
       metricLabel: label,
-      title: !common.length
-        ? `${label}: none recorded in this range`
-        : `${label}: geomean of ${common.length} task${common.length > 1 ? "s" : ""}`,
+      title: !common.length ? `${label}: none recorded in this range` : `${label}: `,
+      titleTail: !common.length
+        ? ""
+        : `geomean of ${common.length} task${common.length > 1 ? "s" : ""}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
       legendDisplay: false,
       onZoomChange,
       builds,
