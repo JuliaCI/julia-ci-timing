@@ -385,6 +385,59 @@ Chart.register({
   },
 });
 
+// The markers of a line series are one size, at most the size the series
+// asks for and smaller as its visible points crowd together, so a dense
+// series reads as a line. Markers too small to see are dropped, as they only
+// thicken the line. Points flagged in `_keepMarker` (failures, say) keep
+// their size, and a series drawn without a line keeps its markers, as there
+// the markers are the data.
+function spacedPointRadius(base) {
+  const at = typeof base === "function" ? base : Array.isArray(base) ? (ctx) => base[ctx.dataIndex] : () => base;
+  const radius = (ctx) => {
+    const r = at(ctx);
+    const size = ctx.dataset._markerSize;
+    if (ctx.type !== "data" || size == null || ctx.dataset._keepMarker?.[ctx.dataIndex]) return r;
+    return Math.min(r, size);
+  };
+  radius._max = base;
+  return radius;
+}
+// Round joins, as a mitred corner where a line folds back sharply juts out
+// well past the point, which the markers no longer hide
+Chart.defaults.elements.line.borderJoinStyle = "round";
+Chart.register({
+  id: "spacedMarkers",
+  beforeUpdate(chart) {
+    for (const ds of chart.data.datasets) {
+      if (ds.pointRadius?._max === undefined) ds.pointRadius = spacedPointRadius(ds.pointRadius ?? Chart.defaults.elements.point.radius);
+    }
+  },
+  // The scales are laid out by now, so the spacing is in pixels
+  beforeDatasetsUpdate(chart) {
+    const showLines = chart.options.showLine ?? chart.config.type !== "scatter";
+    chart.data.datasets.forEach((ds, i) => {
+      const meta = chart.getDatasetMeta(i);
+      const scale = meta.iScale;
+      ds._markerSize = null;
+      if (meta.type !== "line" || !(ds.showLine ?? showLines) || !scale) return;
+      let first = null;
+      let last = null;
+      let n = 0;
+      for (let j = 0; j < ds.data.length; j++) {
+        const p = meta.controller.getParsed(j);
+        const x = p?.[scale.axis];
+        if (x == null || p[meta.vScale.axis] == null || x < scale.min || x > scale.max) continue;
+        first ??= x;
+        last = x;
+        n++;
+      }
+      if (n < 2) return;
+      const size = Math.abs(scale.getPixelForValue(last) - scale.getPixelForValue(first)) / (n - 1) / 3;
+      ds._markerSize = size < 0.75 ? 0 : size;
+    });
+  },
+});
+
 // === State ===
 let chart = null;
 let data = null;
@@ -3671,6 +3724,7 @@ function updateChart() {
       if (p.retry > 0) return 1;
       return 0;
     });
+    const keepMarkers = points.map((p) => (breakageCommit && p.meta.commit === breakageCommit) || isFailedState(p.state) || p.retry > 0);
     const pointHoverBorderWidths = points.map((p) => {
       if (isFailedState(p.state)) return isMobile ? 1.8 : 2.2; // Thicker on hover
       if (p.retry > 0) return 2;
@@ -3688,6 +3742,7 @@ function updateChart() {
         fill: false,
         tension: 0.2,
         pointRadius: pointRadii,
+        _keepMarker: keepMarkers,
         pointHoverRadius: pointRadii.map((r) => r * 1.2),
         pointHitRadius: 10,
         pointBackgroundColor: pointColors,
@@ -3724,6 +3779,7 @@ function updateChart() {
         fill: false,
         showLine: false,
         pointRadius: pointRadii,
+        _keepMarker: keepMarkers,
         pointHoverRadius: pointRadii.map((r) => r * 1.2),
         pointHitRadius: 10,
         pointStyle: pointStyles,
@@ -4481,7 +4537,7 @@ function highlightChartDataset(jobColor, agent = null, yAxisID = "y") {
       ds._originalBorderColor = ds.borderColor;
       ds._originalBackgroundColor = ds.backgroundColor;
       ds._originalBorderWidth = ds.borderWidth;
-      ds._originalPointRadius = ds.pointRadius;
+      ds._originalPointRadius = ds.pointRadius?._max ?? ds.pointRadius;
       ds._originalPointBackgroundColor = ds.pointBackgroundColor;
       ds._originalPointBorderColor = ds.pointBorderColor;
       ds._originalPointStyle = ds.pointStyle;
@@ -7584,7 +7640,7 @@ function highlightBenchDataset(label) {
       ds._origBorderColor = ds.borderColor;
       ds._origBackgroundColor = ds.backgroundColor;
       ds._origBorderWidth = ds.borderWidth;
-      ds._origPointRadius = ds.pointRadius;
+      ds._origPointRadius = ds.pointRadius?._max ?? ds.pointRadius;
     });
     benchHighlightActive = true;
   }
@@ -7611,7 +7667,7 @@ function highlightBenchGroup(group) {
       ds._origBorderColor = ds.borderColor;
       ds._origBackgroundColor = ds.backgroundColor;
       ds._origBorderWidth = ds.borderWidth;
-      ds._origPointRadius = ds.pointRadius;
+      ds._origPointRadius = ds.pointRadius?._max ?? ds.pointRadius;
     });
     benchHighlightActive = true;
   }
@@ -12866,7 +12922,8 @@ const ttfxLegendIcons = new Map();
 function ttfxLegendIcon(chart, ds) {
   const width = Math.min(ds.borderWidth || 1, 2.5);
   const dash = ds.borderDash || [];
-  const marker = (ds.pointRadius || 0) > 0 ? Math.min(ds.pointRadius + 1, 3.5) : 0;
+  const radius = ds.pointRadius?._max ?? ds.pointRadius;
+  const marker = (radius || 0) > 0 ? Math.min(radius + 1, 3.5) : 0;
   const shape = ["rectRot", "triangle", "rect"].includes(ds.pointStyle) ? ds.pointStyle : "circle";
   const key = [ds.borderColor, width, dash.join("-"), marker, shape].join("|");
   let img = ttfxLegendIcons.get(key);
