@@ -12733,7 +12733,7 @@ Chart.register({
     const { toFont, toPadding } = Chart.helpers;
     const head = opts.text.slice(0, -opts.tail.length);
     const headFont = toFont(opts.font);
-    const tailFont = toFont({ ...opts.font, weight: "normal" });
+    const tailFont = toFont(opts.tailFont);
     const ctx = chart.ctx;
     ctx.save();
     ctx.textBaseline = "middle";
@@ -12747,7 +12747,7 @@ Chart.register({
     ctx.fillStyle = opts.headColor;
     ctx.font = headFont.string;
     ctx.fillText(head, x, y);
-    ctx.fillStyle = colorToRgba(opts.headColor, 0.65);
+    ctx.fillStyle = opts.tailColor;
     ctx.font = tailFont.string;
     ctx.fillText(opts.tail, x + headWidth, y);
     ctx.restore();
@@ -12776,8 +12776,10 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
             text: title + titleTail,
             color: titleTail ? "transparent" : textColor,
             tail: titleTail,
-            headColor: textColor,
-            font: { size: 12, weight: "600" },
+            headColor: ttfxSuiteColor(),
+            tailColor: colorToRgba(textColor, 0.65),
+            font: { size: titleTail ? 13 : 12, weight: "600" },
+            tailFont: { size: 12, weight: "normal" },
             padding: { top: 2, bottom: 6 },
           }
         : { display: false },
@@ -13446,10 +13448,10 @@ function updateTtfxSummaryCharts() {
     const options = ttfxChartOptions({
       metric,
       metricLabel: label,
-      title: !common.length ? `${label}: none recorded in this range` : `${label}: `,
+      title: `${label} `,
       titleTail: !common.length
-        ? ""
-        : `geomean of ${common.length} task${common.length > 1 ? "s" : ""}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
+        ? "None recorded in this range"
+        : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
       legendDisplay: false,
       onZoomChange,
       builds,
