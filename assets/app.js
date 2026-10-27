@@ -6578,6 +6578,7 @@ const DASHBOARD_PARAMS = new Set([
   "tt", // ttfx time range
   "tn", // ttfx normalized (% change) toggle
   "th", // ttfx hide annotated jumps toggle
+  "tz", // ttfx show zero toggle
   "tg", // ttfx GC-off repeats toggle (retired; stripped from the URL)
   "tk", // ttfx selected tasks
   "tq", // ttfx task filter
@@ -6813,7 +6814,7 @@ const TAB_URL_KEYS = {
   ci: ["s", "t", "x", "y", "l", "e", "st", "jv", "jf", "jq", "wq"],
   commit: ["c"],
   benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
-  "ci-ttfx": ["tm", "tt", "tn", "th", "tg", "tk", "tq", "tx", "tv", "ts"],
+  "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   "ci-build-stages": ["it", "ip", "iw"],
   activity: ["at", "aw"],
@@ -11236,6 +11237,8 @@ let ttfxNormalized = false;
 // job disappears; per task, the factors that do it for each value index
 let ttfxHideJumps = false;
 let ttfxJumpScales = new Map();
+// Whether the y axes of times start at zero rather than fit the data
+let ttfxShowZero = false;
 // Load, run and warm also come from repeats with the GC disabled, drawn as
 // a thin twin of each line (the gap is what the GC cost); whether any
 // build in the data has them, and whether the charts draw the twins
@@ -12321,6 +12324,13 @@ function toggleTtfxHideJumps() {
   updateTtfxURL();
 }
 
+function toggleTtfxShowZero() {
+  ttfxShowZero = !ttfxShowZero;
+  document.getElementById("ttfx-btn-show-zero").classList.toggle("btn-primary", ttfxShowZero);
+  updateTtfxChart();
+  updateTtfxURL();
+}
+
 function toggleTtfxNormalized() {
   ttfxNormalized = !ttfxNormalized;
   document.getElementById("ttfx-btn-normalize").textContent = ttfxNormalized
@@ -12382,6 +12392,7 @@ function updateTtfxURL() {
   setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
   setOrDelete("tn", "1", !ttfxNormalized);
   setOrDelete("th", "1", !ttfxHideJumps);
+  setOrDelete("tz", "1", !ttfxShowZero);
   for (const [twin, t] of Object.entries(TTFX_TWINS)) setOrDelete(t.param, "1", !ttfxTwinsDrawn.has(twin));
   setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
@@ -12430,6 +12441,10 @@ function applyTtfxURLParams() {
   if (params.get("th") === "1") {
     ttfxHideJumps = true;
     document.getElementById("ttfx-btn-hide-jumps").classList.add("btn-primary");
+  }
+  if (params.get("tz") === "1") {
+    ttfxShowZero = true;
+    document.getElementById("ttfx-btn-show-zero").classList.add("btn-primary");
   }
   for (const [twin, t] of Object.entries(TTFX_TWINS)) {
     if (params.get(t.param) !== "1") continue;
@@ -12800,8 +12815,8 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, legendDispl
       y: {
         grid: { color: gridColor },
         // A count starts at 0, so a step from 0 to a few methods reads as one
-        beginAtZero: count,
-        afterDataLimits: (axis) => ttfxFitYAxis(axis, count),
+        beginAtZero: count || ttfxShowZero,
+        afterDataLimits: (axis) => ttfxFitYAxis(axis, count || (ttfxShowZero && !normalized)),
         // End at the padded limits rather than rounding out to a whole tick,
         // which could leave half the panel empty. Chart.js then starts the
         // ticks at the limit, so they are put back on multiples of its step.
@@ -12909,11 +12924,11 @@ function ttfxRoundTicks(axis) {
   axis.ticks = ticks;
 }
 
-function ttfxFitYAxis(axis, count) {
+function ttfxFitYAxis(axis, fromZero) {
   if (axis.options.min != null || axis.options.max != null) return;
   if (!isFinite(axis.min) || !isFinite(axis.max)) return;
-  // A count starts at 0 and keeps its own span
-  if (!count) {
+  // A count, or any value with "Show zero", starts at 0 and keeps its own span
+  if (!fromZero) {
     const mid = (axis.min + axis.max) / 2;
     const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
     if (axis.max - axis.min < minSpan) {
