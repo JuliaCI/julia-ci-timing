@@ -1400,8 +1400,7 @@ let buildHoursChart = null;
 let buildHoursStat = "mean";
 // `color` indexes the backlog palette
 const BUILD_HOURS_SERIES = [
-  { pipeline: "julia-pr", label: "Pull requests, all builds", short: "PR", color: 1 },
-  { pipeline: "julia-pr", passed: true, label: "Pull requests, passed builds", short: "PR passed", color: 1, dash: [4, 3] },
+  { pipeline: "julia-pr", label: "Pull requests (passed builds only)", short: "PR", color: 1 },
   { pipeline: "julia-ci", label: "Master", short: "master", color: 0 },
 ];
 
@@ -1416,7 +1415,7 @@ function buildHoursBuilds(d, s, from = -Infinity) {
   const out = [];
   if (!c) return out;
   for (let i = 0; i < c.build.length; i++) {
-    if (s.passed && c.outcome[i] !== "passed") continue;
+    if (c.outcome[i] !== "passed") continue;
     const t = Date.parse(c.created[i]);
     if (t >= from) out.push({ t, day: c.created[i].slice(0, 10), hours: c.seconds[i] / 3600, jobs: c.jobs[i] });
   }
@@ -1471,7 +1470,7 @@ function renderBuildHoursChart(d) {
       jobs: builds.reduce((a, b) => a + b.jobs, 0) / builds.length,
     }));
     const color = palette[s.color];
-    return { label: s.label, data, borderColor: color, backgroundColor: color, borderDash: s.dash || [], borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6, clip: false };
+    return { label: s.label, data, borderColor: color, backgroundColor: color, borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6, clip: false };
   });
   const weekAgo = Date.now() - 7 * 86400000;
   const recent = BUILD_HOURS_SERIES.map((s) => {
@@ -1515,9 +1514,8 @@ function renderBuildHoursChart(d) {
   legendEl.innerHTML = datasets
     .map(
       (ds, i) =>
-        // A sample of the line, dash included, so the two pull request series tell apart
         `<li><button type="button" data-index="${i}" aria-pressed="true"><svg width="24" height="10" aria-hidden="true">` +
-        `<line x1="1" y1="5" x2="23" y2="5" stroke="${ds.borderColor}" stroke-width="2" stroke-dasharray="${ds.borderDash.join(" ")}"/>` +
+        `<line x1="1" y1="5" x2="23" y2="5" stroke="${ds.borderColor}" stroke-width="2"/>` +
         `<circle cx="12" cy="5" r="2.5" fill="${ds.borderColor}"/></svg>${escapeHtml(ds.label)}</button></li>`,
     )
     .join("");

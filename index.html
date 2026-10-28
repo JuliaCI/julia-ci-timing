@@ -869,9 +869,8 @@
                 >Agent hours each master and pull request build used, from
                 the start to the end of each of its jobs, by the day the build
                 started. A pull request build runs for each pushed commit.
-                Builds cancelled by a newer push or a failing job pull the
-                all-builds line down, so the passed builds show what a full
-                run costs.</span
+                Only passed builds are counted, since cancelled and failed
+                builds stop partway and would hide what a full run costs.</span
               >
             </div>
             <div class="balance-card">
