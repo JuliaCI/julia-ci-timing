@@ -1389,6 +1389,137 @@ function renderBacklogChart(d) {
   }
 }
 
+// === CI time per build (Workers tab) ===
+// api/agents/build-hours has the agent time of every finished julia-pr and
+// julia-ci build, drawn per day as the mean or median over the builds that
+// started that day
+let buildHoursData = null;
+let buildHoursSince = null;
+let buildHoursPromise = null;
+let buildHoursChart = null;
+let buildHoursStat = "mean";
+// `color` indexes the backlog palette
+const BUILD_HOURS_SERIES = [
+  { pipeline: "julia-pr", label: "Pull requests, all builds", short: "PR", color: 1 },
+  { pipeline: "julia-pr", passed: true, label: "Pull requests, passed builds", short: "PR passed", color: 1, dash: [4, 3] },
+  { pipeline: "julia-ci", label: "Master", short: "master", color: 0 },
+];
+
+function setBuildHoursStat(value) {
+  buildHoursStat = value === "median" ? "median" : "mean";
+  if (buildHoursData && !buildHoursData.error) renderBuildHoursChart(buildHoursData);
+}
+
+// The builds of series `s` from `from` (ms) on, as hours and job counts
+function buildHoursBuilds(d, s, from = -Infinity) {
+  const c = d.pipelines?.[s.pipeline];
+  const out = [];
+  if (!c) return out;
+  for (let i = 0; i < c.build.length; i++) {
+    if (s.passed && c.outcome[i] !== "passed") continue;
+    const t = Date.parse(c.created[i]);
+    if (t >= from) out.push({ t, day: c.created[i].slice(0, 10), hours: c.seconds[i] / 3600, jobs: c.jobs[i] });
+  }
+  return out;
+}
+
+const buildHoursAverage = (values) => (buildHoursStat === "median" ? median(values) : values.reduce((a, b) => a + b, 0) / values.length);
+
+async function renderBuildHoursSection() {
+  const section = document.getElementById("build-hours-section");
+  if (!section) return;
+  const since = apiSince(getTimeRangeCutoff());
+  const stale = takeStale("buildhours");
+  if (buildHoursSince !== since || !buildHoursPromise || stale) {
+    buildHoursSince = since;
+    buildHoursPromise = apiGet("agents/build-hours", { since }).catch((err) => {
+      console.error("Failed to load the CI time per build:", err);
+      return { error: true };
+    });
+  }
+  const d = await buildHoursPromise;
+  if (buildHoursSince !== since) return;
+  buildHoursData = d;
+  renderBuildHoursChart(d);
+}
+
+function renderBuildHoursChart(d) {
+  const canvas = document.getElementById("build-hours-chart");
+  const summaryEl = document.getElementById("build-hours-summary");
+  if (!canvas || typeof Chart === "undefined") return;
+  if (buildHoursChart) {
+    buildHoursChart.destroy();
+    buildHoursChart = null;
+  }
+  if (d.error || !Object.keys(d.pipelines || {}).length) {
+    summaryEl.textContent = d.error ? "Could not load the builds." : "No finished builds recorded yet.";
+    return;
+  }
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
+  const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
+  const stat = buildHoursStat === "median" ? "median" : "mean";
+  const datasets = BUILD_HOURS_SERIES.map((s) => {
+    const days = new Map();
+    for (const b of buildHoursBuilds(d, s)) {
+      if (!days.has(b.day)) days.set(b.day, []);
+      days.get(b.day).push(b);
+    }
+    const data = [...days].map(([day, builds]) => ({
+      x: Date.parse(day + "T12:00:00Z"),
+      y: buildHoursAverage(builds.map((b) => b.hours)),
+      n: builds.length,
+      jobs: builds.reduce((a, b) => a + b.jobs, 0) / builds.length,
+    }));
+    const color = palette[s.color];
+    return { label: s.label, data, borderColor: color, backgroundColor: color, borderDash: s.dash || [], borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6 };
+  });
+  const weekAgo = Date.now() - 7 * 86400000;
+  const recent = BUILD_HOURS_SERIES.map((s) => {
+    const hours = buildHoursBuilds(d, s, weekAgo).map((b) => b.hours);
+    return hours.length ? `${s.short} <strong>${buildHoursAverage(hours).toFixed(1)} h</strong>` : null;
+  }).filter(Boolean);
+  summaryEl.innerHTML = recent.length ? `Last 7 days, ${stat}: ${recent.join(", ")}` : "";
+  const first = Math.min(...datasets.flatMap((ds) => ds.data.map((p) => p.x)));
+  buildHoursChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      ...baseChartOptions(),
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => (items.length ? new Date(items[0].parsed.x).toISOString().slice(0, 10) : ""),
+            label: (item) => {
+              const p = item.raw;
+              return `${item.dataset.label}: ${p.y.toFixed(1)} h ${stat} over ${p.n} build${p.n === 1 ? "" : "s"}, ${Math.round(p.jobs)} jobs each on average`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, ...workersTimeRange({ start: d.start ?? new Date(first).toISOString() }) }),
+        y: {
+          beginAtZero: true,
+          afterFit: workersYAxisFit,
+          ticks: { color: textColor },
+          grid: { color: gridColor },
+          title: { display: true, text: `Agent hours per build (${stat})`, color: textColor },
+        },
+      },
+    },
+  });
+  const legendEl = document.getElementById("build-hours-legend");
+  legendEl.innerHTML = datasets
+    .map(
+      (ds, i) =>
+        `<li><button type="button" data-index="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${ds.borderColor}"></span>${escapeHtml(ds.label)}</button></li>`,
+    )
+    .join("");
+  bindDatasetToggles(legendEl, () => buildHoursChart);
+}
+
 // === Machine balance (Workers tab) ===
 // Pools whose agents run on the same hosts draw on the same machines. For each
 // such group, each pool's demand (jobs running plus waiting) as a multiple of
@@ -1584,7 +1715,10 @@ let workersHostsSort = { col: "runs", asc: false };
 function renderWorkerPresence({ charts = true } = {}) {
   const container = document.getElementById("workers-grid");
   if (!container) return;
-  if (charts) renderBacklogSection();
+  if (charts) {
+    renderBacklogSection();
+    renderBuildHoursSection();
+  }
   const agentsShown = renderAgentsSection();
   // The filter matches the grid's hosts by their queue and OS, which come
   // with the agent snapshots, so draw it again once they have loaded
@@ -6423,7 +6557,7 @@ const SOURCE_VIEWS = {
   sizes: ["sizes"],
   sysimage: ["sysimage"],
   packages: ["packages"],
-  agents: ["agents", "backlog", "usage"],
+  agents: ["agents", "backlog", "usage", "buildhours"],
   github: ["activity"],
 };
 
@@ -19427,6 +19561,7 @@ function applyTheme() {
     renderBacklogChart(backlogData);
     renderBalanceCharts(backlogData);
   }
+  if (buildHoursData && !buildHoursData.error) renderBuildHoursChart(buildHoursData);
 
   if (usageCharts.length) drawUsageView();
   if (activeTab === "overview" && overviewSources) drawOverview();

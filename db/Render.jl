@@ -1983,6 +1983,36 @@ function worker_time(db; days=7)
     return OrderedDict{String,Any}("generated_at" => gen, "start" => start, "end" => gen, "days" => days, "rows" => out)
 end
 
+# Agent time per julia-pr and julia-ci build whose first job became runnable
+# from `since`, from start to finish of each of its jobs, with the build's
+# job count and outcome: passed when every job passed or was skipped,
+# canceled when any job was, failed otherwise. A build with a job still
+# waiting or running is left out. Columns per pipeline, oldest build first.
+function build_hours(db; since="")
+    start = isempty(since) ? "" : Store.iso(DateTime(since[1:min(end, 19)], length(since) <= 10 ? dateformat"yyyy-mm-dd" : dateformat"yyyy-mm-ddTHH:MM:SS"))
+    # No build runs for two days, so its jobs are all after this
+    early = isempty(start) ? "" : Store.iso(DateTime(start, Store.ISO_SECONDS) - Day(2))
+    open = join(("'$st'" for st in (QUEUED_STATES..., "running", "canceling", "timing_out")), ", ")
+    out = OrderedDict{String,Any}()
+    for r in rows(db, "SELECT pipeline, build, MIN(runnable_at) AS created, COUNT(*) AS jobs, " *
+                      "SUM(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL " *
+                      "THEN MAX(0, strftime('%s', finished_at) - strftime('%s', started_at)) ELSE 0 END) AS s, " *
+                      "SUM(state IN ($open)) AS open, SUM(state = 'canceled') AS canceled, " *
+                      "SUM(state NOT IN ('passed', 'skipped')) AS bad FROM pool_jobs WHERE runnable_at >= ? " *
+                      "GROUP BY pipeline, build HAVING created >= ? AND open = 0 ORDER BY created",
+                  (early, start))
+        c = get!(out, String(r.pipeline)) do
+            OrderedDict{String,Any}("build" => Int[], "created" => String[], "seconds" => Int[], "jobs" => Int[], "outcome" => String[])
+        end
+        push!(c["build"], r.build)
+        push!(c["created"], String(r.created))
+        push!(c["seconds"], r.s)
+        push!(c["jobs"], r.jobs)
+        push!(c["outcome"], r.bad == 0 ? "passed" : r.canceled > 0 ? "canceled" : "failed")
+    end
+    return OrderedDict{String,Any}("generated_at" => agents_generated_at(db), "start" => isempty(start) ? nothing : start, "pipelines" => out)
+end
+
 # --- health --------------------------------------------------------------------
 
 # Percent of the volume holding the database in use (df), or nothing

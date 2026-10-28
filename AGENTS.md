@@ -192,6 +192,9 @@ same agents, so each snapshot also keeps the pipeline of every agent's job in
 finished in the last 7 days, which the Timing tab's Worker time view
 (`?tab=ci-timing&jv=usage`) splits by pipeline, job type, OS and so on;
 clicking slices filters the other charts (`jf=os.Linux~queue.test`).
+`api/agents/build-hours` sums the agent time of each finished build's jobs,
+which the Workers tab charts per day as the CI time per build: all pull
+request builds, those that passed, and master.
 
 Repository activity (the Repo → Activity tab) comes from `fetch_github.jl`:
 `gh_items` holds every issue and pull request of JuliaLang/julia as GitHub lists

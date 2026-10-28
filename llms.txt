@@ -68,6 +68,7 @@ Downloads:
 Agents and GitHub:
 - `/api/agents/backlog?since=`: per agent pool, the julia-pr and julia-ci jobs waiting for an agent and running over time, plus agents busy with other pipelines' jobs
 - `/api/agents/usage?days=`: agent seconds of the julia-pr and julia-ci jobs finished in the last `days` (7 by default), per pipeline, job name, pool and state
+- `/api/agents/build-hours?since=`: agent seconds, job count and outcome of every finished julia-pr and julia-ci build, the CI cost per pushed commit
 - `/api/github/activity?since=`: JuliaLang/julia per day: open issues and pull requests, issues and pull requests opened, closed and merged, master commits, and contributors and time to merge over 30 days
 
 The response shapes are the site's own and can change; the database schema is stable.

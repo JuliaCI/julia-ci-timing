@@ -113,7 +113,8 @@ only the files that changed. `AGENTS.md` describes their shapes.
   `agent_snapshot_members` (who was connected at each ingest, and the pipeline of each one's job). `pool_jobs` holds every
   runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
   for (queue, os, arch) and when it became runnable, started and finished: the queue
-  backlog behind `api/agents/backlog` and the worker time shares behind `api/agents/usage`.
+  backlog behind `api/agents/backlog`, the worker time shares behind `api/agents/usage`
+  and the agent time per build behind `api/agents/build-hours`.
 - **GitHub.** `gh_items` (every issue and pull request of JuliaLang/julia: kind, author,
   labels, created_at, closed_at, merged_at; a reopened item keeps only its latest close)
   and `commits` (master commits: author, dates, subject, PR number), behind

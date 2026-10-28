@@ -852,6 +852,35 @@
               <ul class="balance-stats backlog-legend" id="backlog-legend"></ul>
             </div>
           </div>
+          <div class="backlog-section" id="build-hours-section">
+            <div class="agents-header">
+              <span class="agents-title">CI time per build</span>
+              <select
+                class="time-select"
+                id="build-hours-stat"
+                onchange="setBuildHoursStat(this.value)"
+                aria-label="Average over each day's builds"
+              >
+                <option value="mean" selected>Mean</option>
+                <option value="median">Median</option>
+              </select>
+              <span class="agents-summary" id="build-hours-summary"></span>
+              <span class="agents-help"
+                >Agent hours each master and pull request build used, from
+                the start to the end of each of its jobs, by the day the build
+                started. A pull request build runs for each pushed commit.
+                Builds cancelled by a newer push or a failing job pull the
+                all-builds line down, so the passed builds show what a full
+                run costs.</span
+              >
+            </div>
+            <div class="balance-card">
+              <div class="agents-chart-wrapper backlog-chart-wrapper">
+                <canvas id="build-hours-chart"></canvas>
+              </div>
+              <ul class="balance-stats backlog-legend" id="build-hours-legend"></ul>
+            </div>
+          </div>
           <div class="backlog-section" id="balance-section">
             <div class="agents-header">
               <span class="agents-title">Machine balance</span>
