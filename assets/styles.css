@@ -3737,6 +3737,8 @@ tr.ttfx-pr-outdated:focus-within > td {
   background: var(--color-accent-subtle);
   border-radius: 4px;
   padding: 0 4px;
+  /* Lets the text line up with the unhighlighted changes above and below */
+  margin-right: -4px;
 }
 .overview-card-desc {
   margin: 0;
