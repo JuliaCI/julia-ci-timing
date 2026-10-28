@@ -15910,6 +15910,8 @@ const OVERVIEW_DOWNLOADS_LAG_DAYS = 3;
 // Agents are snapshotted on every update run
 const OVERVIEW_AGENTS_STALE_MS = OVERVIEW_DAY_MS;
 const OVERVIEW_DOWNLOADS_TOP_MINORS = 4;
+// Client types of the version shares table, as keys of the version rollup
+const OVERVIEW_DOWNLOADS_KINDS = [["user", "User"], ["ci", "CI"], ["all", "All"]];
 const OVERVIEW_LIST_LIMIT = 6;
 const OVERVIEW_SPARK_DAYS = 30;
 
@@ -16109,11 +16111,12 @@ function overviewReportDelta(latestDate, earlierDate, what = "report") {
   };
 }
 
-// Donut spec: [{ label, value, color }] plus a legend format
-function overviewDonut(segments, { format = (v) => String(v), showPct = true } = {}) {
+// Donut spec: [{ label, value, color }] plus a legend format. With `columns`,
+// each segment's `values` fill one legend column each, under those headings.
+function overviewDonut(segments, { format = (v) => String(v), showPct = true, columns = null } = {}) {
   const kept = segments.filter((s) => s.value > 0);
   if (!kept.length) return null;
-  return { segments: kept, format, showPct };
+  return { segments: kept, format, showPct, columns };
 }
 
 // Sparkline spec: points [{ x: ms, y }] of one series
@@ -16204,7 +16207,14 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     const deltas = donut.segments.map((s) => (s.delta ? Math.abs(s.delta.value) : 0));
     const biggest = Math.max(0, ...deltas);
     const hasDelta = donut.segments.some((s) => s.delta);
-    parts.push(`<ul class="overview-legend${hasDelta ? " overview-legend-with-delta" : ""}">`);
+    const cols = donut.columns;
+    const gridStyle = cols ? ` style="grid-template-columns: auto repeat(${cols.length + (hasDelta ? 1 : 0)}, max-content)"` : "";
+    parts.push(`<ul class="overview-legend${hasDelta ? " overview-legend-with-delta" : ""}"${gridStyle}>`);
+    if (cols) {
+      parts.push(
+        `<li class="overview-legend-head"><span></span>${cols.map((c) => `<span class="overview-legend-value">${escapeHtml(c)}</span>`).join("")}${hasDelta ? "<span></span>" : ""}</li>`,
+      );
+    }
     donut.segments.forEach((s, i) => {
       const pct = donut.showPct && total ? ` <span class="overview-legend-pct">${((100 * s.value) / total).toFixed(1)}%</span>` : "";
       let deltaHtml = "";
@@ -16214,8 +16224,11 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
       } else if (hasDelta) {
         deltaHtml = '<span class="overview-legend-delta"></span>';
       }
+      const valueHtml = cols
+        ? s.values.map((v) => `<span class="overview-legend-value">${escapeHtml(donut.format(v))}</span>`).join("")
+        : `<span class="overview-legend-value">${escapeHtml(donut.format(s.value))}${pct}</span>`;
       parts.push(
-        `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(donut.format(s.value))}${pct}</span>${deltaHtml}</li>`,
+        `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>${valueHtml}${deltaHtml}</li>`,
       );
     });
     parts.push("</ul></div>");
@@ -17056,13 +17069,14 @@ function overviewWeekSums(rows, to, days) {
   };
 }
 
-// Share of each Julia minor in the version rollup rows, as a fraction
-function overviewMinorShares(mixRows) {
+// Share of each Julia minor in the version rollup rows, as a fraction, of
+// one client type's downloads
+function overviewMinorShares(mixRows, kind = "all") {
   const perMinor = new Map();
   let total = 0;
   for (const day of mixRows) {
     for (const [minor, v] of Object.entries(day.minors || {})) {
-      const n = (v && v.all) || 0;
+      const n = (v && v[kind]) || 0;
       perMinor.set(minor, (perMinor.get(minor) || 0) + n);
       total += n;
     }
@@ -17092,7 +17106,9 @@ function overviewPackagesCard(src) {
   // Share per Julia minor this week and last, from the version rollup
   let biggestShift = "";
   const mixRows = src.version_mix || [];
-  const thisWeek = overviewMinorShares(overviewDateWindow(mixRows, maxDate, 7));
+  const thisWeekRows = overviewDateWindow(mixRows, maxDate, 7);
+  const thisWeek = overviewMinorShares(thisWeekRows);
+  const kindShares = OVERVIEW_DOWNLOADS_KINDS.map(([kind]) => overviewMinorShares(thisWeekRows, kind));
   const lastWeek = overviewMinorShares(overviewDateWindow(mixRows, overviewDateAdd(maxDate, -7), 7));
   let donut = null;
   if (thisWeek.total > 0) {
@@ -17107,16 +17123,23 @@ function overviewPackagesCard(src) {
       lastWeek.days >= 3 && then != null
         ? overviewDelta({ value: 100 * (now - then), unit: "pp", upIsGood: null, digits: 1, detail: `Share of downloads in the ${weekDetail}${lastWeek.days < 7 ? ` (${lastWeek.days} of those 7 days reported)` : ""}` })
         : null;
+    const kindValues = (minor) => kindShares.map((k) => (k.total ? k.shares.get(minor) || 0 : null));
     const segments = top.map(([minor, share], i) => ({
       label: `Julia ${minor}`,
       value: share,
+      values: kindValues(minor),
       color: colors.categorical[i],
       delta: shareDelta(share, lastWeek.shares.has(minor) ? lastWeek.shares.get(minor) : lastWeek.total ? 0 : null),
     }));
     if (restShare > 0) {
-      segments.push({ label: "Other", value: restShare, color: colors.categorical[OVERVIEW_DOWNLOADS_TOP_MINORS], delta: shareDelta(restShare, restLast) });
+      const values = kindShares.map((k, j) => (k.total ? Math.max(0, 1 - segments.reduce((acc, seg) => acc + (seg.values[j] || 0), 0)) : null));
+      segments.push({ label: "Other", value: restShare, values, color: colors.categorical[OVERVIEW_DOWNLOADS_TOP_MINORS], delta: shareDelta(restShare, restLast) });
     }
-    donut = overviewDonut(segments, { format: (v) => `${(100 * v).toFixed(1)}%`, showPct: false });
+    donut = overviewDonut(segments, {
+      format: (v) => (v == null ? "" : `${(100 * v).toFixed(1)}%`),
+      showPct: false,
+      columns: OVERVIEW_DOWNLOADS_KINDS.map(([, label]) => label),
+    });
     const movers = segments.filter((seg) => seg.delta).sort((a, b) => Math.abs(b.delta.value) - Math.abs(a.delta.value));
     if (movers.length && Math.abs(movers[0].delta.value) >= 0.05) {
       biggestShift = `${escapeHtml(movers[0].label)} ${escapeHtml(movers[0].delta.text)} of downloads, this week vs last`;

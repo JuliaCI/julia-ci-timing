@@ -3718,6 +3718,10 @@ tr.ttfx-pr-outdated:focus-within > td {
   white-space: nowrap;
   text-align: right;
 }
+.overview-legend-head .overview-legend-value {
+  color: var(--color-fg-muted);
+  font-weight: 600;
+}
 .overview-legend-pct {
   color: var(--color-fg-muted);
 }
