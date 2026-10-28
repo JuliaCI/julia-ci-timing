@@ -4728,8 +4728,11 @@ tr.ttfx-pr-outdated:focus-within > td {
   min-width: 0;
   height: 170px;
 }
+/* Wide enough for the widest table, and fixed, so the charts beside it end
+   at the same x and their time axes line up */
 .balance-stats {
-  flex: 0 0 340px;
+  flex: 0 0 360px;
+  min-width: 0;
   font-size: 12px;
   color: var(--color-fg-muted);
 }

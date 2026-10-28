@@ -1871,12 +1871,18 @@ request (julia-pr) jobs can be told apart. Its `other` entry counts the pool's
 agents busy with jobs of any other pipeline, from the agent snapshots (see
 `other_running`); their waiting jobs are not known, so it never has any.
 """
-function pool_backlog(db; since="")
-    now_t = floor(now(UTC), Minute(10))
+# The start of a window over pool_jobs from `since`: no earlier than the
+# oldest job kept, on a 10-minute multiple, so the Workers charts share it
+function pool_jobs_start(db, since, now_t)
     first_r = rows(db, "SELECT MIN(runnable_at) AS t FROM pool_jobs")[1].t
     start = isempty(since) ? DateTime(0) : DateTime(since[1:min(end, 19)], length(since) <= 10 ? dateformat"yyyy-mm-dd" : dateformat"yyyy-mm-ddTHH:MM:SS")
     start = max(start, first_r === missing ? now_t - Day(7) : floor(DateTime(String(first_r), Store.ISO_SECONDS), Minute(10)))
-    start = min(start, now_t)
+    return min(start, now_t)
+end
+
+function pool_backlog(db; since="")
+    now_t = floor(now(UTC), Minute(10))
+    start = pool_jobs_start(db, since, now_t)
     span = Dates.value(now_t - start) ÷ 1000
     # At most about 1000 samples, on 10-minute multiples
     step = max(600, cld(span, 1000 * 600) * 600)
@@ -1989,9 +1995,10 @@ end
 # canceled when any job was, failed otherwise. A build with a job still
 # waiting or running is left out. Columns per pipeline, oldest build first.
 function build_hours(db; since="")
-    start = isempty(since) ? "" : Store.iso(DateTime(since[1:min(end, 19)], length(since) <= 10 ? dateformat"yyyy-mm-dd" : dateformat"yyyy-mm-ddTHH:MM:SS"))
+    start_t = pool_jobs_start(db, since, floor(now(UTC), Minute(10)))
+    start = Store.iso(start_t)
     # No build runs for two days, so its jobs are all after this
-    early = isempty(start) ? "" : Store.iso(DateTime(start, Store.ISO_SECONDS) - Day(2))
+    early = Store.iso(start_t - Day(2))
     open = join(("'$st'" for st in (QUEUED_STATES..., "running", "canceling", "timing_out")), ", ")
     out = OrderedDict{String,Any}()
     for r in rows(db, "SELECT pipeline, build, MIN(runnable_at) AS created, COUNT(*) AS jobs, " *
@@ -2010,7 +2017,7 @@ function build_hours(db; since="")
         push!(c["jobs"], r.jobs)
         push!(c["outcome"], r.bad == 0 ? "passed" : r.canceled > 0 ? "canceled" : "failed")
     end
-    return OrderedDict{String,Any}("generated_at" => agents_generated_at(db), "start" => isempty(start) ? nothing : start, "pipelines" => out)
+    return OrderedDict{String,Any}("generated_at" => agents_generated_at(db), "start" => start, "pipelines" => out)
 end
 
 # --- health --------------------------------------------------------------------

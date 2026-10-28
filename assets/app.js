@@ -1471,7 +1471,7 @@ function renderBuildHoursChart(d) {
       jobs: builds.reduce((a, b) => a + b.jobs, 0) / builds.length,
     }));
     const color = palette[s.color];
-    return { label: s.label, data, borderColor: color, backgroundColor: color, borderDash: s.dash || [], borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6 };
+    return { label: s.label, data, borderColor: color, backgroundColor: color, borderDash: s.dash || [], borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6, clip: false };
   });
   const weekAgo = Date.now() - 7 * 86400000;
   const recent = BUILD_HOURS_SERIES.map((s) => {
@@ -1479,12 +1479,13 @@ function renderBuildHoursChart(d) {
     return hours.length ? `${s.short} <strong>${buildHoursAverage(hours).toFixed(1)} h</strong>` : null;
   }).filter(Boolean);
   summaryEl.innerHTML = recent.length ? `Last 7 days, ${stat}: ${recent.join(", ")}` : "";
-  const first = Math.min(...datasets.flatMap((ds) => ds.data.map((p) => p.x)));
   buildHoursChart = new Chart(canvas.getContext("2d"), {
     type: "line",
     data: { datasets },
     options: {
       ...baseChartOptions(),
+      // The plot area spans what the other Workers charts span; the edge markers draw past it
+      layout: { autoPadding: false },
       interaction: { mode: "nearest", axis: "x", intersect: false },
       plugins: {
         legend: { display: false },
@@ -1499,7 +1500,7 @@ function renderBuildHoursChart(d) {
         },
       },
       scales: {
-        x: timeAxis({ textColor, gridColor, ...workersTimeRange({ start: d.start ?? new Date(first).toISOString() }) }),
+        x: timeAxis({ textColor, gridColor, ...workersTimeRange(d) }),
         y: {
           beginAtZero: true,
           afterFit: workersYAxisFit,
@@ -1514,7 +1515,10 @@ function renderBuildHoursChart(d) {
   legendEl.innerHTML = datasets
     .map(
       (ds, i) =>
-        `<li><button type="button" data-index="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${ds.borderColor}"></span>${escapeHtml(ds.label)}</button></li>`,
+        // A sample of the line, dash included, so the two pull request series tell apart
+        `<li><button type="button" data-index="${i}" aria-pressed="true"><svg width="24" height="10" aria-hidden="true">` +
+        `<line x1="1" y1="5" x2="23" y2="5" stroke="${ds.borderColor}" stroke-width="2" stroke-dasharray="${ds.borderDash.join(" ")}"/>` +
+        `<circle cx="12" cy="5" r="2.5" fill="${ds.borderColor}"/></svg>${escapeHtml(ds.label)}</button></li>`,
     )
     .join("");
   bindDatasetToggles(legendEl, () => buildHoursChart);
