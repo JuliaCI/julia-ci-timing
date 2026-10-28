@@ -17136,7 +17136,7 @@ function overviewPackagesCard(src) {
       segments.push({ label: "Other", value: restShare, values, color: colors.categorical[OVERVIEW_DOWNLOADS_TOP_MINORS], delta: shareDelta(restShare, restLast) });
     }
     donut = overviewDonut(segments, {
-      format: (v) => (v == null ? "" : `${(100 * v).toFixed(1)}%`),
+      format: (v) => (v == null ? "" : `${(100 * v).toFixed(0)}%`),
       showPct: false,
       columns: OVERVIEW_DOWNLOADS_KINDS.map(([, label]) => label),
     });
