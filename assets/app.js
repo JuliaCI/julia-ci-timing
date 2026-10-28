@@ -6635,7 +6635,9 @@ const DASHBOARD_PARAMS = new Set([
   "tn", // ttfx normalized (% change) toggle
   "th", // ttfx hide annotated jumps toggle
   "tz", // ttfx show zero toggle
-  "tg", // ttfx GC-off repeats toggle (retired; stripped from the URL)
+  "tg", // ttfx GC-off twins toggle (retired; read as tc=off)
+  "tl", // ttfx stdlibs-first twin toggle
+  "tc", // ttfx GC mode: every value from the repeats with the GC off
   "tk", // ttfx selected tasks
   "tq", // ttfx task filter
   "tx", // ttfx excluded tasks (when most are selected)
@@ -6870,7 +6872,7 @@ const TAB_URL_KEYS = {
   ci: ["s", "t", "x", "y", "l", "e", "st", "jv", "jf", "jq", "wq"],
   commit: ["c"],
   benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
-  "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tk", "tq", "tx", "tv", "ts"],
+  "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tl", "tc", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   "ci-build-stages": ["it", "ip", "iw"],
   activity: ["at", "aw"],
@@ -11295,9 +11297,10 @@ let ttfxHideJumps = false;
 let ttfxJumpScales = new Map();
 // Whether the y axes of times start at zero rather than fit the data
 let ttfxShowZero = false;
-// Load, run and warm also come from repeats with the GC disabled, drawn as
-// a thin twin of each line (the gap is what the GC cost); whether any
-// build in the data has them, and whether the charts draw the twins
+// Whether load, run and warm come from the repeats with the GC disabled
+// everywhere: the lines, tables and details. The stdlibs-first twins are
+// then not drawn, since those were measured with the GC on.
+let ttfxGcOff = false;
 // The twin kinds the data has values for, and those drawn
 const ttfxTwinsHave = new Set();
 const ttfxTwinsDrawn = new Set();
@@ -11342,12 +11345,14 @@ const TTFX_METRICS = {
   invalidated: { label: "Invalidations", index: 7, count: true },
 };
 const TTFX_SUITE_LABEL = "Nightly";
-// The twins a time metric can draw beside its line, each from the metric's
-// value index `index`: the same phase from the repeats with the GC off, and
-// from the run in a copy of the project with every stdlib loaded first.
-// Both draw as a thin line; `dash` tells the stdlibs one apart.
+// The twins of a time metric, each from the metric's value index `index`: the
+// same phase from the repeats with the GC off, and from the run in a copy of
+// the project with every stdlib loaded first. One with a `button` can be drawn
+// beside its line, as a thin `dash`ed one; the GC-off values are shown muted
+// in the tables and details instead, and "Show GC off" draws them in place of
+// the lines (`ttfxGcOff`).
 const TTFX_TWINS = {
-  gcoff: { index: "gcoffIndex", label: "GC off", legend: "with the GC off", button: "ttfx-btn-gcoff", param: "tg" },
+  gcoff: { index: "gcoffIndex", label: "GC off", legend: "with the GC off" },
   stdlibs: { index: "stdlibsIndex", label: "stdlibs first", legend: "with every stdlib loaded first", button: "ttfx-btn-stdlibs", param: "tl", dash: [2, 2] },
 };
 // Up to this many tasks, the per-task chart's legend lists each one; above
@@ -11488,7 +11493,7 @@ function showTtfxBuildPopup(b, task) {
   const pairedCell = (p) => (p ? `<td class="num ${ttfxPctClass((p.ratio - 1) * 100)}" title="${p.n} tasks">${formatTtfxRatio(p.ratio)}</td>` : '<td class="num"></td>');
   const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
   for (const r of suiteRows) {
-    html += `<tr><th title="${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks">${escapeHtml(ttfxMetricLabel(r.key))}</th>`;
+    html += `<tr><th title="${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks">${escapeHtml(ttfxShownLabel(r.key))}</th>`;
     html += `<td class="num">${formatTtfxValue(r.g, r.key)}${offHtml(r.off)}</td>`;
     html += `<td class="num ${r.change.cls}">${r.change.text}</td>`;
     if (paired) html += pairedCell(r.paired);
@@ -11509,7 +11514,7 @@ function showTtfxBuildPopup(b, task) {
     if (offs) html += '<th class="num" title="The change in the same task and phase from the repeats with the GC off">GC off</th>';
     html += "</tr></thead><tbody>";
     for (const o of outliers) {
-      html += `<tr><td class="ttfx-compile-stmt">${escapeHtml(o.task)}</td><td class="ttfx-outlier-metric">${escapeHtml(ttfxMetricLabel(o.key))}</td>`;
+      html += `<tr><td class="ttfx-compile-stmt">${escapeHtml(o.task)}</td><td class="ttfx-outlier-metric">${escapeHtml(ttfxShownLabel(o.key))}</td>`;
       html += `<td class="num">${formatTtfxValue(o.prev, o.key)}</td><td class="num">${formatTtfxValue(o.v, o.key)}</td><td class="num ${o.change.cls}">${o.change.text}</td>`;
       if (offs) {
         const c = ttfxChange(o.off, o.offPrev, o.key);
@@ -11583,7 +11588,7 @@ function ttfxBuildMarkdown(b, task) {
     if (paired) cells.push(ratio(r.paired));
     if (task) cells.push(`${formatTtfxValue(r.tv, r.key)}${gc(r.toff)}`);
     if (task && paired) cells.push(ratio(r.tpaired));
-    lines.push(`| ${ttfxMetricLabel(r.key)} | ${cells.join(" | ")} |`);
+    lines.push(`| ${ttfxShownLabel(r.key)} | ${cells.join(" | ")} |`);
   }
   const outliers = ttfxBuildOutliers(b, series, tasks, suiteRows);
   if (outliers.length) {
@@ -11594,7 +11599,7 @@ function ttfxBuildMarkdown(b, task) {
       const off = o.off != null || o.offPrev != null
         ? ` ${formatTtfxSeconds(o.offPrev)} | ${formatTtfxSeconds(o.off)} | ${ttfxChange(o.off, o.offPrev, o.key).text} |`
         : offs ? " | | |" : "";
-      lines.push(`| ${o.task} | ${ttfxMetricLabel(o.key)} | ${formatTtfxValue(o.prev, o.key)} | ${formatTtfxValue(o.v, o.key)} | **${o.change.text}** |${off}`);
+      lines.push(`| ${o.task} | ${ttfxShownLabel(o.key)} | ${formatTtfxValue(o.prev, o.key)} | ${formatTtfxValue(o.v, o.key)} | **${o.change.text}** |${off}`);
     }
   } else {
     lines.push("", "No task moved much against its previous run.");
@@ -12008,10 +12013,12 @@ function ttfxBuildTime(b) {
 }
 
 // The value index of `metric`, or of its `twin` (a TTFX_TWINS key); null
-// when the metric has no such twin
+// when the metric has no such twin. With the GC off, a metric's own index is
+// that of its GC-off repeats when it has them.
 function ttfxIndex(metric, twin = null) {
   const m = TTFX_METRICS[metric];
-  return (twin ? m[TTFX_TWINS[twin].index] : m.index) ?? null;
+  if (twin) return m[TTFX_TWINS[twin].index] ?? null;
+  return (ttfxGcOff && m.gcoffIndex != null ? m.gcoffIndex : m.index) ?? null;
 }
 
 // `twin`: the value of that twin, null for a metric without one
@@ -12114,14 +12121,20 @@ function ttfxMetricLabel(metric = ttfxMetric) {
   return TTFX_METRICS[metric].label;
 }
 
+// The label of the values the charts and tables show for `metric`, which
+// says so when they come from the repeats with the GC off
+function ttfxShownLabel(metric = ttfxMetric) {
+  return ttfxMetricLabel(metric) + (ttfxGcOff && TTFX_METRICS[metric].gcoffIndex != null ? ", GC off" : "");
+}
+
 // A metric's name in running text, or the key itself for one the site does not list
 function ttfxShortName(metric) {
   return TTFX_METRICS[metric]?.short || metric;
 }
 
-// Whether `metric` has a `twin` in the data
+// Whether `metric` has a `twin` in the data; none with the GC off
 function ttfxShowsTwin(twin, metric = ttfxMetric) {
-  return ttfxTwinsHave.has(twin) && ttfxIndex(metric, twin) != null;
+  return !ttfxGcOff && ttfxTwinsHave.has(twin) && ttfxIndex(metric, twin) != null;
 }
 
 function ttfxDrawsTwin(twin, metric = ttfxMetric) {
@@ -12215,7 +12228,7 @@ function ttfxHasPanel(metric = ttfxMetric) {
 
 // Whether any task of a build has a value of `metric`
 function ttfxBuildHas(b, metric) {
-  const i = TTFX_METRICS[metric].index;
+  const i = ttfxIndex(metric);
   return Object.values(b.tasks || {}).some((v) => v[i] != null);
 }
 
@@ -12382,14 +12395,63 @@ function toggleTtfxTwin(twin) {
   updateTtfxURL();
 }
 
-// Which twins the data has, and their buttons shown for those alone
+// Which twins the data has, and their buttons shown for those alone; the GC
+// mode's control needs the GC-off repeats
 function updateTtfxTwinsHave() {
   for (const [twin, t] of Object.entries(TTFX_TWINS)) {
     const has = (ttfxData.builds || []).some((b) => ttfxHasTwinValues(b, twin));
     if (has) ttfxTwinsHave.add(twin);
     else ttfxTwinsHave.delete(twin);
-    document.getElementById(t.button).hidden = !has;
   }
+  updateTtfxGcButtons();
+}
+
+// The twins' buttons are hidden with the GC off, as the twins are not drawn
+function updateTtfxGcButtons() {
+  for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.button) document.getElementById(t.button).hidden = !ttfxTwinsHave.has(twin) || ttfxGcOff;
+  const btn = document.getElementById("ttfx-btn-gcoff");
+  btn.hidden = !ttfxTwinsHave.has("gcoff");
+  btn.classList.toggle("btn-primary", ttfxGcOff);
+}
+
+// The charts drawn now, by summary panel or "task" for the per-task chart
+function ttfxChartsByKey() {
+  return ttfxMode === "summary" ? { ...ttfxSummaryCharts } : ttfxChart ? { task: ttfxChart } : {};
+}
+
+// Flipping the GC keeps each chart's axes, so the lines move against fixed
+// axes instead of the axes refitting to them: a zoomed chart keeps its zoom,
+// over any number of flips (the charts drawn anew are not zoomed as far as
+// the zoom plugin knows, so `_ttfxZoomed` carries it), and otherwise each
+// axis is widened to fit the other GC's values if need be (the GC-off
+// repeats start at a later build, for one)
+function toggleTtfxGcOff() {
+  const before = {};
+  for (const [k, c] of Object.entries(ttfxChartsByKey())) {
+    before[k] = { zoomed: c.isZoomedOrPanned() || !!c._ttfxZoomed, x: { min: c.scales.x.min, max: c.scales.x.max }, y: { min: c.scales.y.min, max: c.scales.y.max } };
+  }
+  ttfxGcOff = !ttfxGcOff;
+  updateTtfxGcButtons();
+  populateTtfxTaskList();
+  updateTtfxChart();
+  let zoomed = false;
+  for (const [k, c] of Object.entries(ttfxChartsByKey())) {
+    const r = before[k];
+    if (!r) continue;
+    zoomed ||= r.zoomed;
+    c._ttfxKeptAxes = true;
+    c._ttfxZoomed = r.zoomed;
+    for (const axis of ["x", "y"]) {
+      const { min, max } = r[axis];
+      if (!isFinite(min) || !isFinite(max)) continue;
+      c.options.scales[axis].min = r.zoomed ? min : Math.min(min, c.scales[axis].min);
+      c.options.scales[axis].max = r.zoomed ? max : Math.max(max, c.scales[axis].max);
+    }
+    c.update("none");
+  }
+  if (zoomed) document.getElementById("ttfx-btn-reset-zoom").style.display = "";
+  updateTtfxTable();
+  updateTtfxURL();
 }
 
 function toggleTtfxHideJumps() {
@@ -12470,7 +12532,9 @@ function updateTtfxURL() {
   setOrDelete("tn", "1", !ttfxNormalized);
   setOrDelete("th", "1", !ttfxHideJumps);
   setOrDelete("tz", "1", !ttfxShowZero);
-  for (const [twin, t] of Object.entries(TTFX_TWINS)) setOrDelete(t.param, "1", !ttfxTwinsDrawn.has(twin));
+  setOrDelete("tc", "off", !ttfxGcOff);
+  url.searchParams.delete("tg");
+  for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.param) setOrDelete(t.param, "1", !ttfxTwinsDrawn.has(twin));
   setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
   setOrDelete("ts", ttfxMode, ttfxMode === "summary");
   setOrDelete("tq", ttfxTaskFilter, !ttfxTaskFilter);
@@ -12523,8 +12587,11 @@ function applyTtfxURLParams() {
     ttfxShowZero = true;
     document.getElementById("ttfx-btn-show-zero").classList.add("btn-primary");
   }
+  // Its button is styled once the data says whether it has the repeats.
+  // `tg=1` drew the GC-off values as twins before they replaced the lines.
+  ttfxGcOff = params.get("tc") === "off" || params.get("tg") === "1";
   for (const [twin, t] of Object.entries(TTFX_TWINS)) {
-    if (params.get(t.param) !== "1") continue;
+    if (!t.param || params.get(t.param) !== "1") continue;
     ttfxTwinsDrawn.add(twin);
     document.getElementById(t.button).classList.add("btn-primary");
   }
@@ -12647,7 +12714,7 @@ function populateTtfxTaskList() {
   // The summary has no one metric, so each task shows what a user waits for
   // in all: precompiling, then loading and running it warm
   const summary = ttfxMode === "summary";
-  const metricLabel = summary ? "precompile + warm load and run" : ttfxMetricLabel().toLowerCase();
+  const metricLabel = summary ? `precompile + warm load and run${ttfxGcOff ? ", GC off" : ""}` : ttfxShownLabel().toLowerCase();
   const valueOf = (t) => {
     if (!summary) return ttfxValue(latest, t);
     const p = ttfxValue(latest, t, "precompile");
@@ -13303,7 +13370,10 @@ function destroyTtfxCharts() {
   }
 }
 
+// Charts with the axes a GC flip kept are drawn anew, fitting their data:
+// resetting their zoom would only go back to those axes
 function resetTtfxZoom() {
+  if (Object.values(ttfxChartsByKey()).some((c) => c._ttfxKeptAxes)) return updateTtfxChart();
   if (ttfxChart) ttfxChart.resetZoom();
   for (const c of Object.values(ttfxSummaryCharts)) c.resetZoom();
   document.getElementById("ttfx-btn-reset-zoom").style.display = "none";
@@ -13442,7 +13512,7 @@ function updateTtfxSummaryCharts() {
     if (!ttfxHasPanel(metric)) continue;
     const canvas = document.getElementById("ttfx-chart-" + metric);
     const common = ttfxSuiteTasks(builds, tasks, metric);
-    const label = ttfxMetricLabel(metric);
+    const label = ttfxShownLabel(metric);
     const datasets = ttfxSuiteDatasets(builds, common, metric);
     const noise = ttfxSuiteNoise(builds, common, metric);
     const options = ttfxChartOptions({
@@ -13518,7 +13588,7 @@ function updateTtfxTaskChart() {
 
   const options = ttfxChartOptions({
     metric: ttfxMetric,
-    metricLabel: ttfxMetricLabel(),
+    metricLabel: ttfxShownLabel(),
     title: null,
     legendDisplay: true,
     legendSummary: tasks.length > TTFX_LEGEND_TASKS_MAX,
@@ -13559,9 +13629,9 @@ function renderTtfxBuildsTable() {
       ["tasks", "Tasks", "num", "Tasks measured / tasks run; failed tasks in the tooltip"],
       ...metricCols.map((key) => [
         key,
-        ttfxMetricLabel(key),
+        ttfxShownLabel(key),
         "num",
-        `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxMetricLabel(key).toLowerCase()} value in every build of the range${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
+        `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
       ]),
       ["message", "Message", "col-secondary"],
     ],
@@ -14315,7 +14385,9 @@ function showTtfxPrPoints(p) {
         const r = ttfxPrChainedSuite(q)[key];
         return r && r.geomeans.length ? Math.exp(r.geomeans.reduce((a, g) => a + Math.log(g), 0) / r.geomeans.length) : null;
       });
-    const ratios = geomean(metric);
+    // With the GC off the suite line is the GC-off values, so it moves by the
+    // pull request's GC-off ratios
+    const ratios = geomean(ttfxGcOff && TTFX_METRICS[metric].gcoffIndex != null ? metric + "_gcoff" : metric);
     if (ratios.some((r) => r == null)) continue;
     const first = suite.data[0];
     const last = suite.data[suite.data.length - 1];
@@ -14457,7 +14529,7 @@ function renderTtfxTasksTable() {
   const tasks = ttfxSelectedList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
-  const metricLabel = ttfxMetricLabel();
+  const metricLabel = ttfxShownLabel();
   const cols = [
     ["task", "Task", ""],
     ["latest", "Latest", "num"],
@@ -16443,15 +16515,18 @@ function overviewCICard() {
   });
 }
 
-// The TTFX tab's "Hide annotated jumps" rescales its values; the Overview
-// shows them as measured
+// The TTFX tab's "Hide annotated jumps" rescales its values and its GC mode
+// can pick the GC-off repeats; the Overview shows them as measured, GC on
 function overviewTtfxUnscaled(fn) {
   const hide = ttfxHideJumps;
+  const gcOff = ttfxGcOff;
   ttfxHideJumps = false;
+  ttfxGcOff = false;
   try {
     return fn();
   } finally {
     ttfxHideJumps = hide;
+    ttfxGcOff = gcOff;
   }
 }
 
