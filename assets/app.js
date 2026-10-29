@@ -19885,8 +19885,8 @@ function updateRuntimeCharts() {
       label: (ctx) => {
         const i = ctx.raw.i;
         const max = runtimeValue(name, i, "value_max");
-        const lines = [` Fastest block: ${runtimeFormat(ctx.raw.y, info.metric)}`];
-        if (max != null) lines.push(` Slowest block: ${runtimeFormat(max, info.metric)} (${formatSignedPct(runtimePct(max, ctx.raw.y))})`);
+        const lines = [` Fastest process: ${runtimeFormat(ctx.raw.y, info.metric)}`];
+        if (max != null) lines.push(` Slowest process: ${runtimeFormat(max, info.metric)} (${formatSignedPct(runtimePct(max, ctx.raw.y))})`);
         const base = runtimeBaseline(name, i);
         if (base != null) lines.push(` vs median of ${RUNTIME_BASELINE} before: ${formatSignedPct(runtimePct(ctx.raw.y, base))}`);
         return lines;
@@ -19941,7 +19941,7 @@ function updateRuntimeCharts() {
       onClick: open(name),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title(name, ` · ${runtimeMetricText(info.metric)} per call, the band spans the blocks`),
+        title: title(name, ` · ${runtimeMetricText(info.metric)} per call; line: fastest process, band: range across processes`),
         legend: { display: false },
         zoom: zoomOptions(syncRuntimeZoom),
         annotation: notes,
@@ -20227,8 +20227,8 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
     };
     html += `<div class="ttfx-popup-section">${escapeHtml(info.name)}</div>`;
     html += head(escapeHtml(runtimeMetricText(info.metric)));
-    html += line("Fastest block", "value", (v) => runtimeFormat(v, info.metric), tol);
-    html += line("Slowest block", "value_max", (v) => runtimeFormat(v, info.metric), tol);
+    html += line("Fastest process", "value", (v) => runtimeFormat(v, info.metric), tol);
+    html += line("Slowest process", "value_max", (v) => runtimeFormat(v, info.metric), tol);
     html += line("Instructions", "instructions", runtimeCount, RUNTIME_INSTR_PCT);
     html += line("Wall time", "min_ns", runtimeNs, RUNTIME_TOLERANCE.time);
     html += line("Allocations", "allocs", (v) => v.toLocaleString("en-US"), 0.001);
