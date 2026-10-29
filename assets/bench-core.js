@@ -96,7 +96,8 @@
   // geomean of the ratios of every key present at that date to its previous
   // sample, so a key that is missing on some dates, or added or removed, moves
   // the line only by its own change. The level starts at the first date's
-  // geomean.
+  // geomean. The Runtime tab's category index uses it too, with `x` a build's
+  // index.
   function chainLink(entries) {
     const out = [];
     const last = new Map();
@@ -193,6 +194,7 @@
     setMethodologyChanges,
     loadMethodologyChanges,
     buildBenchmarkSeries,
+    chainLink,
     buildGroupGeomeanFromDetail,
     buildOverallFromGroupSeries,
     toPercentOfBaseline,

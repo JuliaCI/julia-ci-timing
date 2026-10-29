@@ -99,7 +99,7 @@ function relative_files(dir)
     for (root, _, names) in walkdir(dir)
         for n in names
             (endswith(n, ".json") || endswith(n, ".json.gz") || endswith(n, ".ndjson")) || continue
-            n in ("ttfx_annotations.json", "sysimage_annotations.json", "methodology_changes.json") && continue   # hand-maintained, not exported
+            n in ("ttfx_annotations.json", "sysimage_annotations.json", "runtime_annotations.json", "methodology_changes.json") && continue   # hand-maintained, not exported
             push!(files, relpath(joinpath(root, n), dir))
         end
     end

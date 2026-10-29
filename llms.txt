@@ -51,6 +51,12 @@ TTFX:
 - `/api/ttfx/job/<job_id>?task=`: one TTFX job's recompiled methods (from its trace logs) and invalidations with their top causes, per task
 - `/api/notes/ttfx_annotations`: notes on TTFX jobs where the runners or the benchmark changed, so a step there is not a commit's
 
+Runtime benchmarks:
+- `/api/runtime/summary?since=`: about 110 runtime benchmarks (13 categories: scalar, simd, array, collections, strings, io, dispatch, types, runtime, gc, compiler, apps, parallel) on every master build: per benchmark the judged metric (cycles of the calling thread, or wall time), its spread over the job's blocks, retired instructions (exact, so a change means the code changed), wall time, allocations
+- `/api/runtime/prs`: open pull requests by their latest runtime benchmark comparison against the merge-base, with per-category verdicts and the benchmarks that changed
+- `/api/runtime/job/<job_id>`: one job's every benchmark with its per-block values
+- `/api/notes/runtime_annotations`: notes on builds where the benchmark machine or suite changed, so a step there is not a commit's
+
 Sizes:
 - `/api/sizes/summary?since=`: size of the linux-x86_64 distribution (total, sys.so, pkgimages, runtime libraries) of master commits, back to 2020, and of every stable release since 1.10
 - `/api/sizes/commit/<sha>`: one master commit's size against the previous measured commit, every metric and every file of at least 1 MiB

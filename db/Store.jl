@@ -255,8 +255,9 @@ function source_run(f, db::SQLite.DB, source::AbstractString)
     end
 end
 
-compress_zst(bytes::AbstractVector{UInt8}) = transcode(ZstdCompressor, Vector{UInt8}(bytes))
-compress_zst(s::AbstractString) = compress_zst(codeunits(s))
+compress_zst(bytes::AbstractVector{UInt8}; level=nothing) =
+    level === nothing ? transcode(ZstdCompressor, Vector{UInt8}(bytes)) : transcode(ZstdCompressor(; level), Vector{UInt8}(bytes))
+compress_zst(s::AbstractString; kw...) = compress_zst(codeunits(s); kw...)
 decompress_zst(bytes) = String(transcode(ZstdDecompressor, Vector{UInt8}(bytes)))
 
 # --- timestamps -----------------------------------------------------------

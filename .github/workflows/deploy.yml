@@ -25,6 +25,7 @@ on:
       - 'llms.txt'
       - 'data/ttfx_annotations.json'
       - 'data/sysimage_annotations.json'
+      - 'data/runtime_annotations.json'
       - 'data/methodology_changes.json'
       - 'Project.toml'
       - 'Manifest.toml'

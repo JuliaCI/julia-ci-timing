@@ -827,8 +827,8 @@ function commit_candidates(db, ref)
     for b in rows(db, "SELECT commit_prefix, commit_sha FROM builds WHERE commit_prefix GLOB ? ORDER BY created_at", (p8 * "*",))
         fits(b.commit_sha) && note!(String(b.commit_prefix), b.commit_sha)
     end
-    for table in ("ttfx_jobs", "bench_reports", "pkgeval_reports")
-        master = table == "ttfx_jobs" ? " AND kind = 'master'" : ""
+    for table in ("ttfx_jobs", "rtb_jobs", "bench_reports", "pkgeval_reports")
+        master = table in ("ttfx_jobs", "rtb_jobs") ? " AND kind = 'master'" : ""
         for r in rows(db, "SELECT DISTINCT commit_sha FROM $table WHERE (commit_sha GLOB ? OR commit_sha = ?)" * master, (ref * "*", p8))
             sha = String(r.commit_sha)
             length(sha) >= 8 && note!(first(sha, 8), sha)
@@ -851,6 +851,7 @@ function commit_summary(db, prefix, sha)
                  "ORDER BY message = '$SCHEDULED_MESSAGE', created_at LIMIT 1", (prefix,))
     if isempty(b)
         t = rows(db, "SELECT message, build_created_at FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' ORDER BY build_created_at LIMIT 1", (commit_glob(prefix, sha),))
+        isempty(t) && (t = rows(db, "SELECT message, build_created_at FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = 'master' ORDER BY build_created_at LIMIT 1", (commit_glob(prefix, sha),)))
         message = isempty(t) ? "" : String(t[1].message)
         return OrderedDict{String,Any}("prefix" => prefix, "sha" => sha, "author" => "", "message" => message,
                                        "pr" => pr_number(message), "created_at" => isempty(t) ? nothing : String(t[1].build_created_at))
@@ -1123,9 +1124,11 @@ function commit_pr(db, n)
                                          "releases" => commit_pr_ttfx_releases(db, ttfx_all[i])))
     sizes = size_pr(db, string(n))
     sizes === nothing || (sizes["releases"] = size_release_series(db))
-    github === nothing && ttfx === nothing && sizes === nothing && return nothing
+    rt = rows(db, "SELECT * FROM rtb_prs WHERE pr_number = ?", (n,))
+    runtime = isempty(rt) ? nothing : runtime_pr_entry(rt[1])
+    github === nothing && ttfx === nothing && sizes === nothing && runtime === nothing && return nothing
     stack = commit_pr_stack(db, n, ttfx_all, size_prs(db)["prs"])
-    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes, "stack" => stack)
+    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes, "runtime" => runtime, "stack" => stack)
 end
 
 function latest_ttfx_job(db, cond, params=())
@@ -1279,6 +1282,7 @@ function commit(db, ref)
         "builds" => builds,
         "jobs" => primary === nothing ? nothing : commit_jobs(db, primary),
         "ttfx" => commit_ttfx(db, prefix, sha),
+        "runtime" => commit_runtime(db, prefix, sha),
         "benchmarks" => commit_benchmarks(db, prefix, sha, t),
         "sizes" => commit_sizes(db, something(sha, prefix)),
         "pkgeval" => commit_pkgeval(db, prefix, sha, t),
@@ -1650,6 +1654,168 @@ function sysimage(db; since="")
     end
     return OrderedDict("generated_at" => generated_at(db, "sysimage"), "pipeline" => "julia-ci", "branch" => "master",
                        "stages" => SYSIMAGE_STAGES, "platforms" => platforms, "subjects" => subjects)
+end
+
+# --- runtime benchmarks --------------------------------------------------------
+
+# The suite's categories in its own order; one it adds later goes after them
+const RUNTIME_CATEGORIES = ["scalar", "simd", "array", "collections", "strings", "io", "dispatch", "types", "runtime", "gc",
+                            "compiler", "apps", "parallel"]
+const RUNTIME_SERIES = ["value", "value_max", "instructions", "min_ns", "allocs", "bytes"]
+
+runtime_category_rank(c) = (i = findfirst(==(c), RUNTIME_CATEGORIES); i === nothing ? (length(RUNTIME_CATEGORIES) + 1, c) : (i, ""))
+rt_round(x) = x === missing ? nothing : x isa AbstractFloat ? (isinteger(x) || abs(x) >= 1e3 ? round(Int, x) : round(x; digits=2)) : x
+
+# A julia-ci build's row as the summary and the commit page describe it
+runtime_build(j) = OrderedDict{String,Any}(
+    "build" => Int(j.build), "job_id" => String(j.job_uuid), "commit" => String(j.commit_sha), "date" => String(j.build_created_at),
+    "version" => String(j.version), "llvm" => String(j.llvm), "state" => String(j.state), "message" => String(j.message),
+    "agent" => String(j.agent), "machine" => String(j.machine), "suite_commit" => String(j.suite_commit),
+    "backend" => String(j.counters_backend), "blocks" => js(j.blocks), "url" => js(j.web_url))
+
+# Every master build's runtime benchmarks in the window: the builds in time order, and per
+# benchmark one array per series aligned with them (null where the build has no value)
+function runtime(db; since="")
+    where, params = where_clause("build_created_at", since, "")
+    jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = 'master' ORDER BY build_created_at, build", params)
+    index = Dict(String(j.job_uuid) => k for (k, j) in enumerate(jobs))
+    builds = [runtime_build(j) for j in jobs]
+    for b in builds
+        b["failed"] = OrderedDict{String,String}()
+    end
+    info = Dict{String,Any}()
+    series = Dict{String,OrderedDict{String,Vector{Any}}}()
+    windowed = isempty(where) ? "" : " WHERE job_uuid IN (SELECT job_uuid FROM rtb_jobs$where)"
+    for r in rows(db, "SELECT job_uuid, name, category, metric, status, error, ops, $(join(RUNTIME_SERIES, ", ")) FROM rtb_results" * windowed, params)
+        k = get(index, String(r.job_uuid), nothing)
+        k === nothing && continue
+        name = String(r.name)
+        # The newest build's category, metric and ops describe the benchmark
+        old = get(info, name, nothing)
+        (old === nothing || k >= old.k) && (info[name] = (category=String(r.category), metric=String(r.metric), ops=js(r.ops), k))
+        s = get!(() -> OrderedDict(c => Vector{Any}(nothing, length(jobs)) for c in RUNTIME_SERIES), series, name)
+        for c in RUNTIME_SERIES
+            s[c][k] = rt_round(getproperty(r, Symbol(c)))
+        end
+        String(r.status) == "ok" || (builds[k]["failed"][name] = r.error === missing ? String(r.status) : String(r.error))
+    end
+    names = sort!(collect(keys(info)); by=n -> (runtime_category_rank(info[n].category), n))
+    benchmarks = [OrderedDict("name" => n, "category" => info[n].category, "metric" => info[n].metric, "ops" => info[n].ops) for n in names]
+    categories = sort!(unique([info[n].category for n in names]); by=runtime_category_rank)
+    return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-ci", "branch" => "master",
+                       "categories" => categories, "series_keys" => RUNTIME_SERIES, "benchmarks" => benchmarks, "builds" => builds,
+                       "series" => OrderedDict(n => series[n] for n in names))
+end
+
+# The master job with results before `j` on another commit, nothing when there is none
+function runtime_previous(db, j)
+    r = rows(db, "SELECT * FROM rtb_jobs WHERE kind = 'master' AND has_results = 1 AND build_created_at < ? AND commit_sha != ? " *
+                 "ORDER BY build_created_at DESC LIMIT 1", (j.build_created_at, j.commit_sha))
+    return isempty(r) ? nothing : r[1]
+end
+
+parse_json_array(x) = x === missing ? Any[] : collect(Any, JSON3.read(String(x)))
+
+# Everything one job recorded: its build, machine and settings, and per benchmark the
+# values over blocks and each block's. Nothing when there is no such job.
+function runtime_job(db, job_id)
+    j = rows(db, "SELECT * FROM rtb_jobs WHERE job_uuid = ?", (job_id,))
+    isempty(j) && return nothing
+    j = j[1]
+    prev = runtime_previous(db, j)
+    out = runtime_build(j)
+    merge!(out, OrderedDict("kind" => String(j.kind), "cpu_target" => String(j.cpu_target), "threads" => js(j.threads),
+                            "duration_s" => js(j.duration_s), "started_at" => js(j.started_at), "finished_at" => js(j.finished_at),
+                            "n_benchmarks" => js(j.n_benchmarks), "n_failed" => js(j.n_failed),
+                            "failures" => j.failures === missing ? Any[] : JSON3.read(String(j.failures)),
+                            "previous" => prev === nothing ? nothing : OrderedDict("build" => Int(prev.build), "job_id" => String(prev.job_uuid),
+                                                                                   "commit" => String(prev.commit_sha))))
+    benchmarks = Any[]
+    for r in rows(db, "SELECT * FROM rtb_results WHERE job_uuid = ?", (job_id,))
+        push!(benchmarks, OrderedDict(
+            "name" => String(r.name), "category" => String(r.category), "metric" => String(r.metric), "status" => String(r.status),
+            "error" => js(r.error), "blocks" => Int(r.blocks), "ops" => js(r.ops), "tolerance" => js(r.tolerance),
+            (c => rt_round(getproperty(r, Symbol(c))) for c in ["value", "value_max", "instructions", "min_ns", "median_ns", "allocs", "bytes"])...,
+            "per_block" => OrderedDict("value" => parse_json_array(r.block_values), "min_ns" => parse_json_array(r.block_ns),
+                                       "instructions" => parse_json_array(r.block_instructions))))
+    end
+    sort!(benchmarks; by=b -> (runtime_category_rank(b["category"]), b["name"]))
+    out["benchmarks"] = benchmarks
+    return out
+end
+
+# The benchmarks of a comparison worth listing: every robust change and instruction
+# change, and the RUNTIME_PR_TOP furthest from no change either way
+const RUNTIME_PR_TOP = 5
+const RUNTIME_PR_FIELDS = ("name", "category", "metric", "verdict", "ratio", "ratios", "instr_ratio", "instr_changed",
+                           "base", "head", "base_time", "head_time", "allocs_base", "allocs_head", "tolerance")
+
+function runtime_pr_notable(benchmarks)
+    dist(b) = (x = get(b, :ratio, nothing); x isa Number && x > 0 ? abs(log(x)) : 0.0)
+    flagged = Set(i for (i, b) in enumerate(benchmarks) if get(b, :verdict, "same") != "same" || get(b, :instr_changed, false) === true)
+    order = sortperm(collect(benchmarks); by=b -> -dist(b))
+    union!(flagged, first(order, RUNTIME_PR_TOP))
+    out = [OrderedDict(f => get(benchmarks[i], Symbol(f), nothing) for f in RUNTIME_PR_FIELDS) for i in flagged]
+    return sort!(out; by=b -> -(b["ratio"] isa Number ? b["ratio"] : 1.0))
+end
+
+function runtime_pr_entry(r)
+    benchmarks = JSON3.read(String(r.benchmarks))
+    ratio(b) = (x = get(b, :ratio, nothing); x isa Number ? Float64(x) : 1.0)
+    worst = isempty(benchmarks) ? nothing : benchmarks[argmax([ratio(b) for b in benchmarks])]
+    best = isempty(benchmarks) ? nothing : benchmarks[argmin([ratio(b) for b in benchmarks])]
+    pick(b) = b === nothing ? nothing : OrderedDict(f => get(b, Symbol(f), nothing) for f in RUNTIME_PR_FIELDS)
+    errors = JSON3.read(String(r.errors))
+    return OrderedDict(
+        "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+        "base_ref" => String(r.base_ref), "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state),
+        "web_url" => js(r.web_url), "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
+        "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version), "llvm" => String(r.head_llvm)),
+        "base" => OrderedDict("commit" => String(r.base_commit), "version" => String(r.base_version), "llvm" => String(r.base_llvm)),
+        "outdated" => !isempty(String(r.pr_head_sha)) && String(r.pr_head_sha) != String(r.head_commit),
+        "blocks" => js(r.blocks), "verdict" => String(r.verdict), "n_benchmarks" => Int(r.n_benchmarks),
+        "n_regressions" => Int(r.n_regressions), "n_improvements" => Int(r.n_improvements),
+        "n_instr_changed" => Int(r.n_instr_changed), "n_errors" => Int(r.n_errors), "geomean" => js(r.geomean),
+        "categories" => JSON3.read(String(r.categories)), "worst" => pick(worst), "best" => pick(best),
+        "notable" => runtime_pr_notable(benchmarks), "errors" => errors[:errors], "failures" => errors[:failures])
+end
+
+# Open pull requests by their latest runtime benchmark comparison, best first: by the
+# geometric mean of every benchmark's ratio, head against base
+function runtime_prs(db)
+    prs = [runtime_pr_entry(r) for r in rows(db, "SELECT * FROM rtb_prs")]
+    sort!(prs; by=p -> (p["geomean"] === nothing, something(p["geomean"], 0.0), p["n_regressions"] - p["n_improvements"]))
+    return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-pr", "prs" => prs)
+end
+
+# The commit's runtime benchmark job against the latest earlier one with results on
+# another commit: every benchmark's value, instructions and allocations in both
+function commit_runtime(db, prefix, sha)
+    tj = rows(db, "SELECT * FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = 'master' ORDER BY build_created_at DESC LIMIT 1",
+              (commit_glob(prefix, sha),))
+    isempty(tj) && return nothing
+    j = tj[1]
+    prev = runtime_previous(db, j)
+    results(uuid) = Dict(String(r.name) => r for r in rows(db, "SELECT name, category, metric, status, error, value, instructions, " *
+                                                                   "min_ns, allocs, ops FROM rtb_results WHERE job_uuid = ?", (uuid,)))
+    now_ = results(String(j.job_uuid))
+    before = prev === nothing ? Dict{String,Any}() : results(String(prev.job_uuid))
+    benchmarks = Any[]
+    for name in sort!(collect(keys(now_)); by=n -> (runtime_category_rank(String(now_[n].category)), n))
+        r = now_[name]
+        p = get(before, name, nothing)
+        push!(benchmarks, OrderedDict(
+            "name" => name, "category" => String(r.category), "metric" => String(r.metric), "status" => String(r.status),
+            "error" => js(r.error), "now" => rt_round(r.value), "previous" => p === nothing ? nothing : rt_round(p.value),
+            "instructions" => rt_round(r.instructions), "instructions_previous" => p === nothing ? nothing : rt_round(p.instructions),
+            "min_ns" => rt_round(r.min_ns), "allocs" => js(r.allocs), "allocs_previous" => p === nothing ? nothing : js(p.allocs),
+            "ops" => js(r.ops), "failed_before" => p !== nothing && String(p.status) != "ok"))
+    end
+    out = runtime_build(j)
+    out["previous"] = prev === nothing ? nothing : OrderedDict("build" => Int(prev.build), "job_id" => String(prev.job_uuid),
+                                                                "commit" => String(prev.commit_sha), "llvm" => String(prev.llvm))
+    out["benchmarks"] = benchmarks
+    return out
 end
 
 # --- downloads ---------------------------------------------------------------
@@ -2122,6 +2288,7 @@ const LATEST_DATA = Dict(
     "benchmarks" => "SELECT MAX(date) AS t FROM bench_reports",
     "pkgeval" => "SELECT MAX(date) AS t FROM pkgeval_reports",
     "ttfx" => "SELECT MAX(build_created_at) AS t FROM ttfx_jobs",
+    "runtime" => "SELECT MAX(build_created_at) AS t FROM rtb_jobs",
     "sizes" => "SELECT MAX(merged_at) AS t FROM size_builds WHERE source IN ('ci', 'pr')",
     "packages" => "SELECT MAX(date) AS t FROM dl_series",
     "agents" => "SELECT MAX(time) AS t FROM agent_snapshots",

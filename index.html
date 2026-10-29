@@ -231,6 +231,18 @@
             </button>
             <button
               class="tab-btn"
+              id="tab-ci-runtime"
+              role="tab"
+              aria-selected="false"
+              aria-controls="runtime-view"
+              tabindex="-1"
+              onclick="switchTab('ci-runtime')"
+              title="Runtime benchmarks on every master build: cycles, wall time and instructions of about a hundred benchmarks of codegen, the runtime, the GC and the compiler"
+            >
+              Runtime
+            </button>
+            <button
+              class="tab-btn"
               id="tab-ci-sizes"
               role="tab"
               aria-selected="false"
@@ -1379,6 +1391,113 @@
             <table>
               <thead id="ttfx-stats-thead"></thead>
               <tbody id="ttfx-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="ttfx-main view-hidden"
+      id="runtime-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-runtime"
+      tabindex="0"
+    >
+      <div class="ttfx-toolbar">
+        <select
+          class="time-select"
+          id="runtime-time-range"
+          onchange="setRuntimeTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="0">All time</option>
+        </select>
+        <span class="runtime-reference" id="runtime-reference"></span>
+        <button class="btn" id="runtime-btn-all" onclick="setRuntimeCategories(true)" title="Show every category in the index chart and the table">
+          All categories
+        </button>
+        <button class="btn" id="runtime-btn-none" onclick="setRuntimeCategories(false)" title="Hide every category; then click the ones to show in the list or the legend">
+          None
+        </button>
+        <span class="bench-table-view-toggle" role="group" aria-label="Table view">
+          <button
+            class="btn btn-primary"
+            id="runtime-view-benchmarks"
+            onclick="setRuntimeTableView('benchmarks')"
+            title="Every benchmark in the newest build, against the reference build and the builds before it"
+          >
+            Benchmarks
+          </button>
+          <button
+            class="btn"
+            id="runtime-view-prs"
+            onclick="setRuntimeTableView('prs')"
+            title="Open pull requests by their latest runtime benchmark comparison against master, best first"
+          >
+            Open PRs
+          </button>
+        </span>
+        <button
+          class="btn btn-primary"
+          id="runtime-btn-reset-zoom"
+          onclick="resetRuntimeZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <a
+          class="btn btn-link"
+          href="https://github.com/JuliaCI/julia-ci-benchmarks#readme"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="What the suite measures and how: cycles and instructions from the CPU's counters, each block its own process"
+          >Method</a
+        >
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-sidebar" id="runtime-bench-list">
+          <div class="group-header" id="runtime-bench-header">Benchmarks</div>
+          <input class="sidebar-filter" id="runtime-filter" type="search" placeholder="Filter benchmarks" oninput="setRuntimeFilter(this.value)" aria-label="Filter benchmarks" />
+          <div class="runtime-bench-items" id="runtime-bench-items"><div class="loading">Loading...</div></div>
+        </div>
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="runtime-chart-loading">
+                <span class="loading">Loading runtime benchmark data...</span>
+              </div>
+              <div class="workers-empty" id="runtime-empty" hidden>No build with runtime benchmark results in the selected time range.</div>
+              <div class="ttfx-summary-grid runtime-grid" id="runtime-grid">
+                <div class="ttfx-panel runtime-panel-index"><canvas id="runtime-chart-index"></canvas></div>
+                <div class="ttfx-panel runtime-panel-bench"><canvas id="runtime-chart-bench"></canvas></div>
+                <div class="ttfx-panel runtime-panel-instr"><canvas id="runtime-chart-instr"></canvas></div>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="runtime-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize runtime benchmark table"
+          ></div>
+          <div class="ttfx-stats" id="runtime-stats" style="height: 280px">
+            <div class="ttfx-stats-caption" id="runtime-stats-caption"></div>
+            <table>
+              <thead id="runtime-stats-thead"></thead>
+              <tbody id="runtime-stats-tbody">
                 <tr>
                   <td class="loading">Loading...</td>
                 </tr>

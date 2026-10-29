@@ -1,7 +1,7 @@
 # Julia Performance Tracking
 
 Dashboard for Julia language performance: daily Nanosoldier benchmark reports,
-[CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, distribution size,
+[CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, runtime benchmarks, distribution size,
 sysimage build time, PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), and the other tabs go deep.
 
@@ -13,6 +13,7 @@ Short paths open a tab directly and forward any other query parameters:
 [/diff](https://perf.julialang.org/diff), [/history](https://perf.julialang.org/history),
 [/timing](https://perf.julialang.org/timing),
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
+[/runtime](https://perf.julialang.org/runtime),
 [/sizes](https://perf.julialang.org/sizes), [/build-stages](https://perf.julialang.org/build-stages),
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),
 [/activity](https://perf.julialang.org/activity).
@@ -24,7 +25,7 @@ they resolve to keep working as before.
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Nine fetchers write a SQLite database every half hour, and the CI timing,
+- Ten fetchers write a SQLite database every half hour, and the CI timing,
   agent and GitHub ones every 10 minutes (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
@@ -40,6 +41,11 @@ container image (`Dockerfile`):
     from the `TTFX` job on every `julia-ci` master build, and from the weekly
     `TTFX release` job that measures the newest stable release as a reference, see
     [julia-buildkite/utilities/ttfx](https://github.com/JuliaCI/julia-buildkite/tree/main/utilities/ttfx)
+  - `fetch_runtime.jl`: the runtime benchmarks
+    ([julia-ci-benchmarks](https://github.com/JuliaCI/julia-ci-benchmarks): cycles, wall time
+    and instructions of about 110 benchmarks of codegen, the runtime, the GC and the
+    compiler) from the `Runtime benchmarks` job on every `julia-ci` master build, and the
+    latest comparison of each open pull request from its `julia-pr` job
   - `fetch_sizes.jl`: the size of the binary distribution (`tools/measure_sizes.jl`)
     of every `julia-ci` master build, from the tarball in the nightlies bucket, and of
     the latest `julia-pr` build of every open pull request, from its build job's

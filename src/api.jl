@@ -61,6 +61,8 @@ function parse_args(args)
             opts["site"] = abspath(args[i+1]); i += 2
         elseif a == "--data"
             opts["data"] = abspath(args[i+1]); i += 2
+        elseif a == "--notes"
+            opts["notes"] = abspath(args[i+1]); i += 2
         else
             error("unknown argument $a")
         end
@@ -131,7 +133,7 @@ end
 # The sources each route family reads, for its ETag; nothing means global.
 # Some PkgEval routes rank the packages by their downloads.
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
-                           "ttfx" => ["ttfx"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "downloads" => ["packages"], "agents" => ["agents"],
+                           "ttfx" => ["ttfx"], "runtime" => ["runtime"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "downloads" => ["packages"], "agents" => ["agents"],
                            "github" => ["github"])
 const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "failures"] => ["pkgeval", "packages"],
                                  ["pkgeval", "changes"] => ["pkgeval", "packages"])
@@ -176,7 +178,7 @@ end
 
 # --- routes ------------------------------------------------------------------
 
-const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "sizes", "sysimage", "packages", "agents", "github")
+const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "sysimage", "packages", "agents", "github")
 
 function status(db)
     return Dict("change_seq" => Store.current_seq(db),
@@ -219,7 +221,7 @@ end
 const ROUTES = [
     Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, and the server's time. Never cached, so it is the cheap thing to poll.",
           (db, _, _) -> status(db)),
-    Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts), sysimage_annotations (notes on julia-ci builds where how CI builds julia changed, drawn on the Build stages charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
+    Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts), runtime_annotations (notes on julia-ci builds where the runtime benchmarks' machine or suite changed, drawn on the Runtime charts), sysimage_annotations (notes on julia-ci builds where how CI builds julia changed, drawn on the Build stages charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
           (_, a, _) -> JSON3.read(note_file(a[1]))),
     Route("ready", [], "Whether this server has finished warming up: 200 once the routes the site loads on landing are rendered into its cache, 503 before. A deploy starts the new server beside the old one and switches to it when this answers 200.",
           (db, _, _) -> Dict("ready" => true)),
@@ -311,6 +313,15 @@ const ROUTES = [
     Route("sizes/pr/<number>", [],
           "One open pull request's measurement next to its merge-base's: every metric, and every file of at least 1 MiB in either, the files that changed most first. For a stacked one, stack as in sizes/prs, below_metrics, its own change against the pull request below it as [value, value before] per metric, and below_files, the files against below's build when both have the same merge-base with master. build_change as in sizes/prs.",
           (db, a, _) -> Render.size_pr(db, a[1])),
+    Route("runtime/summary", [SINCE],
+          "The runtime benchmarks (JuliaCI/julia-ci-benchmarks, about 110 benchmarks in 13 categories, on the macOS aarch64 agent) of every julia-ci master build in the window. builds lists them in time order (build, job_id, commit, date, julia version, LLVM, job state, message, agent, machine, suite commit, counters backend, blocks, Buildkite URL) with failed, the benchmarks that did not run in that build and their first error. benchmarks lists each benchmark's name (category/name), category, metric (cycles, or time for work that leaves the calling thread) and ops, the work items per call, in category order. series has per benchmark one array per key of series_keys, aligned with builds and null where the build has no value: value is the judged metric (cycles, or nanoseconds for time), the minimum over the job's blocks of each block's minimum, and value_max the largest of those block minima; instructions the minimum retired instructions per call (exact across processes, so a change means the code or the work changed; null without counters); min_ns the minimum wall time per call (min_ns / ops is the time per item); allocs and bytes the minimum allocations and bytes per call.",
+          (db, _, p) -> Render.runtime(db; since=instant(p, "since"))),
+    Route("runtime/prs", [],
+          "Open julia pull requests by their latest runtime benchmark comparison (the head against the master build of the merge-base, interleaved in one julia-pr job), best first by geomean, the geometric mean of every benchmark's ratio head/base (below 1 is faster). verdict is regression when a benchmark or a category regressed robustly, else improvement when one improved; n_regressions, n_improvements and n_instr_changed count the benchmarks, n_errors those that failed on either arm. categories is the job's per-category verdict (geomean and per-block geomeans). worst and best are the benchmarks with the largest and smallest ratio, notable every benchmark with a robust change or a changed instruction count plus the five furthest from no change; each has its ratio, per-block ratios, instruction ratio, head and base values (cycles or ns) and wall times, and allocations. outdated means the pull request has moved on since the job's commit.",
+          (db, _, _) -> Render.runtime_prs(db)),
+    Route("runtime/job/<job_id>", [],
+          "Everything one runtime benchmark job (the job_id of a runtime/summary build) recorded: the build, julia version and LLVM, machine, settings and failed processes, the previous master job with results on another commit (previous), and per benchmark its status and first error, value and value_max over blocks, instructions, min_ns, median_ns, allocs, bytes, ops, the benchmark's own tolerance and per_block, each block's value, min_ns and instructions.",
+          (db, a, _) -> Render.runtime_job(db, a[1])),
     Route("sysimage/summary", [SINCE],
           "How long the build job of every julia-ci master build spent making the system image, stage by stage, in seconds, from the job logs. stages lists the stages in build order: compiler (compiling the compiler, Base_compiler.jl), compiler_output (emitting basecompiler: from the end of that to its link, from the log's line timestamps), base and stdlibs (loading Base and the sysimage's stdlibs, sysimg.jl), sysbase_output (emitting sysbase, timed like compiler_output), precompile (running the precompile statements, generate_precompile.jl), sys_output (emitting sys), then stdlib_pkgimages, the stdlib pkgimages precompiled after the image (stdlib_pkgimages_count of them: about 110 before build 1002, both bounds-checking configurations, and 55 since). platforms has per build triplet the jobs that started in the window in time order (job UUID, build, commit, start, agent), one array per stage aligned with them, the precompile statements run, and stdlibs, the seconds of each stdlib loaded into the image (null where the log does not have them). subjects has the subject of each commit. Linux jobs share their machine with other jobs, so the times are noisy.",
           (db, _, p) -> Render.sysimage(db; since=instant(p, "since"))),
@@ -355,7 +366,7 @@ const ROUTES = [
               Render.commit_list(db; before=instant(p, "before"), before_commit, limit=limit == 0 ? 100 : min(limit, 500))
           end),
     Route("commit/<ref>", [],
-          "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run and under releases against the latest run of the release, LTS and branch nightly series (ratio, the geomean task ratio per metric), its CI tarball's size against the previous measured commit (as one source of sizes/commit/<sha>) and under releases the newest measured patch of each minor release series, newest first, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches. A PR number with no master commit (an open pull request, say) returns no matches and, under pr, what is recorded for the pull request: its GitHub listing, its TTFX comparison (an entry of ttfx/prs, with the metrics, and releases: as for a commit, for the merge-base's master job, with head, the head's estimate, that ratio times the pull request's change; null for a stacked pull request or a merge-base without a master job) and its size measurement (as sizes/pr/<number>, plus releases as for a commit), each null when missing, and stack, the pull requests it is stacked with from the one on master up (position is its place, 1 the lowest; missing the branch where the walk down stopped for want of a TTFX comparison), null when it is not stacked; pr is null when there is none.",
+          "Everything recorded for one master commit: its builds, each job's time and state against the previous commit's build, TTFX against the previous run and under releases against the latest run of the release, LTS and branch nightly series (ratio, the geomean task ratio per metric), its runtime benchmarks (runtime: each benchmark's value, instructions and allocations against the previous master job with results), its CI tarball's size against the previous measured commit (as one source of sizes/commit/<sha>) and under releases the newest measured patch of each minor release series, newest first, the first benchmark and PkgEval daily reports that include it, and coverage. ref is a SHA prefix of 7 to 40 hex digits or a PR number; a ref matching several commits returns them under matches. A PR number with no master commit (an open pull request, say) returns no matches and, under pr, what is recorded for the pull request: its GitHub listing, its TTFX comparison (an entry of ttfx/prs, with the metrics, and releases: as for a commit, for the merge-base's master job, with head, the head's estimate, that ratio times the pull request's change; null for a stacked pull request or a merge-base without a master job) its size measurement (as sizes/pr/<number>, plus releases as for a commit) and its runtime benchmark comparison (runtime, an entry of runtime/prs), each null when missing, and stack, the pull requests it is stacked with from the one on master up (position is its place, 1 the lowest; missing the branch where the walk down stopped for want of a TTFX comparison), null when it is not stacked; pr is null when there is none.",
           (db, a, _) -> begin
               ref = lowercase(a[1])
               occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))
@@ -391,7 +402,7 @@ end
 function api_index()
     routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
     return OrderedDict(
-        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, distribution sizes, sysimage build times, package downloads and Buildkite agents, from one SQLite database refreshed every 10 to 30 minutes. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, runtime benchmarks, distribution sizes, sysimage build times, package downloads and Buildkite agents, from one SQLite database refreshed every 10 to 30 minutes. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
         "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 300 MB)",
@@ -580,9 +591,13 @@ end
 # The hand-maintained files in data/. They ship with the code, so they are
 # served from it rather than from the ingest's export, which a run started
 # before a deploy would write from the old code.
-const NOTE_FILES = Set(["ttfx_annotations", "sysimage_annotations", "methodology_changes"])
+const NOTE_FILES = Set(["ttfx_annotations", "runtime_annotations", "sysimage_annotations", "methodology_changes"])
+# --notes DIR: for a local preview, the notes in DIR take the place of the repository's
+const NOTES_DIR = Ref{Union{Nothing,String}}(nothing)
 function note_file(name)
-    name in NOTE_FILES || throw(BadRequest("notes are ttfx_annotations, sysimage_annotations or methodology_changes"))
+    name in NOTE_FILES || throw(BadRequest("notes are ttfx_annotations, runtime_annotations, sysimage_annotations or methodology_changes"))
+    dir = NOTES_DIR[]
+    dir !== nothing && isfile(joinpath(dir, name * ".json")) && return read(joinpath(dir, name * ".json"))
     return read(joinpath(dirname(@__DIR__), "data", name * ".json"))
 end
 
@@ -654,7 +669,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "sizes", "build-stages", "downloads", "pkgeval", "activity"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "runtime", "sizes", "build-stages", "downloads", "pkgeval", "activity"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
@@ -704,7 +719,8 @@ end
 function landing_targets(today=Date(now(UTC)))
     day(n) = Dates.format(today - Day(n), dateformat"yyyy-mm-dd")
     return ["/api/timing/runs?since=$(day(30))", "/api/timing/builds?since=$(day(14))",
-            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/prs", "/api/downloads/summary",
+            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/prs",
+            "/api/runtime/summary?since=$(day(30))", "/api/runtime/prs", "/api/downloads/summary",
             "/api/sizes/summary?since=$(day(30))", "/api/sizes/prs", "/api/agents/backlog?since=$(day(14))",
             "/api/agents/latest", "/api/pkgeval/reasons", "/api/downloads/top?days=7&client=user",
             "/api/pkgeval/popular?days=30&client=user&limit=50", "/api/github/activity?since=$(day(30))",
@@ -731,6 +747,11 @@ function sizes_pr_example(db)
     return isempty(r) ? "0" : string(r[1].pr_number)
 end
 
+function runtime_job_example(db)
+    r = Store.query(db, "SELECT job_uuid FROM rtb_jobs ORDER BY build_created_at DESC LIMIT 1")
+    return isempty(r) ? "0" : String(r[1].job_uuid)
+end
+
 function ttfx_job_example(db)
     r = Store.query(db, "SELECT job_uuid FROM ttfx_jobs ORDER BY build_created_at DESC LIMIT 1")
     return isempty(r) ? "0" : String(r[1].job_uuid)
@@ -746,7 +767,8 @@ function other_targets(db)
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
-            "/api/ttfx/job/$(ttfx_job_example(db))", "/api/sysimage/summary",
+            "/api/ttfx/job/$(ttfx_job_example(db))", "/api/runtime/summary", "/api/runtime/job/$(runtime_job_example(db))",
+            "/api/sysimage/summary",
             "/api/commit/$(isempty(latest) ? "0000000" : latest[1]["commit"])",
             (isempty(groups) ? String[] : ["/api/benchmarks/groups/$(groups[1])?since=$since"])...]
 end
@@ -774,6 +796,7 @@ end
 
 function main(args)
     opts = parse_args(args)
+    NOTES_DIR[] = get(opts, "notes", nothing)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
     seqdb = Channel{SQLite.DB}(1)

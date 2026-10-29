@@ -93,6 +93,13 @@ only the files that changed. `AGENTS.md` describes their shapes.
   comparison of each open pull request (head against master: verdict, suite geomean ratios,
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
   current state only.
+- **Runtime benchmarks.** `rtb_jobs` (one julia-ci master build's `Runtime benchmarks` job:
+  julia version and commit, LLVM, machine, suite commit, blocks) and `rtb_results` (job and
+  benchmark: `value`, the minimum over blocks of the judged metric, cycles or ns per
+  `metric`; `value_max`; `instructions`, exact across processes; `min_ns`, `allocs`,
+  `bytes`, `ops`; `status` and `error`; the per-block values as JSON). `rtb_prs` holds the
+  latest comparison of each open pull request (verdict, counts, geomean, and
+  `compare.json`'s categories and benchmarks as JSON), current state only.
 - **Sizes.** `size_builds` (one measurement of the unpacked linux-x86_64 distribution of a
   commit: source `ci` for the tarballs of julia-ci master builds, `manyjulias` for the
   imported history back to 2020, `pr` for open pull requests' latest julia-pr builds,
@@ -209,6 +216,15 @@ SELECT date(started_at) AS day, count(*) AS jobs,
   round(avg(compiler_s)) AS compiler_s, round(avg(sys_output_s)) AS sys_output_s
 FROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'
 GROUP BY day ORDER BY day
+```
+
+One runtime benchmark per master build over 30 days, with its instruction count:
+
+```sql
+SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.llvm, r.metric, r.value, r.value_max, r.instructions, r.min_ns
+FROM rtb_results r JOIN rtb_jobs j ON j.job_uuid = r.job_uuid
+WHERE r.name = 'simd/sum_f64_simd' AND j.kind = 'master' AND j.build_created_at >= date('now', '-30 days')
+ORDER BY j.build_created_at
 ```
 
 One package's downloads per day, user and CI:

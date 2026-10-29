@@ -16,7 +16,7 @@ fi
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
 
 # The fetchers of a whole ingest; `ingest` runs these unless given others
-ALL_FETCHERS=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_sysimage.jl fetch_agents.jl fetch_github.jl)
+ALL_FETCHERS=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_runtime.jl fetch_sizes.jl fetch_sysimage.jl fetch_agents.jl fetch_github.jl)
 
 fetch_all() {
   # One process runs the fetchers (db/ingest.jl), so they share its compiled
@@ -47,7 +47,7 @@ export_all() {
   # reads them from the API (api/notes/<name>), which always has the deployed
   # code's; these copies, from whatever image this run started on, are for
   # readers of /data/ and can lag a deploy by a run.
-  cp /app/data/ttfx_annotations.json /app/data/sysimage_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
+  cp /app/data/ttfx_annotations.json /app/data/sysimage_annotations.json /app/data/runtime_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
   return $rc
 }
 

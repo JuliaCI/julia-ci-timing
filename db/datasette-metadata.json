@@ -318,6 +318,59 @@
         },
         "sysimage_stdlibs": {
           "description": "Seconds each stdlib took to load into the system image in a sysimage_jobs row, from the per-module lines before the Sysimage built summary."
+        },
+        "rtb_jobs": {
+          "description": "One Runtime benchmarks job (JuliaCI/julia-ci-benchmarks, on the macOS aarch64 agent) of a julia-ci master or release branch build, from fetch_runtime.jl. Each benchmark runs in several blocks, each block its own process; the results are in rtb_results.",
+          "columns": {
+            "kind": "master, or release_branch for a release branch's own build",
+            "state": "the job's Buildkite state",
+            "commit_sha": "the measured julia's commit",
+            "version": "the measured julia's VERSION",
+            "llvm": "its LLVM version: a change here can move many benchmarks at once",
+            "machine": "the CPU, e.g. Apple M4 Pro",
+            "suite_commit": "the julia-ci-benchmarks commit",
+            "counters_backend": "what read the hardware counters: thread (cycles and instructions), kperf (also branch and cache misses), or none",
+            "blocks": "blocks the job ran",
+            "n_failed": "benchmarks with no block that ran",
+            "failures": "JSON: processes that failed, as results-meta.json lists them",
+            "has_results": "0 when the job uploaded no results.json"
+          }
+        },
+        "rtb_results": {
+          "description": "One benchmark of an rtb_jobs row, reduced over the job's blocks. Judge cycles benchmarks on value in cycles and time benchmarks on value in ns; compare instructions for whether the generated code changed.",
+          "columns": {
+            "name": "category/benchmark, e.g. simd/sum_f64_simd; stable across suite versions",
+            "metric": "cycles (of the calling thread) or time (wall time, for work that leaves that thread)",
+            "status": "ok when any block ran, else error or skipped",
+            "error": "the first error, also when other blocks ran",
+            "value": "the minimum over blocks of each block's minimum of the metric: cycles, or ns",
+            "value_max": "the largest of those block minima",
+            "instructions": "minimum retired instructions per call of the calling thread; exact from process to process for cycles benchmarks",
+            "min_ns": "minimum wall time per call, ns",
+            "median_ns": "the lowest block median wall time per call, ns",
+            "allocs": "minimum allocations per call",
+            "bytes": "minimum bytes allocated per call",
+            "ops": "work items per call; min_ns / ops is the time per item",
+            "tolerance": "the benchmark's own tolerance for a change, NULL for the default (3% cycles, 6% time)",
+            "block_values": "JSON: value per block",
+            "block_ns": "JSON: min_ns per block",
+            "block_instructions": "JSON: instructions per block"
+          }
+        },
+        "rtb_prs": {
+          "description": "The latest runtime benchmark comparison of every open julia pull request that has one: the head against the master build of the merge-base, interleaved in one julia-pr job. Current state only.",
+          "columns": {
+            "verdict": "regression when a benchmark or a category regressed robustly (every block beyond the tolerance), else improvement when a benchmark improved, else same",
+            "n_instr_changed": "benchmarks retiring a different number of instructions in every block",
+            "n_errors": "benchmarks that failed on either arm",
+            "geomean": "geometric mean of every benchmark's ratio, head/base; below 1 is faster",
+            "categories": "JSON: compare.json's per-category verdicts",
+            "benchmarks": "JSON: compare.json's per-benchmark comparison",
+            "errors": "JSON: compare.json's errors and failed processes"
+          }
+        },
+        "raw_rtb": {
+          "description": "The Runtime benchmarks job's results.json and results-meta.json as fetched, zstd-compressed."
         }
       },
       "queries": {
@@ -389,6 +442,11 @@
         "sysimage_stages_by_week": {
           "title": "Median sysimage stages per week on x86_64 Linux",
           "sql": "SELECT strftime('%Y-%W', started_at) AS week, count(*) AS jobs,\n  round(avg(compiler_s)) AS compiler_s, round(avg(base_s)) AS base_s, round(avg(sys_output_s)) AS sys_output_s,\n  round(avg(compiler_s + compiler_output_s + base_s + stdlibs_s + sysbase_output_s + precompile_s + sys_output_s)) AS total_s\nFROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'\nGROUP BY week ORDER BY week"
+        },
+        "runtime_benchmark_history": {
+          "title": "One runtime benchmark per master build over the last :days days",
+          "description": "name is category/benchmark as in rtb_results.name, e.g. simd/sum_f64_simd",
+          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, j.llvm, r.metric, r.value, r.value_max, r.instructions, r.min_ns, r.allocs\nFROM rtb_results r JOIN rtb_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.name = :name AND j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
         }
       }
     }
