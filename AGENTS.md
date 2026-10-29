@@ -247,7 +247,10 @@ change there means the code or the work changed, whether or not it costs time.
 `min_ns / ops` is the time per work item. On julia-pr the job compares the head with the
 master build of the merge-base and uploads `compare.json`; `rtb_prs` keeps the latest one
 of each open pull request (current state only, like `ttfx_prs`), and `api/runtime/prs`
-ranks them by the geometric mean of every benchmark's ratio. The open pull requests come
+ranks them by the geometric mean of every benchmark's ratio, with every benchmark's change
+under `changes`. The tab's table switches between the benchmarks and those pull requests;
+hovering one projects it onto the charts, and Show (`rp=<number>`) adds its change of every
+benchmark to the benchmarks table. The open pull requests come
 from the list `fetch_ttfx.jl` keeps in `meta`, so this fetcher spends no GitHub requests
 unless that list is older than six hours.
 

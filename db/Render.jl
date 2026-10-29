@@ -1759,6 +1759,14 @@ function runtime_pr_notable(benchmarks)
     return sort!(out; by=b -> -(b["ratio"] isa Number ? b["ratio"] : 1.0))
 end
 
+# Every benchmark's change in a comparison, for the tab's table and its charts
+r5(x) = x isa Number ? round(Float64(x); sigdigits=5) : nothing
+runtime_pr_changes(benchmarks) = OrderedDict(
+    String(b[:name]) => OrderedDict("ratio" => r5(get(b, :ratio, nothing)), "ratios" => [r5(x) for x in get(b, :ratios, [])],
+                                    "instr_ratio" => r5(get(b, :instr_ratio, nothing)), "instr_changed" => get(b, :instr_changed, false) === true,
+                                    "verdict" => String(get(b, :verdict, "same")))
+    for b in benchmarks if haskey(b, :name))
+
 function runtime_pr_entry(r)
     benchmarks = JSON3.read(String(r.benchmarks))
     ratio(b) = (x = get(b, :ratio, nothing); x isa Number ? Float64(x) : 1.0)
@@ -1777,7 +1785,8 @@ function runtime_pr_entry(r)
         "n_regressions" => Int(r.n_regressions), "n_improvements" => Int(r.n_improvements),
         "n_instr_changed" => Int(r.n_instr_changed), "n_errors" => Int(r.n_errors), "geomean" => js(r.geomean),
         "categories" => JSON3.read(String(r.categories)), "worst" => pick(worst), "best" => pick(best),
-        "notable" => runtime_pr_notable(benchmarks), "errors" => errors[:errors], "failures" => errors[:failures])
+        "notable" => runtime_pr_notable(benchmarks), "changes" => runtime_pr_changes(benchmarks),
+        "errors" => errors[:errors], "failures" => errors[:failures])
 end
 
 # Open pull requests by their latest runtime benchmark comparison, best first: by the

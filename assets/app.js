@@ -6807,6 +6807,7 @@ const DASHBOARD_PARAMS = new Set([
   "rr", // runtime reference build
   "rv", // runtime table view (benchmarks or open pull requests)
   "rq", // runtime benchmark filter
+  "rp", // runtime pull request shown in the benchmarks table
   "at", // activity time range
   "aw", // activity averaging window
   "pop", // the TTFX, Runtime, Sizes or Build stages tab's open details popup
@@ -7038,7 +7039,7 @@ const TAB_URL_KEYS = {
   "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tl", "tc", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   "ci-build-stages": ["it", "ip", "iw"],
-  "ci-runtime": ["rt", "rb", "rc", "rr", "rv", "rq"],
+  "ci-runtime": ["rt", "rb", "rc", "rr", "rv", "rq", "rp"],
   activity: ["at", "aw"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
   pkgeval: ["pt", "pp", "pkg", "pr", "pv", "pl", "pd", "pk", "pf"],
@@ -19306,6 +19307,7 @@ let runtimeSort = { col: "move", asc: false };
 let runtimePrsSort = { col: "rank", asc: true };
 let runtimePrs = null;
 let runtimePrsLoading = null;
+let runtimePr = null; // the pull request whose changes the Benchmarks table shows beside the builds'
 // Hand-written notes on julia-ci builds where the machine or the suite changed
 // (data/runtime_annotations.json): { build, kind, label, description, url,
 // categories, benchmarks }, the last three optional
@@ -19326,6 +19328,11 @@ const RUNTIME_INSTR_PCT = 0.5;
 const RUNTIME_MOVERS = 8;
 // The index chart's line over every benchmark
 const RUNTIME_ALL = "all";
+// The Open PRs table's column per category, abbreviated
+const RUNTIME_CATEGORY_ABBR = {
+  scalar: "scal", simd: "simd", array: "arr", collections: "coll", strings: "str", io: "io", dispatch: "disp",
+  types: "type", runtime: "rt", gc: "gc", compiler: "comp", apps: "apps", parallel: "par",
+};
 const RUNTIME_ALL_LABEL = "All benchmarks";
 // One hue per category in the suite's order, stepped for each theme
 const RUNTIME_COLORS = {
@@ -19436,12 +19443,13 @@ function applyRuntimeURLParams() {
   const rr = parseInt(params.get("rr"), 10);
   if (!isNaN(rr)) runtimeReference = rr;
   if (params.get("rv") === "prs") runtimeTableView = "prs";
+  const rp = parseInt(params.get("rp"), 10);
+  if (!isNaN(rp)) runtimePr = rp;
   const rq = params.get("rq");
   if (rq) {
     runtimeFilter = rq;
     document.getElementById("runtime-filter").value = rq;
   }
-  updateRuntimeViewButtons();
 }
 
 // The URL's `rc` names the shown categories; which those leave out is known
@@ -19468,6 +19476,7 @@ function updateRuntimeURL() {
   setOrDelete("rr", runtimeReference, runtimeReference == null);
   setOrDelete("rv", runtimeTableView, runtimeTableView === "benchmarks");
   setOrDelete("rq", runtimeFilter, !runtimeFilter);
+  setOrDelete("rp", runtimePr, runtimePr == null);
   history.replaceState(history.state, "", url);
 }
 
@@ -19488,6 +19497,7 @@ async function loadRuntimeData() {
     document.getElementById("runtime-chart-loading").style.display = "none";
     updateRuntimeURL();
     drawRuntime();
+    loadRuntimePrs().then(() => runtimeData && updateRuntimeTable());
     reopenDetailPopup("ci-runtime");
   } catch (err) {
     console.error("Failed to load runtime benchmark data:", err);
@@ -19600,16 +19610,37 @@ function updateRuntimeReferenceChip() {
 }
 
 function setRuntimeTableView(view) {
-  runtimeTableView = view;
+  runtimeTableView = view === "prs" ? "prs" : "benchmarks";
   updateRuntimeURL();
-  updateRuntimeViewButtons();
+  hideRuntimePrPoints();
   updateRuntimeTable();
 }
 
-function updateRuntimeViewButtons() {
-  document.getElementById("runtime-view-benchmarks").classList.toggle("btn-primary", runtimeTableView === "benchmarks");
-  document.getElementById("runtime-view-prs").classList.toggle("btn-primary", runtimeTableView === "prs");
+// The table's own switch between its views, at the head of its caption
+function runtimeTableSwitch() {
+  const n = runtimePrs && !runtimePrs.failed ? ` (${runtimePrs.prs.length})` : "";
+  const btn = (view, label, title) =>
+    `<button type="button" class="btn${runtimeTableView === view ? " btn-primary" : ""}" onclick="setRuntimeTableView('${view}')" title="${escapeHtml(title)}">${label}</button>`;
+  return (
+    '<span class="bench-table-view-toggle" role="group" aria-label="Table view">' +
+    btn("benchmarks", "Benchmarks", "Every benchmark in the newest build, against the reference build and the builds before it") +
+    btn("prs", `Open PRs${n}`, "Open pull requests by their latest runtime benchmark comparison against master, best first") +
+    "</span>"
+  );
 }
+
+// Shows a pull request's change of every benchmark in the Benchmarks table, or none
+function setRuntimePr(n) {
+  runtimePr = n;
+  runtimeTableView = "benchmarks";
+  if (n != null) runtimeSort = { col: "move", asc: false };
+  closeTtfxBuildPopup();
+  updateRuntimeURL();
+  hideRuntimePrPoints();
+  loadRuntimePrs().then(() => updateRuntimeTable());
+}
+
+const runtimeShownPr = () => (runtimePr == null ? null : runtimePrs?.prs?.find((p) => p.pr === runtimePr) || null);
 
 // --- the benchmark list ------------------------------------------------------------
 
@@ -20022,6 +20053,18 @@ function runtimeTableRows({ all = false } = {}) {
     });
 }
 
+// A pull request's change of one benchmark as table cells: the change, coloured
+// by its verdict, with the blocks in the title, and the instruction change
+function runtimePrChangeCells(c) {
+  if (!c) return '<td class="num runtime-pr-col">—</td><td class="num col-secondary">—</td>';
+  const title = `Blocks: ${(c.ratios || []).map(runtimeRatioPct).join(", ")}; ${c.verdict}`;
+  const instr = c.instr_ratio == null ? "—" : runtimeRatioPct(c.instr_ratio);
+  return (
+    `<td class="num runtime-pr-col ${runtimeVerdictClass(c.verdict)}" title="${escapeHtml(title)}">${c.verdict !== "same" ? "<b>" : ""}${runtimeRatioPct(c.ratio)}${c.verdict !== "same" ? "</b>" : ""}</td>` +
+    `<td class="num col-secondary${c.instr_changed ? " ttfx-up" : ""}" title="${c.instr_changed ? "The instruction count changed in every block" : "Instructions, head against base"}">${instr}</td>`
+  );
+}
+
 function runtimePctCell(pct, threshold, title = "", extra = "") {
   const cls = pct == null || Math.abs(pct) < threshold ? "" : pct > 0 ? " ttfx-up" : " ttfx-down";
   return `<td class="num${cls}${extra}"${title ? ` title="${escapeHtml(title)}"` : ""}>${pct == null ? "—" : formatSignedPct(pct)}</td>`;
@@ -20037,26 +20080,38 @@ function updateRuntimeTable() {
   const ref = runtimeRefIndex(idx);
   const caption = document.getElementById("runtime-stats-caption");
   if (latest == null) {
-    caption.innerHTML = "";
+    caption.innerHTML = `<div class="runtime-caption">${runtimeTableSwitch()}</div>`;
     thead.innerHTML = "";
     tbody.innerHTML = '<tr><td class="col-secondary">No build with results in the selected time range.</td></tr>';
     return;
   }
   const b = runtimeData.builds[latest];
   const refBuild = runtimeData.builds[ref];
+  const pr = runtimeShownPr();
+  const prChip = pr
+    ? `<span class="runtime-pr-chip" title="${escapeHtml(pr.title)}">With <b>#${pr.pr}</b>, head vs base: the robust changes first <button type="button" class="ttfx-pr-copy" onclick="setRuntimePr(null)" title="Take the pull request's columns out of the table">Clear</button></span>`
+    : runtimePr != null && runtimePrs
+      ? `<span class="runtime-pr-chip">#${runtimePr} has no comparison any more <button type="button" class="ttfx-pr-copy" onclick="setRuntimePr(null)" title="Take the pull request's columns out of the table">Clear</button></span>`
+      : "";
   caption.innerHTML =
-    `<b>Every benchmark in build #${b.build}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference build #${refBuild.build} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
-    `Coloured beyond the tolerance compare.jl judges by (cycles ${RUNTIME_TOLERANCE.cycles}%, time ${RUNTIME_TOLERANCE.time}%; instructions ${RUNTIME_INSTR_PCT}%); ▲▼ flags the ${RUNTIME_MOVERS} that moved most. Click a row to chart it.</span>`;
+    `<div class="runtime-caption">${runtimeTableSwitch()}${prChip}<span><b>Every benchmark in build #${b.build}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference build #${refBuild.build} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
+    `Coloured beyond the tolerance compare.jl judges by (cycles ${RUNTIME_TOLERANCE.cycles}%, time ${RUNTIME_TOLERANCE.time}%; instructions ${RUNTIME_INSTR_PCT}%); ▲▼ flags the ${RUNTIME_MOVERS} that moved most. Click a row to chart it${pr ? "" : "; Show in an open pull request's row adds its changes here"}.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
     [
       ["name", "Benchmark"],
       ["category", "Category", "col-secondary"],
       ["latest", "Latest", "num col-secondary", "The judged metric: the fastest block's cycles of the calling thread, or its wall time for the benchmarks whose work leaves that thread"],
       ["perop", "Per op", "num col-secondary", "Wall time per work item: the fastest call divided by the items it processes"],
-      ["ref", `vs #${refBuild.build}`, "num", "Change from the reference build: the first in the range, or the one picked in a build's details"],
+      ["ref", `vs #${refBuild.build}`, `num${pr ? " col-secondary" : ""}`, "Change from the reference build: the first in the range, or the one picked in a build's details"],
       ["median", `<span>vs <span class="col-secondary">median of </span><span class="col-phone">med. </span>${RUNTIME_BASELINE}</span>`, "num", `Change from the median of the ${RUNTIME_BASELINE} builds before, the steadier comparison`],
       ["instr", "Instructions", "num col-secondary", `Retired instructions against the median of the ${RUNTIME_BASELINE} builds before. Exact across processes, so any change means the generated code or the work changed`],
       ["allocs", "Allocs", "num col-secondary", "Allocations per call, with the change from the reference build"],
+      ...(pr
+        ? [
+            ["pr", `#${pr.pr}`, "num runtime-pr-col", `Pull request #${pr.pr}, head against the master build of its merge-base: the benchmark's change, bold and coloured when robust. Its blocks are in the cell's title`],
+            ["prinstr", `#${pr.pr} instr.`, "num col-secondary", "Its instruction change, red when the count changed in every block"],
+          ]
+        : []),
     ],
     runtimeSort,
   );
@@ -20065,6 +20120,16 @@ function updateRuntimeTable() {
     updateRuntimeTable();
   });
   const rows = runtimeTableRows();
+  if (pr) {
+    for (const r of rows) {
+      const c = pr.changes?.[r.name];
+      r.prChange = c || null;
+      r.pr = c?.ratio == null ? null : (c.ratio - 1) * 100;
+      r.prinstr = c?.instr_ratio == null ? null : (c.instr_ratio - 1) * 100;
+      // What the pull request changed robustly first, then the furthest from no change
+      r.prmove = !c || c.ratio == null ? -1 : (c.verdict !== "same" ? 1e3 : 0) + (c.instr_changed ? 1e2 : 0) + Math.abs(Math.log(c.ratio)) * 100;
+    }
+  }
   // The biggest movers beyond their tolerance, whatever the sort
   const movers = new Set(
     rows
@@ -20073,7 +20138,7 @@ function updateRuntimeTable() {
       .slice(0, RUNTIME_MOVERS)
       .map((r) => r.name),
   );
-  sortRows(rows, runtimeSort, "name");
+  sortRows(rows, pr && runtimeSort.col === "move" ? { col: "prmove", asc: false } : runtimeSort, "name");
   let html = "";
   for (const r of rows) {
     const tol = runtimeTolerance(r.metric);
@@ -20081,17 +20146,20 @@ function updateRuntimeTable() {
     html += `<tr tabindex="0" data-bench="${escapeHtml(r.name)}" class="${r.name === runtimeBench ? "highlight" : ""}${movers.has(r.name) ? " runtime-mover" : ""}">`;
     html += `<td>${flag}${escapeHtml(r.name)}</td><td class="col-secondary">${escapeHtml(r.category)}</td>`;
     if (r.failed) {
-      html += `<td class="ttfx-up runtime-failed" colspan="6" title="${escapeHtml(r.failed)}">failed: ${escapeHtml(r.failed.split("\n")[0].slice(0, 80))}</td></tr>`;
+      html += `<td class="ttfx-up runtime-failed" colspan="6" title="${escapeHtml(r.failed)}">failed: ${escapeHtml(r.failed.split("\n")[0].slice(0, 80))}</td>`;
+      html += (pr ? runtimePrChangeCells(r.prChange) : "") + "</tr>";
       continue;
     }
     html += `<td class="num col-secondary">${runtimeFormat(r.latest, r.metric)}</td><td class="num col-secondary">${runtimeNs(r.perop)}</td>`;
-    html += runtimePctCell(r.ref, tol);
+    // A phone keeps the median and the pull request's change
+    html += runtimePctCell(r.ref, tol, "", pr ? " col-secondary" : "");
     html += runtimePctCell(r.median, tol);
     html += runtimePctCell(r.instr, RUNTIME_INSTR_PCT, "", " col-secondary");
     const d = r.allocsDelta ? ` <span class="${r.allocsDelta > 0 ? "ttfx-up" : "ttfx-down"}">(${r.allocsDelta > 0 ? "+" : ""}${r.allocsDelta.toLocaleString("en-US")})</span>` : "";
-    html += `<td class="num col-secondary">${r.allocs == null ? "—" : r.allocs.toLocaleString("en-US")}${d}</td></tr>`;
+    html += `<td class="num col-secondary">${r.allocs == null ? "—" : r.allocs.toLocaleString("en-US")}${d}</td>`;
+    html += (pr ? runtimePrChangeCells(r.prChange) : "") + "</tr>";
   }
-  tbody.innerHTML = html || '<tr><td colspan="8" class="col-secondary">No benchmark of the shown categories matches.</td></tr>';
+  tbody.innerHTML = html || `<tr><td colspan="${pr ? 10 : 8}" class="col-secondary">No benchmark of the shown categories matches.</td></tr>`;
   tbody.querySelectorAll("tr[data-bench]").forEach((tr) => (tr.onclick = () => selectRuntimeBench(tr.dataset.bench)));
 }
 
@@ -20248,6 +20316,8 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
   html += extLink(githubPrURL(p.pr), `GitHub PR #${p.pr}`, 'class="btn"');
   if (p.web_url) html += extLink(p.web_url, "Buildkite job", 'class="btn"');
   if (p.base.commit && p.head.commit) html += extLink(githubCompareURL(p.base.commit, p.head.commit), "Base…head", 'class="btn" title="The commits the job compared"');
+  if (allStats) html += `<button type="button" class="btn" onclick="setRuntimePr(${p.pr})" title="Add this pull request's change of every benchmark to the Benchmarks table">Show in table</button>`;
+  html += `<button type="button" class="btn" data-copy-runtime-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
@@ -20298,24 +20368,92 @@ function showRuntimePrPopup(p) {
   openDetailPopup({ title: `Runtime benchmarks of pull request #${p.pr}`, html: runtimePrDetailsHtml(p), wide: true, key: `runtime-pr-${p.pr}` });
 }
 
+// A pull request's summary in markdown, to paste on GitHub
+function runtimePrMarkdown(p) {
+  const job = p.web_url ? `[job](${p.web_url})` : "job";
+  const llvm = (a) => (a.llvm ? `, LLVM ${a.llvm}` : "");
+  const lines = [
+    `**Runtime benchmarks** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}${llvm(p.head)}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}${llvm(p.base)}), ${p.blocks || "several"} blocks.`,
+    "",
+    `${p.n_regressions} regressions, ${p.n_improvements} improvements, ${p.n_instr_changed} benchmarks with a changed instruction count${p.n_errors ? `, ${p.n_errors} failed` : ""}; geomean over ${p.n_benchmarks} benchmarks ${runtimeRatioPct(p.geomean)}.`,
+  ];
+  if (p.outdated) lines.push("", "Measured on an older commit; the pull request has newer commits.");
+  lines.push("", "| category | geomean | per block | verdict |", "|---|---|---|---|");
+  for (const c of p.categories || []) {
+    const g = runtimeRatioPct(c.geomean);
+    lines.push(`| ${c.category} (${c.n}) | ${c.verdict !== "same" ? `**${g}**` : g} | ${(c.per_block || []).map(runtimeRatioPct).join(", ")} | ${c.verdict} |`);
+  }
+  const changes = Object.entries(p.changes || {});
+  for (const [verdict, label] of [["regression", "Robust regressions"], ["improvement", "Robust improvements"]]) {
+    const bs = changes.filter(([, c]) => c.verdict === verdict).sort((a, b) => Math.abs(Math.log(b[1].ratio)) - Math.abs(Math.log(a[1].ratio)));
+    if (!bs.length) {
+      lines.push("", `${label}: none.`);
+      continue;
+    }
+    lines.push("", `<details><summary>${label} (${bs.length})</summary>`, "");
+    for (const [name, c] of bs) lines.push(`- \`${name}\`: ${runtimeRatioPct(c.ratio)} (blocks ${(c.ratios || []).map(runtimeRatioPct).join(", ")})${c.instr_ratio != null ? `, instructions ${runtimeRatioPct(c.instr_ratio)}` : ""}`);
+    lines.push("", "</details>");
+  }
+  const instr = changes.filter(([, c]) => c.instr_changed && c.verdict === "same");
+  if (instr.length) {
+    lines.push("", `<details><summary>Instruction count changed without a robust time change (${instr.length})</summary>`, "");
+    for (const [name, c] of instr) lines.push(`- \`${name}\`: instructions ${runtimeRatioPct(c.instr_ratio)}, time ${runtimeRatioPct(c.ratio)}`);
+    lines.push("", "</details>");
+  }
+  const errors = Object.entries(p.errors || {});
+  if (errors.length) {
+    lines.push("", "Failed:");
+    for (const [name, arms] of errors) for (const [arm, err] of Object.entries(arms)) lines.push(`- \`${name}\` on ${arm}: ${String(err).split("\n")[0]}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+// Captured, so the click does not also reach the row, which opens the popup
+document.addEventListener(
+  "click",
+  (e) => {
+    const copy = e.target.closest?.("[data-copy-runtime-pr]");
+    const show = e.target.closest?.("[data-show-runtime-pr]");
+    if (!copy && !show) return;
+    e.stopPropagation();
+    if (show) return setRuntimePr(Number(show.dataset.showRuntimePr));
+    const n = Number(copy.dataset.copyRuntimePr);
+    const p = runtimePrs?.prs?.find((x) => x.pr === n) || (commitResult?.data?.pr?.runtime?.pr === n ? commitResult.data.pr.runtime : null);
+    if (p) copyToClipboard(copy, runtimePrMarkdown(p));
+  },
+  true,
+);
+
+// A category's geomean in a pull request's row, coloured by its verdict
+function runtimePrCategoryCell(c, first) {
+  const cls = `num runtime-cat-col${first ? " ttfx-prs-group-start" : ""} col-secondary`;
+  if (!c) return `<td class="${cls}">–</td>`;
+  const title = `${c.category}, ${c.n} benchmarks: ${runtimeRatioPct(c.geomean)}; blocks ${(c.per_block || []).map(runtimeRatioPct).join(", ")}; ${c.verdict}`;
+  const pct = (c.geomean - 1) * 100;
+  const text = Math.abs(pct) < 0.05 ? "0.0" : `${pct > 0 ? "+" : ""}${pct.toFixed(1)}`;
+  return `<td class="${cls} ${runtimeVerdictClass(c.verdict)}" title="${escapeHtml(title)}">${c.verdict !== "same" ? `<b>${text}</b>` : text}</td>`;
+}
+
 function renderRuntimePrsTable() {
   const thead = document.getElementById("runtime-stats-thead");
   const tbody = document.getElementById("runtime-stats-tbody");
+  const cats = runtimeData?.categories || Object.keys(RUNTIME_CATEGORY_ABBR);
   document.getElementById("runtime-stats-caption").innerHTML =
-    `<b>Open pull requests by their runtime benchmarks, best first</b> <span class="col-secondary">Each one's latest julia-pr job, head against the master build of its merge-base. ` +
-    "Geomean is over every benchmark; negative is faster. A regression or improvement is robust: every block agrees beyond the benchmark's tolerance.</span>";
+    `<div class="runtime-caption">${runtimeTableSwitch()}<span><b>Open pull requests by their runtime benchmarks, best first</b> <span class="col-secondary">Each one's latest julia-pr job, head against the master build of its merge-base. ` +
+    "Geomean is over every benchmark, then per category (%); negative is faster, colour and bold a robust change. Hover a row to project it onto the charts.</span></span></div>";
   thead.innerHTML = sortableHeaderRow(
     [
       ["rank", "#", "num"],
       ["pr", "Pull request"],
-      ["author", "Author", "col-secondary"],
+      ["author", "Author", "col-secondary runtime-wide"],
       ["geomean", "Geomean", "num", "The geometric mean of every benchmark's ratio, head against base; rows are ranked by it"],
-      ["regressions", '<span class="col-secondary">Regressions</span><span class="col-phone">Reg.</span>', "num", "Benchmarks with a robust regression"],
-      ["improvements", '<span class="col-secondary">Improvements</span><span class="col-phone">Imp.</span>', "num", "Benchmarks with a robust improvement"],
-      ["instr", "Instr. changed", "num col-secondary", "Benchmarks retiring a different number of instructions in every block: the code or the work changed"],
+      ...cats.map((c, i) => [`cat:${c}`, escapeHtml(RUNTIME_CATEGORY_ABBR[c] || c.slice(0, 4)), `num runtime-cat-col${i === 0 ? " ttfx-prs-group-start" : ""} col-secondary`, `${c}: the geometric mean of its benchmarks' ratios, coloured when every block agrees beyond 1.5%`]),
+      ["changed", "Reg. / Imp.", "num ttfx-prs-group-start", "Benchmarks with a robust regression / improvement. Sorts on regressions less improvements."],
+      ["instr", "Instr.", "num col-secondary", "Benchmarks retiring a different number of instructions in every block: the code or the work changed"],
       ["errors", "Failed", "num col-secondary", "Benchmarks that failed on either arm"],
       ["worst", "Worst", "col-secondary", "The benchmark with the largest ratio"],
-      ["date", "Measured", "col-secondary"],
+      ["date", "Measured", "col-secondary runtime-wide"],
+      [null, ""],
     ],
     runtimePrsSort,
   );
@@ -20323,7 +20461,7 @@ function renderRuntimePrsTable() {
     runtimePrsSort = nextSort(runtimePrsSort, col, (c) => c === "rank" || c === "author" || c === "pr");
     renderRuntimePrsTable();
   });
-  const cols = 10;
+  const cols = 10 + cats.length;
   if (!runtimePrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadRuntimePrs().then(() => runtimeTableView === "prs" && renderRuntimePrsTable());
@@ -20337,46 +20475,134 @@ function renderRuntimePrsTable() {
     tbody.innerHTML = `<tr><td colspan="${cols}">No open pull request has a runtime benchmark comparison</td></tr>`;
     return;
   }
-  const rows = runtimePrs.prs.map((p, i) => ({
-    p,
-    rank: i + 1,
-    pr: p.pr,
-    author: p.author,
-    geomean: p.geomean,
-    regressions: p.n_regressions,
-    improvements: p.n_improvements,
-    instr: p.n_instr_changed,
-    errors: p.n_errors,
-    worst: p.worst?.ratio ?? null,
-    date: p.date,
-  }));
+  const rows = runtimePrs.prs.map((p, i) => {
+    const r = {
+      p,
+      rank: i + 1,
+      pr: p.pr,
+      author: p.author,
+      geomean: p.geomean,
+      changed: p.n_regressions - p.n_improvements,
+      instr: p.n_instr_changed,
+      errors: p.n_errors,
+      worst: p.worst?.ratio ?? null,
+      date: p.date,
+    };
+    for (const c of p.categories || []) r[`cat:${c.category}`] = c.geomean;
+    return r;
+  });
   sortRows(rows, runtimePrsSort, "rank");
   let html = "";
   for (const { p, rank } of rows) {
-    html += `<tr tabindex="0" data-pr="${p.pr}"${p.outdated ? ' class="ttfx-pr-outdated"' : ""}>`;
+    html += `<tr tabindex="0" data-pr="${p.pr}" class="${p.outdated ? "ttfx-pr-outdated" : ""}${p.pr === runtimePr ? " highlight" : ""}">`;
     html += `<td class="num">${rank}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
       (p.outdated ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(runtimePrOutdatedText(p))}">older commit</span> ` : "");
-    html += `<td class="msg"><a href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span></td>`;
-    html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
-    html += `<td class="num ${runtimeVerdictClass(p.verdict)}"><b>${runtimeRatioPct(p.geomean)}</b></td>`;
-    html += `<td class="num${p.n_regressions ? " ttfx-up" : ""}">${p.n_regressions}</td>`;
-    html += `<td class="num${p.n_improvements ? " ttfx-down" : ""}">${p.n_improvements}</td>`;
+    html += `<td class="msg"><a href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(`${p.title}\nby ${p.author}, measured ${timeAgo(p.date)}`)}">${escapeHtml(p.title)}</span></td>`;
+    html += `<td class="col-secondary runtime-wide">${escapeHtml(p.author)}</td>`;
+    html += `<td class="num ${runtimeVerdictClass(p.verdict)}" title="${escapeHtml(`Verdict: ${p.verdict}, over ${p.n_benchmarks} benchmarks`)}"><b>${runtimeRatioPct(p.geomean)}</b></td>`;
+    const byCat = Object.fromEntries((p.categories || []).map((c) => [c.category, c]));
+    cats.forEach((c, i) => (html += runtimePrCategoryCell(byCat[c], i === 0)));
+    html += `<td class="num ttfx-prs-group-start"><span class="${p.n_regressions ? "ttfx-up" : ""}">${p.n_regressions}</span> / <span class="${p.n_improvements ? "ttfx-down" : ""}">${p.n_improvements}</span></td>`;
     html += `<td class="num col-secondary">${p.n_instr_changed}</td>`;
     html += `<td class="num col-secondary${p.n_errors ? " ttfx-up" : ""}">${p.n_errors}</td>`;
     const w = p.worst;
     html += w
-      ? `<td class="col-secondary" title="${escapeHtml(`Blocks: ${(w.ratios || []).map(runtimeRatioPct).join(", ")}; ${w.verdict}`)}"><span class="${runtimeVerdictClass(w.verdict)}">${runtimeRatioPct(w.ratio)}</span> ${escapeHtml(w.name)}</td>`
+      ? `<td class="col-secondary runtime-worst" title="${escapeHtml(`${w.name}: blocks ${(w.ratios || []).map(runtimeRatioPct).join(", ")}; ${w.verdict}`)}"><span class="${runtimeVerdictClass(w.verdict)}">${runtimeRatioPct(w.ratio)}</span> ${escapeHtml(w.name)}</td>`
       : '<td class="col-secondary">—</td>';
-    html += `<td class="col-secondary" title="${escapeHtml(`${formatUtc(p.date)}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
+    html += `<td class="col-secondary runtime-wide" title="${escapeHtml(`${formatUtc(p.date)}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
+    html +=
+      `<td class="runtime-pr-actions"><button type="button" class="ttfx-pr-copy" data-show-runtime-pr="${p.pr}" title="Add this pull request's change of every benchmark to the Benchmarks table">Show</button> ` +
+      `<button type="button" class="ttfx-pr-copy col-secondary" data-copy-runtime-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy</button></td>`;
     html += "</tr>";
   }
   tbody.innerHTML = html;
   tbody.querySelectorAll("tr[data-pr]").forEach((tr) => {
     const p = runtimePrs.prs.find((x) => x.pr === Number(tr.dataset.pr));
-    if (p) tr.onclick = () => showRuntimePrPopup(p);
+    if (!p) return;
+    tr.onclick = () => showRuntimePrPopup(p);
+    tr.addEventListener("mouseenter", () => showRuntimePrPoints(p));
+    tr.addEventListener("mouseleave", hideRuntimePrPoints);
   });
+}
+
+// Where a pull request's result would sit on the charts, while its row is
+// hovered, as the TTFX tab draws one: past the newest build, its value scaled
+// by the pull request's ratio. On the index chart a point per shown category
+// (and the line over all benchmarks), on the benchmark's charts its own ratio.
+// rtb_prs has no branches, so a pull request stacked on another one is drawn
+// against its own base only.
+const RUNTIME_PR_POINT_PREFIX = "rpr-";
+const RUNTIME_PR_POINT_STEP = 70; // px past the newest build
+
+function showRuntimePrPoints(p) {
+  hideRuntimePrPoints();
+  const isDark = isDarkMode();
+  const accent = isDark ? "#58a6ff" : "#0969da";
+  const edge = isDark ? "#f0f6fc" : "#1f2328";
+  const byCat = Object.fromEntries((p.categories || []).map((c) => [c.category, c]));
+  // One point per series, linked to its newest point; `label` only where given
+  const project = (chart, series) => {
+    const xs = chart.scales.x;
+    const lasts = series.map((s) => s.last).filter(Boolean);
+    if (!lasts.length) return;
+    const lastX = Math.max(...lasts.map((l) => l.x));
+    // Room for the step and the widest label right of the point
+    const labelPx = Math.max(0, ...series.map((x) => (x.label ? x.label.length * 7 + 16 : 0)));
+    const span = widenForProjection(chart, lastX, Math.min(0.6, (RUNTIME_PR_POINT_STEP + labelPx) / xs.width));
+    const x = lastX + (RUNTIME_PR_POINT_STEP / xs.width) * span;
+    const notes = chart.options.plugins.annotation.annotations;
+    series.forEach((s, i) => {
+      if (!s.last || s.y == null) return;
+      const color = s.color || accent;
+      notes[`${RUNTIME_PR_POINT_PREFIX}link-${i}`] = { type: "line", xMin: s.last.x, xMax: x, yMin: s.last.y, yMax: s.y, borderColor: colorToRgba(color, 0.8), borderWidth: 1.5, borderDash: [4, 3] };
+      notes[`${RUNTIME_PR_POINT_PREFIX}point-${i}`] = { type: "point", xValue: x, yValue: s.y, radius: s.label ? 5 : 3.5, backgroundColor: color, borderColor: edge, borderWidth: s.label ? 1.5 : 0.75 };
+      if (s.label)
+        notes[`${RUNTIME_PR_POINT_PREFIX}label-${i}`] = {
+          type: "label", xValue: x, yValue: s.y, position: { x: "start", y: "center" }, xAdjust: 9, content: s.label,
+          color, font: { size: 11, weight: "bold" },
+        };
+    });
+    chart.update("none");
+  };
+  const lastOf = (ds) => (ds && ds.data.length ? ds.data[ds.data.length - 1] : null);
+  const pct = (r) => formatSignedPct((r - 1) * 100);
+  for (const chart of runtimeCharts) {
+    if (chart.$runtime === "index") {
+      // The index is a change in %, so a ratio r moves a level y to (1 + y) * r - 1
+      const series = chart.data.datasets
+        .map((ds, i) => ({ ds, i }))
+        .filter(({ ds, i }) => chart.isDatasetVisible(i) && (ds._cat === RUNTIME_ALL ? p.geomean != null : byCat[ds._cat]))
+        .map(({ ds }) => {
+          const r = ds._cat === RUNTIME_ALL ? p.geomean : byCat[ds._cat].geomean;
+          const last = lastOf(ds);
+          const robust = ds._cat !== RUNTIME_ALL && byCat[ds._cat].verdict !== "same";
+          return {
+            last,
+            y: last ? ((1 + last.y / 100) * r - 1) * 100 : null,
+            color: ds.borderColor,
+            // The line over every benchmark, and the categories that changed robustly, are labelled
+            label: ds._cat === RUNTIME_ALL ? `#${p.pr} ${pct(r)}` : robust ? `${ds._cat} ${pct(r)}` : null,
+          };
+        });
+      project(chart, series);
+    } else {
+      const c = runtimeBench && p.changes?.[runtimeBench];
+      if (!c) continue;
+      const instr = chart.canvas.id === "runtime-chart-instr";
+      const r = instr ? c.instr_ratio : c.ratio;
+      if (r == null) continue;
+      const ds = chart.data.datasets.find((d) => !d._band);
+      const last = lastOf(ds);
+      if (!last) continue;
+      project(chart, [{ last, y: last.y * r, color: accent, label: `#${p.pr} ${pct(r)}` }]);
+    }
+  }
+}
+
+function hideRuntimePrPoints() {
+  for (const chart of runtimeCharts) clearProjectedPoints(chart, RUNTIME_PR_POINT_PREFIX);
 }
 
 // --- the Overview and the Commit page -----------------------------------------------------
