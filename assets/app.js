@@ -17121,7 +17121,7 @@ function overviewPackagesCard(src) {
     // Share deltas in percentage points need a few days of last week's data
     const shareDelta = (now, then) =>
       lastWeek.days >= 3 && then != null
-        ? overviewDelta({ value: 100 * (now - then), unit: "pp", upIsGood: null, digits: 1, detail: `Share of downloads in the ${weekDetail}${lastWeek.days < 7 ? ` (${lastWeek.days} of those 7 days reported)` : ""}` })
+        ? overviewDelta({ value: 100 * (now - then), unit: "pp", upIsGood: null, digits: 1, detail: `Share of package server requests in the ${weekDetail}${lastWeek.days < 7 ? ` (${lastWeek.days} of those 7 days reported)` : ""}` })
         : null;
     const kindValues = (minor) => kindShares.map((k) => (k.total ? k.shares.get(minor) || 0 : null));
     const segments = top.map(([minor, share], i) => ({
@@ -17142,7 +17142,7 @@ function overviewPackagesCard(src) {
     });
     const movers = segments.filter((seg) => seg.delta).sort((a, b) => Math.abs(b.delta.value) - Math.abs(a.delta.value));
     if (movers.length && Math.abs(movers[0].delta.value) >= 0.05) {
-      biggestShift = `${escapeHtml(movers[0].label)} ${escapeHtml(movers[0].delta.text)} of downloads, this week vs last`;
+      biggestShift = `${escapeHtml(movers[0].label)} ${escapeHtml(movers[0].delta.text)} of requests, this week vs last`;
     }
   }
   const sparkFrom = overviewDateAdd(maxDate, 1 - OVERVIEW_SPARK_DAYS);
@@ -17155,7 +17155,7 @@ function overviewPackagesCard(src) {
     title: "Package downloads",
     status,
     description:
-      "Package installs served by pkg.julialang.org, by client type and Julia version.",
+      "Package installs served by pkg.julialang.org, by client type. The Julia version shares are of all package server requests (packages, artifacts and registries), as the logs are not split by both.",
     headline: compactNumber(week.all),
     headlineLabel: `package-server downloads in the 7 days to ${escapeHtml(maxDate)}`,
     delta,
