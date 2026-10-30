@@ -76,7 +76,7 @@ case "${1:-ingest}" in
       # Every page directory, so a new tab needs no change here
       for index in /app/*/index.html; do cp -r "$(dirname "$index")" "$stage/"; done
       commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"
-      sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" "$stage/index.html"
+      sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" "$stage/index.html" "$stage/runtime-run/index.html"
       # A top-level page the image no longer ships goes too
       for f in /site/*.html; do
         if [ -e "$f" ] && [ ! -e "$stage/${f##*/}" ]; then mv "$f" "$old/"; fi

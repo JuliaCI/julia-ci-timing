@@ -11,6 +11,12 @@ if [ ! -s "$db" ]; then
   exit 1
 fi
 docker rm -f "ci-timing-api-$port" >/dev/null 2>&1 || true
+# The run page (/api/runtime/run/...) reads Runtime benchmarks jobs from Buildkite with
+# the ingest's token; as there, it never lands on disk and is passed by name
+BUILDKITE_API_TOKEN="$(aws ssm get-parameter --region "$AWS_REGION" --name "$CI_TIMING_TOKEN_PARAMETER" --with-decryption \
+  --query Parameter.Value --output text 2>/dev/null || true)"
+[ "$BUILDKITE_API_TOKEN" = "unset" ] && BUILDKITE_API_TOKEN=""
+export BUILDKITE_API_TOKEN
 # As for Datasette, the data directory is mounted writable so a reader can
 # create the WAL's -shm file; the server opens the database query-only.
 # Not --read-only: Julia writes usage logs and compile caches under its
@@ -23,5 +29,6 @@ exec docker run --name "ci-timing-api-$port" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   --env CI_TIMING_DB="/data/${CI_TIMING_DB_FILENAME}" \
+  --env BUILDKITE_API_TOKEN \
   --mount type=bind,src="${CI_TIMING_DATA_DIR}",dst=/data \
   "$CI_TIMING_IMAGE_REF" api --port "$port"

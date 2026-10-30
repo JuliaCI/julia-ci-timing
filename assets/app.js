@@ -19424,6 +19424,10 @@ function runtimeJobURL(b) {
   return b.url || `${buildkiteBuildUrl({ pipeline: "julia-ci", build: b.build })}#${b.job_id}`;
 }
 
+// The run page (runtime-run/): one job's every benchmark, samples and verdicts
+const runtimeRunURL = (pipeline, build, job) =>
+  `runtime-run?${new URLSearchParams({ pipeline, build: String(build), job })}`;
+
 // --- loading and the URL ---------------------------------------------------------
 
 function applyRuntimeURLParams() {
@@ -20189,6 +20193,7 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
 
   let html = '<div class="ttfx-popup-actions">';
   html += allStatsButton(b.commit);
+  html += `<a class="btn" href="${runtimeRunURL("julia-ci", b.build, b.job_id)}" title="Every benchmark of this job: its samples, instruction counts and allocations">Run page</a>`;
   html += extLink(runtimeJobURL(b), "Buildkite job", 'class="btn"');
   if (pr) html += extLink(githubPrURL(pr), `GitHub PR #${pr}`, 'class="btn"');
   html += extLink(githubCommitURL(b.commit), "GitHub commit", 'class="btn"');
@@ -20314,6 +20319,7 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
   let html = '<div class="ttfx-popup-actions">';
   if (allStats) html += allStatsButton(p.pr, { pr: true });
   html += extLink(githubPrURL(p.pr), `GitHub PR #${p.pr}`, 'class="btn"');
+  html += `<a class="btn" href="${runtimeRunURL("julia-pr", p.build, p.job_id)}" title="The comparison in full: every benchmark's change, its samples, instructions against cycles">Run page</a>`;
   if (p.web_url) html += extLink(p.web_url, "Buildkite job", 'class="btn"');
   if (p.base.commit && p.head.commit) html += extLink(githubCompareURL(p.base.commit, p.head.commit), "Base…head", 'class="btn" title="The commits the job compared"');
   if (allStats) html += `<button type="button" class="btn" onclick="setRuntimePr(${p.pr})" title="Add this pull request's change of every benchmark to the Benchmarks table">Show in table</button>`;

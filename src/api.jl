@@ -63,6 +63,8 @@ function parse_args(args)
             opts["data"] = abspath(args[i+1]); i += 2
         elseif a == "--notes"
             opts["notes"] = abspath(args[i+1]); i += 2
+        elseif a == "--runtime-runs"
+            opts["runtime-runs"] = abspath(args[i+1]); i += 2
         else
             error("unknown argument $a")
         end
@@ -322,6 +324,11 @@ const ROUTES = [
     Route("runtime/job/<job_id>", [],
           "Everything one runtime benchmark job (the job_id of a runtime/summary build) recorded: the build, julia version and LLVM, machine, settings and failed processes, the previous master job with results on another commit (previous), and per benchmark its status and first error, value and value_max over blocks, instructions, min_ns, median_ns, allocs, bytes, ops, the benchmark's own tolerance and per_block, each block's value, min_ns and instructions.",
           (db, a, _) -> Render.runtime_job(db, a[1])),
+    Route("runtime/run/<pipeline>/<build>/<job_id>",
+          ["bench" => "a benchmark (category/name): its samples instead of the summary",
+           "run" => "with bench: main (the comparison, default) or confirm (the confirmation run with the control arm)"],
+          "One Runtime benchmarks job of julia-pr, julia-ci or julia-buildkite-ci, read from its Buildkite artifacts when first asked for (the run page, /runtime-run?pipeline=...&build=...&job=..., draws it). The job and its build (job_url, state, message, commit, branch, pr), and per run (main, and confirm when the job measured flagged regressions again against a control build): the arms (name, commit, julia version, LLVM, date), machine, settings, suite commit, failures and incomplete benchmarks, compared (false for a build measured alone), categories (compare.json's per-category geomean, per-block geomeans and verdict, vetoed when the control build dropped it) and benchmarks: name, category, metric, ops, its own tolerance, compare (verdict, ratio, per-block ratios, instruction ratio, vetoed, the ratios against the control) and per arm one entry per block (value: the 5th percentile of the samples, as compare.jl judges; q: minimum, quartiles and maximum; instructions, wall times, allocations, bytes and mean GC time per call). With bench, that benchmark's samples per arm and block (values in the judged metric, instructions). 409 while the job runs, 429 when too many uncached jobs were asked for lately.",
+          (_, _, _) -> nothing),
     Route("sysimage/summary", [SINCE],
           "How long the build job of every julia-ci master build spent making the system image, stage by stage, in seconds, from the job logs. stages lists the stages in build order: compiler (compiling the compiler, Base_compiler.jl), compiler_output (emitting basecompiler: from the end of that to its link, from the log's line timestamps), base and stdlibs (loading Base and the sysimage's stdlibs, sysimg.jl), sysbase_output (emitting sysbase, timed like compiler_output), precompile (running the precompile statements, generate_precompile.jl), sys_output (emitting sys), then stdlib_pkgimages, the stdlib pkgimages precompiled after the image (stdlib_pkgimages_count of them: about 110 before build 1002, both bounds-checking configurations, and 55 since). platforms has per build triplet the jobs that started in the window in time order (job UUID, build, commit, start, agent), one array per stage aligned with them, the precompile statements run, and stdlibs, the seconds of each stdlib loaded into the image (null where the log does not have them). subjects has the subject of each commit. Linux jobs share their machine with other jobs, so the times are noisy.",
           (db, _, p) -> Render.sysimage(db; since=instant(p, "since"))),
@@ -609,10 +616,37 @@ function note_response(req::HTTP.Request, name)
     return HTTP.Response(200, headers, body)
 end
 
+# A finished job's artifacts never change: the job identifies the body, and the build
+# id covers a change to its shape
+function runtime_run_response(req::HTTP.Request, args, params)
+    bench = get(params, "bench", "")
+    run = get(params, "run", "main")
+    err(status, msg; extra...) = HTTP.Response(status, ["Content-Type" => "application/json; charset=utf-8", "Cache-Control" => "no-store"],
+                                               JSON3.write(Dict("error" => msg, extra...)))
+    body = try
+        offload(() -> isempty(bench) ? RuntimeRun.summary(args...) : RuntimeRun.samples(args..., run, bench))
+    catch e
+        e isa RuntimeRun.BadInput && return err(400, e.msg)
+        e isa RuntimeRun.NotFound && return err(404, e.msg)
+        e isa RuntimeRun.NotFinished && return err(409, "the job has not finished"; state=e.state)
+        e isa RuntimeRun.Busy && return err(429, "too many jobs fetched lately; try again in a few minutes")
+        e isa RuntimeRun.Unavailable && return err(503, "this server has no Buildkite token to read jobs with")
+        rethrow()
+    end
+    tag = "W/\"rtb-$(args[3])-$(BUILD_ID[])\""
+    headers = ["Content-Type" => "application/json; charset=utf-8", "ETag" => tag,
+               "Cache-Control" => "public, max-age=86400", "Vary" => "Accept-Encoding"]
+    HTTP.header(req, "If-None-Match", "") == tag && return HTTP.Response(304, headers)
+    accepts_gzip(req) && return HTTP.Response(200, push!(headers, "Content-Encoding" => "gzip"), body)
+    return HTTP.Response(200, headers, transcode(GzipDecompressor, body))
+end
+
 function api(s::Server, req::HTTP.Request)
     key, segments, params = split_target(req.target)
     # Read from the code, not the database, and never cached
     length(segments) == 2 && segments[1] == "notes" && return note_response(req, segments[2])
+    # Read from Buildkite, not the database, and cached apart from the routes
+    length(segments) == 5 && segments[1:2] == ["runtime", "run"] && return runtime_run_response(req, segments[3:5], params)
     # A deploy and the proxy's health checks ask; answered before anything
     # touches the database or the cache
     if segments == ["ready"]
@@ -669,7 +703,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "runtime", "sizes", "build-stages", "downloads", "pkgeval", "activity"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "runtime", "runtime-run", "sizes", "build-stages", "downloads", "pkgeval", "activity"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
@@ -797,6 +831,7 @@ end
 function main(args)
     opts = parse_args(args)
     NOTES_DIR[] = get(opts, "notes", nothing)
+    RuntimeRun.LOCAL_DIR[] = get(opts, "runtime-runs", nothing)
     pool = Channel{SQLite.DB}(POOL_SIZE)
     foreach(_ -> put!(pool, open_readonly(opts["db"])), 1:POOL_SIZE)
     seqdb = Channel{SQLite.DB}(1)

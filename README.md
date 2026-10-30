@@ -46,6 +46,9 @@ container image (`Dockerfile`):
     and instructions of about 110 benchmarks of codegen, the runtime, the GC and the
     compiler) from the `Runtime benchmarks` job on every `julia-ci` master build, and the
     latest comparison of each open pull request from its `julia-pr` job
+    (the run page, `/runtime-run?pipeline=...&build=...&job=...`, which the job links at its
+    end, reads any one job's artifacts from Buildkite when first opened instead:
+    `src/runtime_run.jl`, through the API, which needs the token for that)
   - `fetch_sizes.jl`: the size of the binary distribution (`tools/measure_sizes.jl`)
     of every `julia-ci` master build, from the tarball in the nightlies bucket, and of
     the latest `julia-pr` build of every open pull request, from its build job's
