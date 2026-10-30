@@ -94,8 +94,10 @@ only the files that changed. `AGENTS.md` describes their shapes.
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
   current state only.
 - **Runtime benchmarks.** `rtb_jobs` (one julia-ci master build's `Runtime benchmarks` job:
-  julia version and commit, LLVM, machine, suite commit, blocks) and `rtb_results` (job and
-  benchmark: `value`, the minimum over blocks of the judged metric, cycles or ns per
+  julia version and commit, LLVM, machine, suite commit, blocks; `pipeline` `manyjulias` for
+  the backfill of earlier master commits from manyjulias builds on another machine, never
+  comparable with `julia-ci`'s) and `rtb_results` (job and
+  benchmark: `value`, the minimum over blocks of the judged metric, cycles, instructions or ns per
   `metric`; `value_max`; `instructions`, exact across processes; `min_ns`, `allocs`,
   `bytes`, `ops`; `status` and `error`; the per-block values as JSON). `rtb_prs` holds the
   latest comparison of each open pull request (verdict, counts, geomean, and

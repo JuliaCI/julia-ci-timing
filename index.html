@@ -1411,6 +1411,14 @@
       <div class="ttfx-toolbar">
         <select
           class="time-select"
+          id="runtime-source"
+          onchange="setRuntimeSource(this.value)"
+          aria-label="Series"
+          title="CI's master builds, or the backfill of earlier master commits measured on another machine"
+          hidden
+        ></select>
+        <select
+          class="time-select"
           id="runtime-time-range"
           onchange="setRuntimeTimeRange(this.value)"
           aria-label="Time range"
@@ -1448,6 +1456,7 @@
           >Method</a
         >
       </div>
+      <p class="runtime-source-note" id="runtime-source-note" hidden></p>
       <div class="ttfx-content">
         <div class="ttfx-sidebar" id="runtime-bench-list">
           <div class="group-header" id="runtime-bench-header">Benchmarks</div>

@@ -566,10 +566,13 @@ CREATE TABLE IF NOT EXISTS sysimage_stdlibs (
 -- benchmark is judged on `metric`: the cycles of the calling thread, or wall
 -- time for work that leaves it. Instruction counts are exact from process to
 -- process, so a change in them means the generated code or the work changed.
+-- Rows of pipeline 'manyjulias' are master commits measured before CI ran the
+-- job, from manyjulias builds on another machine; never compare them with the
+-- julia-ci rows.
 
 CREATE TABLE IF NOT EXISTS rtb_jobs (
     job_uuid         TEXT PRIMARY KEY,
-    pipeline         TEXT NOT NULL DEFAULT 'julia-ci',
+    pipeline         TEXT NOT NULL DEFAULT 'julia-ci', -- or 'manyjulias': the backfill of master commits (db/import_runtime.jl), on another machine
     build            INTEGER NOT NULL,
     kind             TEXT NOT NULL DEFAULT 'master', -- 'master', 'release_branch' for a release branch's own build, or 'release', 'lts', 'branch_nightly' for the weekly runs of a published julia
     state            TEXT NOT NULL,                  -- the job's Buildkite state
@@ -605,11 +608,11 @@ CREATE TABLE IF NOT EXISTS rtb_results (
     job_uuid           TEXT NOT NULL REFERENCES rtb_jobs (job_uuid),
     name               TEXT NOT NULL,                -- category/benchmark, e.g. simd/sum_f64
     category           TEXT NOT NULL,
-    metric             TEXT NOT NULL,                -- 'cycles' or 'time'
+    metric             TEXT NOT NULL,                -- 'cycles', 'instructions' or 'time'
     status             TEXT NOT NULL,                -- 'ok' when any block ran, else 'error' or 'skipped'
     error              TEXT,                         -- the first error, also when other blocks ran
     blocks             INTEGER NOT NULL,             -- blocks that ran it
-    value              REAL,                         -- cycles or ns
+    value              REAL,                         -- cycles, instructions or ns
     value_max          REAL,
     instructions       REAL,                         -- minimum retired instructions per call, NULL without counters
     min_ns             REAL,                         -- minimum wall time per call

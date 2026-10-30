@@ -1359,6 +1359,15 @@ th.sorted .sort-indicator {
 }
 
 /* Warning banner for stale data */
+.runtime-source-note {
+  margin: 0 16px 8px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--color-attention-fg);
+  background: var(--color-attention-subtle);
+  font-size: 13px;
+  color: var(--color-fg-default);
+}
+
 .warning-banner {
   background: var(--color-danger-subtle);
   border: 2px solid var(--color-danger-fg);

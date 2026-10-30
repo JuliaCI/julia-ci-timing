@@ -2,7 +2,7 @@
 # Fetch the runtime benchmark results from the julia-ci and julia-pr pipelines on Buildkite.
 #
 # The `Runtime benchmarks` job runs JuliaCI/julia-ci-benchmarks on the macOS aarch64 agent:
-# about 110 benchmarks in 13 categories, each (block, category, arm) in its own process.
+# about 200 benchmarks in 14 categories, each (block, category, arm) in its own process.
 # On julia-ci it measures the build alone (one arm, `head`); on julia-pr it measures the
 # pull request's head against the master build of its merge-base, interleaved, and judges
 # the difference into compare.json. The job uploads, under runtime-benchmarks/out/,
@@ -49,10 +49,13 @@ const RAW_ZSTD_LEVEL = 19
 counters_of(r) = something(get(r, :counters, nothing), Dict())
 has_counter(r, key) = (c = get(counters_of(r), key, nothing); c !== nothing && !isempty(c))
 
-# What compare.jl in julia-ci-benchmarks judges a record on: cycles when the benchmark
-# asks for them and the backend recorded them, else wall time
-record_metric(r) = String(get(r, :metric, "time")) == "cycles" && has_counter(r, :cycles) ? "cycles" : "time"
-record_value(r, metric) = metric == "cycles" ? Float64(minimum(counters_of(r)[:cycles])) : Float64(r.min_ns)
+# What compare.jl in julia-ci-benchmarks judges a record on: the counter the benchmark asks
+# for (cycles, or instructions) when the backend recorded it, else wall time
+function record_metric(r)
+    m = String(get(r, :metric, "time"))
+    return m in ("cycles", "instructions") && has_counter(r, Symbol(m)) ? m : "time"
+end
+record_value(r, metric) = metric == "time" ? Float64(r.min_ns) : Float64(minimum(counters_of(r)[Symbol(metric)]))
 record_instructions(r) = has_counter(r, :instructions) ? Float64(minimum(counters_of(r)[:instructions])) : nothing
 
 num(x) = x === nothing ? nothing : Float64(x)
@@ -158,16 +161,17 @@ const RESULT_COLS = ["job_uuid", "name", "category", "metric", "status", "error"
                      "min_ns", "median_ns", "allocs", "bytes", "ops", "tolerance", "block_values", "block_ns", "block_instructions"]
 
 """
-    write_rows!(db, rows; pipeline=CI_PIPELINE)
+    write_rows!(db, rows; pipeline=CI_PIPELINE, raw=true)
 
 Store `job_row`s, each replacing whatever its job had before, in the caller's transaction.
+`raw` keeps the parsed artifacts in raw_rtb as well.
 """
-function write_rows!(db, rows; pipeline=CI_PIPELINE)
+function write_rows!(db, rows; pipeline=CI_PIPELINE, raw=true)
     isempty(rows) && return 0
     seq = next_seq!(db)
     job = upsert_stmt(db, "rtb_jobs", ["job_uuid"], JOB_COLS)
     result = DBInterface.prepare(db, "INSERT INTO rtb_results ($(join(RESULT_COLS, ", "))) VALUES ($(join(fill("?", length(RESULT_COLS)), ", ")))")
-    raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_rtb (job_uuid, fetched_at, results_zst, meta_zst) VALUES (?, ?, ?, ?)")
+    raw_stmt = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_rtb (job_uuid, fetched_at, results_zst, meta_zst) VALUES (?, ?, ?, ?)")
     for r in rows
         uuid = r["job_uuid"]
         upsert!(job, (uuid, pipeline, (miss(r[c]) for c in JOB_COLS[2:end])..., seq))
@@ -179,9 +183,10 @@ function write_rows!(db, rows; pipeline=CI_PIPELINE)
                                          miss(b["median_ns"]), miss(b["allocs"]), miss(b["bytes"]), miss(b["ops"]), miss(b["tolerance"]),
                                          jsonarr(b["block_values"]), jsonarr(b["block_ns"]), jsonarr(b["block_instructions"])))
         end
+        raw || continue
         # The artifacts expire on Buildkite; keep what was parsed
         pack(x) = x === nothing ? missing : compress_zst(JSON3.write(x); level=RAW_ZSTD_LEVEL)
-        DBInterface.execute(raw, (uuid, iso_now(), pack(r["_results"]), pack(r["_meta"])))
+        DBInterface.execute(raw_stmt, (uuid, iso_now(), pack(r["_results"]), pack(r["_meta"])))
     end
     return length(rows)
 end

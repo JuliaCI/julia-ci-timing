@@ -19300,7 +19300,8 @@ let runtimeTimeRangeDays = 30;
 let runtimeSince = null; // the start of the window loaded or on its way, "" for all time
 let runtimeBench = null; // the benchmark the lower charts show
 let runtimeHidden = new Set(); // categories left out of the index chart and the table
-let runtimeReference = null; // a build number, or null for the first build in the range
+let runtimeReference = null; // a build's runtimeBuildKey, or null for the first build in the range
+let runtimeSource = null; // "ci" or "manyjulias" (the backfill), null for what the API picks
 let runtimeTableView = "benchmarks"; // "benchmarks" | "prs"
 let runtimeFilter = "";
 let runtimeSort = { col: "move", asc: false };
@@ -19321,7 +19322,11 @@ const RUNTIME_DEFAULT_DAYS = 30;
 const RUNTIME_BASELINE = 10;
 // What compare.jl in julia-ci-benchmarks calls a change, in %, unless a
 // benchmark sets its own tolerance
-const RUNTIME_TOLERANCE = { cycles: 3, time: 6 };
+const RUNTIME_TOLERANCE = { cycles: 3, instructions: 2, time: 6 };
+// The series the tab can show, each measured on its own machine
+const RUNTIME_SOURCE_LABELS = { ci: "CI", manyjulias: "Backfill" };
+const RUNTIME_SOURCE_HINT =
+  "The backfill measured master commits from before CI ran these benchmarks, from manyjulias builds on another machine (one block per commit). Its numbers are not comparable with CI's.";
 // Instruction counts are exact, so a change beyond this is the code changing
 const RUNTIME_INSTR_PCT = 0.5;
 // The table flags at most this many benchmarks, those that moved most beyond their tolerance
@@ -19331,7 +19336,7 @@ const RUNTIME_ALL = "all";
 // The Open PRs table's column per category, abbreviated
 const RUNTIME_CATEGORY_ABBR = {
   scalar: "scal", simd: "simd", array: "arr", collections: "coll", strings: "str", io: "io", dispatch: "disp",
-  types: "type", runtime: "rt", gc: "gc", compiler: "comp", apps: "apps", parallel: "par",
+  types: "type", runtime: "rt", gc: "gc", compiler: "comp", inference: "inf", apps: "apps", parallel: "par",
 };
 const RUNTIME_ALL_LABEL = "All benchmarks";
 // One hue per category in the suite's order, stepped for each theme
@@ -19346,6 +19351,10 @@ const runtimeInfo = (name) => runtimeData.benchmarks.find((b) => b.name === name
 const runtimeShortName = (name) => name.slice(name.indexOf("/") + 1);
 const runtimePct = (now, before) => (now == null || !(before > 0) ? null : (now / before - 1) * 100);
 const runtimeTolerance = (metric) => RUNTIME_TOLERANCE[metric] ?? RUNTIME_TOLERANCE.cycles;
+// A backfilled commit has no build: it goes by its commit
+const runtimeIsBackfill = (b) => b.source === "manyjulias";
+const runtimeBuildKey = (b) => (runtimeIsBackfill(b) ? b.commit.slice(0, 10) : String(b.build));
+const runtimeBuildName = (b) => (runtimeIsBackfill(b) ? `commit ${b.commit.slice(0, 10)}` : `build #${b.build}`);
 
 function runtimeColors(categories = runtimeData?.categories || []) {
   const colors = RUNTIME_COLORS[isDarkMode() ? "dark" : "light"];
@@ -19366,8 +19375,10 @@ function runtimeNs(t) {
 }
 
 // A value of the judged metric: cycles or nanoseconds
-const runtimeFormat = (v, metric) => (v == null ? "—" : metric === "cycles" ? `${runtimeCount(v)} cyc` : runtimeNs(v));
-const runtimeMetricText = (metric) => (metric === "cycles" ? "cycles of the calling thread" : "wall time");
+const runtimeFormat = (v, metric) =>
+  v == null ? "—" : metric === "cycles" ? `${runtimeCount(v)} cyc` : metric === "instructions" ? `${runtimeCount(v)} instr` : runtimeNs(v);
+const runtimeMetricText = (metric) =>
+  metric === "cycles" ? "cycles of the calling thread" : metric === "instructions" ? "retired instructions" : "wall time";
 
 function runtimeWantedSince() {
   if (runtimeTimeRangeDays <= 0) return "";
@@ -19390,7 +19401,7 @@ function runtimeIndices() {
 function runtimeRefIndex(idx) {
   if (!idx.length) return null;
   if (runtimeReference != null) {
-    const i = idx.find((k) => runtimeData.builds[k].build === runtimeReference);
+    const i = idx.find((k) => runtimeBuildKey(runtimeData.builds[k]) === runtimeReference);
     if (i != null) return i;
   }
   return idx.find((k) => runtimeData.builds[k]._n > 0) ?? idx[0];
@@ -19444,8 +19455,9 @@ function applyRuntimeURLParams() {
   // The categories shown, when not all are
   const rc = params.get("rc");
   if (rc !== null) runtimeHidden = new Set(["__pending__", ...rc.split(",").filter(Boolean)]);
-  const rr = parseInt(params.get("rr"), 10);
-  if (!isNaN(rr)) runtimeReference = rr;
+  if (params.get("rr")) runtimeReference = params.get("rr");
+  const rs = params.get("rs");
+  if (rs === "ci" || rs === "manyjulias") runtimeSource = rs;
   if (params.get("rv") === "prs") runtimeTableView = "prs";
   const rp = parseInt(params.get("rp"), 10);
   if (!isNaN(rp)) runtimePr = rp;
@@ -19478,6 +19490,7 @@ function updateRuntimeURL() {
     setOrDelete("rc", shown.join(","), runtimeHidden.size === 0);
   }
   setOrDelete("rr", runtimeReference, runtimeReference == null);
+  setOrDelete("rs", runtimeSource, runtimeSource == null);
   setOrDelete("rv", runtimeTableView, runtimeTableView === "benchmarks");
   setOrDelete("rq", runtimeFilter, !runtimeFilter);
   setOrDelete("rp", runtimePr, runtimePr == null);
@@ -19488,14 +19501,17 @@ async function loadRuntimeData() {
   const since = runtimeWantedSince();
   runtimeSince = since;
   try {
-    const [d, notes] = await Promise.all([apiGet("runtime/summary", { since }), loadRuntimeAnnotations()]);
-    // A wider window was asked for meanwhile
-    if (since !== runtimeSince) return;
+    const source = runtimeSource;
+    const [d, notes] = await Promise.all([apiGet("runtime/summary", { since, ...(source ? { source } : {}) }), loadRuntimeAnnotations()]);
+    // A wider window or another source was asked for meanwhile
+    if (since !== runtimeSince || source !== runtimeSource) return;
     // How many benchmarks each build has a value for: 0 for a job that uploaded nothing
     for (const [i, b] of d.builds.entries()) b._n = Object.values(d.series).filter((s) => s.value[i] != null).length;
     runtimeData = d;
-    runtimeAnnotations = notes;
+    // The notes are on CI's builds
+    runtimeAnnotations = d.source === "ci" ? notes : [];
     resolveRuntimeHidden();
+    updateRuntimeSourceSelect();
     if (!runtimeBench || !runtimeInfo(runtimeBench)) runtimeBench = runtimeDefaultBench();
     setUpdatedLabels();
     document.getElementById("runtime-chart-loading").style.display = "none";
@@ -19607,8 +19623,8 @@ function setRuntimeCategories(all) {
   drawRuntime();
 }
 
-function setRuntimeReference(build) {
-  runtimeReference = build;
+function setRuntimeReference(key) {
+  runtimeReference = key;
   updateRuntimeURL();
   closeTtfxBuildPopup();
   drawRuntime();
@@ -19623,10 +19639,38 @@ function updateRuntimeReferenceChip() {
     return;
   }
   const b = runtimeData.builds[ref];
-  const chosen = runtimeReference != null && b.build === runtimeReference;
+  const chosen = runtimeReference != null && runtimeBuildKey(b) === runtimeReference;
   el.innerHTML =
-    `<span title="The index chart and the table compare every build with this one. Pick another from a build's details (click a point).">Reference: <b>#${b.build}</b> ${escapeHtml(b.date.slice(0, 10))}${chosen ? "" : " (first in range)"}</span>` +
+    `<span title="The index chart and the table compare every build with this one. Pick another from a build's details (click a point).">Reference: <b>${escapeHtml(runtimeBuildName(b))}</b> ${escapeHtml(b.date.slice(0, 10))}${chosen ? "" : " (first in range)"}</span>` +
     (chosen ? ` <button type="button" class="btn btn-link" onclick="setRuntimeReference(null)" title="Compare with the first build in the range again">Reset</button>` : "");
+}
+
+// The source picker, shown when there is more than one; a note says what the backfill is
+function updateRuntimeSourceSelect() {
+  const el = document.getElementById("runtime-source");
+  const sources = runtimeData.sources || [];
+  el.hidden = sources.length < 2;
+  el.innerHTML = sources
+    .map((x) => {
+      const label = `${RUNTIME_SOURCE_LABELS[x.source] || x.source}${x.machine ? ` (${x.machine.replace(/ \d+-Core Processor$/, "")})` : ""}`;
+      return `<option value="${x.source}"${x.source === runtimeData.source ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  const note = document.getElementById("runtime-source-note");
+  const backfill = runtimeData.source === "manyjulias";
+  note.hidden = !backfill;
+  if (backfill) {
+    const m = sources.find((x) => x.source === "manyjulias")?.machine;
+    note.textContent = `Backfill: master commits measured from manyjulias builds${m ? ` on an ${m}` : ""}, one block each, before CI ran these benchmarks. Not comparable with CI's numbers.`;
+  }
+}
+
+function setRuntimeSource(source) {
+  runtimeSource = source;
+  runtimeReference = null;
+  updateRuntimeURL();
+  document.getElementById("runtime-chart-loading").style.display = "";
+  loadRuntimeData();
 }
 
 function setRuntimeTableView(view) {
@@ -19721,6 +19765,7 @@ function runtimeNoteLines(idx, name, isDark) {
   const out = {};
   const builds = runtimeData.builds;
   runtimeNotesFor(name).forEach((a, n) => {
+    if (runtimeData.source !== "ci") return;
     const k = idx.findIndex((i) => builds[i].build >= a.build);
     if (k < 0 || (k === 0 && builds[idx[0]].build !== a.build)) return;
     const id = `note-${n}`;
@@ -19729,7 +19774,7 @@ function runtimeNoteLines(idx, name, isDark) {
   for (const i of idx) {
     const prev = runtimePrevIndex(i);
     if (prev == null || !builds[i]._n || !builds[i].llvm || builds[prev].llvm === builds[i].llvm) continue;
-    const a = { label: `LLVM ${builds[i].llvm}`, description: `LLVM ${builds[prev].llvm} → ${builds[i].llvm} from build #${builds[i].build} on` };
+    const a = { label: `LLVM ${builds[i].llvm}`, description: `LLVM ${builds[prev].llvm} → ${builds[i].llvm} from ${runtimeBuildName(builds[i])} on` };
     out[`note-llvm-${i}`] = chartNoteAnnotation(a, runtimeTime(builds[i]), `note-llvm-${i}`, isDark, RUNTIME_LLVM_HINT);
   }
   return out;
@@ -19769,7 +19814,7 @@ function runtimeBuildFooter(i) {
 const runtimeTooltipTitle = (items) => {
   if (!items.length) return "";
   const b = runtimeData.builds[items[0].raw.i];
-  return `#${b.build} · ${b.commit.slice(0, 10)} · ${formatUtc(b.date)}`;
+  return `${runtimeIsBackfill(b) ? "" : `#${b.build} · `}${b.commit.slice(0, 10)} · ${formatUtc(b.date)}`;
 };
 
 function updateRuntimeCharts() {
@@ -19857,7 +19902,7 @@ function updateRuntimeCharts() {
       onClick: open(null),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title("Category index", ` · geometric mean against build #${refBuild.build}`),
+        title: title("Category index", ` · geometric mean against ${runtimeBuildName(refBuild)}`),
         legend: {
           labels: { color: theme.text, usePointStyle: true, pointStyle: "line", boxWidth: 14, font: { size: 11 } },
           onClick: (e, item, legend) => toggleRuntimeCategory(legend.chart.data.datasets[item.datasetIndex]._cat),
@@ -19886,7 +19931,7 @@ function updateRuntimeCharts() {
         x: xAxis(),
         y: yAxis({
           ticks: { color: theme.text, callback: (v) => formatSignedPct(v, { digits: Math.abs(v) < 10 && v % 1 ? 1 : 0 }) },
-          title: { display: true, text: `Change from build #${refBuild.build} (dotted line), %`, color: theme.text },
+          title: { display: true, text: `Change from ${runtimeBuildName(refBuild)} (dotted line), %`, color: theme.text },
         }),
       },
     },
@@ -20154,7 +20199,7 @@ function updateRuntimeTable() {
       ? `<span class="runtime-pr-chip">#${runtimePr} has no comparison any more <button type="button" class="ttfx-pr-copy" onclick="setRuntimePr(null)" title="Take the pull request's columns out of the table">Clear</button></span>`
       : "";
   caption.innerHTML =
-    `<div class="runtime-caption">${runtimeTableSwitch()}${prChip}<span><b>Every benchmark in build #${b.build}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference build #${refBuild.build} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
+    `<div class="runtime-caption">${runtimeTableSwitch()}${prChip}<span><b>Every benchmark in ${escapeHtml(runtimeBuildName(b))}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference ${escapeHtml(runtimeBuildName(refBuild))} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
     `Coloured beyond the tolerance compare.jl judges by (cycles ${RUNTIME_TOLERANCE.cycles}%, time ${RUNTIME_TOLERANCE.time}%; instructions ${RUNTIME_INSTR_PCT}%); ▲▼ flags the ${RUNTIME_MOVERS} that moved most. Click a row to chart it${pr ? "" : "; Show in an open pull request's row adds its changes here"}.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
     [
@@ -20162,7 +20207,7 @@ function updateRuntimeTable() {
       ["category", "Category", "col-secondary"],
       ["latest", "Latest", "num col-secondary", "The judged metric: the fastest block's cycles of the calling thread, or its wall time for the benchmarks whose work leaves that thread"],
       ["perop", "Per op", "num col-secondary", "Wall time per work item: the fastest call divided by the items it processes"],
-      ["ref", `vs #${refBuild.build}`, `num${pr ? " col-secondary" : ""}`, "Change from the reference build: the first in the range, or the one picked in a build's details"],
+      ["ref", `vs ${runtimeIsBackfill(refBuild) ? refBuild.commit.slice(0, 7) : `#${refBuild.build}`}`, `num${pr ? " col-secondary" : ""}`, "Change from the reference build: the first in the range, or the one picked in a build's details"],
       ["median", `<span>vs <span class="col-secondary">median of </span><span class="col-phone">med. </span>${RUNTIME_BASELINE}</span>`, "num", `Change from the median of the ${RUNTIME_BASELINE} builds before, the steadier comparison`],
       ["instr", "Instructions", "num col-secondary", `Retired instructions against the median of the ${RUNTIME_BASELINE} builds before. Exact across processes, so any change means the generated code or the work changed`],
       ["allocs", "Allocs", "num col-secondary", "Allocations per call, with the change from the reference build"],
@@ -20249,29 +20294,34 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
 
   let html = '<div class="ttfx-popup-actions">';
   html += allStatsButton(b.commit);
-  html += `<a class="btn" href="${runtimeRunURL("julia-ci", b.build, b.job_id)}" title="Every benchmark of this job: its samples, instruction counts and allocations">Run page</a>`;
-  html += extLink(runtimeJobURL(b), "Buildkite job", 'class="btn"');
+  // A backfilled commit's samples stay on the machine that measured it
+  if (!runtimeIsBackfill(b)) {
+    html += `<a class="btn" href="${runtimeRunURL("julia-ci", b.build, b.job_id)}" title="Every benchmark of this job: its samples, instruction counts and allocations">Run page</a>`;
+    html += extLink(runtimeJobURL(b), "Buildkite job", 'class="btn"');
+  }
   if (pr) html += extLink(githubPrURL(pr), `GitHub PR #${pr}`, 'class="btn"');
   html += extLink(githubCommitURL(b.commit), "GitHub commit", 'class="btn"');
   if (p && p.commit !== b.commit)
     html += extLink(githubCompareURL(p.commit, b.commit), "Commits since the previous build", 'class="btn" title="What changed between the build before this one and this one"');
-  if (runtimeReference !== b.build)
-    html += `<button type="button" class="btn" onclick="setRuntimeReference(${b.build})" title="Compare every build with this one in the index chart and the table">Use as reference</button>`;
+  if (runtimeReference !== runtimeBuildKey(b))
+    html += `<button type="button" class="btn" onclick="setRuntimeReference('${runtimeBuildKey(b)}')" title="Compare every build with this one in the index chart and the table">Use as reference</button>`;
   html += "</div>";
   html += row("Title", escapeHtml(b.message));
   html += row("Commit", `${commitShaLink(b.commit)} ${githubCommitLink(b.commit)}`);
   html += row("Created", timeHtml(b.date));
-  html += row("Build", `#${b.build}, job ${escapeHtml(b.state)}${b.blocks ? `, ${b.blocks} blocks` : ""}`);
+  html += runtimeIsBackfill(b)
+    ? row("Build", `a manyjulias build, measured ${b.state === "passed" ? "in full" : "with failures"}${b.blocks ? `, ${b.blocks} block${b.blocks === 1 ? "" : "s"}` : ""} (backfill)`)
+    : row("Build", `#${b.build}, job ${escapeHtml(b.state)}${b.blocks ? `, ${b.blocks} blocks` : ""}`);
   const llvm = p && p.llvm !== b.llvm ? ` <span class="ttfx-up">(was ${escapeHtml(p.llvm)})</span>` : "";
   html += row("Julia", `${escapeHtml(b.version)}, LLVM ${escapeHtml(b.llvm)}${llvm}`);
   html += row("Machine", escapeHtml([b.machine, b.agent.replace(/\..*/, ""), b.backend ? `${b.backend} counters` : ""].filter(Boolean).join(", ")));
-  if (p) html += row("Previous", `#${p.build}, <code>${escapeHtml(p.commit.slice(0, 10))}</code>, ${escapeHtml(formatUtc(p.date))}`);
+  if (p) html += row("Previous", `${runtimeIsBackfill(p) ? "" : `#${p.build}, `}<code>${escapeHtml(p.commit.slice(0, 10))}</code>, ${escapeHtml(formatUtc(p.date))}`);
   for (const a of runtimeAnnotations.filter((a) => a.build === b.build)) {
     html += `<div class="ttfx-popup-note">Note: ${escapeHtml(ttfxAnnotationText(a))}${a.url ? ` (${ttfxAnnotationLink(a)})` : ""}</div>`;
   }
   if (!b._n) {
     html += '<div class="ttfx-popup-note">This job uploaded no results.</div>';
-    openDetailPopup({ title: `Runtime benchmarks of build #${b.build}`, html, key: `runtime-job-${b.job_id}` });
+    openDetailPopup({ title: `Runtime benchmarks of ${runtimeBuildName(b)}`, html, key: `runtime-job-${b.job_id}` });
     return;
   }
   const head = (first, value = true) =>
@@ -20349,7 +20399,7 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
     html += "</ul>";
   }
   html += `<div class="ttfx-popup-muted ttfx-popup-hint">Each value is the fastest of the job's ${b.blocks || "few"} blocks, each block its own process. Cycles move by about 1% from process to process and wall time by several, so the median of the builds before is the steadier comparison; instruction counts are exact.</div>`;
-  openDetailPopup({ title: `Runtime benchmarks of build #${b.build}`, html, key: `runtime-job-${b.job_id}` });
+  openDetailPopup({ title: `Runtime benchmarks of ${runtimeBuildName(b)}`, html, key: `runtime-job-${b.job_id}` });
 }
 
 // --- pull requests ---------------------------------------------------------------------
@@ -20690,7 +20740,7 @@ function overviewRuntimeCard(src, prs) {
   };
   const names = (cat) => src.benchmarks.filter((x) => !cat || x.category === cat).map((x) => x.name);
   const detail = (what) =>
-    weekAgo ? `${what}: build #${b.build} (${formatUtc(b.date)}) against #${weekAgo.x.build} (${formatUtc(weekAgo.x.date)}), the last build at least a week older` : "";
+    weekAgo ? `${what}: ${runtimeBuildName(b)} (${formatUtc(b.date)}) against ${runtimeBuildName(weekAgo.x)} (${formatUtc(weekAgo.x.date)}), the last build at least a week older` : "";
   const all = weekAgo ? geo(names(null), latest, weekAgo.i) : null;
   const monthStart = builds.findIndex((x, i) => Date.parse(x.date) >= Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS && has(i));
   const cats = (src.categories || [])
@@ -20800,9 +20850,9 @@ function commitRuntimeHtml(data) {
   const prev = r.previous;
   const llvm = prev && prev.llvm && prev.llvm !== r.llvm ? ` LLVM changed from ${escapeHtml(prev.llvm)} to ${escapeHtml(r.llvm)}.` : "";
   const against = prev
-    ? `each benchmark against the previous job, build #${prev.build} (${commitLink(prev.commit.slice(0, 8), `<code>${escapeHtml(prev.commit.slice(0, 8))}</code>`)})`
+    ? `each benchmark against the previous job, ${runtimeIsBackfill(prev) ? "commit" : `build #${prev.build}`} (${commitLink(prev.commit.slice(0, 8), `<code>${escapeHtml(prev.commit.slice(0, 8))}</code>`)})`
     : "no earlier job to compare with";
-  const intro = `<p class="commit-line">Build #${r.build}${r.version ? `, ${escapeHtml(r.version)}` : ""}, ${escapeHtml(r.state)}: ${against}.${llvm} Geometric mean change per category; one build against another moves by about 1% in cycles and several in wall time:</p>`;
+  const intro = `<p class="commit-line">${runtimeIsBackfill(r) ? `Backfill (a manyjulias build on ${escapeHtml(r.machine || "another machine")}, not comparable with CI)` : `Build #${r.build}`}${r.version ? `, ${escapeHtml(r.version)}` : ""}, ${escapeHtml(r.state)}: ${against}.${llvm} Geometric mean change per category; one build against another moves by about 1% in cycles and several in wall time:</p>`;
   const links = `${r.url ? overviewExtLink(r.url, "Job") + " · " : ""}${overviewTabLink("ci-runtime", "Runtime")}`;
   return commitCard(
     "Runtime benchmarks",

@@ -1660,24 +1660,51 @@ end
 
 # The suite's categories in its own order; one it adds later goes after them
 const RUNTIME_CATEGORIES = ["scalar", "simd", "array", "collections", "strings", "io", "dispatch", "types", "runtime", "gc",
-                            "compiler", "apps", "parallel"]
+                            "compiler", "inference", "apps", "parallel"]
 const RUNTIME_SERIES = ["value", "value_max", "instructions", "min_ns", "allocs", "bytes"]
 
 runtime_category_rank(c) = (i = findfirst(==(c), RUNTIME_CATEGORIES); i === nothing ? (length(RUNTIME_CATEGORIES) + 1, c) : (i, ""))
 rt_round(x) = x === missing ? nothing : x isa AbstractFloat ? (isinteger(x) || abs(x) >= 1e3 ? round(Int, x) : round(x; digits=2)) : x
 
-# A julia-ci build's row as the summary and the commit page describe it
+# The series the Runtime tab can show, each on its own machine: what CI measures, and the
+# backfill of master commits from manyjulias builds (db/import_runtime.jl) before that
+const RUNTIME_SOURCES = ("ci" => "julia-ci", "manyjulias" => "manyjulias")
+runtime_pipeline(source) = Dict(RUNTIME_SOURCES)[source]
+runtime_source(pipeline) = pipeline == "manyjulias" ? "manyjulias" : "ci"
+
+# A job's row as the summary and the commit page describe it. A backfilled commit has no
+# build (0) and no Buildkite job.
 runtime_build(j) = OrderedDict{String,Any}(
-    "build" => Int(j.build), "job_id" => String(j.job_uuid), "commit" => String(j.commit_sha), "date" => String(j.build_created_at),
+    "build" => Int(j.build), "job_id" => String(j.job_uuid), "source" => runtime_source(String(j.pipeline)),
+    "commit" => String(j.commit_sha), "date" => String(j.build_created_at),
     "version" => String(j.version), "llvm" => String(j.llvm), "state" => String(j.state), "message" => String(j.message),
     "agent" => String(j.agent), "machine" => String(j.machine), "suite_commit" => String(j.suite_commit),
     "backend" => String(j.counters_backend), "blocks" => js(j.blocks), "url" => js(j.web_url))
 
-# Every master build's runtime benchmarks in the window: the builds in time order, and per
-# benchmark one array per series aligned with them (null where the build has no value)
-function runtime(db; since="")
+# What each source has: its master jobs with results, their machine and time span
+function runtime_sources(db)
+    out = Any[]
+    for (source, pipeline) in RUNTIME_SOURCES
+        r = rows(db, "SELECT count(*) AS n, MIN(build_created_at) AS first, MAX(build_created_at) AS last, " *
+                     "(SELECT machine FROM rtb_jobs WHERE pipeline = ?1 AND kind = 'master' ORDER BY build_created_at DESC LIMIT 1) AS machine " *
+                     "FROM rtb_jobs WHERE pipeline = ?1 AND kind = 'master' AND has_results = 1", (pipeline,))[1]
+        r.n > 0 && push!(out, OrderedDict("source" => source, "jobs" => Int(r.n), "first" => js(r.first), "last" => js(r.last),
+                                          "machine" => js(r.machine)))
+    end
+    return out
+end
+
+# Every master build's runtime benchmarks in the window, of one source (CI's by default,
+# the backfill while CI has none): the builds in time order, and per benchmark one array
+# per series aligned with them (null where the build has no value)
+function runtime(db; since="", source="")
+    sources = runtime_sources(db)
+    isempty(source) && (source = isempty(sources) ? "ci" : sources[1]["source"])
+    pipeline = runtime_pipeline(source)
     where, params = where_clause("build_created_at", since, "")
-    jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = 'master' ORDER BY build_created_at, build", params)
+    params = (params..., pipeline)
+    jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = 'master' AND pipeline = ? " *
+                    "ORDER BY build_created_at, build", params)
     index = Dict(String(j.job_uuid) => k for (k, j) in enumerate(jobs))
     builds = [runtime_build(j) for j in jobs]
     for b in builds
@@ -1685,7 +1712,7 @@ function runtime(db; since="")
     end
     info = Dict{String,Any}()
     series = Dict{String,OrderedDict{String,Vector{Any}}}()
-    windowed = isempty(where) ? "" : " WHERE job_uuid IN (SELECT job_uuid FROM rtb_jobs$where)"
+    windowed = " WHERE job_uuid IN (SELECT job_uuid FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " pipeline = ?)"
     for r in rows(db, "SELECT job_uuid, name, category, metric, status, error, ops, $(join(RUNTIME_SERIES, ", ")) FROM rtb_results" * windowed, params)
         k = get(index, String(r.job_uuid), nothing)
         k === nothing && continue
@@ -1702,10 +1729,13 @@ function runtime(db; since="")
     names = sort!(collect(keys(info)); by=n -> (runtime_category_rank(info[n].category), n))
     benchmarks = [OrderedDict("name" => n, "category" => info[n].category, "metric" => info[n].metric, "ops" => info[n].ops) for n in names]
     categories = sort!(unique([info[n].category for n in names]); by=runtime_category_rank)
-    return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-ci", "branch" => "master",
+    # The weekly references run on CI's machine
+    refs = source == "ci" ? (key => runtime_refs(db, kind, where, params[1:end-1]) for (kind, key) in RUNTIME_REF_KINDS) :
+           (key => Any[] for (_, key) in RUNTIME_REF_KINDS)
+    return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => pipeline, "branch" => "master",
+                       "source" => source, "sources" => sources,
                        "categories" => categories, "series_keys" => RUNTIME_SERIES, "benchmarks" => benchmarks, "builds" => builds,
-                       "series" => OrderedDict(n => series[n] for n in names),
-                       (key => runtime_refs(db, kind, where, params) for (kind, key) in RUNTIME_REF_KINDS)...)
+                       "series" => OrderedDict(n => series[n] for n in names), refs...)
 end
 
 const RUNTIME_REF_KINDS = ("release" => "releases", "lts" => "lts", "branch_nightly" => "branch_nightly")
@@ -1731,10 +1761,11 @@ function runtime_refs(db, kind, where, params)
     return out
 end
 
-# The master job with results before `j` on another commit, nothing when there is none
+# The master job with results before `j` on another commit and the same machine (source),
+# nothing when there is none
 function runtime_previous(db, j)
     r = rows(db, "SELECT * FROM rtb_jobs WHERE kind = 'master' AND has_results = 1 AND build_created_at < ? AND commit_sha != ? " *
-                 "ORDER BY build_created_at DESC LIMIT 1", (j.build_created_at, j.commit_sha))
+                 "AND pipeline = ? ORDER BY build_created_at DESC LIMIT 1", (j.build_created_at, j.commit_sha, j.pipeline))
     return isempty(r) ? nothing : r[1]
 end
 
@@ -1821,10 +1852,12 @@ function runtime_prs(db)
     return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-pr", "prs" => prs)
 end
 
-# The commit's runtime benchmark job against the latest earlier one with results on
-# another commit: every benchmark's value, instructions and allocations in both
+# The commit's runtime benchmark job (CI's, else the backfill's) against the latest
+# earlier one of the same source with results on another commit: every benchmark's value,
+# instructions and allocations in both
 function commit_runtime(db, prefix, sha)
-    tj = rows(db, "SELECT * FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = 'master' ORDER BY build_created_at DESC LIMIT 1",
+    tj = rows(db, "SELECT * FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
+                  "ORDER BY pipeline = 'manyjulias', build_created_at DESC LIMIT 1",
               (commit_glob(prefix, sha),))
     isempty(tj) && return nothing
     j = tj[1]
@@ -1846,6 +1879,7 @@ function commit_runtime(db, prefix, sha)
     end
     out = runtime_build(j)
     out["previous"] = prev === nothing ? nothing : OrderedDict("build" => Int(prev.build), "job_id" => String(prev.job_uuid),
+                                                                "source" => runtime_source(String(prev.pipeline)),
                                                                 "commit" => String(prev.commit_sha), "llvm" => String(prev.llvm))
     out["benchmarks"] = benchmarks
     return out
