@@ -19379,6 +19379,7 @@ const runtimeChartKey = () => RUNTIME_CHART_KEYS[runtimeChartMetric] || "value";
 const runtimeChartFormat = (v, info) =>
   runtimeChartMetric === "time" ? runtimeNs(v) : runtimeChartMetric === "instructions" ? `${runtimeCount(v)} instr` : runtimeFormat(v, info.metric);
 const RUNTIME_CHART_TEXT = { judged: "", time: "wall time", instructions: "retired instructions" };
+const RUNTIME_CHART_TITLES = { cycles: "Cycles", time: "Wall time", instructions: "Instructions" };
 const runtimeInfo = (name) => runtimeData.benchmarks.find((b) => b.name === name);
 const runtimeShortName = (name) => name.slice(name.indexOf("/") + 1);
 const runtimePct = (now, before) => (now == null || !(before > 0) ? null : (now / before - 1) * 100);
@@ -20013,8 +20014,14 @@ function updateRuntimeCharts() {
   runtimeCharts.push(indexChart);
 
   const info = runtimeBench ? runtimeInfo(runtimeBench) : null;
+  const head = document.getElementById("runtime-bench-head");
+  head.hidden = !info;
   if (!info) return;
   const name = info.name;
+  // The benchmark's name heads both charts on the right, each titled by what it shows
+  head.innerHTML =
+    `<span class="runtime-bench-name">${escapeHtml(name)}</span>` +
+    `<span class="col-secondary">${escapeHtml(info.category)}${info.ops > 1 ? ` · ${info.ops.toLocaleString("en-US")} ops per call` : ""} · judged on ${escapeHtml(runtimeMetricText(info.metric))}</span>`;
   const color = colors[info.category];
   const key = runtimeChartKey();
   const judged = key === "value";
@@ -20117,10 +20124,8 @@ function updateRuntimeCharts() {
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
         title: title(
-          name,
-          judged
-            ? ` · ${runtimeMetricText(info.metric)} per call; line: fastest process, band: range across processes`
-            : ` · ${RUNTIME_CHART_TEXT[runtimeChartMetric]} per call, fastest process${runtimeChartMetric === "time" && info.ops > 1 ? `; ${info.ops.toLocaleString("en-US")} ops per call` : ""}`,
+          `${RUNTIME_CHART_TITLES[judged ? info.metric : runtimeChartMetric]} per call`,
+          judged ? " · line: fastest process, band: range across processes" : " · fastest process",
         ),
         // The master line and the weekly references, which a click hides
         legend: {
