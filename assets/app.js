@@ -19509,7 +19509,7 @@ function applyRuntimeURLParams() {
     runtimeChartMetric = rm;
     document.getElementById("runtime-chart-metric").value = rm;
   }
-  if (params.get("rv") === "prs") runtimeTableView = "prs";
+  if (params.get("rv") === "prs" || params.get("rv") === "changes") runtimeTableView = params.get("rv");
   const rp = parseInt(params.get("rp"), 10);
   if (!isNaN(rp)) runtimePr = rp;
   const rq = params.get("rq");
@@ -19733,7 +19733,7 @@ function setRuntimeSource(source) {
 }
 
 function setRuntimeTableView(view) {
-  runtimeTableView = view === "prs" ? "prs" : "benchmarks";
+  runtimeTableView = view === "prs" || view === "changes" ? view : "benchmarks";
   updateRuntimeURL();
   hideRuntimePrPoints();
   updateRuntimeTable();
@@ -19747,6 +19747,7 @@ function runtimeTableSwitch() {
   return (
     '<span class="bench-table-view-toggle" role="group" aria-label="Table view">' +
     btn("benchmarks", "Benchmarks", "Every benchmark in the newest build, against the reference build and the builds before it") +
+    btn("changes", "Changes", "Every commit in the range where a benchmark's instruction count stepped and stayed: the code or the work changed there") +
     btn("prs", `Open PRs${n}`, "Open pull requests by their latest runtime benchmark comparison against master, best first") +
     "</span>"
   );
@@ -20273,8 +20274,107 @@ function runtimePctCell(pct, threshold, title = "", extra = "") {
   return `<td class="num${cls}${extra}"${title ? ` title="${escapeHtml(title)}"` : ""}>${pct == null ? "—" : formatSignedPct(pct)}</td>`;
 }
 
+// A step in a benchmark's instruction count counts when the median of the builds from it on
+// differs from the median of the builds before by RUNTIME_INSTR_PCT, over this many each side,
+// and by RUNTIME_STEP_NOISE times the benchmark's own build-to-build wiggle: the counts of
+// the benchmarks that allocate or compile move a little with the heap and caches
+const RUNTIME_STEP_WINDOW = 3;
+const RUNTIME_STEP_NOISE = 3;
+let runtimeChangesSort = { col: "date", asc: false };
+
+// The lasting steps in the shown benchmarks' instruction counts in the range: one per
+// benchmark and build, with the change in instructions and in the judged metric (each
+// the median of the builds after against that of the builds before, on one machine). The
+// benchmarks judged on wall time are left out: their counters see the calling thread only.
+// A benchmark's wiggle is the 90th percentile of its change from build to build in the range.
+function runtimeSteps() {
+  const idx = runtimeIndices();
+  const out = [];
+  for (const x of runtimeData.benchmarks) {
+    if (x.metric === "time" || runtimeHidden.has(x.category) || !matchesSearchWords(x.name, runtimeFilter)) continue;
+    const has = idx.filter((i) => runtimeValue(x.name, i, "instructions") != null);
+    const instr = (i) => runtimeValue(x.name, i, "instructions");
+    const med = (list, key) => sysimageMedian(list.map((i) => runtimeValue(x.name, i, key)).filter((v) => v != null));
+    const wiggles = [];
+    for (let k = 1; k < has.length; k++) if (runtimeSameSource(has[k], has[k - 1])) wiggles.push(Math.abs(runtimePct(instr(has[k]), instr(has[k - 1]))));
+    wiggles.sort((a, c) => a - c);
+    const noise = wiggles.length ? wiggles[Math.floor(0.9 * (wiggles.length - 1))] : 0;
+    for (let k = 1; k < has.length; k++) {
+      const i = has[k];
+      if (!runtimeSameSource(i, has[k - 1]) || Math.abs(runtimePct(instr(i), instr(has[k - 1]))) < RUNTIME_INSTR_PCT) continue;
+      const side = (from, dir) => {
+        const list = [];
+        for (let m = from; m >= 0 && m < has.length && list.length < RUNTIME_STEP_WINDOW && runtimeSameSource(has[m], i); m += dir) list.push(has[m]);
+        return list;
+      };
+      const after = side(k, 1);
+      const before = side(k - 1, -1);
+      const change = runtimePct(med(after, "instructions"), med(before, "instructions"));
+      if (change == null || Math.abs(change) < Math.max(RUNTIME_INSTR_PCT, RUNTIME_STEP_NOISE * noise)) continue;
+      if (Math.sign(change) !== Math.sign(instr(i) - instr(has[k - 1]))) continue;
+      const value = runtimePct(med(after, "value"), med(before, "value"));
+      out.push({
+        i,
+        date: runtimeData.builds[i].date,
+        name: x.name,
+        category: x.category,
+        metric: x.metric,
+        instr: change,
+        value,
+        // The size columns sort by how far from no change
+        abs_instr: Math.abs(change),
+        abs_value: value == null ? null : Math.abs(value),
+        // Too few builds after it yet to tell a step from a blip
+        tentative: after.length < 2,
+      });
+    }
+  }
+  return out;
+}
+
+function renderRuntimeChangesTable() {
+  const thead = document.getElementById("runtime-stats-thead");
+  const tbody = document.getElementById("runtime-stats-tbody");
+  const steps = runtimeSteps();
+  const commits = new Set(steps.map((x) => x.i)).size;
+  document.getElementById("runtime-stats-caption").innerHTML =
+    `<div class="runtime-caption">${runtimeTableSwitch()}<span><b>${steps.length} lasting instruction step${steps.length === 1 ? "" : "s"} in ${commits} commit${commits === 1 ? "" : "s"}</b> <span class="col-secondary">in the range: ` +
+    `where a benchmark's instruction count changed by ${RUNTIME_INSTR_PCT}% or more and stayed (the median of the ${RUNTIME_STEP_WINDOW} builds from there against the ${RUNTIME_STEP_WINDOW} before), and by more than ${RUNTIME_STEP_NOISE}× its usual wiggle from build to build. ` +
+    `Instruction counts are exact, so each is the code or the work changing; the judged change is measured the same way. Benchmarks judged on wall time are left out. Click a row to chart it.</span></span></div>`;
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Commit"],
+      ["name", "Benchmark"],
+      ["instr", "Instructions", "num", `Change in retired instructions per call: the median of the ${RUNTIME_STEP_WINDOW} builds from this commit on against the ${RUNTIME_STEP_WINDOW} before`],
+      ["value", "Judged", "num", "Change in the judged metric (cycles for most), measured the same way"],
+    ],
+    runtimeChangesSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    runtimeChangesSort = nextSort(runtimeChangesSort, col, (c) => c === "name");
+    updateRuntimeTable();
+  });
+  sortRows(steps, runtimeChangesSort.col === "instr" || runtimeChangesSort.col === "value"
+    ? { col: `abs_${runtimeChangesSort.col}`, asc: runtimeChangesSort.asc } : runtimeChangesSort, "name");
+  let html = "";
+  for (const x of steps) {
+    const b = runtimeData.builds[x.i];
+    const message = b.message ? ` <span class="col-secondary">${escapeHtml(b.message.length > 70 ? b.message.slice(0, 67) + "..." : b.message)}</span>` : "";
+    const tentative = x.tentative ? ' <span class="col-secondary" title="Too few builds after this one yet to tell a lasting step from a blip">(new)</span>' : "";
+    html += `<tr tabindex="0" data-bench="${escapeHtml(x.name)}" data-build="${x.i}" class="${x.name === runtimeBench ? "highlight" : ""}">`;
+    html += `<td><span class="col-secondary">${escapeHtml(b.date.slice(0, 10))}</span> ${commitShaLink(b.commit, 8)}${message}${tentative}</td>`;
+    html += `<td>${escapeHtml(x.name)}</td>`;
+    html += runtimePctCell(x.instr, RUNTIME_INSTR_PCT);
+    html += runtimePctCell(x.value, runtimeTolerance(x.metric));
+    html += "</tr>";
+  }
+  tbody.innerHTML = html || '<tr><td colspan="4" class="col-secondary">No lasting instruction step in the shown benchmarks in the selected time range.</td></tr>';
+  tbody.querySelectorAll("tr[data-bench]").forEach((tr) => (tr.onclick = (e) => !e.target.closest("a") && selectRuntimeBench(tr.dataset.bench)));
+}
+
 function updateRuntimeTable() {
   if (runtimeTableView === "prs") return renderRuntimePrsTable();
+  if (runtimeTableView === "changes") return runtimeData && renderRuntimeChangesTable();
   const thead = document.getElementById("runtime-stats-thead");
   const tbody = document.getElementById("runtime-stats-tbody");
   if (!runtimeData) return;
