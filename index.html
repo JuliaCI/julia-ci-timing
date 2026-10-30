@@ -816,7 +816,7 @@
         <div class="workers-view view-hidden" id="workers-view">
           <div class="backlog-section" id="backlog-section">
             <div class="agents-header">
-              <span class="agents-title">Queue backlog</span>
+              <a class="agents-title section-link" href="#backlog-section">Queue backlog</a>
               <select
                 class="time-select"
                 id="backlog-metric"
@@ -854,7 +854,7 @@
           </div>
           <div class="backlog-section" id="build-hours-section">
             <div class="agents-header">
-              <span class="agents-title">CI time per build</span>
+              <a class="agents-title section-link" href="#build-hours-section">CI time per build</a>
               <select
                 class="time-select"
                 id="build-hours-stat"
@@ -882,7 +882,7 @@
           </div>
           <div class="backlog-section" id="balance-section">
             <div class="agents-header">
-              <span class="agents-title">Machine balance</span>
+              <a class="agents-title section-link" href="#balance-section">Machine balance</a>
               <span class="agents-help"
                 >Pools whose agents run on the same machines, with each pool's
                 jobs running and waiting as a multiple of its slots. Above 1× a
@@ -897,7 +897,7 @@
           </div>
           <div class="agents-section" id="agents-section">
             <div class="agents-header">
-              <span class="agents-title">Connected agents</span>
+              <a class="agents-title section-link" href="#agents-section">Connected agents</a>
               <span class="agents-summary" id="agents-summary"></span>
               <span class="updated" id="agents-updated"></span>
               <span class="agents-help"
@@ -912,8 +912,8 @@
               <div class="loading">Loading agent snapshots...</div>
             </div>
           </div>
-          <div class="workers-toolbar">
-            <span class="agents-title">Jobs per host</span>
+          <div class="workers-toolbar" id="jobs-per-host">
+            <a class="agents-title section-link" href="#jobs-per-host">Jobs per host</a>
             <span class="workers-help"
               >Per day, <strong>master</strong> builds only, so an empty cell
               is not downtime.</span

@@ -1652,6 +1652,21 @@ th.sorted .sort-indicator {
   font-weight: 600;
   color: var(--color-fg-default);
 }
+.section-link {
+  position: relative;
+  text-decoration: none;
+}
+.section-link:hover {
+  text-decoration: underline;
+}
+/* In the gap after the title, so showing it moves nothing */
+.section-link:hover::after {
+  content: "#";
+  position: absolute;
+  left: 100%;
+  margin-left: 3px;
+  color: var(--color-fg-muted);
+}
 .agents-summary strong {
   color: var(--color-fg-default);
 }

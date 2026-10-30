@@ -6855,6 +6855,28 @@ window.addEventListener("message", (event) => {
   history.replaceState(null, "", url);
 });
 
+// The browser scrolls to a linked section before the tab's charts have
+// loaded, and they push it down as they draw. Keep it in view until the
+// reader scrolls or a few seconds have passed.
+function followLandingSection() {
+  const target = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (!target) return;
+  const follow = () => target.offsetParent && target.scrollIntoView({ block: "start" });
+  // Otherwise a reload puts back the old scroll position once the page loads
+  history.scrollRestoration = "manual";
+  // The tab's view is the scroller and keeps its height, so watch the
+  // sections in it, which grow
+  const observer = new ResizeObserver(follow);
+  for (const section of target.parentElement.children) observer.observe(section);
+  const events = ["wheel", "touchstart", "keydown", "mousedown"];
+  const stop = () => {
+    observer.disconnect();
+    for (const type of events) removeEventListener(type, stop, true);
+  };
+  for (const type of events) addEventListener(type, stop, { capture: true, passive: true });
+  setTimeout(stop, 10000);
+}
+
 // `pushHistory`: a switch the user made gets its own history entry so the
 // browser's back button returns to the previous tab; the startup switch and
 // the one that answers a back or forward navigation only reflect the URL
@@ -6974,6 +6996,8 @@ function switchTab(tab, { pushHistory = true } = {}) {
   // The other tabs have read the landing URL by now. Diff parameters on a
   // landing elsewhere are kept for when the Diff tab is shown.
   dropOtherTabsParams(url, tabShown ? previousTab : "perf", tab);
+  // A section link names a section of the tab it was made on
+  if (pushHistory && tabShown && tab !== previousTab) url.hash = "";
   tabShown = true;
   if (pushHistory && url.href !== window.location.href) {
     history.pushState(null, "", url);
@@ -19477,6 +19501,7 @@ const perfDeepLink = applyPerfURLParams();
 // The Overview is the landing page; a URL carrying julia-perf parameters but
 // no tab is a deep link into the Diff tab
 switchTab(tabFromLocation() || (perfDeepLink ? "perf" : "overview"), { pushHistory: false });
+followLandingSection();
 
 // Auto-refresh data periodically — but only when the page is visible.
 setInterval(() => {
