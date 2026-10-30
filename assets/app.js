@@ -19379,6 +19379,16 @@ const runtimeTolerance = (metric) => RUNTIME_TOLERANCE[metric] ?? RUNTIME_TOLERA
 const runtimeIsBackfill = (b) => b.source === "manyjulias";
 const runtimeBuildKey = (b) => (runtimeIsBackfill(b) ? b.commit.slice(0, 10) : String(b.build));
 const runtimeBuildName = (b) => (runtimeIsBackfill(b) ? `commit ${b.commit.slice(0, 10)}` : `build #${b.build}`);
+// A benchmark's axes span at least this much, in % of the median, so a wiggle of a few
+// instructions or a fraction of a percent in cycles draws flat rather than as a step
+const RUNTIME_MIN_SPAN = 1;
+function runtimeMinSpan(values, pct = RUNTIME_MIN_SPAN) {
+  const vs = values.filter((v) => v != null);
+  if (!vs.length) return {};
+  const mid = sysimageMedian(vs);
+  return { suggestedMin: mid * (1 - pct / 100), suggestedMax: mid * (1 + pct / 100) };
+}
+
 // Whether builds i and j were measured on the same machine, so their values compare
 const runtimeSameSource = (i, j) => runtimeData.builds[i].source === runtimeData.builds[j].source;
 
@@ -20097,7 +20107,10 @@ function updateRuntimeCharts() {
       },
       scales: {
         x: xAxis(),
-        y: yAxis({ ticks: { color: theme.text, callback: (v) => (info.metric === "time" ? runtimeNs(v) : runtimeCount(v)) } }),
+        y: yAxis({
+          ticks: { color: theme.text, callback: (v) => (info.metric === "time" ? runtimeNs(v) : runtimeCount(v)) },
+          ...runtimeMinSpan(has.map((i) => runtimeValue(name, i))),
+        }),
       },
     },
   });
@@ -20156,7 +20169,7 @@ function updateRuntimeCharts() {
       },
       scales: {
         x: xAxis(),
-        y: yAxis({ ticks: { color: theme.text, callback: (v) => runtimeCount(v) } }),
+        y: yAxis({ ticks: { color: theme.text, callback: (v) => runtimeCount(v) }, ...runtimeMinSpan(instr.map((i) => runtimeValue(name, i, "instructions"))) }),
       },
     },
   });
