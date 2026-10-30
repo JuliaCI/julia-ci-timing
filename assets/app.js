@@ -19326,6 +19326,7 @@ let runtimeBench = null; // the benchmark the lower charts show
 let runtimeHidden = new Set(); // categories left out of the index chart and the table
 let runtimeReference = null; // a build's runtimeBuildKey, or null for the first build in the range
 let runtimeSource = null; // "ci" or "manyjulias" (the backfill) alone, null for the backfill followed by CI
+let runtimeChartMetric = "judged"; // what the index and a benchmark's chart show: "judged", "time" or "instructions"
 let runtimeTableView = "benchmarks"; // "benchmarks" | "prs"
 let runtimeFilter = "";
 let runtimeSort = { col: "move", asc: false };
@@ -19371,6 +19372,13 @@ const RUNTIME_COLORS = {
 
 const runtimeTime = (b) => Date.parse(b.date);
 const runtimeValue = (name, i, key = "value") => runtimeData.series[name]?.[key]?.[i] ?? null;
+// The series the charts show: each benchmark's judged metric (cycles, instructions or wall
+// time), or the wall time or instructions of every benchmark
+const RUNTIME_CHART_KEYS = { judged: "value", time: "min_ns", instructions: "instructions" };
+const runtimeChartKey = () => RUNTIME_CHART_KEYS[runtimeChartMetric] || "value";
+const runtimeChartFormat = (v, info) =>
+  runtimeChartMetric === "time" ? runtimeNs(v) : runtimeChartMetric === "instructions" ? `${runtimeCount(v)} instr` : runtimeFormat(v, info.metric);
+const RUNTIME_CHART_TEXT = { judged: "", time: "wall time", instructions: "retired instructions" };
 const runtimeInfo = (name) => runtimeData.benchmarks.find((b) => b.name === name);
 const runtimeShortName = (name) => name.slice(name.indexOf("/") + 1);
 const runtimePct = (now, before) => (now == null || !(before > 0) ? null : (now / before - 1) * 100);
@@ -19495,6 +19503,11 @@ function applyRuntimeURLParams() {
   if (params.get("rr")) runtimeReference = params.get("rr");
   const rs = params.get("rs");
   if (rs === "ci" || rs === "manyjulias") runtimeSource = rs;
+  const rm = params.get("rm");
+  if (rm in RUNTIME_CHART_KEYS) {
+    runtimeChartMetric = rm;
+    document.getElementById("runtime-chart-metric").value = rm;
+  }
   if (params.get("rv") === "prs") runtimeTableView = "prs";
   const rp = parseInt(params.get("rp"), 10);
   if (!isNaN(rp)) runtimePr = rp;
@@ -19528,6 +19541,7 @@ function updateRuntimeURL() {
   }
   setOrDelete("rr", runtimeReference, runtimeReference == null);
   setOrDelete("rs", runtimeSource, runtimeSource == null);
+  setOrDelete("rm", runtimeChartMetric, runtimeChartMetric === "judged");
   setOrDelete("rv", runtimeTableView, runtimeTableView === "benchmarks");
   setOrDelete("rq", runtimeFilter, !runtimeFilter);
   setOrDelete("rp", runtimePr, runtimePr == null);
@@ -19701,6 +19715,12 @@ function updateRuntimeSourceSelect() {
     const m = sources.find((x) => x.source === "manyjulias")?.machine;
     note.textContent = `Backfill: master commits measured from manyjulias builds${m ? ` on an ${m}` : ""}, one block each, before CI ran these benchmarks. Not comparable with CI's numbers.`;
   }
+}
+
+function setRuntimeChartMetric(metric) {
+  runtimeChartMetric = metric in RUNTIME_CHART_KEYS ? metric : "judged";
+  updateRuntimeURL();
+  updateRuntimeCharts();
 }
 
 function setRuntimeSource(source) {
@@ -19912,11 +19932,15 @@ function updateRuntimeCharts() {
   const refBuild = runtimeData.builds[ref];
   const datasets = [];
   for (const cat of [RUNTIME_ALL, ...runtimeData.categories]) {
-    const names = runtimeData.benchmarks.filter((b) => cat === RUNTIME_ALL || b.category === cat).map((b) => b.name);
+    // The counters see the calling thread only, so the instruction counts of the benchmarks
+    // judged on wall time (their work leaves that thread) are left out of that index
+    const names = runtimeData.benchmarks
+      .filter((b) => (cat === RUNTIME_ALL || b.category === cat) && !(runtimeChartMetric === "instructions" && b.metric === "time"))
+      .map((b) => b.name);
     // The step at a change of machine is no change: the chain starts over there
     const entries = idx.map((i, k) => ({
       x: i,
-      values: new Map(names.map((n) => [n, runtimeValue(n, i)]).filter(([, v]) => v != null)),
+      values: new Map(names.map((n) => [n, runtimeValue(n, i, runtimeChartKey())]).filter(([, v]) => v != null)),
       reset: k > 0 && !runtimeSameSource(i, idx[k - 1]),
     }));
     const pts = BenchCore.chainLink(entries);
@@ -19951,7 +19975,7 @@ function updateRuntimeCharts() {
       onClick: open(null),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title("Category index", ` · geometric mean against ${runtimeBuildName(refBuild)}`),
+        title: title("Category index", ` · geometric mean${RUNTIME_CHART_TEXT[runtimeChartMetric] ? ` of ${RUNTIME_CHART_TEXT[runtimeChartMetric]}` : ""} against ${runtimeBuildName(refBuild)}`),
         legend: {
           labels: { color: theme.text, usePointStyle: true, pointStyle: "line", boxWidth: 14, font: { size: 11 } },
           onClick: (e, item, legend) => toggleRuntimeCategory(legend.chart.data.datasets[item.datasetIndex]._cat),
@@ -19992,15 +20016,18 @@ function updateRuntimeCharts() {
   if (!info) return;
   const name = info.name;
   const color = colors[info.category];
-  const has = idx.filter((i) => runtimeValue(name, i) != null);
+  const key = runtimeChartKey();
+  const judged = key === "value";
+  const has = idx.filter((i) => runtimeValue(name, i, key) != null);
   const point = (i, key) => ({ x: runtimeTime(runtimeData.builds[i]), y: runtimeValue(name, i, key), i });
   // The points of `list`, the line broken where the machine changes
   const line = (list, key) =>
     list.flatMap((i, k) =>
       k > 0 && !runtimeSameSource(i, list[k - 1]) ? [{ x: (runtimeTime(runtimeData.builds[list[k - 1]]) + runtimeTime(runtimeData.builds[i])) / 2, y: null }, point(i, key)] : [point(i, key)]);
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
-  const refs = RUNTIME_REFS.map(([key, label, pointStyle]) => {
-    const pts = runtimeRefPoints(key, name);
+  // The weekly references have the judged metric only
+  const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle]) => {
+    const pts = runtimeRefPoints(refKey, name);
     const newest = pts.length ? pts[pts.length - 1].r.version : null;
     return {
       label,
@@ -20030,10 +20057,10 @@ function updateRuntimeCharts() {
           return lines;
         }
         const i = ctx.raw.i;
-        const max = runtimeValue(name, i, "value_max");
-        const lines = [` Fastest process: ${runtimeFormat(ctx.raw.y, info.metric)}`];
+        const max = judged ? runtimeValue(name, i, "value_max") : null;
+        const lines = [` Fastest process: ${runtimeChartFormat(ctx.raw.y, info)}`];
         if (max != null) lines.push(` Slowest process: ${runtimeFormat(max, info.metric)} (${formatSignedPct(runtimePct(max, ctx.raw.y))})`);
-        const base = runtimeBaseline(name, i);
+        const base = runtimeBaseline(name, i, key);
         if (base != null) lines.push(` vs median of ${RUNTIME_BASELINE} before: ${formatSignedPct(runtimePct(ctx.raw.y, base))}`);
         return lines;
       },
@@ -20060,7 +20087,7 @@ function updateRuntimeCharts() {
         {
           label: "Slowest block",
           _band: true,
-          data: line(has, "value_max"),
+          data: judged ? line(has, "value_max") : [],
           borderWidth: 0,
           pointRadius: 0,
           pointHoverRadius: 0,
@@ -20069,7 +20096,7 @@ function updateRuntimeCharts() {
         },
         {
           label: "Master",
-          data: line(has, "value"),
+          data: line(has, key),
           borderColor: color,
           backgroundColor: color,
           borderWidth: 1.2,
@@ -20089,7 +20116,12 @@ function updateRuntimeCharts() {
       onClick: open(name),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title(name, ` · ${runtimeMetricText(info.metric)} per call; line: fastest process, band: range across processes`),
+        title: title(
+          name,
+          judged
+            ? ` · ${runtimeMetricText(info.metric)} per call; line: fastest process, band: range across processes`
+            : ` · ${RUNTIME_CHART_TEXT[runtimeChartMetric]} per call, fastest process${runtimeChartMetric === "time" && info.ops > 1 ? `; ${info.ops.toLocaleString("en-US")} ops per call` : ""}`,
+        ),
         // The master line and the weekly references, which a click hides
         legend: {
           display: refs.length > 0,
@@ -20108,8 +20140,8 @@ function updateRuntimeCharts() {
       scales: {
         x: xAxis(),
         y: yAxis({
-          ticks: { color: theme.text, callback: (v) => (info.metric === "time" ? runtimeNs(v) : runtimeCount(v)) },
-          ...runtimeMinSpan(has.map((i) => runtimeValue(name, i))),
+          ticks: { color: theme.text, callback: (v) => ((judged ? info.metric : runtimeChartMetric) === "time" ? runtimeNs(v) : runtimeCount(v)) },
+          ...runtimeMinSpan(has.map((i) => runtimeValue(name, i, key))),
         }),
       },
     },
