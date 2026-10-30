@@ -19649,6 +19649,28 @@ function selectRuntimeBench(name) {
   highlightRuntimeRow();
 }
 
+// Up and down step through the benchmarks: in the table's order when one of its rows has
+// the focus, else in the list's
+document.addEventListener("keydown", (e) => {
+  if (activeTab !== "ci-runtime" || !runtimeData || modalOpen || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.target.closest?.("input, select, textarea, [contenteditable]")) return;
+  const row = e.target.closest?.("#runtime-stats-tbody tr[data-bench]");
+  const items = [...document.querySelectorAll(row ? "#runtime-stats-tbody tr[data-bench]" : "#runtime-bench-items .group-item[data-bench]")];
+  if (!items.length) return;
+  e.preventDefault();
+  const at = row ? items.indexOf(row) : items.findIndex((el) => el.dataset.bench === runtimeBench);
+  const next = at < 0 ? 0 : Math.max(0, Math.min(items.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)));
+  if (next === at) return;
+  selectRuntimeBench(items[next].dataset.bench);
+  if (row) {
+    items[next].focus();
+    items[next].scrollIntoView({ block: "nearest" });
+  } else {
+    // The list was drawn anew
+    document.querySelector(`#runtime-bench-items .group-item[data-bench="${CSS.escape(runtimeBench)}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+});
+
 function setRuntimeFilter(q) {
   runtimeFilter = q.trim();
   updateRuntimeURL();
