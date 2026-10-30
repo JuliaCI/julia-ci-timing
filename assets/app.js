@@ -20519,7 +20519,8 @@ function renderRuntimePrsTable() {
       : '<td class="col-secondary">—</td>';
     html += `<td class="col-secondary runtime-wide" title="${escapeHtml(`${formatUtc(p.date)}: ${p.head.version} against ${p.base.version}, job ${p.state}`)}">${escapeHtml(timeAgo(p.date))}</td>`;
     html +=
-      `<td class="runtime-pr-actions"><button type="button" class="ttfx-pr-copy" data-show-runtime-pr="${p.pr}" title="Add this pull request's change of every benchmark to the Benchmarks table">Show</button> ` +
+      `<td class="runtime-pr-actions"><a class="ttfx-pr-copy" href="${runtimeRunURL("julia-pr", p.build, p.job_id)}" onclick="event.stopPropagation()" title="Open this comparison's run page: every benchmark's change, its samples, instructions and allocations">Run</a> ` +
+      `<button type="button" class="ttfx-pr-copy" data-show-runtime-pr="${p.pr}" title="Add this pull request's change of every benchmark to the Benchmarks table">Show</button> ` +
       `<button type="button" class="ttfx-pr-copy col-secondary" data-copy-runtime-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy</button></td>`;
     html += "</tr>";
   }

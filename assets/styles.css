@@ -3337,6 +3337,10 @@ tr.ttfx-pr-outdated:focus-within > td {
   line-height: 18px;
   cursor: pointer;
 }
+a.ttfx-pr-copy {
+  display: inline-block;
+  text-decoration: none;
+}
 .ttfx-pr-copy:hover {
   border-color: var(--color-fg-muted);
 }

@@ -224,6 +224,7 @@ function verdicts(compare)
                                      "ratios" => [Float64(x) for x in getk(b, :ratios, [])], "tolerance" => num(getk(b, :tolerance)),
                                      "instr_ratio" => num(getk(b, :instr_ratio)), "instr_changed" => getk(b, :instr_changed, false),
                                      "mixed_units" => getk(b, :mixed_units, false), "vetoed" => getk(b, :vetoed, false),
+                                     "alloc_change" => getk(b, :alloc_change),
                                      "control_ratio" => c === nothing ? nothing : num(getk(c, :ratio)),
                                      "control_ratios" => c === nothing ? nothing : [Float64(x) for x in getk(c, :ratios, [])])
     end

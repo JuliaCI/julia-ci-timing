@@ -193,6 +193,14 @@ const minOver = (cells, key) => {
   return v.length ? Math.min(...v) : null;
 };
 
+// compare.jl's judgement when compare.json has one: counts that differ by more than 0.1%,
+// left out for benchmarks judged on time (threads and the GC move their counts)
+function allocsChanged(c, metric, a, b) {
+  if (c.alloc_change != null) return c.alloc_change !== "";
+  if (a == null || b == null || metric === "time") return false;
+  return Math.abs(b - a) > Math.max(0, 0.001 * a);
+}
+
 // One row per benchmark: its verdict and change when compared, its values per arm
 function rows(run = runData()) {
   const base = run.base, head = run.head || run.arm_order[run.arm_order.length - 1], control = run.control;
@@ -222,7 +230,7 @@ function rows(run = runData()) {
       instructions: minOver(b.arms[head], "instructions"),
       allocs,
       bytes,
-      allocsChanged: base != null && allocs[base] != null && allocs[head] != null && allocs[base] !== allocs[head],
+      allocsChanged: allocsChanged(c, b.metric, allocs[base], allocs[head]),
       failed,
       skipped,
       error: failed ? run.arm_order.flatMap((a) => b.arms[a] || []).find((x) => x.status !== "ok")?.error : null,
@@ -427,6 +435,10 @@ function drawChangeChart(all) {
   const shown = notableRows(all);
   const labels = shown.map((r) => r.name);
   document.getElementById("rr-change-wrap").style.height = `${Math.max(160, shown.length * 20 + 50)}px`;
+  // The axis fits the overall changes, markers and bands; a single block far outside them
+  // (a wall-time outlier) is drawn at the edge instead of squashing every bar
+  const lim = Math.max(5, ...shown.flatMap((r) => [r.change, r.instr, r.control, r.tol].filter((v) => v != null).map(Math.abs))) * 1.15;
+  const clip = (v) => Math.max(-lim, Math.min(lim, v));
   const scatter = (label, pts, style, color, radius = 3.5) => ({
     type: "scatter",
     label,
@@ -448,7 +460,7 @@ function drawChangeChart(all) {
       barPercentage: 0.7,
       categoryPercentage: 1,
     },
-    scatter("Block", shown.flatMap((r) => r.blocks.map((b) => ({ x: b, y: r.name, r }))), "circle", p.strong, 2.5),
+    scatter("Block", shown.flatMap((r) => r.blocks.map((b) => ({ x: clip(b), y: r.name, r, value: b }))), "circle", p.strong, 2.5),
     scatter("Instructions", shown.filter((r) => r.instr != null).map((r) => ({ x: r.instr, y: r.name, r })), "rectRot", p.text, 4),
   ];
   if (shown.some((r) => r.control != null))
@@ -461,6 +473,8 @@ function drawChangeChart(all) {
       indexAxis: "y",
       scales: {
         x: {
+          min: -lim,
+          max: lim,
           title: { display: true, text: "% change against base", color: p.text },
           grid: { color: p.grid },
           ticks: { color: p.text, callback: (v) => fmtPct(v, 0) },
@@ -478,7 +492,7 @@ function drawChangeChart(all) {
               if (it.dataset.label === "Change")
                 return [`${fmtPct(r.change)} (${r.verdict}${r.vetoed ? ", dropped against the control" : ""})`, `tolerance ±${r.tol?.toFixed(0)}%`,
                         `${fmtValue(r.base, r.metric)} → ${fmtValue(r.head, r.metric)}`];
-              return `${it.dataset.label}: ${fmtPct(it.raw.x)}`;
+              return `${it.dataset.label}: ${fmtPct(it.raw.value ?? it.raw.x)}${Math.abs(it.raw.value ?? 0) > lim ? " (off the axis)" : ""}`;
             },
           },
         },
