@@ -1419,6 +1419,17 @@
         ></select>
         <select
           class="time-select"
+          id="runtime-chart-metric"
+          onchange="setRuntimeChartMetric(this.value)"
+          aria-label="Charted metric"
+          title="What the category index and the benchmark's chart show: each benchmark's judged metric (cycles for most, wall time where the work leaves the calling thread, instructions for inference), or every benchmark's wall time or retired instructions"
+        >
+          <option value="judged" selected>Judged metric</option>
+          <option value="time">Wall time</option>
+          <option value="instructions">Instructions</option>
+        </select>
+        <select
+          class="time-select"
           id="runtime-time-range"
           onchange="setRuntimeTimeRange(this.value)"
           aria-label="Time range"
@@ -1472,6 +1483,7 @@
               <div class="workers-empty" id="runtime-empty" hidden>No build with runtime benchmark results in the selected time range.</div>
               <div class="ttfx-summary-grid runtime-grid" id="runtime-grid">
                 <div class="ttfx-panel runtime-panel-index"><canvas id="runtime-chart-index"></canvas></div>
+                <div class="runtime-bench-head" id="runtime-bench-head" hidden></div>
                 <div class="ttfx-panel runtime-panel-bench"><canvas id="runtime-chart-bench"></canvas></div>
                 <div class="ttfx-panel runtime-panel-instr"><canvas id="runtime-chart-instr"></canvas></div>
               </div>
