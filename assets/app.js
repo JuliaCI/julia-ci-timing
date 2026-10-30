@@ -19970,17 +19970,17 @@ function updateRuntimeCharts() {
     const pts = BenchCore.chainLink(entries);
     const base = pts.find((p) => p.x >= ref) ?? pts[0];
     if (!base) continue;
+    const level = new Map(pts.map((p) => [p.x, p.y]));
+    const steps = new Set(runtimeSeriesSteps(pts.map((p) => p.x), (i) => level.get(i), runtimeChartMetric === "instructions" ? RUNTIME_INSTR_PCT : 1).map((st) => st.i));
     datasets.push({
       label: cat === RUNTIME_ALL ? RUNTIME_ALL_LABEL : cat,
       _cat: cat,
       _n: names.length,
-      data: pts.map((p) => ({ x: runtimeTime(runtimeData.builds[p.x]), y: (p.y / base.y - 1) * 100, i: p.x })),
+      ...runtimeStepPoints(steps, 0, pts.map((p) => ({ x: runtimeTime(runtimeData.builds[p.x]), y: (p.y / base.y - 1) * 100, i: p.x }))),
       borderColor: colors[cat],
       backgroundColor: colors[cat],
       borderWidth: cat === RUNTIME_ALL ? 2.5 : 1.5,
       borderDash: cat === RUNTIME_ALL ? [6, 3] : undefined,
-      pointRadius: 0,
-      pointHoverRadius: 4,
       hidden: runtimeHidden.has(cat),
     });
   }
@@ -20053,6 +20053,16 @@ function updateRuntimeCharts() {
   const key = runtimeChartKey();
   const judged = key === "value";
   const has = idx.filter((i) => runtimeValue(name, i, key) != null);
+  // The lasting steps: in instructions, and in what the main chart shows, whose points
+  // also mark the instruction steps unless the work leaves the counted thread
+  const instrSteps = new Set(
+    runtimeSeriesSteps(idx.filter((i) => runtimeValue(name, i, "instructions") != null), (i) => runtimeValue(name, i, "instructions"), RUNTIME_INSTR_PCT).map((st) => st.i),
+  );
+  const shownMin = key === "instructions" ? RUNTIME_INSTR_PCT : runtimeTolerance(key === "min_ns" ? "time" : info.metric);
+  const benchSteps = new Set([
+    ...runtimeSeriesSteps(has, (i) => runtimeValue(name, i, key), shownMin).map((st) => st.i),
+    ...(info.metric === "time" ? [] : instrSteps),
+  ]);
   const point = (i, key) => ({ x: runtimeTime(runtimeData.builds[i]), y: runtimeValue(name, i, key), i });
   // The points of `list`, the line broken where the machine changes
   const line = (list, key) =>
@@ -20130,12 +20140,10 @@ function updateRuntimeCharts() {
         },
         {
           label: "Master",
-          data: line(has, key),
           borderColor: color,
           backgroundColor: color,
           borderWidth: 1.2,
-          pointRadius: 2,
-          pointHoverRadius: 4,
+          ...runtimeStepPoints(benchSteps, 2, line(has, key)),
         },
         ...refs,
       ],
@@ -20188,13 +20196,11 @@ function updateRuntimeCharts() {
       datasets: [
         {
           label: "Instructions",
-          data: line(instr, "instructions"),
           borderColor: instrColor,
           backgroundColor: instrColor,
           borderWidth: 1.2,
           stepped: "before",
-          pointRadius: 1.5,
-          pointHoverRadius: 4,
+          ...runtimeStepPoints(instrSteps, 1.5, line(instr, "instructions")),
         },
       ],
     },
@@ -20309,49 +20315,79 @@ let runtimeChangesSort = { col: "date", asc: false };
 // the median of the builds after against that of the builds before, on one machine). The
 // benchmarks judged on wall time are left out: their counters see the calling thread only.
 // A benchmark's wiggle is the 90th percentile of its change from build to build in the range.
+// The lasting steps of one series: `list` holds its builds in time order (indices into
+// runtimeData.builds) and `val` gives a build's value. A step is where the value moved by
+// `min`% from the build before and the median of the RUNTIME_STEP_WINDOW builds from there
+// differs from that of the ones before, on the same machine, by `min`% and by
+// RUNTIME_STEP_NOISE times the series' wiggle, in the same direction.
+function runtimeSeriesSteps(list, val, min) {
+  const wiggles = [];
+  for (let k = 1; k < list.length; k++) if (runtimeSameSource(list[k], list[k - 1])) wiggles.push(Math.abs(runtimePct(val(list[k]), val(list[k - 1]))));
+  wiggles.sort((a, c) => a - c);
+  const noise = wiggles.length ? wiggles[Math.floor(0.9 * (wiggles.length - 1))] : 0;
+  const med = (l) => sysimageMedian(l.map(val));
+  const out = [];
+  for (let k = 1; k < list.length; k++) {
+    const i = list[k];
+    const jump = runtimePct(val(i), val(list[k - 1]));
+    if (!runtimeSameSource(i, list[k - 1]) || jump == null || Math.abs(jump) < min) continue;
+    const side = (from, dir) => {
+      const l = [];
+      for (let m = from; m >= 0 && m < list.length && l.length < RUNTIME_STEP_WINDOW && runtimeSameSource(list[m], i); m += dir) l.push(list[m]);
+      return l;
+    };
+    const after = side(k, 1);
+    const before = side(k - 1, -1);
+    const change = runtimePct(med(after), med(before));
+    if (change == null || Math.abs(change) < Math.max(min, RUNTIME_STEP_NOISE * noise) || Math.sign(change) !== Math.sign(jump)) continue;
+    out.push({ i, change, after, before });
+  }
+  return out;
+}
+
+// The lasting steps in the shown benchmarks' instruction counts in the range: one per
+// benchmark and build, with the change in instructions and in the judged metric (each
+// the median of the builds after against that of the builds before). The benchmarks
+// judged on wall time are left out: their counters see the calling thread only.
 function runtimeSteps() {
   const idx = runtimeIndices();
   const out = [];
   for (const x of runtimeData.benchmarks) {
     if (x.metric === "time" || runtimeHidden.has(x.category) || !matchesSearchWords(x.name, runtimeFilter)) continue;
     const has = idx.filter((i) => runtimeValue(x.name, i, "instructions") != null);
-    const instr = (i) => runtimeValue(x.name, i, "instructions");
-    const med = (list, key) => sysimageMedian(list.map((i) => runtimeValue(x.name, i, key)).filter((v) => v != null));
-    const wiggles = [];
-    for (let k = 1; k < has.length; k++) if (runtimeSameSource(has[k], has[k - 1])) wiggles.push(Math.abs(runtimePct(instr(has[k]), instr(has[k - 1]))));
-    wiggles.sort((a, c) => a - c);
-    const noise = wiggles.length ? wiggles[Math.floor(0.9 * (wiggles.length - 1))] : 0;
-    for (let k = 1; k < has.length; k++) {
-      const i = has[k];
-      if (!runtimeSameSource(i, has[k - 1]) || Math.abs(runtimePct(instr(i), instr(has[k - 1]))) < RUNTIME_INSTR_PCT) continue;
-      const side = (from, dir) => {
-        const list = [];
-        for (let m = from; m >= 0 && m < has.length && list.length < RUNTIME_STEP_WINDOW && runtimeSameSource(has[m], i); m += dir) list.push(has[m]);
-        return list;
-      };
-      const after = side(k, 1);
-      const before = side(k - 1, -1);
-      const change = runtimePct(med(after, "instructions"), med(before, "instructions"));
-      if (change == null || Math.abs(change) < Math.max(RUNTIME_INSTR_PCT, RUNTIME_STEP_NOISE * noise)) continue;
-      if (Math.sign(change) !== Math.sign(instr(i) - instr(has[k - 1]))) continue;
-      const value = runtimePct(med(after, "value"), med(before, "value"));
+    const med = (list) => sysimageMedian(list.map((i) => runtimeValue(x.name, i)).filter((v) => v != null));
+    for (const st of runtimeSeriesSteps(has, (i) => runtimeValue(x.name, i, "instructions"), RUNTIME_INSTR_PCT)) {
+      const value = runtimePct(med(st.after), med(st.before));
       out.push({
-        i,
-        date: runtimeData.builds[i].date,
+        i: st.i,
+        date: runtimeData.builds[st.i].date,
         name: x.name,
         category: x.category,
         metric: x.metric,
-        instr: change,
+        instr: st.change,
         value,
         // The size columns sort by how far from no change
-        abs_instr: Math.abs(change),
+        abs_instr: Math.abs(st.change),
         abs_value: value == null ? null : Math.abs(value),
         // Too few builds after it yet to tell a step from a blip
-        tentative: after.length < 2,
+        tentative: st.after.length < 2,
       });
     }
   }
   return out;
+}
+
+// A series' points at its lasting steps are drawn larger, and easier to hover, than the
+// rest; `_keepMarker` keeps them that size where spacedPointRadius shrinks crowded markers
+function runtimeStepPoints(steps, radius, data) {
+  const at = (ctx) => steps.has(ctx.dataset.data[ctx.dataIndex]?.i);
+  return {
+    data,
+    _keepMarker: data.map((p) => steps.has(p.i)),
+    pointRadius: (ctx) => (at(ctx) ? 4.5 : radius),
+    pointHoverRadius: (ctx) => (at(ctx) ? 6 : 4),
+    pointHitRadius: (ctx) => (at(ctx) ? 8 : 1),
+  };
 }
 
 function renderRuntimeChangesTable() {
