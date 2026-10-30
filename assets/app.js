@@ -19537,6 +19537,22 @@ function runtimeDefaultBench() {
   return rows[0]?.name || runtimeData.benchmarks[0]?.name || null;
 }
 
+// The weekly runs of published julias, drawn on a benchmark's chart beside master:
+// [payload key, label, point style], as the TTFX tab's references
+const RUNTIME_REFS = [
+  ["releases", "Latest release", "rectRot"],
+  ["lts", "LTS", "rect"],
+  ["branch_nightly", "Next release nightly", "circle"],
+];
+
+// One reference series' points of `name` in the range: each run's fastest block
+function runtimeRefPoints(key, name) {
+  const start = runtimeTimeRangeDays > 0 ? Date.now() - runtimeTimeRangeDays * 864e5 : -Infinity;
+  return (runtimeData[key] || [])
+    .filter((r) => runtimeTime(r) >= start && r.values[name]?.[0] != null)
+    .map((r) => ({ x: runtimeTime(r), y: r.values[name][0], r }));
+}
+
 function drawRuntime() {
   if (!runtimeData) return;
   populateRuntimeBenchList();
@@ -19788,7 +19804,10 @@ function updateRuntimeCharts() {
   const open = (bench) =>
     tapAgainToOpen((evt, elements, chart) => {
       const e = elements.find((x) => chart.data.datasets[x.datasetIndex].data[x.index]?.i != null && !chart.data.datasets[x.datasetIndex]._band);
-      if (e) showRuntimeBuildPopup(chart.data.datasets[e.datasetIndex].data[e.index].i, bench);
+      if (e) return showRuntimeBuildPopup(chart.data.datasets[e.datasetIndex].data[e.index].i, bench);
+      // A reference run opens its run page
+      const r = elements.map((x) => chart.data.datasets[x.datasetIndex].data[x.index]?.r).find((r) => r);
+      if (r) window.open(runtimeRunURL("julia-ci", r.build, r.job_id), "_blank", "noopener");
     });
   const xAxis = () => timeAxis({ textColor: theme.text, gridColor: theme.grid, min: xMin, max: xMax });
   const yAxis = (extra) => ({
@@ -19882,11 +19901,36 @@ function updateRuntimeCharts() {
   const has = idx.filter((i) => runtimeValue(name, i) != null);
   const point = (i, key) => ({ x: runtimeTime(runtimeData.builds[i]), y: runtimeValue(name, i, key), i });
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
+  const refs = RUNTIME_REFS.map(([key, label, pointStyle]) => {
+    const pts = runtimeRefPoints(key, name);
+    const newest = pts.length ? pts[pts.length - 1].r.version : null;
+    return {
+      label,
+      _ref: true,
+      data: pts,
+      borderColor: ttfxReleaseVersionColor(newest),
+      backgroundColor: ttfxReleaseVersionColor(newest),
+      pointBackgroundColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
+      pointBorderColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
+      borderWidth: 1,
+      borderDash: [4, 3],
+      pointStyle,
+      pointRadius: 3.5,
+      pointHoverRadius: 5,
+    };
+  }).filter((ds) => ds.data.length);
+  const refTitle = (raw) => `${raw.r.version} · weekly reference · ${formatUtc(raw.r.date)}`;
   const benchTooltip = {
     filter: (item) => !item.dataset._band,
     callbacks: {
-      title: runtimeTooltipTitle,
+      title: (items) => (items.length && items[0].raw.r ? refTitle(items[0].raw) : runtimeTooltipTitle(items)),
       label: (ctx) => {
+        if (ctx.raw.r) {
+          const [v, max] = ctx.raw.r.values[name];
+          const lines = [` ${ctx.dataset.label} ${ctx.raw.r.version}: ${runtimeFormat(v, info.metric)}`];
+          if (max != null) lines.push(` Slowest process: ${runtimeFormat(max, info.metric)} (${formatSignedPct(runtimePct(max, v))})`);
+          return lines;
+        }
         const i = ctx.raw.i;
         const max = runtimeValue(name, i, "value_max");
         const lines = [` Fastest process: ${runtimeFormat(ctx.raw.y, info.metric)}`];
@@ -19896,7 +19940,7 @@ function updateRuntimeCharts() {
         return lines;
       },
       afterBody: (items) => {
-        if (!items.length) return [];
+        if (!items.length || items[0].raw.r) return [];
         const i = items[0].raw.i;
         const ns = runtimeValue(name, i, "min_ns");
         const ins = runtimeValue(name, i, "instructions");
@@ -19907,7 +19951,8 @@ function updateRuntimeCharts() {
         if (allocs != null) out.push(`Allocations: ${allocs.toLocaleString("en-US")}`);
         return out;
       },
-      footer: (items) => (items.length ? runtimeBuildFooter(items[0].raw.i) : []),
+      footer: (items) =>
+        !items.length ? [] : items[0].raw.r ? [IS_TOUCH ? "Tap again for the run page" : "Click for the run page"] : runtimeBuildFooter(items[0].raw.i),
     },
   };
   const benchChart = new Chart(document.getElementById("runtime-chart-bench"), {
@@ -19925,7 +19970,7 @@ function updateRuntimeCharts() {
           backgroundColor: colorToRgba(color, 0.18),
         },
         {
-          label: "Fastest block",
+          label: "Master",
           data: has.map((i) => point(i, "value")),
           borderColor: color,
           backgroundColor: color,
@@ -19933,6 +19978,7 @@ function updateRuntimeCharts() {
           pointRadius: 2,
           pointHoverRadius: 4,
         },
+        ...refs,
       ],
     },
     options: {
@@ -19946,7 +19992,17 @@ function updateRuntimeCharts() {
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
         title: title(name, ` · ${runtimeMetricText(info.metric)} per call; line: fastest process, band: range across processes`),
-        legend: { display: false },
+        // The master line and the weekly references, which a click hides
+        legend: {
+          display: refs.length > 0,
+          labels: {
+            color: theme.text,
+            usePointStyle: true,
+            boxWidth: 14,
+            font: { size: 11 },
+            filter: (item, data) => !data.datasets[item.datasetIndex]._band,
+          },
+        },
         zoom: zoomOptions(syncRuntimeZoom),
         annotation: notes,
         tooltip: benchTooltip,

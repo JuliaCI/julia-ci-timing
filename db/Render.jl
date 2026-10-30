@@ -1704,7 +1704,31 @@ function runtime(db; since="")
     categories = sort!(unique([info[n].category for n in names]); by=runtime_category_rank)
     return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-ci", "branch" => "master",
                        "categories" => categories, "series_keys" => RUNTIME_SERIES, "benchmarks" => benchmarks, "builds" => builds,
-                       "series" => OrderedDict(n => series[n] for n in names))
+                       "series" => OrderedDict(n => series[n] for n in names),
+                       (key => runtime_refs(db, kind, where, params) for (kind, key) in RUNTIME_REF_KINDS)...)
+end
+
+const RUNTIME_REF_KINDS = ("release" => "releases", "lts" => "lts", "branch_nightly" => "branch_nightly")
+
+# The weekly runs of a published julia of one kind in the window, in time order, each with
+# its fastest and slowest block per benchmark. A run that measured nothing (no release
+# branch ahead of the latest release) is left out.
+function runtime_refs(db, kind, where, params)
+    jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") *
+                    " kind = ? AND has_results = 1 ORDER BY build_created_at, build", (params..., kind))
+    out = [runtime_build(j) for j in jobs]
+    index = Dict(String(j.job_uuid) => k for (k, j) in enumerate(jobs))
+    for b in out
+        b["values"] = OrderedDict{String,Any}()
+    end
+    isempty(out) && return out
+    for r in rows(db, "SELECT job_uuid, name, value, value_max FROM rtb_results WHERE status = 'ok' AND job_uuid IN " *
+                      "(SELECT job_uuid FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = ?)", (params..., kind))
+        k = get(index, String(r.job_uuid), nothing)
+        k === nothing && continue
+        out[k]["values"][String(r.name)] = [rt_round(r.value), rt_round(r.value_max)]
+    end
+    return out
 end
 
 # The master job with results before `j` on another commit, nothing when there is none

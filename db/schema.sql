@@ -571,7 +571,7 @@ CREATE TABLE IF NOT EXISTS rtb_jobs (
     job_uuid         TEXT PRIMARY KEY,
     pipeline         TEXT NOT NULL DEFAULT 'julia-ci',
     build            INTEGER NOT NULL,
-    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', or 'release_branch' for a release branch's own build
+    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', 'release_branch' for a release branch's own build, or 'release', 'lts', 'branch_nightly' for the weekly runs of a published julia
     state            TEXT NOT NULL,                  -- the job's Buildkite state
     build_created_at TEXT NOT NULL,
     commit_sha       TEXT NOT NULL DEFAULT '',       -- the measured julia's commit, else the build's

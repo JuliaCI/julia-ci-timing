@@ -15,6 +15,9 @@
 # calling thread), its maximum over blocks, the retired instructions, the wall time,
 # allocations and the per-block values. The parsed artifacts are kept, compressed, in
 # raw_rtb. rtb_prs keeps the latest compare.json of each open pull request (see below).
+# The weekly julia-ci build that measures published releases (TTFX_RELEASE) runs the
+# job on the newest stable release (kind 'release'), the LTS ('lts') and the nightly of
+# the next release's branch ('branch_nightly'); their rows sit beside the master ones.
 #
 # A run is idempotent: a job with a row is not fetched again.
 #
@@ -31,9 +34,10 @@ using SQLite, DBInterface
 
 const CI_PIPELINE = "julia-ci"
 const PR_PIPELINE = "julia-pr"
-# ":macos: Runtime benchmarks aarch64-apple-darwin"; the triplet keeps a group step of
-# the same name from matching
-const RTB_JOB = r"\bRuntime benchmarks\s+([a-z0-9_]+-[a-z0-9_-]+)$"
+# ":macos: Runtime benchmarks aarch64-apple-darwin", or ":macos: Runtime benchmarks
+# release <triplet>" (also lts, branch nightly) for the weekly references; the triplet
+# keeps a group step of the same name from matching
+const RTB_JOB = r"\bRuntime benchmarks\s+(?:(release|lts|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 const ARTIFACT_DIR = "runtime-benchmarks/out/"
 # The parsed results are some MB of samples per job; the store keeps them at a higher
@@ -124,8 +128,11 @@ function job_row(build, job, results, meta)
     branch = String(something(get(build, :branch, "master"), "master"))
     backend = results === nothing || isempty(results) ? "" : str(get(results[1], :counters_backend, nothing))
     failures = getin(meta, :failures)
+    m = match(RTB_JOB, String(something(get(job, :name, ""), "")))
+    kind = m !== nothing && m.captures[1] !== nothing ? replace(String(m.captures[1]), ' ' => '_') :
+           branch == "master" ? "master" : "release_branch"
     return Dict{String,Any}(
-        "job_uuid" => String(job.id), "build" => Int(build.number), "kind" => branch == "master" ? "master" : "release_branch",
+        "job_uuid" => String(job.id), "build" => Int(build.number), "kind" => kind,
         "state" => String(get(job, :state, "unknown")),
         "build_created_at" => Store.iso(Store.parse_upstream(String(build.created_at))),
         "commit_sha" => isempty(str(getin(head, :commit))) ? String(build.commit) : str(getin(head, :commit)),

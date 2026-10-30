@@ -17,6 +17,8 @@
 # - a compiler slowdown across `compiler/*`
 # - `io/file_roundtrip` failing for a few builds, one job with no results at all, and
 #   `types/show_types` failing in the newest build
+# - weekly runs of the latest release (1.13.2, then 1.13.3), the LTS (1.10.12) and the
+#   next release's nightly, as the TTFX_RELEASE schedule measures them
 # - a step in `parallel` from an agent update, annotated in runtime_annotations.json (one
 #   illustrative note, written next to the database; the repository's file stays empty)
 #
@@ -268,6 +270,7 @@ function main(args)
             push!(rows, job_row(build, job, results, JSON3.read(JSON3.write(meta))))
             push!(builds, (; k, number, uuid, created, sha=c.sha, version, llvm))
         end
+        append!(rows, fake_reference_rows(base, names, t0, t1, number, rng))
         transaction(db) do
             write_rows!(db, rows)
         end
@@ -288,10 +291,49 @@ function main(args)
     println("wrote $(opts["db"]): $n builds from $(Date(t0)) to $(Date(t1)), $(length(names)) benchmarks; notes in $(opts["notes"])")
 end
 
+# The weekly reference runs: each a fixed level against master's starting point, the LTS
+# slower and with its own spread per benchmark, the latest release a little slower
+function fake_reference_rows(base, names, t0, t1, number, rng)
+    rows = Any[]
+    lts_level = Dict(x => exp(0.25 + 0.2randn(rng)) for x in names)
+    rel_level = Dict(x => exp(0.03 + 0.03randn(rng)) for x in names)
+    t = t0 + Day(2)
+    week = 0
+    while t < t1
+        week += 1
+        number += 1
+        release = t < t0 + Day(40) ? "1.13.2" : "1.13.3"
+        for (label, version, level) in (("release", release, rel_level), ("lts", "1.10.12", lts_level),
+                                        ("branch nightly", "1.14.0-rc$(min(3, 1 + week ÷ 4))", nothing))
+            uuid = string(Base.UUID(rand(rng, UInt128)))
+            build = JSON3.read(JSON3.write(Dict("number" => number, "created_at" => Store.iso(t), "commit" => bytes2hex(rand(rng, UInt8, 20)),
+                                                "message" => "Weekly release reference", "branch" => "master")))
+            job = JSON3.read(JSON3.write(Dict("id" => uuid, "state" => "passed", "name" => ":macos: Runtime benchmarks $label aarch64-apple-darwin",
+                                              "started_at" => Store.iso(t + Minute(5)), "finished_at" => Store.iso(t + Minute(10)),
+                                              "web_url" => "https://buildkite.com/julialang/julia-ci/builds/$number#$uuid")))
+            meta = Dict{String,Any}("arm_order" => ["head"], "arms" => Dict("head" => Dict("version" => version, "llvm" => "20.1.8")),
+                                    "machine" => Dict("cpu" => "Apple M4 Pro"), "settings" => Dict("blocks" => 3, "threads" => 4),
+                                    "failures" => Any[])
+            records = Any[]
+            order = 0
+            for block in 1:3, x in names
+                b = base[x]
+                order += 1
+                lv = level === nothing ? 1.0 : level[x]
+                cyc, ins, ns = block_values(b, lv, lv, 0.003randn(rng), rng)
+                push!(records, record(b, "head", block, order, cyc, ins, ns, version))
+            end
+            push!(rows, job_row(build, job, JSON3.read(JSON3.write(records)), JSON3.read(JSON3.write(meta))))
+        end
+        t += Day(7)
+    end
+    return rows
+end
+
 # --- pull requests -------------------------------------------------------------
 
-const DEFAULT_TOL = Dict("cycles" => 0.03, "time" => 0.06)
-const FLOOR = Dict("cycles" => 5_000, "time" => 2_000)
+const DEFAULT_TOL = Dict("cycles" => 0.03, "time" => 0.06, "instructions" => 0.02)
+const FLOOR = Dict("cycles" => 5_000, "time" => 2_000, "instructions" => 10_000)
 const INSTR_TOL = 0.005
 const SUITE_TOL = 0.015
 
