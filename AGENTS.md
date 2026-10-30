@@ -7,7 +7,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host; the nine
+The source of truth is a SQLite database on the site's host; the ten
 `fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC), and
 `fetch_timing.jl`, `fetch_agents.jl` and `fetch_github.jl` also at :15, :25, :45
 and :55. `docs/querying.md` is the
@@ -224,6 +224,50 @@ affected; every one when left out) and `platforms` (build triplets). The tab dra
 a dashed line at that build in the panels of those stages and shows the note in
 the build's popup. Use it for a step that is not the commit being slower, such as
 build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
+
+Runtime benchmarks (the CI → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
+records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks, about
+110 benchmarks in 13 categories on the macOS aarch64 agent) of every julia-ci master build:
+one `rtb_jobs` row per job and one `rtb_results` row per benchmark, reduced over the job's
+blocks (each block its own process). A benchmark is judged on `metric`: `cycles` of the
+calling thread, or `time` for work that leaves it. `value` is the minimum over blocks of
+each block's minimum of that metric (cycles, or ns), `value_max` the largest of those
+block minima; `instructions` (retired, per call) are exact from process to process, so a
+change there means the code or the work changed, whether or not it costs time.
+`api/runtime/summary` serves them per benchmark as arrays aligned with `builds`:
+
+```text
+{ "categories": ["scalar", ...], "series_keys": ["value", "value_max", "instructions", "min_ns", "allocs", "bytes"],
+  "benchmarks": [ { "name": "simd/sum_f64_simd", "category", "metric", "ops" }, ... ],
+  "builds": [ { "build", "job_id", "commit", "date", "version", "llvm", "state", "message", ...,
+                "failed": { "<name>": "error" } }, ... ],
+  "series": { "<name>": { "value": [...], "value_max": [...], ... } } }
+```
+
+`min_ns / ops` is the time per work item. On julia-pr the job compares the head with the
+master build of the merge-base and uploads `compare.json`; `rtb_prs` keeps the latest one
+of each open pull request (current state only, like `ttfx_prs`), and `api/runtime/prs`
+ranks them by the geometric mean of every benchmark's ratio, with every benchmark's change
+under `changes`. The tab's table switches between the benchmarks and those pull requests;
+hovering one projects it onto the charts, and Show (`rp=<number>`) adds its change of every
+benchmark to the benchmarks table. The open pull requests come
+from the list `fetch_ttfx.jl` keeps in `meta`, so this fetcher spends no GitHub requests
+unless that list is older than six hours.
+
+Hand-written notes on julia-ci builds where the benchmark machine or the suite changed live
+in `data/runtime_annotations.json` (`{ "schema_version": 1, "annotations": [...] }`), served
+like the others from `api/notes/runtime_annotations`: each names a julia-ci `build` plus a
+short `label` and a fuller `description`, with an optional `kind` (`runner` or `driver`, as
+for TTFX), `url`, and `categories` or `benchmarks` to limit it to those (every chart when
+left out). The tab draws a dashed line at that build and shows the note in the build's
+popup. It also draws one, unlabelled in the file, wherever the measured julia's LLVM
+version changes, since that moves many benchmarks at once.
+
+`tools/fake_runtime_data.jl` writes a database of synthetic history around the values of a
+real `results.json` (with an LLVM bump, a regression that is fixed, a GC improvement, a
+compiler slowdown, failing benchmarks, an annotated runner change and four open pull
+requests), through the fetcher's own row functions, for previewing the tab with
+`db/serve.jl --notes`; its header has the commands.
 
 ## Analysis helpers (`analysis/`)
 

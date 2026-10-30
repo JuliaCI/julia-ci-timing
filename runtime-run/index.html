@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Julia Performance Tracking: Runtime benchmark run</title>
+    <meta name="description" content="One Runtime benchmarks job of Julia's CI: every benchmark's change against the base build, its samples, instruction counts and allocations." />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+    <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
+    <script>
+      (function () {
+        try {
+          const t = localStorage.getItem("theme");
+          if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+      integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+      crossorigin="anonymous"
+      defer
+    ></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../assets/styles.css?v=__BUILD_COMMIT_SHORT__" />
+  </head>
+  <body class="rr-page">
+    <noscript><p>This page needs JavaScript. The data is at /api/runtime/run/&lt;pipeline&gt;/&lt;build&gt;/&lt;job&gt;.</p></noscript>
+    <div class="toolbar" role="toolbar" aria-label="Page controls">
+      <h1>
+        <img src="../favicon.svg" alt="" class="julia-logo" /><a
+          href="https://github.com/JuliaLang/julia"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="link-inherit"
+          >julia</a
+        ><span class="site-title"> - Performance Tracking</span>
+      </h1>
+      <a class="btn btn-link" href="../runtime" title="The runtime benchmarks of every master build">Runtime tab</a>
+      <a
+        class="btn btn-link"
+        href="https://github.com/JuliaCI/julia-ci-benchmarks#readme"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="What the suite measures and how compare.jl judges a change"
+        >Method</a
+      >
+      <span class="updated"></span>
+      <button class="btn btn-icon" id="theme-toggle" onclick="cycleTheme()" aria-label="Toggle theme" title="Theme: system">◑</button>
+    </div>
+    <main class="rr-main" id="rr-main">
+      <div class="loading" id="rr-loading">Loading the job's results...</div>
+    </main>
+    <script src="../assets/runtime-run.js?v=__BUILD_COMMIT_SHORT__" defer></script>
+  </body>
+</html>

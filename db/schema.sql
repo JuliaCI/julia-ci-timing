@@ -559,6 +559,118 @@ CREATE TABLE IF NOT EXISTS sysimage_stdlibs (
     PRIMARY KEY (job_uuid, stdlib)
 ) WITHOUT ROWID;
 
+-- --------------------------------------------------------------- runtime --
+-- The runtime benchmarks (JuliaCI/julia-ci-benchmarks) of julia-ci builds, from
+-- the artifacts of the `Runtime benchmarks` job (fetch_runtime.jl). Each job
+-- runs every benchmark in several blocks, each block its own process. A
+-- benchmark is judged on `metric`: the cycles of the calling thread, or wall
+-- time for work that leaves it. Instruction counts are exact from process to
+-- process, so a change in them means the generated code or the work changed.
+-- Rows of pipeline 'manyjulias' are master commits measured before CI ran the
+-- job, from manyjulias builds on another machine; never compare them with the
+-- julia-ci rows.
+
+CREATE TABLE IF NOT EXISTS rtb_jobs (
+    job_uuid         TEXT PRIMARY KEY,
+    pipeline         TEXT NOT NULL DEFAULT 'julia-ci', -- or 'manyjulias': the backfill of master commits (db/import_runtime.jl), on another machine
+    build            INTEGER NOT NULL,
+    kind             TEXT NOT NULL DEFAULT 'master', -- 'master', 'release_branch' for a release branch's own build, or 'release', 'lts', 'branch_nightly' for the weekly runs of a published julia
+    state            TEXT NOT NULL,                  -- the job's Buildkite state
+    build_created_at TEXT NOT NULL,
+    commit_sha       TEXT NOT NULL DEFAULT '',       -- the measured julia's commit, else the build's
+    message          TEXT NOT NULL DEFAULT '',       -- the build's message, first line, cut at 80 characters
+    version          TEXT NOT NULL DEFAULT '',       -- the measured julia's VERSION
+    llvm             TEXT NOT NULL DEFAULT '',       -- its LLVM version
+    cpu_target       TEXT NOT NULL DEFAULT '',
+    agent            TEXT NOT NULL DEFAULT '',       -- the agent's hostname
+    machine          TEXT NOT NULL DEFAULT '',       -- the CPU, e.g. Apple M4 Pro
+    suite_commit     TEXT NOT NULL DEFAULT '',       -- julia-ci-benchmarks commit
+    counters_backend TEXT NOT NULL DEFAULT '',       -- what recorded the counters: thread, kperf, or none
+    blocks           INTEGER,                        -- blocks the job was set to run
+    threads          INTEGER,                        -- threads of the parallel category
+    n_benchmarks     INTEGER,                        -- benchmarks in its results
+    n_failed         INTEGER,                        -- of those, with no block ok
+    failures         TEXT,                           -- JSON: processes that failed, as results-meta.json lists them
+    duration_s       REAL,                           -- the suite's own run time
+    started_at       TEXT,
+    finished_at      TEXT,
+    web_url          TEXT,
+    has_results      INTEGER NOT NULL DEFAULT 0,     -- 0 when the job uploaded no results.json
+    change_seq       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rtb_jobs_build ON rtb_jobs (build_created_at, build);
+
+-- One row per job and benchmark, reduced over the blocks that ran it. value is
+-- the minimum over blocks of the per-block minimum of the judged metric (cycles,
+-- or ns for time), value_max the maximum of those per-block minima; the per-block
+-- values are kept in block order, as JSON arrays.
+CREATE TABLE IF NOT EXISTS rtb_results (
+    job_uuid           TEXT NOT NULL REFERENCES rtb_jobs (job_uuid),
+    name               TEXT NOT NULL,                -- category/benchmark, e.g. simd/sum_f64
+    category           TEXT NOT NULL,
+    metric             TEXT NOT NULL,                -- 'cycles', 'instructions' or 'time'
+    status             TEXT NOT NULL,                -- 'ok' when any block ran, else 'error' or 'skipped'
+    error              TEXT,                         -- the first error, also when other blocks ran
+    blocks             INTEGER NOT NULL,             -- blocks that ran it
+    value              REAL,                         -- cycles, instructions or ns
+    value_max          REAL,
+    instructions       REAL,                         -- minimum retired instructions per call, NULL without counters
+    min_ns             REAL,                         -- minimum wall time per call
+    median_ns          REAL,                         -- lowest per-block median wall time
+    allocs             INTEGER,                      -- minimum allocations per call
+    bytes              INTEGER,                      -- minimum bytes allocated per call
+    ops                INTEGER,                      -- work items per call: min_ns / ops is the time per item
+    tolerance          REAL,                         -- the benchmark's own tolerance, NULL for the default
+    block_values       TEXT,                         -- JSON: value per block
+    block_ns           TEXT,                         -- JSON: min_ns per block
+    block_instructions TEXT,                         -- JSON: instructions per block
+    PRIMARY KEY (job_uuid, name)
+) WITHOUT ROWID;
+
+-- The latest finished runtime benchmark comparison (head against the master
+-- build of the merge-base, interleaved in one job) of every open julia pull
+-- request that has one. Current state only, like ttfx_prs.
+CREATE TABLE IF NOT EXISTS rtb_prs (
+    pr_number        INTEGER PRIMARY KEY,
+    title            TEXT NOT NULL DEFAULT '',
+    author           TEXT NOT NULL DEFAULT '',
+    draft            INTEGER NOT NULL DEFAULT 0,
+    pr_head_sha      TEXT NOT NULL DEFAULT '',   -- the pull request's head now; the job may be older
+    base_ref         TEXT NOT NULL DEFAULT '',
+    build            INTEGER NOT NULL,           -- julia-pr build number
+    job_uuid         TEXT NOT NULL,
+    job_state        TEXT NOT NULL,
+    build_created_at TEXT NOT NULL,
+    finished_at      TEXT,
+    web_url          TEXT,
+    head_commit      TEXT NOT NULL DEFAULT '',
+    head_version     TEXT NOT NULL DEFAULT '',
+    head_llvm        TEXT NOT NULL DEFAULT '',
+    base_commit      TEXT NOT NULL DEFAULT '',
+    base_version     TEXT NOT NULL DEFAULT '',
+    base_llvm        TEXT NOT NULL DEFAULT '',
+    blocks           INTEGER,
+    verdict          TEXT NOT NULL,              -- regression (a benchmark's or a category's), improvement or same
+    n_benchmarks     INTEGER NOT NULL,
+    n_regressions    INTEGER NOT NULL,           -- benchmarks
+    n_improvements   INTEGER NOT NULL,
+    n_instr_changed  INTEGER NOT NULL,           -- benchmarks retiring a different number of instructions
+    n_errors         INTEGER NOT NULL,           -- benchmarks that failed on either arm
+    geomean          REAL,                       -- head/base over every benchmark
+    categories       TEXT NOT NULL,              -- JSON: compare.json's categories
+    benchmarks       TEXT NOT NULL,              -- JSON: compare.json's benchmarks
+    errors           TEXT NOT NULL,              -- JSON: compare.json's errors and failures
+    change_seq       INTEGER NOT NULL
+);
+
+-- Buildkite artifacts expire; keep the pair we parsed.
+CREATE TABLE IF NOT EXISTS raw_rtb (
+    job_uuid    TEXT PRIMARY KEY REFERENCES rtb_jobs (job_uuid),
+    fetched_at  TEXT NOT NULL,
+    results_zst BLOB,
+    meta_zst    BLOB
+);
+
 -- ------------------------------------------------------------- downloads --
 -- Rollup rows from julialang-logs public_outputs, stored as published.
 -- request_addrs counts distinct addresses within its own row only and must

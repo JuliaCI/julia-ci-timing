@@ -16,7 +16,7 @@ fi
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
 
 # The fetchers of a whole ingest; `ingest` runs these unless given others
-ALL_FETCHERS=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_sizes.jl fetch_sysimage.jl fetch_agents.jl fetch_github.jl)
+ALL_FETCHERS=(fetch_timing.jl fetch_benchmarks.jl fetch_pkgeval.jl fetch_packages.jl fetch_ttfx.jl fetch_runtime.jl fetch_sizes.jl fetch_sysimage.jl fetch_agents.jl fetch_github.jl)
 
 fetch_all() {
   # One process runs the fetchers (db/ingest.jl), so they share its compiled
@@ -47,7 +47,7 @@ export_all() {
   # reads them from the API (api/notes/<name>), which always has the deployed
   # code's; these copies, from whatever image this run started on, are for
   # readers of /data/ and can lag a deploy by a run.
-  cp /app/data/ttfx_annotations.json /app/data/sysimage_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
+  cp /app/data/ttfx_annotations.json /app/data/sysimage_annotations.json /app/data/runtime_annotations.json /app/data/methodology_changes.json "$export_dir/" || rc=1
   return $rc
 }
 
@@ -76,7 +76,7 @@ case "${1:-ingest}" in
       # Every page directory, so a new tab needs no change here
       for index in /app/*/index.html; do cp -r "$(dirname "$index")" "$stage/"; done
       commit="$(cat /app/BUILD_COMMIT 2>/dev/null || echo unknown)"
-      sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" "$stage/index.html"
+      sed -i "s|__BUILD_COMMIT__|$commit|g; s|__BUILD_COMMIT_SHORT__|${commit:0:7}|g" "$stage/index.html" "$stage/runtime-run/index.html"
       # A top-level page the image no longer ships goes too
       for f in /site/*.html; do
         if [ -e "$f" ] && [ ! -e "$stage/${f##*/}" ]; then mv "$f" "$old/"; fi

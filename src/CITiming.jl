@@ -17,6 +17,8 @@ include(joinpath(@__DIR__, "..", "db", "Render.jl"))
 using .Render
 using HTTP, SQLite, JSON3, CodecZlib, Dates, DataStructures
 
+include("runtime_run.jl")
+using .RuntimeRun
 include("api.jl")
 
 function __init__()

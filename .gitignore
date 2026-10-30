@@ -4,6 +4,7 @@
 data/*
 !data/ttfx_annotations.json
 !data/sysimage_annotations.json
+!data/runtime_annotations.json
 !data/methodology_changes.json
 
 # Julia (Manifest.toml is tracked: the image instantiates from it)
