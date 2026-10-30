@@ -103,6 +103,8 @@
     const last = new Map();
     let level = null;
     for (const e of entries) {
+      // An entry may start the chain over: its change from the entries before counts as none
+      if (e.reset) last.clear();
       let logSum = 0;
       let n = 0;
       let stepSum = 0;

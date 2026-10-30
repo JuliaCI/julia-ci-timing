@@ -19325,7 +19325,7 @@ let runtimeSince = null; // the start of the window loaded or on its way, "" for
 let runtimeBench = null; // the benchmark the lower charts show
 let runtimeHidden = new Set(); // categories left out of the index chart and the table
 let runtimeReference = null; // a build's runtimeBuildKey, or null for the first build in the range
-let runtimeSource = null; // "ci" or "manyjulias" (the backfill), null for what the API picks
+let runtimeSource = null; // "ci" or "manyjulias" (the backfill) alone, null for the backfill followed by CI
 let runtimeTableView = "benchmarks"; // "benchmarks" | "prs"
 let runtimeFilter = "";
 let runtimeSort = { col: "move", asc: false };
@@ -19347,10 +19347,10 @@ const RUNTIME_BASELINE = 10;
 // What compare.jl in julia-ci-benchmarks calls a change, in %, unless a
 // benchmark sets its own tolerance
 const RUNTIME_TOLERANCE = { cycles: 3, instructions: 2, time: 6 };
-// The series the tab can show, each measured on its own machine
-const RUNTIME_SOURCE_LABELS = { ci: "CI", manyjulias: "Backfill" };
-const RUNTIME_SOURCE_HINT =
-  "The backfill measured master commits from before CI ran these benchmarks, from manyjulias builds on another machine (one block per commit). Its numbers are not comparable with CI's.";
+// The series the tab can show, each measured on its own machine; nothing is compared
+// across the switch from the one to the other
+const RUNTIME_SOURCE_LABELS = { all: "Backfill, then CI", ci: "CI only", manyjulias: "Backfill only" };
+const RUNTIME_SWITCH_HINT = "The benchmark machine changed here, so the numbers step: neither the changes nor the index compare across this line.";
 // Instruction counts are exact, so a change beyond this is the code changing
 const RUNTIME_INSTR_PCT = 0.5;
 // The table flags at most this many benchmarks, those that moved most beyond their tolerance
@@ -19379,6 +19379,8 @@ const runtimeTolerance = (metric) => RUNTIME_TOLERANCE[metric] ?? RUNTIME_TOLERA
 const runtimeIsBackfill = (b) => b.source === "manyjulias";
 const runtimeBuildKey = (b) => (runtimeIsBackfill(b) ? b.commit.slice(0, 10) : String(b.build));
 const runtimeBuildName = (b) => (runtimeIsBackfill(b) ? `commit ${b.commit.slice(0, 10)}` : `build #${b.build}`);
+// Whether builds i and j were measured on the same machine, so their values compare
+const runtimeSameSource = (i, j) => runtimeData.builds[i].source === runtimeData.builds[j].source;
 
 function runtimeColors(categories = runtimeData?.categories || []) {
   const colors = RUNTIME_COLORS[isDarkMode() ? "dark" : "light"];
@@ -19428,7 +19430,8 @@ function runtimeRefIndex(idx) {
     const i = idx.find((k) => runtimeBuildKey(runtimeData.builds[k]) === runtimeReference);
     if (i != null) return i;
   }
-  return idx.find((k) => runtimeData.builds[k]._n > 0) ?? idx[0];
+  const latest = runtimeLatestIndex(idx);
+  return idx.find((k) => runtimeData.builds[k]._n > 0 && (latest == null || runtimeSameSource(k, latest))) ?? idx[0];
 }
 
 // The newest build with results among `idx`
@@ -19437,16 +19440,16 @@ function runtimeLatestIndex(idx) {
   return null;
 }
 
-// The build with results before `i`
+// The build with results before `i` on the same machine
 function runtimePrevIndex(i) {
-  for (let j = i - 1; j >= 0; j--) if (runtimeData.builds[j]._n > 0) return j;
+  for (let j = i - 1; j >= 0 && runtimeSameSource(i, j); j--) if (runtimeData.builds[j]._n > 0) return j;
   return null;
 }
 
-// The values of `name` in the RUNTIME_BASELINE builds before `i` that have one
+// The values of `name` in the RUNTIME_BASELINE builds before `i` on the same machine that have one
 function runtimeBefore(name, i, key = "value") {
   const out = [];
-  for (let j = i - 1; j >= 0 && out.length < RUNTIME_BASELINE; j--) {
+  for (let j = i - 1; j >= 0 && out.length < RUNTIME_BASELINE && runtimeSameSource(i, j); j--) {
     const v = runtimeValue(name, j, key);
     if (v != null) out.push(v);
   }
@@ -19533,7 +19536,7 @@ async function loadRuntimeData() {
     for (const [i, b] of d.builds.entries()) b._n = Object.values(d.series).filter((s) => s.value[i] != null).length;
     runtimeData = d;
     // The notes are on CI's builds
-    runtimeAnnotations = d.source === "ci" ? notes : [];
+    runtimeAnnotations = d.source !== "manyjulias" ? notes : [];
     resolveRuntimeHidden();
     updateRuntimeSourceSelect();
     if (!runtimeBench || !runtimeInfo(runtimeBench)) runtimeBench = runtimeDefaultBench();
@@ -19674,9 +19677,10 @@ function updateRuntimeSourceSelect() {
   const el = document.getElementById("runtime-source");
   const sources = runtimeData.sources || [];
   el.hidden = sources.length < 2;
-  el.innerHTML = sources
+  const machine = (x) => (x?.machine ? ` (${x.machine.replace(/ \d+-Core Processor$/, "")})` : "");
+  el.innerHTML = [{ source: "all" }, ...sources]
     .map((x) => {
-      const label = `${RUNTIME_SOURCE_LABELS[x.source] || x.source}${x.machine ? ` (${x.machine.replace(/ \d+-Core Processor$/, "")})` : ""}`;
+      const label = `${RUNTIME_SOURCE_LABELS[x.source] || x.source}${machine(x)}`;
       return `<option value="${x.source}"${x.source === runtimeData.source ? " selected" : ""}>${escapeHtml(label)}</option>`;
     })
     .join("");
@@ -19690,7 +19694,7 @@ function updateRuntimeSourceSelect() {
 }
 
 function setRuntimeSource(source) {
-  runtimeSource = source;
+  runtimeSource = source === "all" ? null : source;
   runtimeReference = null;
   updateRuntimeURL();
   document.getElementById("runtime-chart-loading").style.display = "";
@@ -19795,6 +19799,11 @@ function runtimeNoteLines(idx, name, isDark) {
     const id = `note-${n}`;
     out[id] = chartNoteAnnotation(a, runtimeTime(builds[idx[k]]), id, isDark, RUNTIME_ANNOTATION_HINT);
   });
+  const start = idx.length ? runtimeTime(builds[idx[0]]) : Infinity;
+  (runtimeData.markers || []).forEach((m, n) => {
+    const x = Date.parse(m.at);
+    if (x >= start) out[`switch-${n}`] = chartNoteAnnotation({ ...m, kind: "runner" }, x, `switch-${n}`, isDark, RUNTIME_SWITCH_HINT);
+  });
   for (const i of idx) {
     const prev = runtimePrevIndex(i);
     if (prev == null || !builds[i]._n || !builds[i].llvm || builds[prev].llvm === builds[i].llvm) continue;
@@ -19830,7 +19839,8 @@ function runtimeBuildFooter(i) {
   const failed = Object.keys(b.failed || {});
   if (failed.length) lines.push(`${failed.length} benchmark${failed.length === 1 ? "" : "s"} failed`);
   if (b.message) lines.push(...wrapTooltipText(b.message));
-  for (const a of runtimeAnnotations.filter((a) => a.build === b.build)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
+  if (runtimeIsBackfill(b)) lines.push(`Backfill: a manyjulias build on ${b.machine || "another machine"}`);
+  for (const a of runtimeAnnotations.filter((a) => a.build === b.build && !runtimeIsBackfill(b))) lines.push(...wrapTooltipText(`Note: ${a.description}`));
   lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click a point for details and links");
   return lines;
 }
@@ -19893,7 +19903,12 @@ function updateRuntimeCharts() {
   const datasets = [];
   for (const cat of [RUNTIME_ALL, ...runtimeData.categories]) {
     const names = runtimeData.benchmarks.filter((b) => cat === RUNTIME_ALL || b.category === cat).map((b) => b.name);
-    const entries = idx.map((i) => ({ x: i, values: new Map(names.map((n) => [n, runtimeValue(n, i)]).filter(([, v]) => v != null)) }));
+    // The step at a change of machine is no change: the chain starts over there
+    const entries = idx.map((i, k) => ({
+      x: i,
+      values: new Map(names.map((n) => [n, runtimeValue(n, i)]).filter(([, v]) => v != null)),
+      reset: k > 0 && !runtimeSameSource(i, idx[k - 1]),
+    }));
     const pts = BenchCore.chainLink(entries);
     const base = pts.find((p) => p.x >= ref) ?? pts[0];
     if (!base) continue;
@@ -19969,6 +19984,10 @@ function updateRuntimeCharts() {
   const color = colors[info.category];
   const has = idx.filter((i) => runtimeValue(name, i) != null);
   const point = (i, key) => ({ x: runtimeTime(runtimeData.builds[i]), y: runtimeValue(name, i, key), i });
+  // The points of `list`, the line broken where the machine changes
+  const line = (list, key) =>
+    list.flatMap((i, k) =>
+      k > 0 && !runtimeSameSource(i, list[k - 1]) ? [{ x: (runtimeTime(runtimeData.builds[list[k - 1]]) + runtimeTime(runtimeData.builds[i])) / 2, y: null }, point(i, key)] : [point(i, key)]);
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
   const refs = RUNTIME_REFS.map(([key, label, pointStyle]) => {
     const pts = runtimeRefPoints(key, name);
@@ -20031,7 +20050,7 @@ function updateRuntimeCharts() {
         {
           label: "Slowest block",
           _band: true,
-          data: has.map((i) => point(i, "value_max")),
+          data: line(has, "value_max"),
           borderWidth: 0,
           pointRadius: 0,
           pointHoverRadius: 0,
@@ -20040,7 +20059,7 @@ function updateRuntimeCharts() {
         },
         {
           label: "Master",
-          data: has.map((i) => point(i, "value")),
+          data: line(has, "value"),
           borderColor: color,
           backgroundColor: color,
           borderWidth: 1.2,
@@ -20078,7 +20097,7 @@ function updateRuntimeCharts() {
       },
       scales: {
         x: xAxis(),
-        y: yAxis({ ticks: { color: theme.text, callback: (v) => (info.metric === "cycles" ? runtimeCount(v) : runtimeNs(v)) } }),
+        y: yAxis({ ticks: { color: theme.text, callback: (v) => (info.metric === "time" ? runtimeNs(v) : runtimeCount(v)) } }),
       },
     },
   });
@@ -20092,7 +20111,7 @@ function updateRuntimeCharts() {
       datasets: [
         {
           label: "Instructions",
-          data: instr.map((i) => point(i, "instructions")),
+          data: line(instr, "instructions"),
           borderColor: instrColor,
           backgroundColor: instrColor,
           borderWidth: 1.2,
@@ -20164,7 +20183,8 @@ function runtimeTableRows({ all = false } = {}) {
       const ns = runtimeValue(x.name, latest, "min_ns");
       const ins = runtimeValue(x.name, latest, "instructions");
       const allocs = runtimeValue(x.name, latest, "allocs");
-      const refAllocs = ref == null ? null : runtimeValue(x.name, ref, "allocs");
+      const comparable = ref != null && runtimeSameSource(ref, latest);
+      const refAllocs = comparable ? runtimeValue(x.name, ref, "allocs") : null;
       return {
         name: x.name,
         category: x.category,
@@ -20172,7 +20192,7 @@ function runtimeTableRows({ all = false } = {}) {
         failed: b.failed[x.name] || null,
         latest: v,
         perop: ns == null ? null : ns / (x.ops || 1),
-        ref: ref === latest ? null : runtimePct(v, ref == null ? null : runtimeValue(x.name, ref)),
+        ref: ref === latest || !comparable ? null : runtimePct(v, runtimeValue(x.name, ref)),
         median,
         instr: runtimePct(ins, runtimeBaseline(x.name, latest, "instructions")),
         allocs,
@@ -20749,10 +20769,12 @@ function hideRuntimePrPoints() {
 function overviewRuntimeCard(src, prs) {
   const builds = (src && src.builds) || [];
   if (!builds.length) return overviewMissingCard("ci-runtime", "Runtime benchmarks", "The runtime benchmark summary");
-  const has = (i) => Object.values(src.series).some((s) => s.value[i] != null);
+  const hasValues = (i) => Object.values(src.series).some((s) => s.value[i] != null);
   let latest = builds.length - 1;
-  while (latest > 0 && !has(latest)) latest--;
+  while (latest > 0 && !hasValues(latest)) latest--;
   const b = builds[latest];
+  // Only builds measured on the latest one's machine compare with it
+  const has = (i) => hasValues(i) && builds[i].source === b.source;
   const latestMs = Date.parse(b.date);
   const ageMs = Date.now() - Date.parse(builds[builds.length - 1].date);
   const colors = overviewColors();
@@ -20774,7 +20796,7 @@ function overviewRuntimeCard(src, prs) {
   // The benchmarks that moved most, against the median of the builds before the latest
   const before = (n) => {
     const vs = [];
-    for (let j = latest - 1; j >= 0 && vs.length < RUNTIME_BASELINE; j--) if (value(n, j) != null) vs.push(value(n, j));
+    for (let j = latest - 1; j >= 0 && vs.length < RUNTIME_BASELINE && builds[j].source === b.source; j--) if (value(n, j) != null) vs.push(value(n, j));
     return sysimageMedian(vs);
   };
   const movers = src.benchmarks

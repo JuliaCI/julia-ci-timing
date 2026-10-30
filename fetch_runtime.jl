@@ -18,6 +18,9 @@
 # The weekly julia-ci build that measures published releases (TTFX_RELEASE) runs the
 # job on the newest stable release (kind 'release'), the LTS ('lts') and the nightly of
 # the next release's branch ('branch_nightly'); their rows sit beside the master ones.
+# The backfill of master commits measured before CI ran the job, from manyjulias builds
+# on another machine, comes as a bundle published with julia-ci-benchmarks (see below);
+# its rows have pipeline 'manyjulias'.
 #
 # A run is idempotent: a job with a row is not fetched again.
 #
@@ -26,6 +29,7 @@
 using HTTP
 using JSON3
 using Dates
+using CodecZlib
 
 # The package has the store precompiled
 using CITiming.Store
@@ -406,6 +410,101 @@ function refresh_prs!(db)
     return length(rows)
 end
 
+# --- the backfill ----------------------------------------------------------------
+
+# Master commits measured on manyjulias builds before CI ran the job, on another machine:
+# a series of their own, never compared with julia-ci's rows. The machine running it
+# publishes them as one gzipped file of JSON lines, a release asset of julia-ci-benchmarks,
+# one line per commit: sha, date (its merge time, ISO 8601 UTC), subject, rc (bench.jl's
+# exit code), meta (results-meta.json) and results (results.json, each record's samples
+# cut to their minimum, which is all summarize_records reads).
+const BACKFILL_PIPELINE = "manyjulias"
+const BACKFILL_RELEASE = "https://api.github.com/repos/JuliaCI/julia-ci-benchmarks/releases/tags/backfill"
+const BACKFILL_ASSET = "runtime-backfill.jsonl.gz"
+
+backfill_job_uuid(sha) = "$BACKFILL_PIPELINE-$sha"
+
+"""
+    backfill_row(sha, results, meta; rc, date, subject) -> Dict
+
+One backfilled commit's row, as `job_row` makes it for a julia-ci job. `date` is the
+commit's merge time (ISO 8601 UTC); without it, the build's commit date (to the minute).
+nothing when neither is known.
+"""
+function backfill_row(sha, results, meta; rc, date=nothing, subject="")
+    head = getin(meta, :arms, :head)
+    if date === nothing
+        m = match(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d)", str(getin(head, :date)))
+        m === nothing && return nothing
+        date = Store.iso(DateTime("$(m[1])T$(m[2]):00"))
+    end
+    benchmarks = results === nothing ? Dict{String,Dict{String,Any}}() : summarize_records(results, "head")
+    failures = getin(meta, :failures)
+    started = getin(meta, :started)
+    duration = num(getin(meta, :duration_s))
+    return Dict{String,Any}(
+        "job_uuid" => backfill_job_uuid(sha), "build" => 0, "kind" => "master",
+        "state" => rc == 0 ? "passed" : "failed", "build_created_at" => date, "commit_sha" => sha,
+        "message" => length(subject) > 80 ? first(subject, 77) * "..." : subject,
+        "version" => str(getin(head, :version)), "llvm" => str(getin(head, :llvm)), "cpu_target" => str(getin(head, :cpu_target)),
+        "agent" => str(getin(meta, :machine, :hostname)), "machine" => str(getin(meta, :machine, :cpu)),
+        "suite_commit" => str(getin(meta, :suite_commit)),
+        "counters_backend" => results === nothing || isempty(results) ? "" : str(get(results[1], :counters_backend, nothing)),
+        "blocks" => getin(meta, :settings, :blocks), "threads" => getin(meta, :settings, :threads),
+        "n_benchmarks" => length(benchmarks), "n_failed" => count(b -> b["status"] != "ok", values(benchmarks)),
+        "failures" => failures === nothing ? nothing : JSON3.write(failures), "duration_s" => duration,
+        "started_at" => started === nothing ? missing : Store.iso(DateTime(String(started))),
+        "finished_at" => started === nothing || duration === nothing ? missing :
+                         Store.iso(DateTime(String(started)) + Second(round(Int, duration))),
+        "web_url" => nothing, "has_results" => results === nothing ? 0 : 1,
+        "benchmarks" => benchmarks, "_results" => nothing, "_meta" => nothing)
+end
+
+# The rows of a bundle's commits that `known` (job_uuids) does not have
+function backfill_bundle_rows(io, known)
+    rows = Any[]
+    for line in eachline(GzipDecompressorStream(io))
+        isempty(line) && continue
+        e = JSON3.read(line)
+        sha = String(e.sha)
+        backfill_job_uuid(sha) in known && continue
+        row = backfill_row(sha, get(e, :results, nothing), get(e, :meta, nothing); rc=Int(get(e, :rc, 1)),
+                           date=(d = get(e, :date, nothing); d === nothing ? nothing : Store.iso(Store.parse_upstream(String(d)))),
+                           subject=String(something(get(e, :subject, nothing), "")))
+        row === nothing || push!(rows, row)
+    end
+    return rows
+end
+
+"""
+    refresh_backfill!(db) -> Int
+
+Import the commits of the published backfill bundle that the database does not have yet.
+The asset's update time is kept in meta, so an unchanged bundle costs one request.
+"""
+function refresh_backfill!(db)
+    resp = http_get_retry(BACKFILL_RELEASE, github_headers())
+    resp.status == 404 && return 0
+    resp.status == 200 || error("looking up the backfill release failed: HTTP $(resp.status)")
+    assets = JSON3.read(resp.body).assets
+    i = findfirst(a -> String(a.name) == BACKFILL_ASSET, assets)
+    i === nothing && return 0
+    asset = assets[i]
+    stamp = "$(asset.id) $(asset.updated_at)"
+    seen = query(db, "SELECT value FROM meta WHERE key = 'runtime_backfill_asset'")
+    !isempty(seen) && seen[1].value == stamp && return 0
+    dl = http_get_retry(String(asset.browser_download_url), ["User-Agent" => "julia-ci-timing-fetcher"])
+    dl.status == 200 || error("downloading the backfill bundle failed: HTTP $(dl.status)")
+    known = Set(String(r.job_uuid) for r in query(db, "SELECT job_uuid FROM rtb_jobs WHERE pipeline = ?", (BACKFILL_PIPELINE,)))
+    rows = backfill_bundle_rows(IOBuffer(dl.body), known)
+    transaction(db) do
+        write_rows!(db, rows; pipeline=BACKFILL_PIPELINE, raw=false)
+        Store.setmeta!(db, "runtime_backfill_asset", stamp)
+    end
+    @info "Backfilled commits" new=length(rows)
+    return length(rows)
+end
+
 # --- main ------------------------------------------------------------------------
 
 function run!(db)
@@ -423,7 +522,13 @@ function run!(db)
     catch e
         @error "Updating the pull request comparisons failed" exception=(e, catch_backtrace())
     end
-    return length(rows)
+    n = 0
+    try
+        n = refresh_backfill!(db)
+    catch e
+        @error "Importing the backfill failed" exception=(e, catch_backtrace())
+    end
+    return length(rows) + n
 end
 
 function main(args=ARGS)
