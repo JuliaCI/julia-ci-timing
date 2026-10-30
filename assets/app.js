@@ -20006,6 +20006,10 @@ function updateRuntimeCharts() {
         y: yAxis({
           ticks: { color: theme.text, callback: (v) => formatSignedPct(v, { digits: Math.abs(v) < 10 && v % 1 ? 1 : 0 }) },
           title: { display: true, text: `Change from ${runtimeBuildName(refBuild)} (dotted line), %`, color: theme.text },
+          // As a benchmark's axes, at least ±RUNTIME_MIN_SPAN: a category whose
+          // instructions move by a few would otherwise fill the chart
+          suggestedMin: -RUNTIME_MIN_SPAN,
+          suggestedMax: RUNTIME_MIN_SPAN,
         }),
       },
     },
