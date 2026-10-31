@@ -19571,7 +19571,7 @@ async function loadRuntimeData() {
     runtimeAnnotations = d.source !== "manyjulias" ? notes : [];
     resolveRuntimeHidden();
     updateRuntimeSourceSelect();
-    if (!runtimeBench || !runtimeInfo(runtimeBench)) runtimeBench = runtimeDefaultBench();
+    if (runtimeBench && !runtimeInfo(runtimeBench)) runtimeBench = null;
     setUpdatedLabels();
     document.getElementById("runtime-chart-loading").style.display = "none";
     updateRuntimeURL();
@@ -19603,13 +19603,6 @@ function loadRuntimePrs() {
         runtimePrs = { prs: [], failed: true };
       });
   return runtimePrsLoading;
-}
-
-// With nothing picked, the benchmark that moved most in the newest build
-function runtimeDefaultBench() {
-  const rows = runtimeTableRows({ all: true });
-  rows.sort((a, b) => (b.move ?? -1) - (a.move ?? -1));
-  return rows[0]?.name || runtimeData.benchmarks[0]?.name || null;
 }
 
 // The weekly runs of published julias, drawn on a benchmark's chart beside master:
@@ -20049,8 +20042,10 @@ function updateRuntimeCharts() {
 
   const info = runtimeBench ? runtimeInfo(runtimeBench) : null;
   const head = document.getElementById("runtime-bench-head");
-  head.hidden = !info;
-  if (!info) return;
+  if (!info) {
+    head.innerHTML = '<span class="col-secondary">Pick a benchmark from the list or the table to see its history.</span>';
+    return;
+  }
   const name = info.name;
   // The benchmark's name heads both charts on the right, each titled by what it shows
   head.innerHTML =
