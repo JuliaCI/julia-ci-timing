@@ -12679,13 +12679,28 @@ function toggleTtfxNormalized() {
 
 function setTtfxTableView(view) {
   ttfxTableView = view === "tasks" || view === "builds" ? view : "prs";
-  for (const v of ["prs", "builds", "tasks"]) {
-    document
-      .getElementById("ttfx-view-" + v)
-      .classList.toggle("btn-primary", v === ttfxTableView);
-  }
   updateTtfxTable();
   updateTtfxURL();
+}
+
+// The table's caption: its own switch between its views, then what the view shows
+function renderTtfxCaption() {
+  const n = ttfxPrs && !ttfxPrs.failed ? ` (${ttfxPrs.prs.length})` : "";
+  const btn = (view, label, title) =>
+    `<button type="button" class="btn${ttfxTableView === view ? " btn-primary" : ""}" onclick="setTtfxTableView('${view}')" title="${escapeHtml(title)}">${label}</button>`;
+  const text = {
+    prs:
+      "<b>🚀 Open PRs by TTFX, best first</b> <span class=\"col-secondary\">Each one's latest TTFX CI job, head against master. " +
+      "A stacked pull request is measured against the one below it; its score chains the stack down to master. Negative is faster; colour marks a robust change.</span>",
+    builds: '<b>One row per master build</b> <span class="col-secondary">Suite geometric means over the selected tasks.</span>',
+    tasks: '<b>One row per task</b> <span class="col-secondary">The selected metric over the builds in range.</span>',
+  }[ttfxTableView];
+  document.getElementById("ttfx-stats-caption").innerHTML =
+    '<div class="runtime-caption"><span class="bench-table-view-toggle" role="group" aria-label="Table view">' +
+    btn("prs", `Open PRs${n}`, "Open pull requests ranked by their latest TTFX comparison against master, best first") +
+    btn("builds", "By commit", "One row per master commit's build: suite geometric means over the selected tasks") +
+    btn("tasks", "By task", "One row per task: the selected metric over the builds in range") +
+    `</span><span class="runtime-caption-text">${text}</span></div>`;
 }
 
 function toggleTtfxTask(task) {
@@ -12798,8 +12813,6 @@ function applyTtfxURLParams() {
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
-    document.getElementById("ttfx-view-prs").classList.remove("btn-primary");
-    document.getElementById("ttfx-view-" + tv).classList.add("btn-primary");
   }
   const tk = params.get("tk");
   if (tk !== null) ttfxURLTasks = tk.split(",").filter(Boolean);
@@ -13801,7 +13814,7 @@ function updateTtfxTaskChart() {
 
 function updateTtfxTable() {
   document.getElementById("ttfx-stats-thead").parentElement.classList.toggle("ttfx-prs-table", ttfxTableView === "prs");
-  document.getElementById("ttfx-stats-caption").hidden = ttfxTableView !== "prs";
+  renderTtfxCaption();
   if (ttfxTableView === "prs") return renderTtfxPrsTable();
   if (!ttfxData) return;
   if (ttfxTableView === "tasks") renderTtfxTasksTable();
@@ -14304,7 +14317,6 @@ function ttfxPrsFlatToggleRow(cols) {
 // The phone layout of the ranked pull requests: two lines each, the title
 // and the score, then who, what state and when. A tap opens the card.
 function renderTtfxPrsList() {
-  document.getElementById("ttfx-stats-caption").hidden = false;
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   thead.innerHTML = "";
@@ -14317,7 +14329,7 @@ function renderTtfxPrsList() {
     tbody.innerHTML = `<tr><td>${ttfxPrs.failed ? "Failed to load data" : "No open pull request has a TTFX comparison"}</td></tr>`;
     return;
   }
-  document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
+  renderTtfxCaption();
   tbody.innerHTML = ttfxPrs.prs
     .map((p, i) => {
       const firstFlat = ttfxPrIsFlat(p) && !(i > 0 && ttfxPrIsFlat(ttfxPrs.prs[i - 1]));
@@ -14394,14 +14406,9 @@ function ttfxPrCountCell(p, key, cls) {
 // The first column of each group, which draws a rule down its left edge
 const ttfxPrGroupStart = (i) => i === 0 || TTFX_PR_COLUMNS[i].group !== TTFX_PR_COLUMNS[i - 1].group;
 
-// The header row above the column names that spans each group, with the
-// table's caption over the columns before them
+// The header row above the column names that spans each group
 function ttfxPrGroupRow(before, after) {
-  const n = ttfxPrs?.prs?.length;
-  const title = "Each pull request's latest TTFX CI job, head against master. A stacked pull request is measured against the one below it; its score chains the stack down to master.";
-  let html =
-    `<tr class="ttfx-prs-groups"><th colspan="${before}" class="ttfx-prs-caption" title="${escapeHtml(title)}">` +
-    `<b>🚀 Open PRs by TTFX, best first</b>${n ? ` (${n})` : ""} · head vs master; negative is faster, colour is a robust change</th>`;
+  let html = `<tr class="ttfx-prs-groups"><th colspan="${before}"></th>`;
   for (let i = 0; i < TTFX_PR_COLUMNS.length; ) {
     const g = TTFX_PR_COLUMNS[i].group;
     let n = 1;
@@ -14429,8 +14436,6 @@ function renderTtfxPrsTable() {
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
   thead.parentElement.classList.add("ttfx-prs-table");
-  // The caption is in the header's top row here; the phone list keeps it above
-  document.getElementById("ttfx-stats-caption").hidden = true;
   thead.innerHTML = ttfxPrGroupRow(4, 3) + sortableHeaderRow(
     [
       ["rank", "#", "num"],
@@ -14467,7 +14472,7 @@ function renderTtfxPrsTable() {
     tbody.innerHTML = `<tr><td colspan="${cols}">No open pull request has a TTFX comparison</td></tr>`;
     return;
   }
-  document.getElementById("ttfx-prs-count").textContent = `(${ttfxPrs.prs.length}).`;
+  renderTtfxCaption();
   const blocksMean = (s) => (s && s.geomeans.length ? Math.exp(s.geomeans.reduce((a, g) => a + Math.log(g), 0) / s.geomeans.length) : null);
   const rows = ttfxPrs.prs.map((p, i) => {
     const r = {
@@ -20398,7 +20403,7 @@ function renderRuntimeChangesTable() {
   const steps = runtimeSteps();
   const commits = new Set(steps.map((x) => x.i)).size;
   document.getElementById("runtime-stats-caption").innerHTML =
-    `<div class="runtime-caption">${runtimeTableSwitch()}<span><b>${steps.length} lasting instruction step${steps.length === 1 ? "" : "s"} in ${commits} commit${commits === 1 ? "" : "s"}</b> <span class="col-secondary">in the range: ` +
+    `<div class="runtime-caption">${runtimeTableSwitch()}<span class="runtime-caption-text"><b>${steps.length} lasting instruction step${steps.length === 1 ? "" : "s"} in ${commits} commit${commits === 1 ? "" : "s"}</b> <span class="col-secondary">in the range: ` +
     `where a benchmark's instruction count changed by ${RUNTIME_INSTR_PCT}% or more and stayed (the median of the ${RUNTIME_STEP_WINDOW} builds from there against the ${RUNTIME_STEP_WINDOW} before), and by more than ${RUNTIME_STEP_NOISE}× its usual wiggle from build to build. ` +
     `Instruction counts are exact, so each is the code or the work changing; the judged change is measured the same way. Benchmarks judged on wall time are left out. Click a row to chart it.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
@@ -20457,7 +20462,7 @@ function updateRuntimeTable() {
       ? `<span class="runtime-pr-chip">#${runtimePr} has no comparison any more <button type="button" class="ttfx-pr-copy" onclick="setRuntimePr(null)" title="Take the pull request's columns out of the table">Clear</button></span>`
       : "";
   caption.innerHTML =
-    `<div class="runtime-caption">${runtimeTableSwitch()}${prChip}<span><b>Every benchmark in ${escapeHtml(runtimeBuildName(b))}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference ${escapeHtml(runtimeBuildName(refBuild))} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
+    `<div class="runtime-caption">${runtimeTableSwitch()}${prChip}<span class="runtime-caption-text"><b>Every benchmark in ${escapeHtml(runtimeBuildName(b))}</b> <span class="col-secondary">(${escapeHtml(formatUtc(b.date))}), against the reference ${escapeHtml(runtimeBuildName(refBuild))} and against the median of the ${RUNTIME_BASELINE} builds before it. ` +
     `Coloured beyond the tolerance compare.jl judges by (cycles ${RUNTIME_TOLERANCE.cycles}%, time ${RUNTIME_TOLERANCE.time}%; instructions ${RUNTIME_INSTR_PCT}%); ▲▼ flags the ${RUNTIME_MOVERS} that moved most. Click a row to chart it${pr ? "" : "; Show in an open pull request's row adds its changes here"}.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
     [
@@ -20809,7 +20814,7 @@ function renderRuntimePrsTable() {
   const tbody = document.getElementById("runtime-stats-tbody");
   const cats = runtimeData?.categories || Object.keys(RUNTIME_CATEGORY_ABBR);
   document.getElementById("runtime-stats-caption").innerHTML =
-    `<div class="runtime-caption">${runtimeTableSwitch()}<span><b>Open pull requests by their runtime benchmarks, best first</b> <span class="col-secondary">Each one's latest julia-pr job, head against the master build of its merge-base. ` +
+    `<div class="runtime-caption">${runtimeTableSwitch()}<span class="runtime-caption-text"><b>Open pull requests by their runtime benchmarks, best first</b> <span class="col-secondary">Each one's latest julia-pr job, head against the master build of its merge-base. ` +
     "Geomean is over every benchmark, then per category (%); negative is faster, colour and bold a robust change. Hover a row to project it onto the charts.</span></span></div>";
   thead.innerHTML = sortableHeaderRow(
     [

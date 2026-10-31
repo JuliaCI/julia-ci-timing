@@ -2959,7 +2959,7 @@ th.sorted .sort-indicator {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The Runtime table's caption: its view switch, then what it shows */
+/* The Runtime and TTFX tables' caption: the view switch, with what it shows beside it */
 .runtime-caption {
   display: flex;
   align-items: center;
@@ -2970,6 +2970,10 @@ th.sorted .sort-indicator {
   padding: 2px 10px;
   font-size: 12px;
   white-space: nowrap;
+}
+.runtime-caption-text {
+  flex: 1 1 24em;
+  min-width: 0;
 }
 @media (max-width: 600px) {
   .runtime-caption .runtime-pr-chip {
@@ -3126,14 +3130,6 @@ th.sorted .sort-indicator {
    runs down the left of the group */
 .ttfx-stats .ttfx-prs-table .ttfx-prs-groups th {
   text-align: center;
-}
-.ttfx-stats .ttfx-prs-table .ttfx-prs-groups th.ttfx-prs-caption {
-  text-align: left;
-  vertical-align: top;
-  font-weight: 400;
-  color: var(--color-fg-default);
-  white-space: normal;
-  user-select: text;
 }
 .ttfx-prs-table .ttfx-prs-group {
   display: block;
@@ -3315,9 +3311,6 @@ th.sorted .sort-indicator {
 }
 .ttfx-stats-caption[hidden] {
   display: none;
-}
-#ttfx-prs-count {
-  margin-right: 4px;
 }
 .ttfx-pr-badge {
   display: inline-block;
