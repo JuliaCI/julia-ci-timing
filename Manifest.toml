@@ -42,10 +42,10 @@ uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
 version = "1.5.5+2"
 
 [[deps.DBInterface]]
-git-tree-sha1 = "265d7f87f329c063cbde41920f9d00713a43cedd"
+git-tree-sha1 = "3b22439978973353092e8782275c59e62f611e3b"
 registries = "General"
 uuid = "a10d1c49-ce27-4219-8d33-6db1a4562965"
-version = "2.7.0"
+version = "2.8.0"
 
 [[deps.DataAPI]]
 git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
@@ -79,10 +79,10 @@ version = "1.0.7"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "Dates", "EnumX", "Logging", "PrecompileTools", "Random", "Reseau", "SHA", "TranscodingStreams", "URIs", "UUIDs", "Zlib_jll"]
-git-tree-sha1 = "77e716661f5e911a9eca3297b80be7df847e3fdd"
+git-tree-sha1 = "4a5ca8aaf013767dc2b8d881e2b2f890e5104639"
 registries = "General"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "2.12.3"
+version = "2.13.1"
 
 [[deps.InlineStrings]]
 git-tree-sha1 = "06b65886c7577a3784d616e29f1302c2e36e389d"
@@ -113,10 +113,10 @@ version = "1.8.0"
 
 [[deps.JSON3]]
 deps = ["Dates", "Mmap", "Parsers", "PrecompileTools", "StructTypes", "UUIDs"]
-git-tree-sha1 = "411eccfe8aba0814ffa0fdf4860913ed09c34975"
+git-tree-sha1 = "34a52631602d7233eb1dca1a358ae82b656f9f2a"
 registries = "General"
 uuid = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
-version = "1.14.3"
+version = "1.14.4"
 
     [deps.JSON3.extensions]
     JSON3ArrowExt = ["ArrowTypes"]
@@ -205,10 +205,10 @@ version = "1.0.0"
 
 [[deps.SQLite]]
 deps = ["DBInterface", "Random", "SQLite_jll", "Serialization", "Tables", "WeakRefStrings"]
-git-tree-sha1 = "711f845818c355340894a802defe812c890ae4f1"
+git-tree-sha1 = "250925bde5e0848674e51f9797f56e0358e62cf5"
 registries = "General"
 uuid = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
-version = "1.9.0"
+version = "1.10.0"
 
 [[deps.SQLite_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll", "dlfcn_win32_jll"]
