@@ -20287,6 +20287,19 @@ function runtimeTableRows({ all = false } = {}) {
     });
 }
 
+// An instruction change that held in every block: red when the count grew, green when it fell
+function runtimeInstrClass(c) {
+  return !c.instr_changed || c.instr_ratio == null ? "" : c.instr_ratio > 1 ? "ttfx-up" : "ttfx-down";
+}
+
+// Allocations per call, head against base, with the change when it moved
+function runtimeAllocsCell(base, head) {
+  const fmt = (n) => (n ?? "—").toLocaleString("en-US");
+  if (base == null || head == null || base === head) return `<td class="num">${fmt(head ?? base)}</td>`;
+  const pct = base === 0 ? "new" : `${head > base ? "+" : ""}${(((head - base) / base) * 100).toFixed(1)}%`;
+  return `<td class="num ${head > base ? "ttfx-up" : "ttfx-down"}" title="${fmt(base)} → ${fmt(head)}">${pct} <span class="col-secondary">(${fmt(base)} → ${fmt(head)})</span></td>`;
+}
+
 // A pull request's change of one benchmark as table cells: the change, coloured
 // by its verdict, with the blocks in the title, and the instruction change
 function runtimePrChangeCells(c) {
@@ -20295,7 +20308,7 @@ function runtimePrChangeCells(c) {
   const instr = c.instr_ratio == null ? "—" : runtimeRatioPct(c.instr_ratio);
   return (
     `<td class="num runtime-pr-col ${runtimeVerdictClass(c.verdict)}" title="${escapeHtml(title)}">${c.verdict !== "same" ? "<b>" : ""}${runtimeRatioPct(c.ratio)}${c.verdict !== "same" ? "</b>" : ""}</td>` +
-    `<td class="num col-secondary${c.instr_changed ? " ttfx-up" : ""}" title="${c.instr_changed ? "The instruction count changed in every block" : "Instructions, head against base"}">${instr}</td>`
+    `<td class="num col-secondary ${runtimeInstrClass(c)}" title="${c.instr_changed ? "The instruction count changed in every block" : "Instructions, head against base"}">${instr}</td>`
   );
 }
 
@@ -20472,7 +20485,7 @@ function updateRuntimeTable() {
       ...(pr
         ? [
             ["pr", `#${pr.pr}`, "num runtime-pr-col", `Pull request #${pr.pr}, head against the master build of its merge-base: the benchmark's change, bold and coloured when robust. Its blocks are in the cell's title`],
-            ["prinstr", `#${pr.pr} instr.`, "num col-secondary", "Its instruction change, red when the count changed in every block"],
+            ["prinstr", `#${pr.pr} instr.`, "num col-secondary", "Its instruction change, coloured when the count changed in every block: red more, green fewer"],
           ]
         : []),
     ],
@@ -20716,10 +20729,10 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
     html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Change</th><th class="num">Per block</th><th class="num">Instructions</th><th class="num">Head time</th><th class="num">Allocs</th></tr></thead><tbody>';
     for (const x of p.notable) {
       const instr = x.instr_ratio == null ? "—" : runtimeRatioPct(x.instr_ratio);
-      const allocs = x.allocs_base === x.allocs_head ? (x.allocs_head ?? "—").toLocaleString("en-US") : `${x.allocs_base} → ${x.allocs_head}`;
+      const allocs = runtimeAllocsCell(x.allocs_base, x.allocs_head);
       html += `<tr><th>${escapeHtml(x.name)}</th>${runtimePrRatioCell(x)}<td class="num">${(x.ratios || []).map(runtimeRatioPct).join(", ")}</td>`;
-      html += `<td class="num ${x.instr_changed ? "ttfx-up" : ""}" title="${x.instr_changed ? "The instruction count changed in every block" : ""}">${instr}</td>`;
-      html += `<td class="num">${runtimeNs(x.head_time)}</td><td class="num">${allocs}</td></tr>`;
+      html += `<td class="num ${runtimeInstrClass(x)}" title="${x.instr_changed ? "The instruction count changed in every block" : ""}">${instr}</td>`;
+      html += `<td class="num">${runtimeNs(x.head_time)}</td>${allocs}</tr>`;
     }
     html += "</tbody></table>";
   }
