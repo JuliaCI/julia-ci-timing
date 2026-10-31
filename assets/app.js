@@ -110,6 +110,34 @@ Chart.Interaction.modes.nearIndex = function (chart, e, options, useFinalPositio
   return near ? items : [];
 };
 
+// The distance from `p` to the segment from `a` to `b`
+function segmentDistance(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// As `nearIndex`, but only when the pointer is within the threshold of a
+// visible series' line, so an empty stretch of the plot shows nothing
+Chart.Interaction.modes.nearLineIndex = function (chart, e, options, useFinalPosition) {
+  const items = Chart.Interaction.modes.nearIndex(chart, e, options, useFinalPosition);
+  if (!items.length) return [];
+  const pos = Chart.helpers.getRelativePosition(e, chart);
+  const threshold = options.threshold ?? HOVER_THRESHOLD_PX;
+  for (const meta of chart.getSortedVisibleDatasetMetas()) {
+    let prev = null;
+    for (const element of meta.data) {
+      const c = element.skip ? null : element.getCenterPoint(useFinalPosition);
+      if (c && c.x > pos.x + threshold && (!prev || prev.x > pos.x + threshold)) break;
+      if (c && (prev ? segmentDistance(pos, prev, c) : Math.hypot(pos.x - c.x, pos.y - c.y)) <= threshold) return items;
+      prev = c;
+    }
+  }
+  return [];
+};
+
 // A touchscreen with no hovering pointer: taps stand in for hovers, and
 // drags belong to scrolling
 const IS_TOUCH = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
@@ -20116,8 +20144,8 @@ function updateRuntimeCharts() {
       ttfxNotes: true,
       parsing: false,
       normalized: true,
-      // Every category at the build under the pointer, when one is near it
-      interaction: { mode: "nearIndex", intersect: false },
+      // Every category at the build under the pointer, when the pointer is near a line
+      interaction: { mode: "nearLineIndex", intersect: false },
       elements: { line: { tension: 0 } },
       onClick: open(null),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
