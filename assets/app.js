@@ -4985,6 +4985,71 @@ makeResizablePanel({
   targetId: "runtime-stats",
   storageKey: "runtime-stats-height",
 });
+
+// The splitter between the Runtime tab's benchmark and instruction charts: the
+// benchmark chart's share of their height, remembered per viewer
+(function makeRuntimeSplit() {
+  const handle = document.getElementById("runtime-split");
+  const grid = document.getElementById("runtime-grid");
+  if (!handle || !grid) return;
+  const KEY = "runtime-split";
+  const DEFAULT = 2 / 3;
+  let share = DEFAULT;
+  function apply(s) {
+    share = Math.max(0.15, Math.min(0.85, s));
+    grid.style.setProperty("--runtime-bench-rows", share + "fr");
+    grid.style.setProperty("--runtime-instr-rows", 1 - share + "fr");
+    handle.setAttribute("aria-valuenow", String(Math.round(share * 100)));
+  }
+  function persist() {
+    try {
+      localStorage.setItem(KEY, String(share));
+    } catch (e) {}
+  }
+  try {
+    const saved = parseFloat(localStorage.getItem(KEY));
+    if (saved > 0 && saved < 1) apply(saved);
+  } catch (e) {}
+
+  let top = 0;
+  let span = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const bench = grid.querySelector(".runtime-panel-bench").getBoundingClientRect();
+    const instr = grid.querySelector(".runtime-panel-instr").getBoundingClientRect();
+    top = bench.top;
+    span = bench.height + instr.height;
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (handle.hasPointerCapture(e.pointerId) && span > 0) apply((e.clientY - top) / span);
+  });
+  function end(e) {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    handle.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    persist();
+  }
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    apply(DEFAULT);
+    try {
+      localStorage.removeItem(KEY);
+    } catch (e) {}
+  });
+  // Up and down move it; stopped here so they do not also step through the benchmarks
+  handle.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    e.stopPropagation();
+    apply(share + (e.key === "ArrowDown" ? 0.05 : -0.05));
+    persist();
+  });
+})();
 makeResizablePanel({
   handleId: "activity-resize-handle",
   targetId: "activity-stats",

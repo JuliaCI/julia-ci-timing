@@ -2868,11 +2868,21 @@ th.sorted .sort-indicator {
    name over its chart and its instruction count on the right */
 .ttfx-summary-grid.runtime-grid {
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto 2fr 1fr;
+  /* The splitter between the two right-hand charts sets the variables */
+  grid-template-rows: auto minmax(0, var(--runtime-bench-rows, 2fr)) 6px minmax(0, var(--runtime-instr-rows, 1fr));
   row-gap: 2px;
 }
 .runtime-grid .runtime-panel-index {
-  grid-row: 1 / 4;
+  grid-row: 1 / 5;
+}
+.runtime-split {
+  grid-column: 2;
+  grid-row: 3;
+  touch-action: none;
+}
+.runtime-split:focus-visible {
+  outline: 2px solid var(--color-accent-fg);
+  outline-offset: -1px;
 }
 .runtime-bench-head {
   display: flex;
@@ -2898,6 +2908,9 @@ th.sorted .sort-indicator {
   }
   .runtime-grid .runtime-panel-index {
     grid-row: auto;
+  }
+  .runtime-split {
+    display: none;
   }
 }
 /* The benchmark list: a heading per category that shows or hides it, then its benchmarks */
