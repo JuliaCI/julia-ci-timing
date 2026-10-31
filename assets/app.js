@@ -11712,7 +11712,7 @@ function showTtfxBuildPopup(b, task) {
   const tasks = ttfxSelectedList();
   // A reference run is compared with the run of its series before it
   const ref = ttfxRefOf(b);
-  const series = ref ? getTtfxFilteredRefs(ref) : builds;
+  const series = ref ? (TTFX_REFS[ref]?.versioned ? refVersionOrder(getTtfxFilteredRefs(ref)) : getTtfxFilteredRefs(ref)) : builds;
   const pr = ttfxBuildPr(b);
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
@@ -11815,7 +11815,7 @@ function ttfxBuildMarkdown(b, task) {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
   const ref = ttfxRefOf(b);
-  const series = ref ? getTtfxFilteredRefs(ref) : builds;
+  const series = ref ? (TTFX_REFS[ref]?.versioned ? refVersionOrder(getTtfxFilteredRefs(ref)) : getTtfxFilteredRefs(ref)) : builds;
   const pr = ttfxBuildPr(b);
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
@@ -12437,6 +12437,50 @@ function getTtfxFilteredBuilds() {
 const TTFX_REF_KEYS = { release: "releases", lts: "lts", branch_nightly: "branch_nightly", opt: "opt" };
 function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
+}
+
+// A stable release's version as [major, minor, patch]; null for a prerelease or a nightly
+function releaseVersionKey(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version || "");
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+const releaseVersionCmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+// The runs of a reference series (in time order) that measured an older release than one the
+// series had measured before: one-off runs of earlier patch releases. They are drawn as points
+// off the series' line and are never its newest run.
+function refBackfills(runs) {
+  const out = new Set();
+  let max = null;
+  for (const r of runs || []) {
+    const k = releaseVersionKey(r.version);
+    if (!k) continue;
+    if (max && releaseVersionCmp(k, max) < 0) out.add(r);
+    else max = k;
+  }
+  return out;
+}
+
+// A reference series' newest run: its last run that is not a backfill
+function refNewest(runs) {
+  const back = refBackfills(runs);
+  for (let i = (runs || []).length - 1; i >= 0; i--) if (!back.has(runs[i])) return runs[i];
+  return null;
+}
+
+// The runs in version order (time order within a version, and for nightlies), so that a
+// run's previous one is that of the release before it
+function refVersionOrder(runs) {
+  return runs
+    .map((r, i) => ({ r, i, k: releaseVersionKey(r.version) }))
+    .sort((a, b) => (a.k && b.k ? releaseVersionCmp(a.k, b.k) : 0) || a.i - b.i)
+    .map((x) => x.r);
+}
+
+// A reference series' points with its backfills moved to the end, and the segment style that
+// leaves them off the line (Chart.js joins points in array order)
+function refLineOrder(pts, back, runOf) {
+  return [...pts.filter((p) => !back.has(runOf(p))), ...pts.filter((p) => back.has(runOf(p)))];
 }
 
 // How many of the selected tasks one series alone measured in every one of
@@ -13510,8 +13554,7 @@ function ttfxReleaseVersionColor(version) {
 // newest one's), and `pointColor`, when set, that of each point. `versioned`
 // names a series of published releases, whose points are told by version.
 const ttfxNewestVersionColor = (key) => () => {
-  const runs = ttfxData?.[key] || [];
-  return ttfxReleaseVersionColor(runs.length ? runs[runs.length - 1].version : null);
+  return ttfxReleaseVersionColor(refNewest(ttfxData?.[key])?.version ?? null);
 };
 const TTFX_REFS = {
   release: {
@@ -13568,11 +13611,13 @@ function ttfxRefStyle(ref) {
 
 function ttfxRefDataset(ref, common, metric, base, { twin = null } = {}) {
   const r = TTFX_REFS[ref];
-  const pts = [];
+  const back = refBackfills(ttfxData[TTFX_REF_KEYS[ref]]);
+  let pts = [];
   for (const b of getTtfxFilteredRefs(ref)) {
     const y = ttfxSuiteValue(b, common, metric, twin);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
+  pts = refLineOrder(pts, back, (p) => p.build);
   const ds = {
     label: r.label,
     data: ttfxRebase(pts, base, metric),
@@ -13593,7 +13638,9 @@ function ttfxRefDataset(ref, common, metric, base, { twin = null } = {}) {
     segment: {
       borderColor: (ctx) => {
         const dataset = ctx.chart.data.datasets[ctx.datasetIndex];
-        return colorAt(dataset, dataset.data[ctx.p0DataIndex]?.build);
+        const b0 = dataset.data[ctx.p0DataIndex]?.build;
+        if (back.has(b0) || back.has(dataset.data[ctx.p1DataIndex]?.build)) return "transparent";
+        return colorAt(dataset, b0);
       },
     },
   };
@@ -16985,9 +17032,9 @@ function overviewTtfxBuildLink(b) {
 // The latest master build, and the latest optimized (PGO and ThinLTO) build,
 // against the releases and each other, one row per comparison
 function overviewTtfxCompare(src, latest) {
-  const rel = src.releases && src.releases[src.releases.length - 1];
-  const lts = src.lts && src.lts[src.lts.length - 1];
-  const bn = src.branch_nightly && src.branch_nightly[src.branch_nightly.length - 1];
+  const rel = refNewest(src.releases);
+  const lts = refNewest(src.lts);
+  const bn = refNewest(src.branch_nightly);
   const opt = overviewTtfxOpt(src);
   const groups = [];
   // Newest version first; a nightly's version is named up to "-DEV", without its build number
@@ -19687,9 +19734,10 @@ function runtimeRefRuns(key, machine) {
 
 // One reference series' points of `name`: each run's fastest block
 function runtimeRefPoints(key, name, machine) {
-  return runtimeRefRuns(key, machine)
+  const pts = runtimeRefRuns(key, machine)
     .filter((r) => r.values[name]?.[0] != null)
     .map((r) => ({ x: runtimeTime(r), y: r.values[name][0], r }));
+  return refLineOrder(pts, refBackfills(runtimeData[key]), (p) => p.r);
 }
 
 function drawRuntime() {
@@ -20149,7 +20197,8 @@ function updateRuntimeCharts() {
   // The weekly references have the judged metric only
   const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle]) => {
     const pts = runtimeRefPoints(refKey, name, refMachine);
-    const newest = pts.length ? pts[pts.length - 1].r.version : null;
+    const back = refBackfills(runtimeData[refKey]);
+    const newest = refNewest(pts.map((p) => p.r).sort((a, b) => runtimeTime(a) - runtimeTime(b)))?.version ?? null;
     return {
       label,
       _ref: true,
@@ -20160,6 +20209,8 @@ function updateRuntimeCharts() {
       pointBorderColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
       borderWidth: 1,
       borderDash: [4, 3],
+      // Backfilled older releases stand off the line (they come last in the data)
+      segment: { borderColor: (ctx) => (back.has(pts[ctx.p0DataIndex]?.r) || back.has(pts[ctx.p1DataIndex]?.r) ? "transparent" : undefined) },
       pointStyle,
       pointRadius: 3.5,
       pointHoverRadius: 5,
