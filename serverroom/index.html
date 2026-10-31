@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Permanent+Marker&family=Space+Grotesk:wght@500;700&display=swap"
     />
     <script type="importmap">
       {
@@ -647,6 +647,89 @@
       const FONT = '"Space Grotesk", system-ui, sans-serif';
       const MONO = '"JetBrains Mono", ui-monospace, Menlo, monospace';
 
+      // A label-maker strip with a host's name, facing +z, `h` metres tall and
+      // at most `maxW` wide; a long name gets smaller rather than wider
+      function hostLabel(text, maxW, h) {
+        const px = 64;
+        const font = `600 40px ${MONO}`;
+        const measure = document.createElement("canvas").getContext("2d");
+        measure.font = font;
+        const aspect = Math.ceil(measure.measureText(text).width + 32) / px;
+        const height = Math.min(h, maxW / aspect);
+        const tex = canvasTexture(Math.round(aspect * px), px, (ctx, w, hh) => {
+          ctx.fillStyle = "#f4f1e6";
+          ctx.beginPath();
+          ctx.roundRect(0, 0, w, hh, 10);
+          ctx.fill();
+          ctx.fillStyle = "#1d2228";
+          ctx.font = font;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(text, w / 2, hh / 2 + 2);
+        });
+        return new THREE.Mesh(new THREE.PlaneGeometry(height * aspect, height), new THREE.MeshBasicMaterial({ map: tex }));
+      }
+
+      // A "HELLO my name is" sticker with a host's name in marker, lying on
+      // top of a Mac at y = 0 of its group, a little crooked
+      const MARKER = '"Permanent Marker", "Bradley Hand", "Comic Sans MS", cursive';
+      const nameTags = new Map();
+      function nameTag(text) {
+        if (!nameTags.has(text)) {
+          const tex = canvasTexture(320, 200, (ctx, w, h) => {
+            ctx.fillStyle = "#1f5fbf";
+            ctx.beginPath();
+            ctx.roundRect(0, 0, w, h, 18);
+            ctx.fill();
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "center";
+            ctx.font = `700 46px ${FONT}`;
+            ctx.fillText("HELLO", w / 2, 48);
+            ctx.font = `500 24px ${FONT}`;
+            ctx.fillText("my name is", w / 2, 76);
+            ctx.fillRect(12, 90, w - 24, h - 112);
+            ctx.fillStyle = "#1d2228";
+            ctx.textBaseline = "middle";
+            // A long name breaks after its first hyphen onto two lines
+            const fit = w - 40;
+            const fits = (s, size) => ((ctx.font = `${size}px ${MARKER}`), ctx.measureText(s).width <= fit);
+            const cut = text.indexOf("-") + 1;
+            const lines = !fits(text, 40) && cut > 0 ? [text.slice(0, cut), text.slice(cut)] : [text];
+            let size = lines.length > 1 ? 36 : 52;
+            while (size > 16 && !lines.every((s) => fits(s, size))) size -= 2;
+            ctx.font = `${size}px ${MARKER}`;
+            const mid = 90 + (h - 112) / 2 + 2;
+            lines.forEach((s, k) => ctx.fillText(s, w / 2, mid + (k - (lines.length - 1) / 2) * size * 1.05));
+          });
+          nameTags.set(text, new THREE.MeshBasicMaterial({ map: tex }));
+        }
+        const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.125), nameTags.get(text));
+        tag.rotation.set(-Math.PI / 2, 0, (Math.sin(text.length * 7.1 + text.charCodeAt(text.length - 1)) * 0.2));
+        return tag;
+      }
+
+      // Each slot of a cluster's hosts in order, with the host's name on its
+      // first slot, for labelling one machine among many
+      const hostUnits = (hosts) => hosts.flatMap((h) => h.states.map((s, k) => ({ s, h, label: k === 0 ? h.name : null })));
+
+      // Labels on the front edge of a table (its top at y = 0.83), one per
+      // `{ x, text, w }`; labels at the same x share its width side by side
+      function labelTableEdge(table, entries) {
+        const byX = new Map();
+        for (const e of entries) {
+          if (!byX.has(e.x)) byX.set(e.x, []);
+          byX.get(e.x).push(e);
+        }
+        for (const [x, es] of byX) {
+          const w = es[0].w / es.length;
+          es.forEach((e, k) => {
+            const l = hostLabel(e.text, w - 0.02, 0.045);
+            l.position.set(x - es[0].w / 2 + w * (k + 0.5), 0.8, 0.502);
+            table.add(l);
+          });
+        }
+      }
+
       // A display above a row: status, counts and the room's commentary, one
       // panel per queue stacked in a single sprite, so the panels of a shared
       // machine stay together from every angle
@@ -741,7 +824,7 @@
       const RACK_H = 2.0;
 
       // A rack of up to RACK_UNITS slots, its front at +z
-      function makeRack(states, leds, accent) {
+      function makeRack(states, leds, accent, labels = []) {
         const g = new THREE.Group();
         const frame = new THREE.Mesh(GEO.box, MAT.rack);
         frame.scale.set(RACK_W, RACK_H, 0.9);
@@ -771,11 +854,16 @@
             g.add(led);
           }
         });
+        for (const { i, text } of labels) {
+          const l = hostLabel(text, 0.38, pitch * 0.55);
+          l.position.set(-0.1, 0.15 + pitch * (i + 0.5), 0.482);
+          g.add(l);
+        }
         return g;
       }
 
       // A Mac mini; a table holds two rows of them
-      function makeMini(state, led) {
+      function makeMini(state, led, name = null) {
         const g = new THREE.Group();
         const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.mini : MAT.miniOff);
         body.scale.set(0.34, 0.07, 0.34);
@@ -786,6 +874,11 @@
         l.scale.set(0.03, 0.012, 0.01);
         l.position.set(0.12, 0.035, 0.172);
         g.add(l);
+        if (name) {
+          const tag = nameTag(name);
+          tag.position.set(0, 0.0705, 0.02);
+          g.add(tag);
+        }
         return g;
       }
 
@@ -1145,7 +1238,8 @@
         const tops = [];
         // The Intel cluster's Mac minis live on a fridge; every other Mac is on a table
         const onFridge = (h) => c.fridge && h.name.startsWith("macmini");
-        const fridgeStates = c.mac ? c.hosts.filter(onFridge).flatMap((h) => h.states) : [];
+        const fridgeUnits = c.mac ? hostUnits(c.hosts.filter(onFridge)) : [];
+        const fridgeStates = fridgeUnits.map((u) => u.s);
         if (fridgeStates.length) {
           // A double-door fridge, the minis stacked on top in wobbly piles of three
           const states = fridgeStates;
@@ -1195,8 +1289,8 @@
           mit.position.set(-fw / 2 + 0.24, 0.98, 0.38);
           mit.rotation.z = 0.12;
           fridge.add(mit);
-          states.forEach((s, i) => {
-            const m = makeMini(s, row.leds[i % 4]);
+          fridgeUnits.forEach(({ s, h }, i) => {
+            const m = makeMini(s, row.leds[i % 4], h.name);
             const pile = Math.floor(i / 3);
             m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * 0.075, 0);
             m.rotation.y = Math.sin(i * 2.3) * 0.25;
@@ -1212,17 +1306,19 @@
           // Desktop towers under a table, a little apart, nothing on top but a
           // mug; a host in HOST_STYLES gets its own case, an open bench on the
           // table top
-          const units = c.hosts.flatMap((h) => h.states.map((s) => ({ s, style: HOST_STYLES[h.name] })));
+          const units = hostUnits(c.hosts).map((u) => ({ ...u, style: HOST_STYLES[u.h.name] }));
           const span = (u) => (u.style === "openbench" ? 0.5 : 0.4);
           // Room for the mug beside a bench at the end
           const tail = units.length && units[units.length - 1].style === "openbench" ? 0.25 : 0;
           const tw = Math.max(1.0, units.reduce((w, u) => w + span(u), 0) + 0.3 + tail);
           const table = makeTable(tw);
           let x = -tw / 2 + 0.12;
+          const labels = [];
           units.forEach((u, i) => {
             const led = row.leds[i % 4];
             const at = x + span(u) / 2;
             x += span(u);
+            if (u.label) labels.push({ x: at, text: u.label, w: span(u) });
             if (u.style === "openbench") {
               const b = makeOpenBench(u.s, led);
               b.position.set(at, 0.83, -0.05);
@@ -1235,6 +1331,7 @@
             d.rotation.y = (i % 2 ? -1 : 1) * 0.05;
             table.add(d);
           });
+          labelTableEdge(table, labels);
           const mug = makeMug();
           mug.position.set(tw / 2 - 0.2, 0.83, 0.2);
           table.add(mug);
@@ -1244,33 +1341,38 @@
           tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "desktop", n: units.length });
         } else if (c.nuc) {
           // Somebody's own machine: a NUC per slot on one table, with coffee
-          const states = c.hosts.flatMap((h) => h.states);
-          const tw = states.length * 0.4 + 0.6;
+          const units = hostUnits(c.hosts);
+          const tw = units.length * 0.4 + 0.6;
           const table = makeTable(tw);
-          states.forEach((s, i) => {
+          units.forEach(({ s }, i) => {
             const n = makeNuc(s, row.leds[i % 4]);
             n.position.set(-tw / 2 + 0.35 + i * 0.4, 0.83, 0);
             n.rotation.y = (i % 2 ? -1 : 1) * 0.08;
             table.add(n);
           });
+          labelTableEdge(
+            table,
+            units.flatMap((u, i) => (u.label ? [{ x: -tw / 2 + 0.35 + i * 0.4, text: u.label, w: 0.4 }] : [])),
+          );
           const mug = makeMug();
           mug.position.set(tw / 2 - 0.15, 0.83, 0.28);
           table.add(mug);
           table.position.x = tw / 2;
           width = tw;
           row.units.add(table);
-          tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "nuc", n: states.length });
+          tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "nuc", n: units.length });
         } else if (c.mac) {
           // Two rows of minis per table, eight to a table
-          const states = c.hosts.filter((h) => !onFridge(h)).flatMap((h) => h.states);
+          const units = hostUnits(c.hosts.filter((h) => !onFridge(h)));
           const perTable = 8;
-          for (let t = 0; t * perTable < states.length; t++) {
-            const chunk = states.slice(t * perTable, (t + 1) * perTable);
+          for (let t = 0; t * perTable < units.length; t++) {
+            const chunk = units.slice(t * perTable, (t + 1) * perTable);
             const tw = Math.ceil(chunk.length / 2) * 0.45 + 0.3;
             const table = makeTable(tw);
-            chunk.forEach((s, i) => {
-              const m = makeMini(s, row.leds[i % 4]);
-              m.position.set(-tw / 2 + 0.38 + Math.floor(i / 2) * 0.45, 0.83, i % 2 ? 0.22 : -0.22);
+            const column = (i) => -tw / 2 + 0.38 + Math.floor(i / 2) * 0.45;
+            chunk.forEach(({ s, h }, i) => {
+              const m = makeMini(s, row.leds[i % 4], h.name);
+              m.position.set(column(i), 0.83, i % 2 ? 0.22 : -0.22);
               table.add(m);
             });
             table.position.x = width + tw / 2;
@@ -1283,15 +1385,17 @@
           // Each host's slots fill racks of RACK_UNITS, a host's racks side by
           // side. Hosts of a few slots each (one GPU agent apiece, say) share racks.
           const packed = c.hosts.length > 2 && c.hosts.every((h) => h.states.length <= 4);
-          const groups = packed ? [{ states: c.hosts.flatMap((h) => h.states) }] : c.hosts;
+          const groups = packed ? [hostUnits(c.hosts)] : c.hosts.map((h) => hostUnits([h]));
           const racks = [];
-          for (const h of groups) {
-            for (let i = 0; i < h.states.length; i += RACK_UNITS) {
-              const rack = makeRack(h.states.slice(i, i + RACK_UNITS), row.leds, row.accent);
+          for (const units of groups) {
+            for (let i = 0; i < units.length; i += RACK_UNITS) {
+              const slice = units.slice(i, i + RACK_UNITS);
+              const labels = slice.flatMap((u, k) => (u.label || (k === 0 && i > 0) ? [{ i: k, text: u.h.name }] : []));
+              const rack = makeRack(slice.map((u) => u.s), row.leds, row.accent, labels);
               rack.position.x = width + RACK_W / 2;
               row.units.add(rack);
               racks.push(rack);
-              tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W, kind: "rack", n: Math.min(RACK_UNITS, h.states.length - i) });
+              tops.push({ x: rack.position.x, y: RACK_H + 0.06, w: RACK_W, kind: "rack", n: slice.length });
               width += RACK_W + 0.06;
             }
             width += 0.2;
@@ -2830,7 +2934,7 @@
           if (!renderer) return;
           // The signs and the art are drawn on canvases, which need the fonts first
           await Promise.all(
-            ['700 70px "Space Grotesk"', '600 40px "JetBrains Mono"', '400 36px "JetBrains Mono"'].map((f) => document.fonts.load(f)),
+            ['700 70px "Space Grotesk"', '600 40px "JetBrains Mono"', '400 36px "JetBrains Mono"', '60px "Permanent Marker"'].map((f) => document.fonts.load(f)),
           ).catch(() => {});
           const { W, D } = buildRoom(data);
           roomSize = { W, D };
