@@ -890,6 +890,11 @@ const AGENTS_PER_JOB_QUEUES = new Set(["build", "test", "launch", "default"]);
 // Section order of the agents table: the Julia cluster first, then the rest
 const AGENTS_JULIA_QUEUE_ORDER = ["build", "test", "launch", "default"];
 const AGENTS_QUIET_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+// A machine is also quiet once a pool it serves has had jobs waiting this long
+// in total while another machine of the pool ran jobs, counted from an hour
+// after its own last job. An idle machine would have taken that work.
+const AGENTS_POOL_WAIT_MS = 30 * 60 * 1000;
+const AGENTS_POOL_GRACE_MS = 60 * 60 * 1000;
 const AGENTS_HOST_RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
 const AGENTS_QUEUE_COLORS = {
   light: { build: "#0969da", test: "#bc4c00", launch: "#8250df", other: "#656d76" },
@@ -919,12 +924,41 @@ function hostSearchText(host) {
   return [...words].join(" ");
 }
 
+// The machines that ran no job while their pool's work waited for others:
+// for each hostname of `lastMs` (when a machine last ran a job, Infinity while
+// it runs one), the time its pools had jobs waiting since an hour after that,
+// when that is at least AGENTS_POOL_WAIT_MS and another machine of the pool
+// ran a job in the meantime. `backlog` is api/agents/backlog.
+function poolStalledMachines(backlog, lastMs) {
+  const stalled = new Map();
+  if (!backlog || backlog.error || !backlog.pools) return stalled;
+  const t0 = Date.parse(backlog.start);
+  const stepMs = backlog.step_s * 1000;
+  for (const [h, last] of lastMs) {
+    if (!isFinite(last)) continue;
+    const from = last + AGENTS_POOL_GRACE_MS;
+    const pools = backlog.pools.filter(
+      (p) => p.hosts.includes(h) && p.hosts.some((o) => o !== h && (lastMs.get(o) ?? -Infinity) > from),
+    );
+    if (!pools.length) continue;
+    let waitedMs = 0;
+    for (let i = Math.max(0, Math.ceil((from - t0) / stepMs)); i < backlog.n; i++) {
+      if (pools.some((p) => p.waiting[i] > 0)) waitedMs += stepMs;
+    }
+    if (waitedMs >= AGENTS_POOL_WAIT_MS) stalled.set(h, waitedMs);
+  }
+  return stalled;
+}
+
 // One table row per resident agent, or per host for the per-job queues, each
 // with a status; `connected` is the agent-name set of the snapshot taken at
 // `latestMs`. Shared by the Workers tab and the Overview card. `hostSlots`,
 // the most jobs each host was seen running at once, marks an idle row whose
-// host is already full with other queues' jobs.
-function summarizeAgents(agents, connected, latestMs, hostSlots = null) {
+// host is already full with other queues' jobs. With `backlog`, a host that
+// sat out work its pool was waiting on is quiet without waiting days.
+// `julia` marks the rows of the Julia cluster's queues, the rest serving other
+// projects (Yggdrasil, the GPU packages).
+function summarizeAgents(agents, connected, latestMs, hostSlots = null, backlog = null) {
   const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
   for (const name of connected) perQueue[agentQueueGroup(agents[name])]++;
   const rows = [];
@@ -958,12 +992,26 @@ function summarizeAgents(agents, connected, latestMs, hostSlots = null) {
     else status = "missing";
     rows.push({ name, rec, queue, status, lastSeenMs });
   }
+  // A machine's rows of different queues count together: one busy with
+  // builds is not sitting out the test queue's work
+  const machineLastMs = new Map();
+  for (const host of hosts.values()) {
+    const h = host.rec.hostname;
+    if (!h) continue;
+    const last = host.running > 0 ? Infinity : host.lastSeenMs;
+    if (!(machineLastMs.get(h) >= last)) machineLastMs.set(h, last);
+  }
+  const stalled = poolStalledMachines(backlog, machineLastMs);
   for (const host of hosts.values()) {
     if (host.running > 0) host.status = "running";
     else if (latestMs - host.lastSeenMs > AGENTS_QUIET_WINDOW_MS) host.status = "quiet";
-    else host.status = "idle";
+    else if (stalled.has(host.rec.hostname)) {
+      host.status = "quiet";
+      host.poolWaitedMs = stalled.get(host.rec.hostname);
+    } else host.status = "idle";
     rows.push(host);
   }
+  for (const row of rows) row.julia = AGENTS_PER_JOB_QUEUES.has(row.rec.queue);
   if (hostSlots) {
     const byHostname = new Map();
     for (const host of hosts.values()) {
@@ -1035,7 +1083,13 @@ async function renderAgentsSection() {
   const connected = new Set(latest.connected);
   const hostSlots = backlogData && !backlogData.error ? backlogData.host_slots : null;
   agentsHostSlotsShown = !!hostSlots;
-  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs, hostSlots);
+  const { rows, perQueue, missing, quiet } = summarizeAgents(
+    agents,
+    connected,
+    latestMs,
+    hostSlots,
+    backlogData && !backlogData.error ? backlogData : null,
+  );
   const queueParts = ["build", "test", "launch", "other"]
     .filter((q) => perQueue[q] > 0)
     .map((q) => `${q} ${perQueue[q]}`);
@@ -1065,6 +1119,8 @@ async function renderAgentsSection() {
       const parts = row.hostBusy.map((b) => `${b.running} ${b.queue}`).join(", ");
       row.statusText = `host full: ${parts} job${n === 1 ? "" : "s"} running`;
     } else if (status === "idle") row.statusText = `idle, last job seen ${lastSeen}`;
+    else if (status === "quiet" && row.poolWaitedMs)
+      row.statusText = `no job seen since ${lastSeen}, while its pool had jobs waiting ${formatWait(row.poolWaitedMs / 1000)}`;
     else if (status === "quiet") row.statusText = `no job seen since ${lastSeen}`;
     else row.statusText = `${status}, last seen ${lastSeen}`;
     if (row.jobs) {
@@ -17254,7 +17310,12 @@ function overviewAgentsCard(src, backlog) {
   const colors = overviewColors();
   const latestMs = Date.parse(src.generated_at);
   const connected = new Set(Object.keys(agents).filter((n) => agents[n].state === "connected"));
-  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs);
+  const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs, null, backlog);
+  // Only the Julia cluster's machines colour the card; the rest serve other
+  // projects and are listed without raising the status
+  const juliaMissing = missing.filter((r) => r.julia);
+  const juliaQuiet = quiet.filter((r) => r.julia);
+  const elsewhere = [...missing, ...quiet].filter((r) => !r.julia);
   const running = rows.filter((r) => r.status === "running").reduce((acc, r) => acc + r.running, 0)
     + rows.filter((r) => r.status === "connected" && r.rec.job).length;
   const queue = overviewQueueSummary(backlog);
@@ -17265,16 +17326,16 @@ function overviewAgentsCard(src, backlog) {
   if (Date.now() - latestMs > OVERVIEW_AGENTS_STALE_MS) {
     level = "bad";
     problems.push(`Snapshot ${overviewAgo(src.generated_at)}`);
-  } else if (missing.length || quiet.length) {
+  } else if (juliaMissing.length || juliaQuiet.length) {
     level = "warn";
-    if (missing.length) problems.push(`${missing.length} missing`);
-    if (quiet.length) problems.push(`${quiet.length} quiet`);
+    if (juliaMissing.length) problems.push(`${juliaMissing.length} missing`);
+    if (juliaQuiet.length) problems.push(`${juliaQuiet.length} quiet`);
   }
   if (queue && queue.level !== "ok") {
     if (rank[queue.level] > rank[level]) level = queue.level;
     problems.push(queue.text);
   }
-  const status = overviewStatus(level, problems.length ? problems.join(", ") : "All present, no long waits");
+  const status = overviewStatus(level, problems.length ? problems.join(", ") : elsewhere.length ? "Julia CI all present, no long waits" : "All present, no long waits");
   const donut = overviewDonut([
     { label: "build queue", value: perQueue.build, color: colors.categorical[0] },
     { label: "test queue", value: perQueue.test, color: colors.categorical[1] },
@@ -17295,8 +17356,9 @@ function overviewAgentsCard(src, backlog) {
     rows: [
       ...(queue ? [["Connected agents", String(connected.size)], ...queue.rows] : []),
       ["Running jobs", String(running)],
-      ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
-      ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
+      ["Missing agents", juliaMissing.length ? overviewList(juliaMissing.map((r) => r.name)) : ""],
+      ["Quiet hosts", juliaQuiet.length ? overviewList(juliaQuiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
+      ["Offline elsewhere", elsewhere.length ? overviewList(elsewhere.map((r) => `${r.name} (${r.rec.queue || "no queue"})`)) : ""],
       ["Snapshot", `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
     ],
   });

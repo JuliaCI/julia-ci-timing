@@ -178,7 +178,11 @@ cluster's `default` queue have no resident agents: each host's scheduler (JuliaC
 agent per job with `--acquire-job`, named `<group>-<host>.<slot>`, and it
 disconnects when the job ends. A snapshot only lists the slots mid-job, so
 an absent `tester-amdci4.3` means an idle slot, not a down host; the site
-folds those names per host and flags a host only after days without a job.
+folds those names per host and flags a host as quiet after three days without
+a job, or sooner when a pool it serves had jobs waiting for half an hour while
+the host ran nothing and another host of the pool ran jobs. Only the Julia
+cluster's queues (`build`, `test`, `launch`, `default`) colour the Overview's
+CI workers card; machines of the other queues are listed there without it.
 
 `fetch_agents.jl` also records every runnable job of julia-pr and julia-ci
 builds in `pool_jobs` (kept 60 days, backfilled 30 on the first run), with the
