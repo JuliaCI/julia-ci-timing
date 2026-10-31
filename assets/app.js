@@ -4985,6 +4985,71 @@ makeResizablePanel({
   targetId: "runtime-stats",
   storageKey: "runtime-stats-height",
 });
+
+// The splitter between the Runtime tab's benchmark and instruction charts: the
+// benchmark chart's share of their height, remembered per viewer
+(function makeRuntimeSplit() {
+  const handle = document.getElementById("runtime-split");
+  const grid = document.getElementById("runtime-grid");
+  if (!handle || !grid) return;
+  const KEY = "runtime-split";
+  const DEFAULT = 2 / 3;
+  let share = DEFAULT;
+  function apply(s) {
+    share = Math.max(0.15, Math.min(0.85, s));
+    grid.style.setProperty("--runtime-bench-rows", share + "fr");
+    grid.style.setProperty("--runtime-instr-rows", 1 - share + "fr");
+    handle.setAttribute("aria-valuenow", String(Math.round(share * 100)));
+  }
+  function persist() {
+    try {
+      localStorage.setItem(KEY, String(share));
+    } catch (e) {}
+  }
+  try {
+    const saved = parseFloat(localStorage.getItem(KEY));
+    if (saved > 0 && saved < 1) apply(saved);
+  } catch (e) {}
+
+  let top = 0;
+  let span = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const bench = grid.querySelector(".runtime-panel-bench").getBoundingClientRect();
+    const instr = grid.querySelector(".runtime-panel-instr").getBoundingClientRect();
+    top = bench.top;
+    span = bench.height + instr.height;
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (handle.hasPointerCapture(e.pointerId) && span > 0) apply((e.clientY - top) / span);
+  });
+  function end(e) {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    handle.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    persist();
+  }
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    apply(DEFAULT);
+    try {
+      localStorage.removeItem(KEY);
+    } catch (e) {}
+  });
+  // Up and down move it; stopped here so they do not also step through the benchmarks
+  handle.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    e.stopPropagation();
+    apply(share + (e.key === "ArrowDown" ? 0.05 : -0.05));
+    persist();
+  });
+})();
 makeResizablePanel({
   handleId: "activity-resize-handle",
   targetId: "activity-stats",
@@ -11647,7 +11712,7 @@ function showTtfxBuildPopup(b, task) {
   const tasks = ttfxSelectedList();
   // A reference run is compared with the run of its series before it
   const ref = ttfxRefOf(b);
-  const series = ref ? getTtfxFilteredRefs(ref) : builds;
+  const series = ref ? (TTFX_REFS[ref]?.versioned ? refVersionOrder(getTtfxFilteredRefs(ref)) : getTtfxFilteredRefs(ref)) : builds;
   const pr = ttfxBuildPr(b);
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
@@ -11750,7 +11815,7 @@ function ttfxBuildMarkdown(b, task) {
   const builds = getTtfxFilteredBuilds();
   const tasks = ttfxSelectedList();
   const ref = ttfxRefOf(b);
-  const series = ref ? getTtfxFilteredRefs(ref) : builds;
+  const series = ref ? (TTFX_REFS[ref]?.versioned ? refVersionOrder(getTtfxFilteredRefs(ref)) : getTtfxFilteredRefs(ref)) : builds;
   const pr = ttfxBuildPr(b);
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
@@ -12372,6 +12437,50 @@ function getTtfxFilteredBuilds() {
 const TTFX_REF_KEYS = { release: "releases", lts: "lts", branch_nightly: "branch_nightly", opt: "opt" };
 function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
+}
+
+// A stable release's version as [major, minor, patch]; null for a prerelease or a nightly
+function releaseVersionKey(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version || "");
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+const releaseVersionCmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+// The runs of a reference series (in time order) that measured an older release than one the
+// series had measured before: one-off runs of earlier patch releases. They are drawn as points
+// off the series' line and are never its newest run.
+function refBackfills(runs) {
+  const out = new Set();
+  let max = null;
+  for (const r of runs || []) {
+    const k = releaseVersionKey(r.version);
+    if (!k) continue;
+    if (max && releaseVersionCmp(k, max) < 0) out.add(r);
+    else max = k;
+  }
+  return out;
+}
+
+// A reference series' newest run: its last run that is not a backfill
+function refNewest(runs) {
+  const back = refBackfills(runs);
+  for (let i = (runs || []).length - 1; i >= 0; i--) if (!back.has(runs[i])) return runs[i];
+  return null;
+}
+
+// The runs in version order (time order within a version, and for nightlies), so that a
+// run's previous one is that of the release before it
+function refVersionOrder(runs) {
+  return runs
+    .map((r, i) => ({ r, i, k: releaseVersionKey(r.version) }))
+    .sort((a, b) => (a.k && b.k ? releaseVersionCmp(a.k, b.k) : 0) || a.i - b.i)
+    .map((x) => x.r);
+}
+
+// A reference series' points with its backfills moved to the end, and the segment style that
+// leaves them off the line (Chart.js joins points in array order)
+function refLineOrder(pts, back, runOf) {
+  return [...pts.filter((p) => !back.has(runOf(p))), ...pts.filter((p) => back.has(runOf(p)))];
 }
 
 // How many of the selected tasks one series alone measured in every one of
@@ -13445,8 +13554,7 @@ function ttfxReleaseVersionColor(version) {
 // newest one's), and `pointColor`, when set, that of each point. `versioned`
 // names a series of published releases, whose points are told by version.
 const ttfxNewestVersionColor = (key) => () => {
-  const runs = ttfxData?.[key] || [];
-  return ttfxReleaseVersionColor(runs.length ? runs[runs.length - 1].version : null);
+  return ttfxReleaseVersionColor(refNewest(ttfxData?.[key])?.version ?? null);
 };
 const TTFX_REFS = {
   release: {
@@ -13503,11 +13611,13 @@ function ttfxRefStyle(ref) {
 
 function ttfxRefDataset(ref, common, metric, base, { twin = null } = {}) {
   const r = TTFX_REFS[ref];
-  const pts = [];
+  const back = refBackfills(ttfxData[TTFX_REF_KEYS[ref]]);
+  let pts = [];
   for (const b of getTtfxFilteredRefs(ref)) {
     const y = ttfxSuiteValue(b, common, metric, twin);
     if (y != null) pts.push({ x: ttfxBuildTime(b), y, build: b });
   }
+  pts = refLineOrder(pts, back, (p) => p.build);
   const ds = {
     label: r.label,
     data: ttfxRebase(pts, base, metric),
@@ -13528,7 +13638,9 @@ function ttfxRefDataset(ref, common, metric, base, { twin = null } = {}) {
     segment: {
       borderColor: (ctx) => {
         const dataset = ctx.chart.data.datasets[ctx.datasetIndex];
-        return colorAt(dataset, dataset.data[ctx.p0DataIndex]?.build);
+        const b0 = dataset.data[ctx.p0DataIndex]?.build;
+        if (back.has(b0) || back.has(dataset.data[ctx.p1DataIndex]?.build)) return "transparent";
+        return colorAt(dataset, b0);
       },
     },
   };
@@ -16920,9 +17032,9 @@ function overviewTtfxBuildLink(b) {
 // The latest master build, and the latest optimized (PGO and ThinLTO) build,
 // against the releases and each other, one row per comparison
 function overviewTtfxCompare(src, latest) {
-  const rel = src.releases && src.releases[src.releases.length - 1];
-  const lts = src.lts && src.lts[src.lts.length - 1];
-  const bn = src.branch_nightly && src.branch_nightly[src.branch_nightly.length - 1];
+  const rel = refNewest(src.releases);
+  const lts = refNewest(src.lts);
+  const bn = refNewest(src.branch_nightly);
   const opt = overviewTtfxOpt(src);
   const groups = [];
   // Newest version first; a nightly's version is named up to "-DEV", without its build number
@@ -19613,12 +19725,19 @@ const RUNTIME_REFS = [
   ["branch_nightly", "Next release nightly", "circle"],
 ];
 
-// One reference series' points of `name` in the range: each run's fastest block
-function runtimeRefPoints(key, name) {
+// One reference series' runs in the range, measured on `machine` (the machine of the
+// newest master build shown) since cycles from another machine do not compare
+function runtimeRefRuns(key, machine) {
   const start = runtimeTimeRangeDays > 0 ? Date.now() - runtimeTimeRangeDays * 864e5 : -Infinity;
-  return (runtimeData[key] || [])
-    .filter((r) => runtimeTime(r) >= start && r.values[name]?.[0] != null)
+  return (runtimeData[key] || []).filter((r) => runtimeTime(r) >= start && (!machine || !r.machine || r.machine === machine));
+}
+
+// One reference series' points of `name`: each run's fastest block
+function runtimeRefPoints(key, name, machine) {
+  const pts = runtimeRefRuns(key, machine)
+    .filter((r) => r.values[name]?.[0] != null)
     .map((r) => ({ x: runtimeTime(r), y: r.values[name][0], r }));
+  return refLineOrder(pts, refBackfills(runtimeData[key]), (p) => p.r);
 }
 
 function drawRuntime() {
@@ -19919,9 +20038,13 @@ function updateRuntimeCharts() {
   const theme = chartTheme();
   const colors = runtimeColors();
   const ref = runtimeRefIndex(idx);
+  const refMachine = runtimeData.builds[idx[idx.length - 1]].machine;
+  // The weekly references widen the axis, as they need not fall between master builds
+  const refTimes = RUNTIME_REFS.flatMap(([k]) => runtimeRefRuns(k, refMachine).map(runtimeTime));
   const xs = idx.map((i) => runtimeTime(runtimeData.builds[i]));
-  const xMin = xs[0];
-  const xMax = xs[xs.length - 1];
+  const refPad = refTimes.length ? (Math.max(xs[xs.length - 1], ...refTimes) - Math.min(xs[0], ...refTimes)) * 0.02 : 0;
+  const xMin = Math.min(xs[0], ...refTimes.map((t) => t - refPad));
+  const xMax = Math.max(xs[xs.length - 1], ...refTimes.map((t) => t + refPad));
   // A phone has room for the titles' heads only
   const title = (text, tail = "") => (PHONE_WIDTH.matches ? (tail = "") : 0, {
     display: true,
@@ -20073,8 +20196,9 @@ function updateRuntimeCharts() {
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
   // The weekly references have the judged metric only
   const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle]) => {
-    const pts = runtimeRefPoints(refKey, name);
-    const newest = pts.length ? pts[pts.length - 1].r.version : null;
+    const pts = runtimeRefPoints(refKey, name, refMachine);
+    const back = refBackfills(runtimeData[refKey]);
+    const newest = refNewest(pts.map((p) => p.r).sort((a, b) => runtimeTime(a) - runtimeTime(b)))?.version ?? null;
     return {
       label,
       _ref: true,
@@ -20085,6 +20209,8 @@ function updateRuntimeCharts() {
       pointBorderColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
       borderWidth: 1,
       borderDash: [4, 3],
+      // Backfilled older releases stand off the line (they come last in the data)
+      segment: { borderColor: (ctx) => (back.has(pts[ctx.p0DataIndex]?.r) || back.has(pts[ctx.p1DataIndex]?.r) ? "transparent" : undefined) },
       pointStyle,
       pointRadius: 3.5,
       pointHoverRadius: 5,

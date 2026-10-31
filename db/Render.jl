@@ -645,7 +645,8 @@ function ttfx(db; since="")
     # The release branch's own builds join its weekly nightly runs, once the branch has
     # commits of its own. Only the branch ahead of the latest release counts: a backport
     # to an older release branch is not the next release.
-    latest = isempty(releases) ? nothing : tryparse(VersionNumber, releases[end]["version"])
+    versions = filter(!isnothing, [tryparse(VersionNumber, r["version"]) for r in releases])
+    latest = isempty(versions) ? nothing : maximum(versions)
     ahead(b) = (v = tryparse(VersionNumber, b["version"]); v !== nothing && latest !== nothing &&
                 (v.major, v.minor) > (latest.major, latest.minor))
     branch_builds = filter(ahead, jobs("release_branch"))
@@ -1137,6 +1138,20 @@ function latest_ttfx_job(db, cond, params=())
     return isempty(r) ? nothing : r[1]
 end
 
+# The newest version's latest run among release jobs: a one-off run of an older patch
+# release, measured after the newer one, is not the latest release
+function newest_release_ttfx_job(db, cond)
+    r = rows(db, "SELECT job_uuid, build, version, build_created_at, web_url FROM ttfx_jobs t WHERE $cond AND EXISTS " *
+                 "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC")
+    isempty(r) && return nothing
+    v(j) = something(tryparse(VersionNumber, String(j.version)), v"0")
+    best = r[1]
+    for j in r
+        v(j) > v(best) && (best = j)
+    end
+    return best
+end
+
 # Master job `uuid` against the latest run of each release series, by the geometric
 # mean of the task ratios per metric (ratio), over the tasks both measured (n_tasks).
 # `pr_suite`, a pull request's suite geomeans against that commit, adds head: an
@@ -1145,8 +1160,8 @@ function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
     results(u) = Dict(String(r.task) => [js(getproperty(r, Symbol(m))) for m in metrics]
                       for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (u,)))
     now_ = results(uuid)
-    release = latest_ttfx_job(db, "kind = 'release'")
-    lts = latest_ttfx_job(db, "kind = 'lts'")
+    release = newest_release_ttfx_job(db, "kind = 'release'")
+    lts = newest_release_ttfx_job(db, "kind = 'lts'")
     branch = latest_ttfx_job(db, "kind IN ('branch_nightly', 'release_branch')")
     # A branch nightly from before the latest release is of that release's own branch
     minor(j) = (v = tryparse(VersionNumber, String(j.version)); v === nothing ? nothing : (v.major, v.minor))
