@@ -5,7 +5,7 @@
 // Usage:
 //   node tools/inspect-bench.mjs                       # default: sparse, minimum, all dates
 //   node tools/inspect-bench.mjs sparse minimum
-//   node tools/inspect-bench.mjs sparse mean --days 15  # the site's default range
+//   node tools/inspect-bench.mjs sparse mean --days 14  # the site's default range
 //
 // `--days N` keeps the last N days, like the chart's time range (0 or no flag
 // is "All"). Reads the extracts that analysis/fetch_data.jl downloads into data/.

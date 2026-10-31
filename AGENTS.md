@@ -41,6 +41,10 @@ docs in the route table, and update `llms.txt` and `docs/querying.md` if
 it is one an agent would reach for. When you add a table or column,
 describe it in `db/datasette-metadata.json`.
 
+Each tab's `?tab=` value is in `TAB_URL_MAP` in `assets/app.js`. Its data comes
+from one of the `fetch_*.jl` scripts, whose headers say what they record, and the route table in `src/api.jl`
+describes every route, `status` and `ready` included.
+
 Per-group BaseBenchmarks history is the extract
 `data/benchmarks/<group>.json.gz`. Each file has the shape:
 
@@ -86,7 +90,7 @@ task's project with every stdlib added and imported first, and
 `precompile_stdlibs`, that copy's precompile after the task's own, and
 `run_stdlibs`, the cold run after that load (null
 for jobs before the driver measured them; the site has no summary panel or
-table column for them: the stdlibs-first load and run are drawn as a dotted
+builds-table column for them (the Open PRs table has the load and run): the stdlibs-first load and run are drawn as a dotted
 twin of load and run with "Show stdlibs first" (`tl=1`), and the precompile
 by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
@@ -115,17 +119,19 @@ series and shows the paired difference in its tooltip and details.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base
+(a pull request stacked on another is compared with the one below it, `ttfx_prs.base_ref`)
 and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
 comparison of each open pull request, in `ttfx_prs` (no history: a closed
 pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
 tab's "Open PRs" table. `compare.json` has no invalidation or recompile counts, so
 each job's `results.json` and trace logs are fetched too, once, into `ttfx_prs.counts`:
 the head and base totals and the tasks that changed most. It lists the open pull requests from GitHub
-anonymously, which makes it the largest user of the 60 requests an hour GitHub
-allows the host (`GITHUB_TOKEN` is used if set).
+anonymously, at most every two hours, out of the 60 requests an hour GitHub
+allows the host, which `fetch_github.jl`, `fetch_sizes.jl` and `fetch_packages.jl`
+share (`GITHUB_TOKEN` is used if set).
 
 Hand-written notes on individual TTFX jobs live in `data/ttfx_annotations.json`
-(not touched by `fetch_ttfx.jl`; the site reads it, and
+(`{ "schema_version": 1, "annotations": [...] }`, not touched by `fetch_ttfx.jl`; the site reads it, and
 `data/methodology_changes.json`, from `api/notes/<name>`, served from the
 deployed code, so an edit is live as soon as the deploy is): each entry names a `job_id` from the summary
 plus a short `label` and a fuller `description`. The site draws a dashed line
@@ -216,7 +222,7 @@ serves them per platform. The Linux jobs share their machine with other jobs, so
 compare medians over several builds.
 
 Hand-written notes on julia-ci builds where how CI builds julia changed live in
-`data/sysimage_annotations.json`, served like the TTFX notes from
+`data/sysimage_annotations.json` (same wrapper), served like the TTFX notes from
 `api/notes/sysimage_annotations`: each names a `build` plus a short `label` and a
 fuller `description`, with an optional `kind` (`build` for a change to what the
 build job does, `runner` for the CI machines), `url`, `stages` (the stages it
@@ -226,12 +232,13 @@ the build's popup. Use it for a step that is not the commit being slower, such a
 build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
 
 Runtime benchmarks (the Benchmarks → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
-records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks, about
-110 benchmarks in 13 categories on the macOS aarch64 agent) of every julia-ci master build:
+records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks on the macOS aarch64 agent;
+the header of `fetch_runtime.jl` says which builds and what each row keeps):
 one `rtb_jobs` row per job and one `rtb_results` row per benchmark, reduced over the job's
 blocks (each block its own process). A benchmark is judged on `metric`: `cycles` of the
-calling thread, or `time` for work that leaves it. `value` is the minimum over blocks of
-each block's minimum of that metric (cycles, or ns), `value_max` the largest of those
+calling thread, `instructions` for the inference benchmarks, or `time` for work that leaves
+it. `value` is the minimum over blocks of each block's minimum of that metric (cycles,
+instructions or ns), `value_max` the largest of those
 block minima; `instructions` (retired, per call) are exact from process to process, so a
 change there means the code or the work changed, whether or not it costs time.
 `api/runtime/summary` serves them per benchmark as arrays aligned with `builds`:
@@ -241,8 +248,13 @@ change there means the code or the work changed, whether or not it costs time.
   "benchmarks": [ { "name": "simd/sum_f64_simd", "category", "metric", "ops" }, ... ],
   "builds": [ { "build", "job_id", "commit", "date", "version", "llvm", "state", "message", ...,
                 "failed": { "<name>": "error" } }, ... ],
-  "series": { "<name>": { "value": [...], "value_max": [...], ... } } }
+  "series": { "<name>": { "value": [...], "value_max": [...], ... } }, ... }
 ```
+
+Older master commits come from a backfill measured on manyjulias builds on another
+machine (`db/import_runtime.jl`; the `source` parameter of `runtime/summary` picks one).
+The run page, `/runtime-run`, reads a job's artifacts from Buildkite live, so the API
+server needs the Buildkite token.
 
 `min_ns / ops` is the time per work item. On julia-pr the job compares the head with the
 master build of the merge-base and uploads `compare.json`; `rtb_prs` keeps the latest one
@@ -268,6 +280,30 @@ real `results.json` (with an LLVM bump, a regression that is fixed, a GC improve
 compiler slowdown, failing benchmarks, an annotated runner change and four open pull
 requests), through the fetcher's own row functions, for previewing the tab with
 `db/serve.jl --notes`; its header has the commands.
+
+## Previewing and deploying
+
+A push to main deploys (the `paths` of `.github/workflows/deploy.yml`;
+`infra/terraform/files/ci-timing-deploy` says what happens on the host). So check
+a site change locally before pushing it:
+
+- Over the weekly database snapshot: `julia --project db/serve.jl --db
+  ci-timing.sqlite --site .` (its header has the options).
+- Over live data (rows newer than the snapshot, open pull requests): serve the
+  working tree with a small static server that forwards `/api/` and `/data/` to
+  `https://perf.julialang.org`. The pages fetch the relative `api/` path, so
+  they need no change. This only covers front-end changes.
+
+Check the phone layout too, by loading the page in an iframe about 390 px wide.
+
+**The deploy ships only the image.** The host scripts, units, `host.env` and
+Caddyfile under `infra/terraform/files/` reach the machine only through
+cloud-init, when Terraform creates the instance. After merging a change to one,
+someone with AWS access to the ci-timing account (Ian) has to put it on the host
+by hand (recipe in `infra/terraform/README.md`), then restart what reads it; for
+the API's files, run the deploy workflow again. Say in the pull request that this
+step is needed. Until it is done the feature fails only in production: #82's run
+page returned 503 until its `ci-timing-run-api` change was applied by hand.
 
 ## Analysis helpers (`analysis/`)
 
@@ -349,7 +385,7 @@ on the live dashboard without opening a browser.
 ```sh
 node tools/inspect-bench.mjs                  # sparse, minimum, all dates
 node tools/inspect-bench.mjs sparse mean
-node tools/inspect-bench.mjs array minimum --days 15   # the site's default range
+node tools/inspect-bench.mjs array minimum --days 14   # the site's default range
 ```
 
 It prints:
