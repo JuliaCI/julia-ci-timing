@@ -1702,15 +1702,17 @@ runtime_switch_description(backfill, ci) =
 
 # Every master build's runtime benchmarks in the window: the builds in time order, and per
 # benchmark one array per series aligned with them (null where the build has no value).
-# By default the backfill's commits up to CI's first job and CI's builds from there, with
-# a marker at the switch; `source` gives one source alone.
+# `source` "all" gives the backfill's commits up to CI's first job and CI's builds from
+# there, with a marker at the switch; "ci" or "manyjulias" one source alone. By default
+# CI's alone, or all while CI has no results yet.
 function runtime(db; since="", source="")
     sources = runtime_sources(db)
+    isempty(source) && (source = any(s -> s["source"] == "ci", sources) ? "ci" : "all")
     where, params = where_clause("build_created_at", since, "")
     switch = rows(db, "SELECT build_created_at AS t, commit_sha FROM rtb_jobs WHERE pipeline = 'julia-ci' AND kind = 'master' " *
                       "ORDER BY build_created_at LIMIT 1")
     switch_at = isempty(switch) ? "9999-12-31T00:00:00Z" : String(switch[1].t)
-    cond, cparams = source == "" ? ("(pipeline = 'julia-ci' OR (pipeline = 'manyjulias' AND build_created_at < ?))", (switch_at,)) :
+    cond, cparams = source == "all" ? ("(pipeline = 'julia-ci' OR (pipeline = 'manyjulias' AND build_created_at < ?))", (switch_at,)) :
                     ("pipeline = ?", (runtime_pipeline(source),))
     params = (params..., cparams...)
     jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " kind = 'master' AND $cond " *
@@ -1743,13 +1745,13 @@ function runtime(db; since="", source="")
     refs = source != "manyjulias" ? (key => runtime_refs(db, kind, where, params[1:end-length(cparams)]) for (kind, key) in RUNTIME_REF_KINDS) :
            (key => Any[] for (_, key) in RUNTIME_REF_KINDS)
     markers = Any[]
-    if source == "" && any(b -> b["source"] == "manyjulias", builds) && any(b -> b["source"] == "ci", builds)
+    if source == "all" && any(b -> b["source"] == "manyjulias", builds) && any(b -> b["source"] == "ci", builds)
         machine(src) = (i = findfirst(x -> x["source"] == src, sources); i === nothing ? "" : something(sources[i]["machine"], ""))
         push!(markers, OrderedDict("at" => switch_at, "commit" => String(switch[1].commit_sha), "label" => RUNTIME_SWITCH_LABEL,
                                    "description" => runtime_switch_description(machine("manyjulias"), machine("ci"))))
     end
     return OrderedDict("generated_at" => generated_at(db, "runtime"), "branch" => "master",
-                       "source" => isempty(source) ? "all" : source, "sources" => sources, "markers" => markers,
+                       "source" => source, "sources" => sources, "markers" => markers,
                        "categories" => categories, "series_keys" => RUNTIME_SERIES, "benchmarks" => benchmarks, "builds" => builds,
                        "series" => OrderedDict(n => series[n] for n in names), refs...)
 end

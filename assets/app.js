@@ -19332,7 +19332,7 @@ let runtimeSince = null; // the start of the window loaded or on its way, "" for
 let runtimeBench = null; // the benchmark the lower charts show
 let runtimeHidden = new Set(); // categories left out of the index chart and the table
 let runtimeReference = null; // a build's runtimeBuildKey, or null for the first build in the range
-let runtimeSource = null; // "ci" or "manyjulias" (the backfill) alone, null for the backfill followed by CI
+let runtimeSource = null; // "ci", "manyjulias" (the backfill) or "all" (the backfill, then CI); null for the API's default, CI's
 let runtimeChartMetric = "judged"; // what the index and a benchmark's chart show: "judged", "time" or "instructions"
 let runtimeTableView = "benchmarks"; // "benchmarks" | "prs"
 let runtimeFilter = "";
@@ -19510,7 +19510,7 @@ function applyRuntimeURLParams() {
   if (rc !== null) runtimeHidden = new Set(["__pending__", ...rc.split(",").filter(Boolean)]);
   if (params.get("rr")) runtimeReference = params.get("rr");
   const rs = params.get("rs");
-  if (rs === "ci" || rs === "manyjulias") runtimeSource = rs;
+  if (rs === "ci" || rs === "manyjulias" || rs === "all") runtimeSource = rs;
   const rm = params.get("rm");
   if (rm in RUNTIME_CHART_KEYS) {
     runtimeChartMetric = rm;
@@ -19571,7 +19571,7 @@ async function loadRuntimeData() {
     runtimeAnnotations = d.source !== "manyjulias" ? notes : [];
     resolveRuntimeHidden();
     updateRuntimeSourceSelect();
-    if (!runtimeBench || !runtimeInfo(runtimeBench)) runtimeBench = runtimeDefaultBench();
+    if (runtimeBench && !runtimeInfo(runtimeBench)) runtimeBench = null;
     setUpdatedLabels();
     document.getElementById("runtime-chart-loading").style.display = "none";
     updateRuntimeURL();
@@ -19603,13 +19603,6 @@ function loadRuntimePrs() {
         runtimePrs = { prs: [], failed: true };
       });
   return runtimePrsLoading;
-}
-
-// With nothing picked, the benchmark that moved most in the newest build
-function runtimeDefaultBench() {
-  const rows = runtimeTableRows({ all: true });
-  rows.sort((a, b) => (b.move ?? -1) - (a.move ?? -1));
-  return rows[0]?.name || runtimeData.benchmarks[0]?.name || null;
 }
 
 // The weekly runs of published julias, drawn on a benchmark's chart beside master:
@@ -19732,7 +19725,7 @@ function updateRuntimeSourceSelect() {
   const sources = runtimeData.sources || [];
   el.hidden = sources.length < 2;
   const machine = (x) => (x?.machine ? ` (${x.machine.replace(/ \d+-Core Processor$/, "")})` : "");
-  el.innerHTML = [{ source: "all" }, ...sources]
+  el.innerHTML = [...sources.filter((x) => x.source === "ci"), { source: "all" }, ...sources.filter((x) => x.source !== "ci")]
     .map((x) => {
       const label = `${RUNTIME_SOURCE_LABELS[x.source] || x.source}${machine(x)}`;
       return `<option value="${x.source}"${x.source === runtimeData.source ? " selected" : ""}>${escapeHtml(label)}</option>`;
@@ -19754,7 +19747,7 @@ function setRuntimeChartMetric(metric) {
 }
 
 function setRuntimeSource(source) {
-  runtimeSource = source === "all" ? null : source;
+  runtimeSource = source;
   runtimeReference = null;
   updateRuntimeURL();
   document.getElementById("runtime-chart-loading").style.display = "";
@@ -20049,8 +20042,10 @@ function updateRuntimeCharts() {
 
   const info = runtimeBench ? runtimeInfo(runtimeBench) : null;
   const head = document.getElementById("runtime-bench-head");
-  head.hidden = !info;
-  if (!info) return;
+  if (!info) {
+    head.innerHTML = '<span class="col-secondary">Pick a benchmark from the list or the table to see its history.</span>';
+    return;
+  }
   const name = info.name;
   // The benchmark's name heads both charts on the right, each titled by what it shows
   head.innerHTML =
