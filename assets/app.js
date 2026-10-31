@@ -19678,11 +19678,17 @@ const RUNTIME_REFS = [
   ["branch_nightly", "Next release nightly", "circle"],
 ];
 
-// One reference series' points of `name` in the range: each run's fastest block
-function runtimeRefPoints(key, name) {
+// One reference series' runs in the range, measured on `machine` (the machine of the
+// newest master build shown) since cycles from another machine do not compare
+function runtimeRefRuns(key, machine) {
   const start = runtimeTimeRangeDays > 0 ? Date.now() - runtimeTimeRangeDays * 864e5 : -Infinity;
-  return (runtimeData[key] || [])
-    .filter((r) => runtimeTime(r) >= start && r.values[name]?.[0] != null)
+  return (runtimeData[key] || []).filter((r) => runtimeTime(r) >= start && (!machine || !r.machine || r.machine === machine));
+}
+
+// One reference series' points of `name`: each run's fastest block
+function runtimeRefPoints(key, name, machine) {
+  return runtimeRefRuns(key, machine)
+    .filter((r) => r.values[name]?.[0] != null)
     .map((r) => ({ x: runtimeTime(r), y: r.values[name][0], r }));
 }
 
@@ -19984,9 +19990,13 @@ function updateRuntimeCharts() {
   const theme = chartTheme();
   const colors = runtimeColors();
   const ref = runtimeRefIndex(idx);
+  const refMachine = runtimeData.builds[idx[idx.length - 1]].machine;
+  // The weekly references widen the axis, as they need not fall between master builds
+  const refTimes = RUNTIME_REFS.flatMap(([k]) => runtimeRefRuns(k, refMachine).map(runtimeTime));
   const xs = idx.map((i) => runtimeTime(runtimeData.builds[i]));
-  const xMin = xs[0];
-  const xMax = xs[xs.length - 1];
+  const refPad = refTimes.length ? (Math.max(xs[xs.length - 1], ...refTimes) - Math.min(xs[0], ...refTimes)) * 0.02 : 0;
+  const xMin = Math.min(xs[0], ...refTimes.map((t) => t - refPad));
+  const xMax = Math.max(xs[xs.length - 1], ...refTimes.map((t) => t + refPad));
   // A phone has room for the titles' heads only
   const title = (text, tail = "") => (PHONE_WIDTH.matches ? (tail = "") : 0, {
     display: true,
@@ -20138,7 +20148,7 @@ function updateRuntimeCharts() {
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
   // The weekly references have the judged metric only
   const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle]) => {
-    const pts = runtimeRefPoints(refKey, name);
+    const pts = runtimeRefPoints(refKey, name, refMachine);
     const newest = pts.length ? pts[pts.length - 1].r.version : null;
     return {
       label,
