@@ -20,18 +20,18 @@
     <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
     <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
     <meta name="robots" content="noindex" />
-    <!-- Shorthand for ../?tab=benchmarks-history. Any other query parameters and the
+    <!-- Shorthand for ../?tab=bench-history. Any other query parameters and the
          fragment are carried over. -->
     <script>
       (function () {
         var p = new URLSearchParams(location.search);
-        p.set("tab", "benchmarks-history");
+        p.set("tab", "bench-history");
         location.replace("../?" + p.toString() + location.hash);
       })();
     </script>
-    <meta http-equiv="refresh" content="0; url=../?tab=benchmarks-history" />
+    <meta http-equiv="refresh" content="0; url=../?tab=bench-history" />
   </head>
   <body>
-    <a href="../?tab=benchmarks-history">Julia Performance Tracking: Benchmarks: History</a>
+    <a href="../?tab=bench-history">Julia Performance Tracking: Benchmarks: History</a>
   </body>
 </html>

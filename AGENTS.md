@@ -61,7 +61,7 @@ corresponds to the i-th `dates`/`commits` entry. `nothing` (or 0)
 means the benchmark was missing on that date, so always filter
 those out before computing anything. Times are nanoseconds.
 
-TTFX history (the CI → TTFX tab) is `data/ttfx_summary.json.gz`, rendered
+TTFX history (the Benchmarks → TTFX tab) is `data/ttfx_summary.json.gz`, rendered
 from what `fetch_ttfx.jl` records from the artifacts of the `TTFX` job on every julia-ci
 master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
 
@@ -225,7 +225,7 @@ a dashed line at that build in the panels of those stages and shows the note in
 the build's popup. Use it for a step that is not the commit being slower, such as
 build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
 
-Runtime benchmarks (the CI → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
+Runtime benchmarks (the Benchmarks → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
 records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks, about
 110 benchmarks in 13 categories on the macOS aarch64 agent) of every julia-ci master build:
 one `rtb_jobs` row per job and one `rtb_results` row per benchmark, reduced over the job's

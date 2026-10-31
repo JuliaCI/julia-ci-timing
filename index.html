@@ -188,35 +188,6 @@
             >
               History
             </button>
-          </div>
-        </div>
-        <div class="tab-group" role="presentation">
-          <span class="tab-group-label" aria-hidden="true">CI</span>
-          <div class="tab-group-buttons" role="presentation">
-            <button
-              class="tab-btn"
-              id="tab-ci-timing"
-              role="tab"
-              aria-selected="false"
-              aria-controls="ci-timing-view"
-              tabindex="-1"
-              onclick="switchTab('ci-timing')"
-              title="Buildkite CI job timing per host and platform"
-            >
-              Timing
-            </button>
-            <button
-              class="tab-btn"
-              id="tab-ci-workers"
-              role="tab"
-              aria-selected="false"
-              aria-controls="ci-timing-view"
-              tabindex="-1"
-              onclick="switchTab('ci-workers')"
-              title="CI worker activity and downtime history"
-            >
-              Workers
-            </button>
             <button
               class="tab-btn"
               id="tab-ci-ttfx"
@@ -252,6 +223,35 @@
               title="Size of the binary distribution on every master build: the sysimage, the stdlib pkgimages, the runtime libraries"
             >
               Sizes
+            </button>
+          </div>
+        </div>
+        <div class="tab-group" role="presentation">
+          <span class="tab-group-label" aria-hidden="true">CI</span>
+          <div class="tab-group-buttons" role="presentation">
+            <button
+              class="tab-btn"
+              id="tab-ci-timing"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-timing')"
+              title="Buildkite CI job timing per host and platform"
+            >
+              Timing
+            </button>
+            <button
+              class="tab-btn"
+              id="tab-ci-workers"
+              role="tab"
+              aria-selected="false"
+              aria-controls="ci-timing-view"
+              tabindex="-1"
+              onclick="switchTab('ci-workers')"
+              title="CI worker activity and downtime history"
+            >
+              Workers
             </button>
             <button
               class="tab-btn"

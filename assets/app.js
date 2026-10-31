@@ -6676,16 +6676,16 @@ let activeTab = "overview";
 const TAB_URL_MAP = {
   overview: "overview",
   commit: "commit",
-  perf: "benchmarks-diff",
-  benchmarks: "benchmarks-history",
+  perf: "bench-diff",
+  benchmarks: "bench-history",
   "ci-timing": "ci-timing",
   "ci-workers": "ci-workers",
-  "ci-ttfx": "ci-ttfx",
-  "ci-runtime": "ci-runtime",
-  "ci-sizes": "ci-sizes",
+  "ci-ttfx": "bench-ttfx",
+  "ci-runtime": "bench-runtime",
+  "ci-sizes": "bench-sizes",
   "ci-build-stages": "ci-build-stages",
-  packages: "ecosystem-downloads",
-  pkgeval: "ecosystem-pkgeval",
+  packages: "eco-downloads",
+  pkgeval: "eco-pkgeval",
   activity: "repo-activity",
 };
 
@@ -6726,6 +6726,8 @@ function tabToURLValue(tab) {
 
 function tabFromURLValue(value) {
   if (!value) return null;
+  // Links from before the group prefixes were shortened
+  value = value.replace(/^benchmarks-/, "bench-").replace(/^ecosystem-/, "eco-");
   for (const [tabName, tabValue] of Object.entries(TAB_URL_MAP)) {
     if (tabValue === value) return tabName;
   }
@@ -21129,8 +21131,8 @@ function commitRuntimeHtml(data) {
 const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
-  { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-ttfx", "ci-runtime", "ci-sizes", "ci-build-stages"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks", "ci-ttfx", "ci-runtime", "ci-sizes"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 // The view holding each tab's toolbar; the two CI pages share one

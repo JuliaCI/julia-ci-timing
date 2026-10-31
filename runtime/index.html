@@ -2,11 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Julia Performance Tracking: CI: Runtime</title>
+    <title>Julia Performance Tracking: Benchmarks: Runtime</title>
     <meta name="description" content="Runtime benchmarks of every Julia master build: cycles, wall time and instructions of about a hundred benchmarks of codegen, the runtime, the GC and the compiler." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Julia Performance Tracking" />
-    <meta property="og:title" content="Julia Performance Tracking: CI: Runtime" />
+    <meta property="og:title" content="Julia Performance Tracking: Benchmarks: Runtime" />
     <meta property="og:description" content="Runtime benchmarks of every Julia master build: cycles, wall time and instructions of about a hundred benchmarks of codegen, the runtime, the GC and the compiler." />
     <meta property="og:url" content="https://perf.julialang.org/runtime" />
     <meta property="og:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
@@ -14,24 +14,24 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Julia Performance Tracking" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Julia Performance Tracking: CI: Runtime" />
+    <meta name="twitter:title" content="Julia Performance Tracking: Benchmarks: Runtime" />
     <meta name="twitter:description" content="Runtime benchmarks of every Julia master build: cycles, wall time and instructions of about a hundred benchmarks of codegen, the runtime, the GC and the compiler." />
     <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
     <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
     <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
     <meta name="robots" content="noindex" />
-    <!-- Shorthand for ../?tab=ci-runtime. Any other query parameters and the
+    <!-- Shorthand for ../?tab=bench-runtime. Any other query parameters and the
          fragment are carried over, so /runtime?rt=90 opens that view. -->
     <script>
       (function () {
         var p = new URLSearchParams(location.search);
-        p.set("tab", "ci-runtime");
+        p.set("tab", "bench-runtime");
         location.replace("../?" + p.toString() + location.hash);
       })();
     </script>
-    <meta http-equiv="refresh" content="0; url=../?tab=ci-runtime" />
+    <meta http-equiv="refresh" content="0; url=../?tab=bench-runtime" />
   </head>
   <body>
-    <a href="../?tab=ci-runtime">Julia Performance Tracking: CI: Runtime</a>
+    <a href="../?tab=bench-runtime">Julia Performance Tracking: Benchmarks: Runtime</a>
   </body>
 </html>

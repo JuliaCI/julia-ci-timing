@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # Write a database of synthetic runtime benchmark history, for previewing the Runtime tab
-# (?tab=ci-runtime) without the julia-ci jobs that will feed it.
+# (?tab=bench-runtime) without the julia-ci jobs that will feed it.
 #
 # It takes the values of a real run of JuliaCI/julia-ci-benchmarks (a results.json, of
 # which the `head` arm is used) as the level of every benchmark, and writes about 150
@@ -33,7 +33,7 @@
 #   julia --project tools/fake_runtime_data.jl --results path/to/results.json \
 #       --db /tmp/rtb/fake.sqlite --julia-repo ~/julia
 #   julia --project db/serve.jl --db /tmp/rtb/fake.sqlite --site . --notes /tmp/rtb --port 8002
-#   open 'http://127.0.0.1:8002/?tab=ci-runtime'
+#   open 'http://127.0.0.1:8002/?tab=bench-runtime'
 #
 # The other tabs have no data in that database; the Overview shows them as missing.
 
