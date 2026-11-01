@@ -78,10 +78,15 @@ only the files that changed. `AGENTS.md` describes their shapes.
   geometric means).
 - **PkgEval.** `pkgeval_reports` (one per run, with outcome counts), `packages` (names),
   `pkgeval_results` (report and package: status, reason, version, duration_s, and on farm
-  reports the failure's first error line), `pkgeval_reasons` (counts per status and reason),
-  `pkgeval_signatures` (per farm report, failing packages grouped by a shared error line:
-  label, key (the normalized line, for matching a group across reports), n and the
-  packages with their logs as JSON).
+  reports the failure's first error line and `log`), `pkgeval_reasons` (counts per status and
+  reason), `pkgeval_signatures` (per farm report, failing packages grouped by a shared error
+  line: label, key (the normalized line, for matching a group across reports), n and the
+  package names as JSON). A farm report's package log is `pkgeval_reports.logs_url` plus
+  `<name>.log`, unless `pkgeval_results.log` names another file in that folder, gives a full
+  URL, or is `''` for no log; the API's `pkgeval/signatures`, `pkgeval/package`,
+  `pkgeval/failures`, `pkgeval/popular` and `pkgeval/changes` return the resolved URLs, and
+  a raw farm `daily.json` follows the same rule with its top-level `logs` and each test's
+  optional `log` (null for no log).
 - **TTFX.** `ttfx_jobs` (one per master build's TTFX job; `kind` is `release` for the
   weekly reference run of the newest stable release, `lts` for that of the LTS, `branch_nightly` for that of the next release's branch nightly, `release_branch` for the job of a release branch's own build, `opt` for the nightly optimized
   build, whose job also measures the regular build of the same commit: its samples have

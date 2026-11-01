@@ -243,7 +243,8 @@ CREATE TABLE IF NOT EXISTS pkgeval_reports (
     change_seq    INTEGER NOT NULL,
     -- From the farm's failure signatures; NULL on reports without them
     signatures_hard  INTEGER,                -- failures and crashes
-    signatures_lines INTEGER                 -- how many of those have an error line
+    signatures_lines INTEGER,                -- how many of those have an error line
+    logs_url         TEXT                    -- the farm's folder of package logs; NULL without one
 );
 CREATE INDEX IF NOT EXISTS pkgeval_reports_date ON pkgeval_reports (kind, date);
 
@@ -268,6 +269,9 @@ CREATE TABLE IF NOT EXISTS pkgeval_results (
     reason     TEXT,
     duration_s REAL,
     error      TEXT,                        -- the failure's first error line, on farm reports
+    -- On farm reports, the log when it is not <logs_url><name>.log: a file
+    -- name in that folder or a full URL, or '' for no log
+    log        TEXT,
     PRIMARY KEY (report_id, package_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS pkgeval_results_pkg ON pkgeval_results (package_id, report_id);
@@ -281,7 +285,7 @@ CREATE TABLE IF NOT EXISTS pkgeval_signatures (
     label     TEXT NOT NULL,
     key       TEXT NOT NULL,
     n         INTEGER NOT NULL,
-    packages  TEXT NOT NULL,                -- JSON [{name, log}], log a key in the farm's bucket
+    packages  TEXT NOT NULL,                -- JSON array of package names
     PRIMARY KEY (report_id, rank)
 ) WITHOUT ROWID;
 

@@ -10592,6 +10592,16 @@ async function setPkgevalPackage(name) {
 
 const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
 
+// A farm daily's log of a package and the failure's error line, where the
+// API has them; the log link keeps a click from reaching its row
+const pkgevalLogLink = (log) => (log ? ` ${extLink(log, "log ↗", 'class="pe-log" title="Open the log"')}` : "");
+const pkgevalErrorLine = (error) => (error ? `<div class="pe-error-line">${escapeHtml(error)}</div>` : "");
+function stopPkgevalLogClicks(root) {
+  root.querySelectorAll(".pe-log").forEach((a) => {
+    a.onclick = (e) => e.stopPropagation();
+  });
+}
+
 // The package's changes, newest first until a header is clicked
 let pkgevalPackageSort = { col: "date", asc: false };
 
@@ -10612,7 +10622,8 @@ function renderPkgevalPackage() {
   const strip = history
     .map((h) => {
       const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}${h.error ? "\n" + h.error : ""}`;
-      return `<span class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"></span>`;
+      const cell = `class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"`;
+      return h.log ? extLink(h.log, "", cell) : `<span ${cell}></span>`;
     })
     .join("");
   // Rows where something changed, newest first, so a long green history
@@ -10642,15 +10653,16 @@ function renderPkgevalPackage() {
         <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
         <td>${escapeHtml(h.version || "")}</td>
         <td class="pe-${escapeHtml(h.status)}">${escapeHtml(h.status)}</td>
-        <td class="wrap">${escapeHtml(h.reason || "")}${h.error ? `<div class="pe-error-line">${escapeHtml(h.error)}</div>` : ""}</td>
+        <td class="wrap">${escapeHtml(h.reason || "")}${pkgevalErrorLine(h.error)}</td>
         <td class="num">${h.duration_s != null ? formatDuration(h.duration_s) : ""}</td>
+        <td>${pkgevalLogLink(h.log)}</td>
       </tr>`;
     })
     .join("");
   panel.innerHTML = `
     <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
-    <p class="package-panel-help">Reports where the status, reason, version or error line changed, newest first; click a row to open the report.</p>
+    <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report, or a cell of the strip to open that day's log where the PkgEval farm kept one.</p>
     <table>
       <thead>${sortableHeaderRow(
         [
@@ -10660,6 +10672,7 @@ function renderPkgevalPackage() {
           ["status", "Status"],
           ["reason", "Reason"],
           ["duration_s", "Duration", "num"],
+          [null, "Log", "", "The package's log on PkgEval farm reports"],
         ],
         pkgevalPackageSort,
       )}</thead>
@@ -10672,6 +10685,7 @@ function renderPkgevalPackage() {
   panel.querySelectorAll("tr[data-url]").forEach((tr) => {
     tr.onclick = () => window.open(tr.dataset.url, "_blank", "noopener");
   });
+  stopPkgevalLogClicks(panel);
 }
 
 // The most downloaded packages that did not pass the newest report: the
@@ -10730,7 +10744,7 @@ function renderPkgevalPopular() {
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
         <td class="num" title="${escapeHtml(title)}">${since}</td>
-        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
+        <td class="wrap">${pkgevalReasonPill(p.reason, p.status)}${pkgevalLogLink(p.log)}${pkgevalErrorLine(p.error)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
     })
@@ -10754,7 +10768,7 @@ function renderPkgevalPopular() {
         return {
           attrs: `data-name="${escapeHtml(p.name)}"`,
           lead: p.rank.toLocaleString("en-US"),
-          title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
+          title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}${pkgevalLogLink(p.log)}`,
           meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> ${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
           value: isNew ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
           valueClass: isNew || (p.days != null && p.days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
@@ -10783,6 +10797,7 @@ function renderPkgevalPopular() {
   panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });
+  stopPkgevalLogClicks(panel);
 }
 
 // The package list under the chart: the most downloaded packages not
@@ -10893,7 +10908,7 @@ function renderPkgevalFailuresList() {
         <td class="num">${p.rank != null ? p.rank.toLocaleString("en-US") : ""}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
-        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
+        <td class="wrap">${pkgevalReasonPill(p.reason, p.status)}${pkgevalLogLink(p.log)}${pkgevalErrorLine(p.error)}</td>
         <td class="num" title="${escapeHtml(title)}">${sinceHtml(p)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
@@ -10904,7 +10919,7 @@ function renderPkgevalFailuresList() {
       packages.map((p) => ({
         attrs: `data-name="${escapeHtml(p.name)}"`,
         lead: p.rank != null ? p.rank.toLocaleString("en-US") : "",
-        title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
+        title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}${pkgevalLogLink(p.log)}`,
         meta: `${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
         value: p.failing_since === d.date ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
         valueClass: isRecent(p) ? "m-bad" : "m-muted",
@@ -10931,6 +10946,7 @@ function renderPkgevalFailuresList() {
   list.querySelectorAll("[data-name]").forEach((el) => {
     el.onclick = () => setPkgevalPackage(el.dataset.name);
   });
+  stopPkgevalLogClicks(list);
 }
 
 // The common failure signatures of the newest farm daily that has them:
@@ -10976,7 +10992,11 @@ function renderPkgevalSignatures() {
     const all = pkgevalSignaturesAll.has(c.rank);
     const shown = all ? c.packages : c.packages.slice(0, PKGEVAL_SIGNATURE_PACKAGES);
     const links = shown
-      .map((p) => (p.log ? extLink(p.log, escapeHtml(p.name), 'title="Open the log"') : escapeHtml(p.name)))
+      .map((p) => {
+        // A package's own line, where it differs from the group's
+        const title = escapeHtml(p.error || "Open the log");
+        return p.log ? extLink(p.log, escapeHtml(p.name), `title="${title}"`) : `<span title="${p.error ? title : ""}">${escapeHtml(p.name)}</span>`;
+      })
       .join("");
     const more =
       shown.length < c.packages.length
@@ -11665,7 +11685,7 @@ function renderPkgevalChangesList() {
       (c) => `<tr tabindex="0" data-name="${escapeHtml(c.name)}" class="${pkgevalIsFlaky(c) ? "pe-row-flaky" : ""}">
         <td>${arrow(c)} ${escapeHtml(c.date)}${pendingTag(c)}</td>
         <td>${escapeHtml(c.name)}</td>
-        <td>${change(c)}</td>
+        <td class="wrap">${change(c)}${pkgevalLogLink(c.log)}${pkgevalErrorLine(c.error)}</td>
         <td>${now(c)}</td>
         <td class="num" title="${flipsTitle}">${c.flips}</td>
         <td class="num">${c.rank != null ? c.rank.toLocaleString("en-US") : ""}</td>
@@ -11683,7 +11703,7 @@ function renderPkgevalChangesList() {
       rows.map((c) => ({
         attrs: `data-name="${escapeHtml(c.name)}"`,
         lead: arrow(c),
-        title: `${escapeHtml(c.name)}${pendingTag(c)}`,
+        title: `${escapeHtml(c.name)}${pendingTag(c)}${pkgevalLogLink(c.log)}`,
         meta: `${escapeHtml(c.date)} · ${change(c)} · ${compactNumber(c.user)} downloads`,
         value: c.rank != null ? `#${c.rank.toLocaleString("en-US")}` : "",
         valueClass: "m-muted",
@@ -11716,6 +11736,7 @@ function renderPkgevalChangesList() {
   list.querySelectorAll("[data-name]").forEach((el) => {
     el.onclick = () => setPkgevalPackage(el.dataset.name);
   });
+  stopPkgevalLogClicks(list);
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===

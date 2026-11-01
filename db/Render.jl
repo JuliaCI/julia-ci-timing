@@ -300,15 +300,25 @@ function pkgeval_packages(db, q; limit=25)
                                                 (replace(q, "%" => "\\%", "_" => "\\_") * "%", limit))]
 end
 
+# A result's log on a farm report: the report's logs folder plus the
+# package's own file name, or a full URL the farm gave for it. Nothing on
+# reports without a logs folder, or when the package has no log.
+function pkgeval_log_url(logs_url, name, log)
+    log isa AbstractString && startswith(log, "https://") && return String(log)
+    (logs_url === missing || isequal(log, "")) && return nothing
+    return String(logs_url) * (log === missing ? String(name) * ".log" : String(log))
+end
+
 # One package's status on every daily report that has package rows
 function pkgeval_package(db, name)
     history = Any[]
-    for r in rows(db, "SELECT r.date, r.path, r.julia_version, p.version, p.status, p.reason, p.duration_s, p.error " *
+    for r in rows(db, "SELECT r.date, r.path, r.julia_version, r.logs_url, p.version, p.status, p.reason, p.duration_s, p.error, p.log " *
                       "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN pkgeval_reports r ON r.id = p.report_id " *
                       "WHERE k.name = ? AND r.kind = 'daily' ORDER BY r.date", (name,))
         push!(history, OrderedDict("date" => String(r.date), "date_path" => date_path(String(r.path)), "julia" => String(r.julia_version),
                                    "version" => js(r.version), "status" => String(r.status), "reason" => js(r.reason),
-                                   "duration_s" => js(r.duration_s), "error" => js(r.error)))
+                                   "duration_s" => js(r.duration_s), "error" => js(r.error),
+                                   "log" => pkgeval_log_url(r.logs_url, name, r.log)))
     end
     return OrderedDict("name" => name, "history" => history)
 end
@@ -318,14 +328,13 @@ end
 # first. Each group carries on how many of the last few reports before it a
 # group had the same key, so a new cause stands out.
 const PKGEVAL_SIGNATURE_HISTORY = 7
-const PKGEVAL_LOG_BASE = "https://pkgeval.s3.us-east-2.amazonaws.com/"
 
 function pkgeval_signatures(db, path="")
     r = if isempty(path)
-        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines FROM pkgeval_reports " *
+        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines, logs_url FROM pkgeval_reports " *
                  "WHERE kind = 'daily' AND signatures_hard IS NOT NULL ORDER BY date DESC LIMIT 1")
     else
-        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines FROM pkgeval_reports " *
+        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines, logs_url FROM pkgeval_reports " *
                  "WHERE path = ? AND signatures_hard IS NOT NULL", ("by_date/" * path,))
     end
     isempty(r) && return nothing
@@ -337,10 +346,19 @@ function pkgeval_signatures(db, path="")
                   (JSON3.write([Int(p.id) for p in previous]),))
         seen[String(x.key)] = get(seen, String(x.key), 0) + 1
     end
+    # The grouped packages' own error lines and logs
+    failed = Dict(String(x.name) => x for x in rows(db, "SELECT k.name, p.error, p.log FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
+                                                        "WHERE p.report_id = ? AND p.error IS NOT NULL", (Int(r.id),)))
     clusters = Any[]
     for x in rows(db, "SELECT rank, label, key, n, packages FROM pkgeval_signatures WHERE report_id = ? ORDER BY rank", (Int(r.id),))
-        packages = [OrderedDict("name" => String(p.name), "log" => isempty(p.log) ? nothing : PKGEVAL_LOG_BASE * String(p.log))
-                    for p in JSON3.read(String(x.packages))]
+        packages = Any[]
+        for name in JSON3.read(String(x.packages))
+            f = get(failed, name, nothing)
+            p = OrderedDict{String,Any}("name" => String(name), "log" => pkgeval_log_url(r.logs_url, name, f === nothing ? missing : f.log))
+            # Most lines repeat the label word for word; only the others are sent
+            f === nothing || f.error == x.label || (p["error"] = String(f.error))
+            push!(packages, p)
+        end
         push!(clusters, OrderedDict("rank" => Int(x.rank), "label" => String(x.label), "key" => String(x.key),
                                     "n" => Int(x.n), "seen" => get(seen, String(x.key), 0), "packages" => packages))
     end
@@ -397,7 +415,7 @@ function failing_runs(db, names)
 end
 
 # The newest two daily reports with package rows, newest first
-pkgeval_latest_reports(db) = rows(db, "SELECT r.id, r.date, r.path FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
+pkgeval_latest_reports(db) = rows(db, "SELECT r.id, r.date, r.path, r.logs_url FROM pkgeval_reports r WHERE r.kind = 'daily' AND EXISTS " *
                                       "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT 2")
 
 # Downloads per registry package name over the last `days` days of rollups,
@@ -430,9 +448,11 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
     all_ranked = ranked_json()
     dl = "WITH ranked AS (SELECT value ->> 0 AS name, value ->> 1 AS total, value ->> 2 AS user, value ->> 3 AS ci, " *
          "value ->> 4 AS rank FROM json_each(?)) "
+    logs_url = reports[1].logs_url
     packages = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
-                            "version" => js(r.version), "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci))
-                for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, p.version, ranked.total, ranked.user, ranked.ci " *
+                            "version" => js(r.version), "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci),
+                            "error" => js(r.error), "log" => pkgeval_log_url(logs_url, r.name, r.log))
+                for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, p.version, p.error, p.log, ranked.total, ranked.user, ranked.ci " *
                                   "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id " *
                                   "WHERE p.report_id = ? AND p.status IN (SELECT value FROM json_each(?)) " *
                                   "ORDER BY ranked.rank, p.package_id LIMIT ?", (all_ranked, report_id, JSON3.write(collect(statuses)), limit))]
@@ -493,7 +513,7 @@ function pkgeval_failures(db; reasons, days=30, client="user")
     report_id = Int(reports[1].id)
     ranked = Dict(String(x.name) => x for x in r.ranking)
     packages = OrderedDict{String,Any}[]
-    for x in rows(db, "SELECT k.name, p.status, p.reason, p.version FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
+    for x in rows(db, "SELECT k.name, p.status, p.reason, p.version, p.error, p.log FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
                       "WHERE p.report_id = ? AND p.status != 'ok' AND p.reason IN (SELECT value FROM json_each(?))",
                       (report_id, JSON3.write(reasons)))
         name = String(x.name)
@@ -501,7 +521,8 @@ function pkgeval_failures(db; reasons, days=30, client="user")
         push!(packages, OrderedDict("rank" => d === nothing ? nothing : Int(d.rank), "name" => name, "status" => String(x.status),
                                     "reason" => js(x.reason), "version" => js(x.version),
                                     "all" => d === nothing ? 0 : Int(d.total), "user" => d === nothing ? 0 : Int(d.user),
-                                    "ci" => d === nothing ? 0 : Int(d.ci)))
+                                    "ci" => d === nothing ? 0 : Int(d.ci), "error" => js(x.error),
+                                    "log" => pkgeval_log_url(reports[1].logs_url, name, x.log)))
     end
     sort!(packages; by=p -> (p["rank"] === nothing, something(p["rank"], 0), p["name"]))
     runs = failing_runs(db, [p["name"] for p in packages])
@@ -527,7 +548,7 @@ end
 const PKGEVAL_FLAKY_REPORTS = 30
 
 function pkgeval_changes(db; days=30, sustain=2, client="user")
-    reports = rows(db, "SELECT r.id, r.date, r.path, r.commit_sha FROM pkgeval_reports r WHERE r.kind = 'daily' AND r.date != '' AND EXISTS " *
+    reports = rows(db, "SELECT r.id, r.date, r.path, r.commit_sha, r.logs_url FROM pkgeval_reports r WHERE r.kind = 'daily' AND r.date != '' AND EXISTS " *
                        "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date")
     n = length(reports)
     n < 2 && return nothing
@@ -564,16 +585,27 @@ function pkgeval_changes(db; days=30, sustain=2, client="user")
     end
     names = Dict(Int(r.id) => String(r.name) for r in rows(db, "SELECT id, name FROM packages WHERE id IN (SELECT value FROM json_each(?))",
                                                             (JSON3.write(unique(c.pkg for c in changes)),)))
+    # The failure each change is about (the one it began, or the one it
+    # ended): its error line and log, read for just those results
+    failure(c) = c.kind == "breaks" ? c.to[1] : c.from[1]
+    details = Dict((Int(x.report_id), Int(x.package_id)) => x
+                   for x in rows(db, "SELECT p.report_id, p.package_id, p.error, p.log FROM json_each(?) j JOIN pkgeval_results p " *
+                                     "ON p.report_id = j.value ->> 0 AND p.package_id = j.value ->> 1",
+                                 (JSON3.write([(Int(reports[failure(c)].id), c.pkg) for c in changes]),)))
     r = pkgeval_ranking(db, 30, client)
     ranked = r === nothing ? Dict() : Dict(String(x.name) => x for x in r.ranking)
     out_changes = Any[]
     for c in sort(changes; by=c -> (-c.i, c.kind, names[c.pkg]))
         d = get(ranked, names[c.pkg], nothing)
+        f = reports[failure(c)]
+        x = get(details, (Int(f.id), c.pkg), nothing)
         push!(out_changes, OrderedDict("date" => String(reports[c.i].date), "name" => names[c.pkg], "kind" => c.kind == "breaks" ? "broke" : "fixed",
                                        "pending" => c.pending, "from_status" => c.from[3], "from_reason" => c.from[4],
                                        "to_status" => c.to[3], "to_reason" => c.to[4], "now_status" => c.now[3], "now_reason" => c.now[4],
                                        "now_date" => String(reports[c.now[1]].date), "flips" => c.flips,
-                                       "rank" => d === nothing ? nothing : Int(d.rank), "user" => d === nothing ? 0 : Int(d.user)))
+                                       "rank" => d === nothing ? nothing : Int(d.rank), "user" => d === nothing ? 0 : Int(d.user),
+                                       "error" => x === nothing ? nothing : js(x.error),
+                                       "log" => x === nothing ? nothing : pkgeval_log_url(f.logs_url, names[c.pkg], x.log)))
     end
     out_reports = [OrderedDict("date" => String(reports[i].date), "date_path" => date_path(String(reports[i].path)),
                                "commit" => String(reports[i].commit_sha), "prev_commit" => String(reports[i-1].commit_sha),

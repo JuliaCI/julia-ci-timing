@@ -2489,6 +2489,13 @@ th.sorted .sort-indicator {
 .pe-error-line {
   color: var(--color-fg-muted);
 }
+.pe-log {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pkgeval-strip a:hover {
+  outline: 1px solid var(--color-fg-default);
+}
 .pe-sig-packages {
   display: flex;
   flex-wrap: wrap;
@@ -2661,10 +2668,13 @@ th.sorted .sort-indicator {
   gap: 1px;
   margin: 4px 0 10px;
 }
-.pkgeval-strip span {
+.pkgeval-strip span,
+.pkgeval-strip a {
   width: 6px;
   height: 14px;
   background: var(--color-neutral-muted);
+}
+.pkgeval-strip span {
   cursor: default;
 }
 .pkgeval-strip .st-ok { background: var(--color-success-fg); }
