@@ -42,6 +42,7 @@ PkgEval:
 - `/api/pkgeval/package/<Name>`: one package's PkgEval status on every report
 - `/api/pkgeval/changes`: packages that recently broke or were fixed on PkgEval and stayed so, with flaky flips filtered out
 - `/api/pkgeval/reasons`: how many packages failed each way on the newest report
+- `/api/pkgeval/signatures`: the newest farm daily's common failure signatures: failing packages grouped by a shared error line, with each package's log URL and whether each group is new; `package`, `failures`, `popular` and `changes` also give a farm daily failure's error line and log URL
 - `/api/pkgeval/failures?reason=precompile`: the packages failing for those reasons, by download rank, with how long each has failed
 - `/api/pkgeval/popular`: the most downloaded packages that fail PkgEval, and for how long
 

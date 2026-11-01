@@ -8,7 +8,12 @@
 # by_date/YYYY-MM/DD paths. Extracts per-date status counts (ok/fail/crash/skip/kill)
 # and the per-package rows. Reports imported from the legacy summary file have
 # no package rows; `--backfill-packages N` re-fetches the newest N such
-# reports (about 1.5 MB and 13k rows each).
+# reports (about 1.5 MB and 13k rows each). Newer farm summaries also carry
+# each failure's first error line, the folder of the package logs (a package
+# names its own log only when it is not <name>.log there) and the failure
+# signatures (failing packages grouped by a shared error line);
+# `--backfill-signatures N` re-fetches the newest N farm reports stored
+# without them.
 
 using JSON3
 using HTTP
@@ -109,6 +114,7 @@ function count_statuses(db, date_path::String)
         commit = sha[1:min(8, length(sha))]
     end
 
+    logs = get(db, :logs, nothing)
     total = sum(values(counts))
     return Dict{String,Any}(
         "date" => date_str,
@@ -121,6 +127,7 @@ function count_statuses(db, date_path::String)
         "kill" => counts["kill"],
         "version" => version_str,
         "commit" => commit,
+        "logs_url" => logs === nothing || isempty(logs) ? missing : String(logs),
     )
 end
 
@@ -138,42 +145,67 @@ function package_rows(db_json)
         reason = reason === nothing ? "" : String(reason)
         dur = get(info, :duration, nothing)
         version = version_string(get(info, :version, nothing))
+        err = get(info, :error, nothing)
+        # Absent means <name>.log, and null that the package has no log
+        log = haskey(info, :log) ? something(info.log, "") : missing
         push!(rows, (package = String(pkg), version = isempty(version) ? missing : version,
                      status = status, reason = isempty(reason) ? missing : reason,
-                     duration_s = dur === nothing ? missing : Float64(dur)))
+                     duration_s = dur === nothing ? missing : Float64(dur),
+                     error = err === nothing || isempty(err) ? missing : String(err),
+                     log = log === missing ? missing : String(log)))
         reasons[(status, reason)] = get(reasons, (status, reason), 0) + 1
     end
     return rows, reasons
 end
 
-const REPORT_COLS = ["kind", "date", "commit_sha", "julia_version", "total", "ok", "fail", "crash", "skip", "kill"]
+# The farm's failure signatures, or nothing for a summary without them
+function signature_rows(db_json)
+    sigs = get(db_json, :signatures, nothing)
+    sigs === nothing && return nothing
+    clusters = [(label = String(c.label), key = String(get(c, :key, c.label)), n = Int(c.n),
+                 packages = JSON3.write([String(p) for p in get(c, :packages, [])]))
+                for c in get(sigs, :clusters, [])]
+    return (hard = Int(get(sigs, :hard, 0)), lines = Int(get(sigs, :lines, 0)), clusters)
+end
+
+const REPORT_COLS = ["kind", "date", "commit_sha", "julia_version", "total", "ok", "fail", "crash", "skip", "kill",
+                     "signatures_hard", "signatures_lines", "logs_url"]
 
 function write_reports!(db, reports)
     seq = next_seq!(db)
     rstmt = upsert_stmt(db, "pkgeval_reports", ["path"], REPORT_COLS)
     reason_stmt = upsert_stmt(db, "pkgeval_reasons", ["report_id", "status", "reason"], ["count"]; seq=false)
-    result_stmt = upsert_stmt(db, "pkgeval_results", ["report_id", "package_id"], ["version", "status", "reason", "duration_s"]; seq=false)
+    result_stmt = upsert_stmt(db, "pkgeval_results", ["report_id", "package_id"], ["version", "status", "reason", "duration_s", "error", "log"]; seq=false)
+    sig_stmt = upsert_stmt(db, "pkgeval_signatures", ["report_id", "rank"], ["label", "key", "n", "packages"]; seq=false)
     packages = Dict{Tuple,Int}()
     n = 0
-    for (summary, sha, pkgs, reasons) in reports
+    for (summary, sha, pkgs, reasons, sigs) in reports
         path = "by_date/" * summary["date_path"]
         upsert!(rstmt, (path, "daily", summary["date"], sha, summary["version"], summary["total"], summary["ok"],
-                        summary["fail"], summary["crash"], summary["skip"], summary["kill"], seq))
+                        summary["fail"], summary["crash"], summary["skip"], summary["kill"],
+                        sigs === nothing ? missing : sigs.hard, sigs === nothing ? missing : sigs.lines, summary["logs_url"], seq))
         id = Int(query(db, "SELECT id FROM pkgeval_reports WHERE path = ?", (path,))[1].id)
         for ((status, reason), count) in reasons
             upsert!(reason_stmt, (id, status, reason, count))
         end
         for r in pkgs
             pid = getid!(packages, db, "packages", ("name",), (r.package,))
-            upsert!(result_stmt, (id, pid, r.version, r.status, r.reason, r.duration_s))
+            upsert!(result_stmt, (id, pid, r.version, r.status, r.reason, r.duration_s, r.error, r.log))
             n += 1
+        end
+        if sigs !== nothing
+            for (rank, c) in enumerate(sigs.clusters)
+                upsert!(sig_stmt, (id, rank, c.label, c.key, c.n, c.packages))
+            end
+            # A summary fetched again may have fewer clusters than before
+            DBInterface.execute(db, "DELETE FROM pkgeval_signatures WHERE report_id = ? AND rank > ?", (id, length(sigs.clusters)))
         end
     end
     return n
 end
 
-function backfill_count(args)
-    i = findfirst(==("--backfill-packages"), args)
+function backfill_count(args, flag="--backfill-packages")
+    i = findfirst(==(flag), args)
     i === nothing && return 0
     return i < length(args) ? parse(Int, args[i+1]) : 365
 end
@@ -202,6 +234,16 @@ function ingest!(db, args)
         @info "Backfilling package rows" reports=length(todo) without_rows=length(without)
         append!(new_dates, todo)
     end
+    # Farm summaries written before the farm grouped failures have no signatures,
+    # and the reports stored from them are not fetched again on their own
+    backfill = backfill_count(args, "--backfill-signatures")
+    if backfill > 0
+        without = Set(String(r.path) for r in query(db, "SELECT path FROM pkgeval_reports WHERE kind = 'daily' AND signatures_hard IS NULL"))
+        todo = sort!([d for d in keys(farm) if "by_date/" * d in without && d ∉ new_dates])
+        todo = todo[max(1, end - backfill + 1):end]
+        @info "Backfilling failure signatures" reports=length(todo)
+        append!(new_dates, todo)
+    end
 
     done = Threads.Atomic{Int}(0)
     total = length(new_dates)
@@ -223,7 +265,7 @@ function ingest!(db, args)
         build = get(db_json, :build, nothing)
         sha = build === nothing ? "" : string(get(build, :sha, ""))
         pkgs, reasons = package_rows(db_json)
-        return (summary, sha, pkgs, reasons)
+        return (summary, sha, pkgs, reasons, signature_rows(db_json))
     end
     close(client)
     reports = filter(!isnothing, results)

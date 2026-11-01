@@ -99,6 +99,11 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_samples", "run_stdlibs_s", "TEXT"),
     ("ttfx_results", "run_stdlibs", "REAL"),
     ("ttfx_prs", "counts", "TEXT"),
+    ("pkgeval_reports", "signatures_hard", "INTEGER"),
+    ("pkgeval_reports", "signatures_lines", "INTEGER"),
+    ("pkgeval_results", "error", "TEXT"),
+    ("pkgeval_reports", "logs_url", "TEXT"),
+    ("pkgeval_results", "log", "TEXT"),
 ]
 
 function apply_schema!(db::SQLite.DB)

@@ -96,7 +96,20 @@
           "description": "PkgEval daily runs of the whole package ecosystem against Julia master, with the count of each outcome.",
           "columns": {
             "path": "the report's directory, such as by_date/2026-09/09: under NanosoldierReports/pkgeval until September 2026, then the PkgEval farm's dailies under the same scheme (report at https://pkgeval-reports.julialang.org/?run=daily-YYYY-MM-DD)",
-            "commit_sha": "the Julia commit tested (8 characters on old reports)"
+            "commit_sha": "the Julia commit tested (8 characters on old reports)",
+            "signatures_hard": "from the farm's failure signatures: how many packages failed or crashed; NULL on reports without signatures (Nanosoldier's and the farm's older dailies)",
+            "signatures_lines": "how many of those failures have an error line (pkgeval_results.error)",
+            "logs_url": "on PkgEval farm reports, the folder holding each package's log, ending in /; NULL otherwise"
+          }
+        },
+        "pkgeval_signatures": {
+          "description": "Failure signatures of PkgEval farm dailies: the failing packages of one report grouped by a shared error line (compared without install paths, addresses and dependency line numbers), groups of two or more, most common first.",
+          "columns": {
+            "rank": "1 for the group with the most packages",
+            "label": "the first raw error line the farm saw in the group",
+            "key": "the normalized line the farm grouped by; the same group has the same key on every report",
+            "n": "how many packages the group has",
+            "packages": "JSON array of the group's package names; their error lines and logs are in pkgeval_results"
           }
         },
         "pkgeval_reasons": {
@@ -110,7 +123,9 @@
           "columns": {
             "status": "ok, fail, crash, skip or kill",
             "reason": "why it did not pass, e.g. test_failures, precompile, time_limit",
-            "duration_s": "how long the tests took"
+            "duration_s": "how long the tests took",
+            "error": "on PkgEval farm reports, the first meaningful error line of a failure's log (up to 240 characters); NULL otherwise",
+            "log": "on PkgEval farm reports, the package's log when it is not <logs_url><name>.log: a file name in that folder (a retry's, say), a full URL, or '' for no log; NULL means <logs_url><name>.log"
           }
         },
         "ttfx_jobs": {

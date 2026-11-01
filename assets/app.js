@@ -10501,7 +10501,7 @@ function updatePkgevalURL() {
     url.searchParams.delete("pt");
   }
   const setOrDelete = (key, value) => (value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
-  setOrDelete("pl", pkgevalPanelView === "failing" ? "failing" : "");
+  setOrDelete("pl", pkgevalPanelView === "changes" ? "" : pkgevalPanelView);
   setOrDelete("pd", pkgevalChangesDay);
   setOrDelete("pk", pkgevalChangesKind === "broke" ? "" : pkgevalChangesKind || "both");
   setOrDelete("pf", pkgevalShowFlaky ? "1" : "");
@@ -10538,7 +10538,8 @@ function applyPkgevalURLParams() {
   const pr = params.get("pr") ?? (params.get("pv") === "precompile" ? "precompile" : "");
   pkgevalReasonFilter = pr.split(",").map((r) => r.trim()).filter((r) => /^[a-z_]+$/.test(r)).sort();
   // A reason filter belongs to the list of packages not passing
-  pkgevalPanelView = params.get("pl") === "failing" || pkgevalReasonFilter.length ? "failing" : "changes";
+  const pl = params.get("pl");
+  pkgevalPanelView = pl === "failing" || pkgevalReasonFilter.length ? "failing" : pl === "signatures" ? "signatures" : "changes";
   const pd = params.get("pd") || "";
   pkgevalChangesDay = /^\d{4}-\d{2}-\d{2}$/.test(pd) ? pd : "";
   const pk = params.get("pk");
@@ -10591,6 +10592,16 @@ async function setPkgevalPackage(name) {
 
 const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
 
+// A farm daily's log of a package and the failure's error line, where the
+// API has them; the log link keeps a click from reaching its row
+const pkgevalLogLink = (log) => (log ? ` ${extLink(log, "log ↗", 'class="pe-log" title="Open the log"')}` : "");
+const pkgevalErrorLine = (error) => (error ? `<div class="pe-error-line">${escapeHtml(error)}</div>` : "");
+function stopPkgevalLogClicks(root) {
+  root.querySelectorAll(".pe-log").forEach((a) => {
+    a.onclick = (e) => e.stopPropagation();
+  });
+}
+
 // The package's changes, newest first until a header is clicked
 let pkgevalPackageSort = { col: "date", asc: false };
 
@@ -10610,8 +10621,9 @@ function renderPkgevalPackage() {
     .join(", ");
   const strip = history
     .map((h) => {
-      const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}`;
-      return `<span class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"></span>`;
+      const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}${h.error ? "\n" + h.error : ""}`;
+      const cell = `class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"`;
+      return h.log ? extLink(h.log, "", cell) : `<span ${cell}></span>`;
     })
     .join("");
   // Rows where something changed, newest first, so a long green history
@@ -10641,15 +10653,16 @@ function renderPkgevalPackage() {
         <td class="col-secondary">${escapeHtml(h.julia || "")}</td>
         <td>${escapeHtml(h.version || "")}</td>
         <td class="pe-${escapeHtml(h.status)}">${escapeHtml(h.status)}</td>
-        <td class="wrap">${escapeHtml(h.reason || "")}</td>
+        <td class="wrap">${escapeHtml(h.reason || "")}${pkgevalErrorLine(h.error)}</td>
         <td class="num">${h.duration_s != null ? formatDuration(h.duration_s) : ""}</td>
+        <td>${pkgevalLogLink(h.log)}</td>
       </tr>`;
     })
     .join("");
   panel.innerHTML = `
     <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
-    <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report.</p>
+    <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report, or a cell of the strip to open that day's log where the PkgEval farm kept one.</p>
     <table>
       <thead>${sortableHeaderRow(
         [
@@ -10659,6 +10672,7 @@ function renderPkgevalPackage() {
           ["status", "Status"],
           ["reason", "Reason"],
           ["duration_s", "Duration", "num"],
+          [null, "Log", "", "The package's log on PkgEval farm reports"],
         ],
         pkgevalPackageSort,
       )}</thead>
@@ -10671,6 +10685,7 @@ function renderPkgevalPackage() {
   panel.querySelectorAll("tr[data-url]").forEach((tr) => {
     tr.onclick = () => window.open(tr.dataset.url, "_blank", "noopener");
   });
+  stopPkgevalLogClicks(panel);
 }
 
 // The most downloaded packages that did not pass the newest report: the
@@ -10729,7 +10744,7 @@ function renderPkgevalPopular() {
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
         <td class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</td>
         <td class="num" title="${escapeHtml(title)}">${since}</td>
-        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
+        <td class="wrap">${pkgevalReasonPill(p.reason, p.status)}${pkgevalLogLink(p.log)}${pkgevalErrorLine(p.error)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
     })
@@ -10753,7 +10768,7 @@ function renderPkgevalPopular() {
         return {
           attrs: `data-name="${escapeHtml(p.name)}"`,
           lead: p.rank.toLocaleString("en-US"),
-          title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
+          title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}${pkgevalLogLink(p.log)}`,
           meta: `<span class="pe-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span> ${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
           value: isNew ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
           valueClass: isNew || (p.days != null && p.days <= PKGEVAL_RECENT_DAYS) ? "m-bad" : "m-muted",
@@ -10782,6 +10797,7 @@ function renderPkgevalPopular() {
   panel.querySelectorAll("[data-name]").forEach((tr) => {
     tr.onclick = () => setPkgevalPackage(tr.dataset.name);
   });
+  stopPkgevalLogClicks(panel);
 }
 
 // The package list under the chart: the most downloaded packages not
@@ -10793,7 +10809,8 @@ let pkgevalFailuresSort = { col: "rank", asc: true };
 let pkgevalFailuresFilter = "";
 
 function renderPkgevalPanel() {
-  if (pkgevalPanelView === "changes" && pkgevalChanges) renderPkgevalChanges();
+  if (pkgevalPanelView === "signatures" && pkgevalSignatures) renderPkgevalSignatures();
+  else if (pkgevalPanelView === "changes" && pkgevalChanges) renderPkgevalChanges();
   else if (pkgevalReasonFilter.length && pkgevalFailures) renderPkgevalFailures();
   else if (pkgevalPopular) renderPkgevalPopular();
 }
@@ -10891,7 +10908,7 @@ function renderPkgevalFailuresList() {
         <td class="num">${p.rank != null ? p.rank.toLocaleString("en-US") : ""}</td>
         <td>${escapeHtml(p.name)}</td>
         <td class="col-secondary">${escapeHtml(p.version || "")}</td>
-        <td>${pkgevalReasonPill(p.reason, p.status)}</td>
+        <td class="wrap">${pkgevalReasonPill(p.reason, p.status)}${pkgevalLogLink(p.log)}${pkgevalErrorLine(p.error)}</td>
         <td class="num" title="${escapeHtml(title)}">${sinceHtml(p)}</td>
         <td class="num">${p.user.toLocaleString("en-US")}</td>
       </tr>`;
@@ -10902,7 +10919,7 @@ function renderPkgevalFailuresList() {
       packages.map((p) => ({
         attrs: `data-name="${escapeHtml(p.name)}"`,
         lead: p.rank != null ? p.rank.toLocaleString("en-US") : "",
-        title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}`,
+        title: `${escapeHtml(p.name)}${p.version ? ` <span class="m-muted">${escapeHtml(p.version)}</span>` : ""}${pkgevalLogLink(p.log)}`,
         meta: `${pkgevalReasonPill(p.reason, p.status)} · ${compactNumber(p.user)} downloads`,
         value: p.failing_since === d.date ? "new" : p.days == null ? "" : `${p.last_passed ? "" : "≥"}${p.days}d`,
         valueClass: isRecent(p) ? "m-bad" : "m-muted",
@@ -10929,6 +10946,100 @@ function renderPkgevalFailuresList() {
   list.querySelectorAll("[data-name]").forEach((el) => {
     el.onclick = () => setPkgevalPackage(el.dataset.name);
   });
+  stopPkgevalLogClicks(list);
+}
+
+// The common failure signatures of the newest farm daily that has them:
+// failing packages grouped by a shared first error line
+let pkgevalSignatures = null; // api/pkgeval/signatures
+const pkgevalSignaturesOpen = new Set(); // the ranks whose packages are listed
+const pkgevalSignaturesAll = new Set(); // the ranks listing every package
+const PKGEVAL_SIGNATURE_PACKAGES = 20;
+
+async function loadPkgevalSignatures() {
+  let d;
+  try {
+    d = await apiGet("pkgeval/signatures");
+  } catch (err) {
+    console.error("Failed to load the PkgEval failure signatures:", err);
+    return;
+  }
+  // Nanosoldier's reports and older farm dailies have none
+  if (!d || !d.clusters || d.clusters.length === 0) return;
+  pkgevalSignatures = d;
+  renderPkgevalPanel();
+  showPkgevalPanels();
+}
+
+function togglePkgevalSignature(rank) {
+  if (pkgevalSignaturesOpen.has(rank)) pkgevalSignaturesOpen.delete(rank);
+  else pkgevalSignaturesOpen.add(rank);
+  renderPkgevalSignatures();
+}
+
+function showAllPkgevalSignature(rank) {
+  pkgevalSignaturesAll.add(rank);
+  renderPkgevalSignatures();
+}
+
+function renderPkgevalSignatures() {
+  const panel = document.getElementById("pkgeval-signatures");
+  const d = pkgevalSignatures;
+  if (!panel || !d) return;
+  const url = pkgevalReportUrl(d.date_path || d.date);
+  const grouped = d.clusters.reduce((t, c) => t + c.n, 0);
+  const packageLinks = (c) => {
+    const all = pkgevalSignaturesAll.has(c.rank);
+    const shown = all ? c.packages : c.packages.slice(0, PKGEVAL_SIGNATURE_PACKAGES);
+    const links = shown
+      .map((p) => {
+        // A package's own line, where it differs from the group's
+        const title = escapeHtml(p.error || "Open the log");
+        return p.log ? extLink(p.log, escapeHtml(p.name), `title="${title}"`) : `<span title="${p.error ? title : ""}">${escapeHtml(p.name)}</span>`;
+      })
+      .join("");
+    const more =
+      shown.length < c.packages.length
+        ? `<button class="btn pe-chip-clear" data-show-all="${c.rank}">Show all ${c.packages.length.toLocaleString("en-US")}</button>`
+        : "";
+    return `<div class="pe-sig-packages">${links}${more}</div>`;
+  };
+  const rows = d.clusters
+    .map((c) => {
+      const open = pkgevalSignaturesOpen.has(c.rank);
+      const seen =
+        d.previous_reports === 0
+          ? ""
+          : c.seen === 0
+            ? `<span class="pe-row-new pe-sig-new">new</span>`
+            : `${c.seen} of ${d.previous_reports}`;
+      return `<tr class="clickable" tabindex="0" data-rank="${c.rank}" aria-expanded="${open}">
+        <td class="num">${c.n.toLocaleString("en-US")}</td>
+        <td class="wrap"><code class="pe-sig-label">${escapeHtml(c.label)}</code>${open ? packageLinks(c) : ""}</td>
+        <td class="num">${seen}</td>
+      </tr>`;
+    })
+    .join("");
+  const seenHelp = d.previous_reports
+    ? ` Seen counts the ${d.previous_reports} reports before this one that had a group with the same line; <span class="pe-row-new">new</span> groups had none.`
+    : "";
+  panel.innerHTML = `
+    <div class="pkgeval-panel-head">${pkgevalPanelSwitch()}<h3>Common failure signatures on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">· ${d.clusters.length.toLocaleString("en-US")} groups, ${grouped.toLocaleString("en-US")} packages</span></h3></div>
+    <p class="package-panel-help">Packages that failed or crashed, grouped by the first meaningful error line of their log when two or more share it. Install paths, addresses and line numbers in dependencies are ignored when comparing lines, so one error in a shared dependency groups across its versions; failed tests keep their own file and line. Each group shows the first line seen. ${d.lines.toLocaleString("en-US")} of the ${d.hard.toLocaleString("en-US")} failures had an error line.${seenHelp} Click a row to list its packages, linked to their logs.</p>
+    <table>
+      <thead><tr><th class="num">Packages</th><th>Error line</th><th class="num" title="Reports before this one with a group of the same line">Seen</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tr[data-rank]").forEach((tr) => {
+    tr.onclick = (e) => {
+      // Leave clicks on a log link or the show-all button to them
+      if (e.target.closest("a, button")) return;
+      togglePkgevalSignature(Number(tr.dataset.rank));
+    };
+  });
+  panel.querySelectorAll("[data-show-all]").forEach((b) => {
+    b.onclick = () => showAllPkgevalSignature(Number(b.dataset.showAll));
+  });
 }
 
 function getPkgevalFilteredReports() {
@@ -10952,6 +11063,7 @@ async function loadPkgevalData() {
     updatePkgevalChart();
     loadPkgevalChanges(true);
     loadPkgevalPopular();
+    loadPkgevalSignatures();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     console.error("Failed to load pkgeval data:", err);
@@ -11428,15 +11540,18 @@ function setPkgevalPanelView(view) {
 // The list under the chart shows once either of its views has loaded
 function showPkgevalPanels() {
   const view =
-    pkgevalPanelView === "changes" && pkgevalChanges
-      ? "changes"
-      : pkgevalPopular
-        ? "failing"
-        : pkgevalChanges
-          ? "changes"
-          : "";
+    pkgevalPanelView === "signatures" && pkgevalSignatures
+      ? "signatures"
+      : pkgevalPanelView === "changes" && pkgevalChanges
+        ? "changes"
+        : pkgevalPopular
+          ? "failing"
+          : pkgevalChanges
+            ? "changes"
+            : "";
   document.getElementById("pkgeval-changes")?.classList.toggle("view-hidden", view !== "changes");
   document.getElementById("pkgeval-popular")?.classList.toggle("view-hidden", view !== "failing");
+  document.getElementById("pkgeval-signatures")?.classList.toggle("view-hidden", view !== "signatures");
   if (view) document.getElementById("pkgeval-panels-handle")?.classList.remove("view-hidden");
 }
 
@@ -11447,7 +11562,11 @@ function pkgevalPanelSwitch() {
     "changes",
     "Recent changes",
     "Packages that broke or were fixed on a report in the time range, and stayed so",
-  )}${button("failing", "Not passing now", "Packages not passing the newest report, most downloaded first")}</span>`;
+  )}${button("failing", "Not passing now", "Packages not passing the newest report, most downloaded first")}${
+    pkgevalSignatures
+      ? button("signatures", "Failure signatures", "Failing packages of the newest farm daily grouped by a shared error line")
+      : ""
+  }</span>`;
 }
 
 function setPkgevalChangesKind(kind) {
@@ -11566,7 +11685,7 @@ function renderPkgevalChangesList() {
       (c) => `<tr tabindex="0" data-name="${escapeHtml(c.name)}" class="${pkgevalIsFlaky(c) ? "pe-row-flaky" : ""}">
         <td>${arrow(c)} ${escapeHtml(c.date)}${pendingTag(c)}</td>
         <td>${escapeHtml(c.name)}</td>
-        <td>${change(c)}</td>
+        <td class="wrap">${change(c)}${pkgevalLogLink(c.log)}${pkgevalErrorLine(c.error)}</td>
         <td>${now(c)}</td>
         <td class="num" title="${flipsTitle}">${c.flips}</td>
         <td class="num">${c.rank != null ? c.rank.toLocaleString("en-US") : ""}</td>
@@ -11584,7 +11703,7 @@ function renderPkgevalChangesList() {
       rows.map((c) => ({
         attrs: `data-name="${escapeHtml(c.name)}"`,
         lead: arrow(c),
-        title: `${escapeHtml(c.name)}${pendingTag(c)}`,
+        title: `${escapeHtml(c.name)}${pendingTag(c)}${pkgevalLogLink(c.log)}`,
         meta: `${escapeHtml(c.date)} · ${change(c)} · ${compactNumber(c.user)} downloads`,
         value: c.rank != null ? `#${c.rank.toLocaleString("en-US")}` : "",
         valueClass: "m-muted",
@@ -11617,6 +11736,7 @@ function renderPkgevalChangesList() {
   list.querySelectorAll("[data-name]").forEach((el) => {
     el.onclick = () => setPkgevalPackage(el.dataset.name);
   });
+  stopPkgevalLogClicks(list);
 }
 
 // === CI TTFX (Julia-TTFX-Snippets on every master build) ===

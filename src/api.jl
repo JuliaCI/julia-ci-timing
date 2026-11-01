@@ -251,7 +251,7 @@ const ROUTES = [
           "Up to 25 package names starting with q, for looking a package up.",
           (db, _, p) -> Render.pkgeval_packages(db, get(p, "q", ""))),
     Route("pkgeval/package/<name>", [],
-          "One package's status, reason, version and test duration on every daily report with package results.",
+          "One package's status, reason, version and test duration on every daily report with package results, and on PkgEval farm reports the failure's first error line and the URL of the package's log.",
           (db, a, _) -> Render.pkgeval_package(db, a[1])),
     Route("pkgeval/reasons", ["path" => "a report as YYYY-MM/DD; the newest by default"],
           "How many packages failed each way (status and reason) on one report.",
@@ -260,15 +260,22 @@ const ROUTES = [
               (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
               Render.pkgeval_reasons(db, path)
           end),
+    Route("pkgeval/signatures", ["path" => "a report as YYYY-MM/DD; the newest with signatures by default"],
+          "The common failure signatures of one PkgEval farm daily: the packages that failed or crashed (hard) and how many of them have an error line (lines), and the groups of two or more packages sharing a normalized error line, most common first, each with its label (the first raw line seen), its key (the normalized line it was grouped by), its size, its packages with their log URLs (and a package's own error line where it differs from the label), and seen: on how many of the previous_reports (up to 7 reports before it) a group had the same key. Nanosoldier's reports and the farm dailies from before the farm grouped failures have none.",
+          (db, _, p) -> begin
+              path = get(p, "path", "")
+              (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
+              Render.pkgeval_signatures(db, path)
+          end),
     Route("pkgeval/popular", ["days" => "download window in days, 30 by default", CLIENT, "limit" => "packages to list, 50 by default, at most 500"],
-          "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; how many packages broke (passed the report before, then failed, crashed or were killed; a move to skip is not a break) and the most downloaded of them.",
+          "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; how many packages broke (passed the report before, then failed, crashed or were killed; a move to skip is not a break) and the most downloaded of them. On a PkgEval farm report each listed package also has its error line and log URL.",
           (db, _, p) -> begin
               limit = cursor(p, "limit")
               Render.pkgeval_popular(db; days=days_param(p, 30), limit=limit == 0 ? 50 : min(limit, 500), client=client_param(p))
           end),
     Route("pkgeval/failures", ["reason" => "failure reasons as in pkgeval/reasons (precompile, test_errors, time_limit, ...), comma-separated; precompile by default",
                                "days" => "download window in days, 30 by default", CLIENT],
-          "Every package that did not pass the newest report for one of those reasons, by download rank (packages without downloads in the window last), with its status, reason, version, downloads and how long it has been failing.",
+          "Every package that did not pass the newest report for one of those reasons, by download rank (packages without downloads in the window last), with its status, reason, version, downloads and how long it has been failing, and on a PkgEval farm report its error line and log URL.",
           (db, _, p) -> begin
               reasons = sort!(unique(String[strip(r) for r in split(get(p, "reason", ""), ',') if !isempty(strip(r))]))
               isempty(reasons) && push!(reasons, "precompile")
@@ -278,7 +285,7 @@ const ROUTES = [
           end),
     Route("pkgeval/changes", ["days" => "reports in the last days days, 30 by default, at most 180",
                               "sustain" => "reports a state must hold either side of a flip, 2 by default, 1 to 5", CLIENT],
-          "Packages that went from passing to not passing (broke) or back (fixed) on a daily report in the window and held the new state, having held the old one on the sustain reports before: the changes that are not flaky tests. A flip too recent to be confirmed, and not undone yet, is pending. Per report: the sustained, pending and raw counts each way, its commit and the previous report's, and the days between them. Per change: the states either side, the package's state now, its download rank (over 30 days) and flips, how often it changed state over the last 30 reports.",
+          "Packages that went from passing to not passing (broke) or back (fixed) on a daily report in the window and held the new state, having held the old one on the sustain reports before: the changes that are not flaky tests. A flip too recent to be confirmed, and not undone yet, is pending. Per report: the sustained, pending and raw counts each way, its commit and the previous report's, and the days between them. Per change: the states either side, the package's state now, its download rank (over 30 days) and flips, how often it changed state over the last 30 reports, and for the failure it began or ended, the error line and log URL when a PkgEval farm report recorded them.",
           (db, _, p) -> begin
               sustain = cursor(p, "sustain")
               sustain = sustain == 0 ? 2 : sustain
@@ -801,7 +808,7 @@ function other_targets(db)
     latest = Render.commit_list(db; limit=1)["commits"]
     groups = Render.bench_groups(db)
     return ["/api/timing/runs?since=$since&changed_since=1", "/api/benchmarks/verdicts?since=$since",
-            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
+            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/signatures", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",

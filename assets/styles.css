@@ -2478,6 +2478,39 @@ th.sorted .sort-indicator {
   background: color-mix(in srgb, var(--color-attention-subtle) 45%, transparent);
 }
 
+/* A failure signature's error line, and the packages it groups */
+.pe-sig-label,
+.pe-error-line {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pe-error-line {
+  color: var(--color-fg-muted);
+}
+.pe-log {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pkgeval-strip a:hover {
+  outline: 1px solid var(--color-fg-default);
+}
+.pe-sig-packages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin: 4px 0 2px;
+}
+#pkgeval-signatures td {
+  vertical-align: top;
+}
+.pe-sig-new {
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
 /* Per-package panels (PkgEval history and reasons, package downloads) */
 .package-search {
   display: inline-flex;
@@ -2635,10 +2668,13 @@ th.sorted .sort-indicator {
   gap: 1px;
   margin: 4px 0 10px;
 }
-.pkgeval-strip span {
+.pkgeval-strip span,
+.pkgeval-strip a {
   width: 6px;
   height: 14px;
   background: var(--color-neutral-muted);
+}
+.pkgeval-strip span {
   cursor: default;
 }
 .pkgeval-strip .st-ok { background: var(--color-success-fg); }
