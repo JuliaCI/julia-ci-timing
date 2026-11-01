@@ -240,7 +240,10 @@ CREATE TABLE IF NOT EXISTS pkgeval_reports (
     crash         INTEGER NOT NULL,
     skip          INTEGER NOT NULL,
     kill          INTEGER NOT NULL,
-    change_seq    INTEGER NOT NULL
+    change_seq    INTEGER NOT NULL,
+    -- From the farm's failure signatures; NULL on reports without them
+    signatures_hard  INTEGER,                -- failures and crashes
+    signatures_lines INTEGER                 -- how many of those have an error line
 );
 CREATE INDEX IF NOT EXISTS pkgeval_reports_date ON pkgeval_reports (kind, date);
 
@@ -264,9 +267,23 @@ CREATE TABLE IF NOT EXISTS pkgeval_results (
     status     TEXT NOT NULL,
     reason     TEXT,
     duration_s REAL,
+    error      TEXT,                        -- the failure's first error line, on farm reports
     PRIMARY KEY (report_id, package_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS pkgeval_results_pkg ON pkgeval_results (package_id, report_id);
+
+-- Failing packages of one farm report grouped by a shared error line, most
+-- common first. The farm groups them; label is the first raw line it saw, and
+-- key the normalized line it grouped by, which stays the same across days.
+CREATE TABLE IF NOT EXISTS pkgeval_signatures (
+    report_id INTEGER NOT NULL REFERENCES pkgeval_reports (id),
+    rank      INTEGER NOT NULL,             -- 1 for the most common
+    label     TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    n         INTEGER NOT NULL,
+    packages  TEXT NOT NULL,                -- JSON [{name, log}], log a key in the farm's bucket
+    PRIMARY KEY (report_id, rank)
+) WITHOUT ROWID;
 
 -- ------------------------------------------------------------------ ttfx --
 

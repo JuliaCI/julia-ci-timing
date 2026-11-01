@@ -251,7 +251,7 @@ const ROUTES = [
           "Up to 25 package names starting with q, for looking a package up.",
           (db, _, p) -> Render.pkgeval_packages(db, get(p, "q", ""))),
     Route("pkgeval/package/<name>", [],
-          "One package's status, reason, version and test duration on every daily report with package results.",
+          "One package's status, reason, version and test duration on every daily report with package results, and on PkgEval farm reports the failure's first error line.",
           (db, a, _) -> Render.pkgeval_package(db, a[1])),
     Route("pkgeval/reasons", ["path" => "a report as YYYY-MM/DD; the newest by default"],
           "How many packages failed each way (status and reason) on one report.",
@@ -259,6 +259,13 @@ const ROUTES = [
               path = get(p, "path", "")
               (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
               Render.pkgeval_reasons(db, path)
+          end),
+    Route("pkgeval/signatures", ["path" => "a report as YYYY-MM/DD; the newest with signatures by default"],
+          "The common failure signatures of one PkgEval farm daily: the packages that failed or crashed (hard) and how many of them have an error line (lines), and the groups of two or more packages sharing a normalized error line, most common first, each with its label (the first raw line seen), its key (the normalized line it was grouped by), its size, its packages with their log URLs, and seen: on how many of the previous_reports (up to 7 reports before it) a group had the same key. Nanosoldier's reports and the farm dailies from before the farm grouped failures have none.",
+          (db, _, p) -> begin
+              path = get(p, "path", "")
+              (isempty(path) || occursin(r"^\d{4}-\d{2}/\d{2}$", path)) || throw(BadRequest("path must be YYYY-MM/DD"))
+              Render.pkgeval_signatures(db, path)
           end),
     Route("pkgeval/popular", ["days" => "download window in days, 30 by default", CLIENT, "limit" => "packages to list, 50 by default, at most 500"],
           "The most downloaded packages not passing the newest report, with their download rank, reason and how long each has been failing; the download-weighted pass rate; how many packages broke (passed the report before, then failed, crashed or were killed; a move to skip is not a break) and the most downloaded of them.",
@@ -801,7 +808,7 @@ function other_targets(db)
     latest = Render.commit_list(db; limit=1)["commits"]
     groups = Render.bench_groups(db)
     return ["/api/timing/runs?since=$since&changed_since=1", "/api/benchmarks/verdicts?since=$since",
-            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
+            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/signatures", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",

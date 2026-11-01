@@ -77,8 +77,11 @@ only the files that changed. `AGENTS.md` describes their shapes.
   with the baseline: verdict, time_ratio, memory_ratio), `bench_report_groups` (group
   geometric means).
 - **PkgEval.** `pkgeval_reports` (one per run, with outcome counts), `packages` (names),
-  `pkgeval_results` (report and package: status, reason, version, duration_s),
-  `pkgeval_reasons` (counts per status and reason).
+  `pkgeval_results` (report and package: status, reason, version, duration_s, and on farm
+  reports the failure's first error line), `pkgeval_reasons` (counts per status and reason),
+  `pkgeval_signatures` (per farm report, failing packages grouped by a shared error line:
+  label, key (the normalized line, for matching a group across reports), n and the
+  packages with their logs as JSON).
 - **TTFX.** `ttfx_jobs` (one per master build's TTFX job; `kind` is `release` for the
   weekly reference run of the newest stable release, `lts` for that of the LTS, `branch_nightly` for that of the next release's branch nightly, `release_branch` for the job of a release branch's own build, `opt` for the nightly optimized
   build, whose job also measures the regular build of the same commit: its samples have

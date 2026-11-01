@@ -303,14 +303,50 @@ end
 # One package's status on every daily report that has package rows
 function pkgeval_package(db, name)
     history = Any[]
-    for r in rows(db, "SELECT r.date, r.path, r.julia_version, p.version, p.status, p.reason, p.duration_s " *
+    for r in rows(db, "SELECT r.date, r.path, r.julia_version, p.version, p.status, p.reason, p.duration_s, p.error " *
                       "FROM pkgeval_results p JOIN packages k ON k.id = p.package_id JOIN pkgeval_reports r ON r.id = p.report_id " *
                       "WHERE k.name = ? AND r.kind = 'daily' ORDER BY r.date", (name,))
         push!(history, OrderedDict("date" => String(r.date), "date_path" => date_path(String(r.path)), "julia" => String(r.julia_version),
                                    "version" => js(r.version), "status" => String(r.status), "reason" => js(r.reason),
-                                   "duration_s" => js(r.duration_s)))
+                                   "duration_s" => js(r.duration_s), "error" => js(r.error)))
     end
     return OrderedDict("name" => name, "history" => history)
+end
+
+# The farm's failure signatures of one report (the newest that has them by
+# default): failing packages grouped by a shared error line, most common
+# first. Each group carries on how many of the last few reports before it a
+# group had the same key, so a new cause stands out.
+const PKGEVAL_SIGNATURE_HISTORY = 7
+const PKGEVAL_LOG_BASE = "https://pkgeval.s3.us-east-2.amazonaws.com/"
+
+function pkgeval_signatures(db, path="")
+    r = if isempty(path)
+        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines FROM pkgeval_reports " *
+                 "WHERE kind = 'daily' AND signatures_hard IS NOT NULL ORDER BY date DESC LIMIT 1")
+    else
+        rows(db, "SELECT id, date, path, signatures_hard, signatures_lines FROM pkgeval_reports " *
+                 "WHERE path = ? AND signatures_hard IS NOT NULL", ("by_date/" * path,))
+    end
+    isempty(r) && return nothing
+    r = r[1]
+    previous = rows(db, "SELECT id, date FROM pkgeval_reports WHERE kind = 'daily' AND signatures_hard IS NOT NULL AND date < ? " *
+                        "ORDER BY date DESC LIMIT ?", (String(r.date), PKGEVAL_SIGNATURE_HISTORY))
+    seen = Dict{String,Int}()
+    for x in rows(db, "SELECT DISTINCT report_id, key FROM pkgeval_signatures WHERE report_id IN (SELECT value FROM json_each(?))",
+                  (JSON3.write([Int(p.id) for p in previous]),))
+        seen[String(x.key)] = get(seen, String(x.key), 0) + 1
+    end
+    clusters = Any[]
+    for x in rows(db, "SELECT rank, label, key, n, packages FROM pkgeval_signatures WHERE report_id = ? ORDER BY rank", (Int(r.id),))
+        packages = [OrderedDict("name" => String(p.name), "log" => isempty(p.log) ? nothing : PKGEVAL_LOG_BASE * String(p.log))
+                    for p in JSON3.read(String(x.packages))]
+        push!(clusters, OrderedDict("rank" => Int(x.rank), "label" => String(x.label), "key" => String(x.key),
+                                    "n" => Int(x.n), "seen" => get(seen, String(x.key), 0), "packages" => packages))
+    end
+    return OrderedDict("date" => String(r.date), "date_path" => date_path(String(r.path)),
+                       "hard" => Int(r.signatures_hard), "lines" => Int(r.signatures_lines),
+                       "previous_reports" => length(previous), "clusters" => clusters)
 end
 
 # Status and reason counts of one report (the newest with package rows by default)
