@@ -2960,8 +2960,16 @@
           if (s) s.textContent = "The door is stuck (the agent data did not load). Try again in a bit.";
         }
       }
+      // Fetch only while the page is visible, so background tabs make no requests
+      let loadedAt = Date.now();
+      function refresh() {
+        if (document.hidden || Date.now() - loadedAt < REFRESH_MS) return;
+        loadedAt = Date.now();
+        load();
+      }
       load();
-      setInterval(load, REFRESH_MS);
+      setInterval(refresh, 30 * 1000);
+      document.addEventListener("visibilitychange", refresh);
     </script>
   </body>
 </html>
