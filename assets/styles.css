@@ -4057,12 +4057,6 @@ a.ttfx-pr-copy {
 .overview-rows dt.overview-compare-sub {
   padding-left: 8px;
 }
-.overview-rows dt.overview-delta-bad {
-  color: var(--color-danger-fg);
-}
-.overview-rows dt.overview-delta-good {
-  color: var(--color-success-fg);
-}
 .overview-rows dd {
   margin: 0;
   min-width: 0;

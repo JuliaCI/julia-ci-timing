@@ -284,6 +284,41 @@ function formatSignedPct(p, { digits = 1, minAbs = 0 } = {}) {
   return `${p > 0 ? "+" : ""}${text}%`;
 }
 
+// The smallest change, in %, that a diff is coloured green or red for. Below it
+// the change is shown uncoloured, as no change. Each is about the noise of that
+// measure, or for exact measures the least change worth noticing.
+const NO_CHANGE_PCT = {
+  // One Nanosoldier benchmark, first to last sample of the range
+  bench: 5,
+  // A geomean over many benchmarks or TTFX tasks
+  geomean: 2,
+  // Sizes are exact, but pkgimages vary by a few hundred KiB between builds
+  size: 0.1,
+  // Invalidation and recompile counts vary with the packages a task resolves
+  count: 1,
+  // A CI job's wall time, on machines shared with other jobs
+  ciTime: 5,
+  // Weekly activity: merged pull requests, downloads, jobs waiting
+  activity: 10,
+  // A pass rate, in percentage points
+  passRate: 1,
+};
+// A size change counts as none below this when the size before is unknown
+const NO_CHANGE_BYTES = 1024 * 1024;
+
+// 1 or -1 for a change of `pct`%, or 0 when it is smaller than `tol`
+const changeSign = (pct, tol) => (pct == null || !isFinite(pct) || Math.abs(pct) < tol ? 0 : Math.sign(pct));
+
+// The same for a size that changed by `delta` bytes from `before`
+function sizeChangeSign(delta, before) {
+  if (!delta) return 0;
+  if (!(before > 0)) return Math.abs(delta) < NO_CHANGE_BYTES ? 0 : Math.sign(delta);
+  return changeSign((100 * delta) / before, NO_CHANGE_PCT.size);
+}
+
+// The red/green class of a change where up is worse, or "" for no change
+const upWorseClass = (sign, worse = "ttfx-up", better = "ttfx-down") => (sign > 0 ? worse : sign < 0 ? better : "");
+
 // The colours and options every chart shares, for the current theme
 function chartTheme() {
   const isDark = isDarkMode();
@@ -2467,7 +2502,8 @@ function computeTrend(runs) {
   // R² > 0.1 means the trend explains at least 10% of variance
   const isSignificant =
     pValue < TREND_SIGNIFICANCE_P_VALUE &&
-    rSquared > TREND_SIGNIFICANCE_R_SQUARED;
+    rSquared > TREND_SIGNIFICANCE_R_SQUARED &&
+    Math.abs(percentChange) >= NO_CHANGE_PCT.ciTime;
 
   return {
     slope, // seconds per day
@@ -8454,9 +8490,9 @@ function computeTrendPct(values) {
   return ((last - first) / first) * 100;
 }
 
-function formatTrendPct(pct) {
+function formatTrendPct(pct, tol = NO_CHANGE_PCT.bench) {
   if (pct == null || !isFinite(pct)) return "—";
-  const cls = pct > 0 ? "trend-up" : pct < 0 ? "trend-down" : "";
+  const cls = upWorseClass(changeSign(pct, tol), "trend-up", "trend-down");
   return `<span class="${cls}">${formatSignedPct(pct)}</span>`;
 }
 
@@ -9226,7 +9262,7 @@ function renderBenchGroupsTable() {
     html += `<td class="bench-time">${formatBenchValue(overall.avg)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(overall.min)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(overall.max)}</td>`;
-    html += `<td class="bench-trend"><strong>${formatTrendPct(overall.trend)}</strong></td>`;
+    html += `<td class="bench-trend"><strong>${formatTrendPct(overall.trend, NO_CHANGE_PCT.geomean)}</strong></td>`;
     html += `<td></td>`;
     html += `<td></td>`;
     html += `<td></td>`;
@@ -9243,7 +9279,7 @@ function renderBenchGroupsTable() {
     html += `<td class="bench-time">${formatBenchValue(row.avg)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(row.min)}</td>`;
     html += `<td class="bench-time">${formatBenchValue(row.max)}</td>`;
-    html += `<td class="bench-trend">${formatTrendPct(row.trend)}</td>`;
+    html += `<td class="bench-trend">${formatTrendPct(row.trend, NO_CHANGE_PCT.geomean)}</td>`;
     html += `<td>${row.count}</td>`;
     html += `<td></td>`;
     html += renderNotesCell(groupNotes);
@@ -12806,7 +12842,7 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
     return { text: formatSignedPct(p), cls: ttfxPctClass(p) };
   }
   const d = v - prev;
-  return { text: (d > 0 ? "+" : "") + d.toLocaleString("en-US"), cls: d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "" };
+  return { text: (d > 0 ? "+" : "") + d.toLocaleString("en-US"), cls: ttfxCountClass(d, prev) };
 }
 
 // The selected tasks with a value for `metric` in every build of the range
@@ -12870,13 +12906,21 @@ function formatTtfxSeconds(s) {
 
 
 
+// A paired geomean over the tasks, so steadier than any one task
+const TTFX_SCORE_NO_CHANGE_PCT = 0.5;
+
 // A pull request's score as a background tint, green for faster and red for
 // slower, full strength at 3% since few scores go beyond that
 function ttfxScoreStyle(change) {
-  if (change == null || !isFinite(change) || Math.abs(change) < 0.05) return "";
+  if (!changeSign(change, TTFX_SCORE_NO_CHANGE_PCT)) return "";
   const tint = Math.round(Math.min(Math.abs(change) / 3, 1) * 45);
   const color = change < 0 ? "--color-success-fg" : "--color-danger-fg";
   return ` style="background: color-mix(in srgb, var(${color}) ${tint}%, transparent)"`;
+}
+
+// A count's change `d` from `before`; with no count before, any change shows
+function ttfxCountClass(d, before) {
+  return upWorseClass(before > 0 ? changeSign((100 * d) / before, NO_CHANGE_PCT.count) : Math.sign(d));
 }
 
 function ttfxPctClass(p) {
@@ -14338,12 +14382,11 @@ function ttfxCountsHtml(counts, { head, base, hint }) {
   if (!counts) return '<div class="ttfx-popup-muted ttfx-popup-hint">Invalidations and recompiled methods: not fetched yet.</div>';
   const kinds = TTFX_COUNT_KINDS.filter(([k]) => counts[k]);
   if (!kinds.length) return '<div class="ttfx-popup-muted ttfx-popup-hint">No invalidation or trace logs to count.</div>';
-  const cls = (d) => (d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "");
   let html = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">${escapeHtml(head)}</th><th class="num">${escapeHtml(base)}</th><th class="num">Change</th></tr></thead><tbody>`;
   for (const [k, label] of kinds) {
     const c = counts[k];
     const d = c.head - c.base;
-    html += `<tr><th title="Summed over the ${c.n_tasks} tasks both have">${label}</th><td class="num">${ttfxCount(c.head)}</td><td class="num">${ttfxCount(c.base)}</td><td class="num ${cls(d)}">${ttfxCountChange(d)}</td></tr>`;
+    html += `<tr><th title="Summed over the ${c.n_tasks} tasks both have">${label}</th><td class="num">${ttfxCount(c.head)}</td><td class="num">${ttfxCount(c.base)}</td><td class="num ${ttfxCountClass(d, c.base)}">${ttfxCountChange(d)}</td></tr>`;
   }
   html += "</tbody></table>";
   const tasks = counts.tasks || [];
@@ -14357,7 +14400,7 @@ function ttfxCountsHtml(counts, { head, base, hint }) {
         const v = t[k];
         const d = v ? v[0] - v[1] : 0;
         html += v
-          ? `<td class="num ${cls(d)}" title="${escapeHtml(`${head} ${ttfxCount(v[0])}, ${base.toLowerCase()} ${ttfxCount(v[1])}`)}">${ttfxCount(v[0])}${d ? ` <span class="ttfx-popup-muted">${ttfxCountChange(d)}</span>` : ""}</td>`
+          ? `<td class="num ${ttfxCountClass(d, v[1])}" title="${escapeHtml(`${head} ${ttfxCount(v[0])}, ${base.toLowerCase()} ${ttfxCount(v[1])}`)}">${ttfxCount(v[0])}${d ? ` <span class="ttfx-popup-muted">${ttfxCountChange(d)}</span>` : ""}</td>`
           : '<td class="num">—</td>';
       }
       html += "</tr>";
@@ -14720,8 +14763,8 @@ function ttfxPrCountCell(p, key, cls) {
     .filter((t) => t[key] && t[key][0] !== t[key][1])
     .map((t) => `${t.name}: ${n(t[key][0])} vs ${n(t[key][1])}`);
   const title = [`Head ${n(c.head)}, base ${n(c.base)}, over ${c.n_tasks} tasks`, ...(tasks.length ? ["Changed most:", ...tasks] : [])].join("\n");
-  const color = d > 0 ? " ttfx-up" : d < 0 ? " ttfx-down" : "";
-  return `<td class="num${color}${cls}" title="${escapeHtml(title)}">${d > 0 ? "+" : ""}${n(d)}</td>`;
+  const color = ttfxCountClass(d, c.base);
+  return `<td class="num ${color}${cls}" title="${escapeHtml(title)}">${d > 0 ? "+" : ""}${n(d)}</td>`;
 }
 // The first column of each group, which draws a rule down its left edge
 const ttfxPrGroupStart = (i) => i === 0 || TTFX_PR_COLUMNS[i].group !== TTFX_PR_COLUMNS[i - 1].group;
@@ -15871,7 +15914,7 @@ function renderSizesPrsTable() {
         continue;
       }
       const before = sizesPrBefore(p)[m];
-      html += `<td class="num ${d > 0 ? "ttfx-up" : "ttfx-down"}${secondary}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
+      html += `<td class="num ${upWorseClass(sizeChangeSign(d, before))}${secondary}" title="${escapeHtml(`${formatSizeValue(before)} → ${formatSizeValue(p.values[m])}`)}">${formatSizeDelta(d)}${formatSizePct(d, before)}</td>`;
     }
     html += `<td class="col-secondary">${sizesPrBaseHtml(p)}</td>`;
     html += `<td class="col-secondary"><a href="${escapeHtml(p.web_url || "")}" target="_blank" rel="noopener noreferrer">${p.build}</a></td>`;
@@ -16052,7 +16095,7 @@ function sizesMetricsTableHtml(metrics, label, more = null, moreLabel = "") {
   html += "</tr></thead><tbody>";
   const cell = (v) => {
     const d = !v || v[0] == null || v[1] == null ? null : v[0] - v[1];
-    const cls = d > 0 ? "ttfx-up" : d < 0 ? "ttfx-down" : "";
+    const cls = upWorseClass(sizeChangeSign(d, v?.[1]));
     return `<td class="num ${cls}">${formatSizeDelta(d)}${d ? formatSizePct(d, v[1]) : ""}</td>`;
   };
   for (const m of Object.keys(SIZES_METRICS)) {
@@ -16073,7 +16116,7 @@ function sizesFilesHtml(files, against = "") {
     .map((f) => {
       const d = f.bytes != null && f.previous != null ? f.bytes - f.previous : null;
       const change = d == null ? (f.bytes == null ? "removed" : "added") : formatSizeDelta(d);
-      const cls = d == null ? "" : d > 0 ? "ttfx-up" : "ttfx-down";
+      const cls = d == null ? "" : upWorseClass(sizeChangeSign(d, f.previous));
       return `<tr><th class="sizes-file-path"><code>${escapeHtml(f.path)}</code></th><td class="num">${formatSizeValue(f.bytes ?? f.previous)}</td><td class="num ${cls}">${change}</td></tr>`;
     })
     .join("");
@@ -16158,7 +16201,7 @@ function renderSizesCommitsTable() {
         continue;
       }
       const delta = c.after - c.before;
-      html += `<td class="num ${delta > 0 ? "ttfx-up" : "ttfx-down"}" title="${escapeHtml(`${formatSizeValue(c.before)} → ${formatSizeValue(c.after)}`)}">${formatSizeDelta(delta)}${formatSizePct(delta, c.before)}</td>`;
+      html += `<td class="num ${upWorseClass(sizeChangeSign(delta, c.before))}" title="${escapeHtml(`${formatSizeValue(c.before)} → ${formatSizeValue(c.after)}`)}">${formatSizeDelta(delta)}${formatSizePct(delta, c.before)}</td>`;
     }
     const msg = multi
       ? `${d.commits[p].slice(0, 10)}..${sha.slice(0, 10)}, not measured one by one`
@@ -16230,7 +16273,7 @@ function showSizesCommitPopup(i, metric) {
     if (!vals || vals[i] == null) continue;
     const p = sizesPrevious(vals, i);
     const delta = p == null ? null : vals[i] - vals[p];
-    const cls = delta > 0 ? "ttfx-up" : delta < 0 ? "ttfx-down" : "";
+    const cls = upWorseClass(sizeChangeSign(delta, vals[p]));
     const pct = delta ? formatSizePct(delta, vals[p]) : "";
     html += `<tr${m === metric ? ' class="highlight"' : ""}><th>${escapeHtml(sizesMetricLabel(m))}</th>`;
     html += `<td class="num">${formatSizeValue(vals[i])}</td><td class="num ${cls}">${formatSizeDelta(delta)}${pct}</td></tr>`;
@@ -16469,13 +16512,15 @@ function overviewWeekBefore(items, latestMs, timeOf) {
 // direction, or null when neither direction is better; `unit` is "pp" for
 // percentage points, "%" for a relative change or "" for a plain count. `vs`
 // says what is compared in a few words, `detail` spells the two spans out
-// for the tooltip.
-function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, vs = "this week vs last", detail = "" }) {
+// for the tooltip. A change smaller than `tol`, in the value's unit, is left
+// uncoloured.
+function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, tol = 0, vs = "this week vs last", detail = "" }) {
   if (value == null || isNaN(value)) return null;
   const rounded = Math.round(value * 10 ** digits) / 10 ** digits;
+  const sign = Math.abs(value) < tol ? 0 : Math.sign(rounded);
   let tone = "neutral";
-  if (upIsGood !== null && rounded > 0) tone = upIsGood ? "good" : "bad";
-  else if (upIsGood !== null && rounded < 0) tone = upIsGood ? "bad" : "good";
+  if (upIsGood !== null && sign > 0) tone = upIsGood ? "good" : "bad";
+  else if (upIsGood !== null && sign < 0) tone = upIsGood ? "bad" : "good";
   const arrow = rounded > 0 ? "▲" : rounded < 0 ? "▼" : "▬";
   const text = `${overviewSigned(value, digits)}${unit === "pp" ? " pp" : unit}`;
   return { tone, arrow, text, vs, detail, value };
@@ -16672,6 +16717,7 @@ function overviewActivityCard(src) {
         value: (100 * (merged - mergedBefore)) / mergedBefore,
         unit: "%",
         upIsGood: true,
+        tol: NO_CHANGE_PCT.activity,
         detail: overviewWeekWindowsDetail("Pull requests merged", dayMs(n)),
       })
     : null;
@@ -16754,7 +16800,7 @@ function overviewPkgevalCard(src) {
   const weekAgo = overviewWeekBefore(reports, Date.parse(last.date), (r) => Date.parse(r.date));
   const delta =
     weekAgo && passRate(weekAgo) != null
-      ? overviewDelta({ value: passPct - passRate(weekAgo), unit: "pp", upIsGood: true, ...overviewReportDelta(last.date, weekAgo.date) })
+      ? overviewDelta({ value: passPct - passRate(weekAgo), unit: "pp", upIsGood: true, tol: NO_CHANGE_PCT.passRate, ...overviewReportDelta(last.date, weekAgo.date) })
       : null;
   let change = "";
   if (weekAgo) {
@@ -16965,7 +17011,7 @@ function overviewCICard() {
   const priorRate = prior.runs ? (100 * prior.passed) / prior.runs : null;
   const delta =
     passRate != null && priorRate != null
-      ? overviewDelta({ value: passRate - priorRate, unit: "pp", upIsGood: true, detail: overviewWeekWindowsDetail("Master job runs") })
+      ? overviewDelta({ value: passRate - priorRate, unit: "pp", upIsGood: true, tol: NO_CHANGE_PCT.passRate, detail: overviewWeekWindowsDetail("Master job runs") })
       : null;
   const rows = [];
   let failedNames = [];
@@ -17116,6 +17162,7 @@ function overviewTtfxCard(src, prs) {
               value: (100 * (now - before)) / before,
               unit: "%",
               upIsGood: false,
+              tol: NO_CHANGE_PCT.geomean,
               detail: `${TTFX_PILL_LABELS[m]} geomean over ${common.length} snippets: ${formatTtfxSeconds(now)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxSeconds(before)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
             })
           : null,
@@ -17152,6 +17199,7 @@ function overviewTtfxCard(src, prs) {
             value: (100 * (now - before)) / before,
             unit: "%",
             upIsGood: false,
+            tol: NO_CHANGE_PCT.geomean,
             vs: "",
             detail: `Geomean of ${what} over ${tasks.length} snippets: ${formatTtfxSeconds(now)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxSeconds(before)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
           })
@@ -17204,14 +17252,10 @@ function overviewTtfxCard(src, prs) {
   });
 }
 
-// Larger than the release is worse, for times and sizes alike; a change that
-// rounds to 0.0% is neither
-const overviewReleaseClass = (pct) =>
-  Math.abs(pct) < 0.05 ? "overview-delta-neutral" : pct > 0 ? "overview-delta-bad" : "overview-delta-good";
-
-// A comparison's label is red when any of its changes is, else green when any is
-const overviewReleaseRowClass = (tones) =>
-  tones.includes("overview-delta-bad") ? "overview-delta-bad" : tones.includes("overview-delta-good") ? "overview-delta-good" : "";
+// Larger than the release is worse, for times and sizes alike; a change within
+// `tol`% is neither
+const overviewReleaseClass = (pct, tol) =>
+  upWorseClass(changeSign(pct, tol), "overview-delta-bad", "overview-delta-good") || "overview-delta-neutral";
 
 const OVERVIEW_TTFX_METRICS = ["precompile", "load", "run", "warm"];
 
@@ -17263,7 +17307,7 @@ function overviewTtfxCompare(src, latest) {
   ];
   groups.push(["Nightly", against(latest), overviewTtfxBuildLink(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)], overviewTtfxBuildLink(opt)]);
-  return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups);
+  return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups, NO_CHANGE_PCT.geomean);
 }
 
 // A cell's text, and for a phone a shorter one when it has its own: numbers of
@@ -17279,7 +17323,7 @@ function overviewCompareText(c) {
 // per group a heading and one row per comparison, its label in the label column
 // and its cells lined up in the value column, even on a phone. A cell is null or has `pct`
 // (which colours it), `title` and optionally `text`.
-function overviewCompareRows(columns, groups) {
+function overviewCompareRows(columns, groups, tol) {
   const shown = groups
     .map(([name, comps, link]) => [name, comps.filter((c) => c && c[1].some(Boolean)), link])
     .filter(([, comps]) => comps.length);
@@ -17290,17 +17334,16 @@ function overviewCompareRows(columns, groups) {
   for (const [name, comps, link] of shown) {
     rows.push({ heading: name, link });
     for (const [label, cells] of comps) {
-      const tones = cells.filter(Boolean).map((c) => overviewReleaseClass(c.pct));
       rows.push([
         label,
         cellsHtml(
           cells.map((c) =>
             c
-              ? `<span class="${overviewReleaseClass(c.pct)}" title="${escapeHtml(c.title)}">${overviewCompareText(c)}</span>`
+              ? `<span class="${overviewReleaseClass(c.pct, tol)}" title="${escapeHtml(c.title)}">${overviewCompareText(c)}</span>`
               : "<span></span>",
           ),
         ),
-        `overview-compare-sub ${overviewReleaseRowClass(tones)}`,
+        "overview-compare-sub",
       ]);
     }
   }
@@ -17355,6 +17398,7 @@ function overviewSizesCard(src, prs) {
           value: (100 * (totals[i] - totals[weekAgo])) / totals[weekAgo],
           unit: "%",
           upIsGood: false,
+          tol: NO_CHANGE_PCT.size,
           ...overviewReportDelta(overviewDateOnly(latestMs), overviewDateOnly(timeOf(weekAgo)), "commit"),
           detail: `Latest measured commit ${sha.slice(0, 10)} (${src.merged_at[i]}) against the last measured one at least a week older, ${src.commits[weekAgo].slice(0, 10)} (${src.merged_at[weekAgo]})`,
         })
@@ -17422,7 +17466,7 @@ function overviewSizesCompare(src, at) {
         return { pct, text: `${formatSizeDelta(d)} (${formatSignedPct(pct)})`, title: `${formatBytes(a)} against ${formatBytes(b)}` };
       }),
     ];
-  return overviewCompareRows(["Total", "Tarball"], [["Nightly", [against(src.release), against(overviewSizesLts(src), " (LTS)")]]]);
+  return overviewCompareRows(["Total", "Tarball"], [["Nightly", [against(src.release), against(overviewSizesLts(src), " (LTS)")]]], NO_CHANGE_PCT.size);
 }
 
 // The five open pull requests that change the total most, with the change
@@ -17431,13 +17475,14 @@ function overviewSizesPrs(prs) {
     const before = sizesPrBefore(p);
     return before && p.values.total != null && before.total != null ? p.values.total - before.total : null;
   };
+  const before = (p) => sizesPrBefore(p)?.total;
   return ((prs && prs.prs) || [])
     .filter((p) => !p.build_change)
     .map((p) => ({ p, d: delta(p) }))
     .filter(({ d }) => d)
     .sort((a, b) => Math.abs(b.d) - Math.abs(a.d))
     .slice(0, 5)
-    .map(({ p, d }) => `${overviewExtLink(githubPrURL(p.number), `#${p.number}`)} <span class="${d > 0 ? "ttfx-up" : "ttfx-down"}">${formatSizeDelta(d)}</span>`)
+    .map(({ p, d }) => `${overviewExtLink(githubPrURL(p.number), `#${p.number}`)} <span class="${upWorseClass(sizeChangeSign(d, before(p)))}">${formatSizeDelta(d)}</span>`)
     .join(", ");
 }
 
@@ -17496,7 +17541,7 @@ function overviewPackagesCard(src) {
   if (week.days < 7) weekText += `, ${week.days} of 7 days reported`;
   const weekDetail = `7 days to ${maxDate} against the 7 days to ${overviewDateAdd(maxDate, -7)}`;
   const delta = week.prev
-    ? overviewDelta({ value: (100 * (week.all - week.prev)) / week.prev, unit: "%", upIsGood: true, detail: `Downloads in the ${weekDetail}` })
+    ? overviewDelta({ value: (100 * (week.all - week.prev)) / week.prev, unit: "%", upIsGood: true, tol: NO_CHANGE_PCT.activity, detail: `Downloads in the ${weekDetail}` })
     : null;
   const status = lagDays !== null && lagDays > OVERVIEW_DOWNLOADS_LAG_DAYS
     ? overviewStatus("warn", `No data since ${maxDate}`)
@@ -17681,6 +17726,7 @@ function overviewQueueSummary(src) {
           unit: "%",
           upIsGood: false,
           digits: 0,
+          tol: NO_CHANGE_PCT.activity,
           vs: "jobs waiting, this week vs last",
           detail: overviewWeekWindowsDetail("Mean jobs waiting for an agent", nowMs),
         })
@@ -18310,8 +18356,8 @@ function commitPrHtml(d, gh) {
   return head + commitPrStackHtml(d.stack, n) + ttfx + runtime + sizes;
 }
 
-// Larger than the release is worse; a change that rounds to 0.0% is neither
-const prReleaseClass = (pct) => (pct == null || Math.abs(pct) < 0.05 ? "" : pct > 0 ? "ttfx-up" : "ttfx-down");
+// Larger than the release is worse; a change within `tol`% is neither
+const prReleaseClass = (pct, tol) => upWorseClass(changeSign(pct, tol));
 
 // A release's row label: a branch nightly is named up to "-DEV", without its build number
 function prReleaseLabel(version, kind, lts) {
@@ -18333,7 +18379,7 @@ function ttfxReleasesHtml(metrics, against, base = null) {
     html += `<tr><th title="${escapeHtml(title)}">${a.url ? extLink(a.url, label) : label}</th>`;
     metrics.forEach((_, i) => {
       const main = pct(base ? a.head[i] : a.ratio[i]);
-      html += `<td class="num ${prReleaseClass(main)}" title="Geomean over ${a.n_tasks[i]} tasks">${formatSignedPct(main)}`;
+      html += `<td class="num ${prReleaseClass(main, NO_CHANGE_PCT.geomean)}" title="Geomean over ${a.n_tasks[i]} tasks">${formatSignedPct(main)}`;
       if (base) html += ` <span class="ttfx-popup-muted" title="Merge-base">${formatSignedPct(pct(a.ratio[i]))}</span>`;
       html += "</td>";
     });
@@ -18383,7 +18429,7 @@ function sizesPrReleasesHtml(z, { pr = true } = {}) {
       const b = sum(ms, (m) => rel.values[m]);
       const h = pct(head, b);
       const title = b ? `${pr ? "Head" : "This commit"} ${formatBytes(head)}${base != null ? `, merge-base ${formatBytes(base)}` : ""}, ${rel.version} ${formatBytes(b)}` : "";
-      html += `<td class="num ${prReleaseClass(h)}" title="${escapeHtml(title)}">${formatSignedPct(h)}`;
+      html += `<td class="num ${prReleaseClass(h, NO_CHANGE_PCT.size)}" title="${escapeHtml(title)}">${formatSignedPct(h)}`;
       if (base != null && b) html += ` <span class="ttfx-popup-muted">${formatSignedPct(pct(base, b))}</span>`;
       html += "</td>";
     }
@@ -18410,7 +18456,7 @@ function commitPrStackHtml(st, n) {
       <td class="commits-reg-msg">${escapeHtml(l.title)} ${badges}</td>
       <td class="col-secondary"><code>${escapeHtml(l.head_ref)}</code></td>
       ${pct(l.own_score)}${pct(l.score)}
-      <td class="num ${l.size_own > 0 ? "commit-worse" : l.size_own < 0 ? "commit-better" : ""}"${dataV(l.size_own)}>${l.size_own == null ? "—" : formatSizeDelta(l.size_own)}</td>
+      <td class="num ${upWorseClass(sizeChangeSign(l.size_own), "commit-worse", "commit-better")}"${dataV(l.size_own)}>${l.size_own == null ? "—" : formatSizeDelta(l.size_own)}</td>
     </tr>`;
   });
   rows.reverse();
@@ -21439,7 +21485,7 @@ function overviewRuntimeCard(src, prs) {
             label: x.c,
             color: runtimeColors(src.categories)[x.c] || colors.accent,
             value: fmt(x.month),
-            delta: overviewDelta({ value: x.pct, unit: "%", upIsGood: false, vs: "", detail: detail(`${x.c} geomean`) }),
+            delta: overviewDelta({ value: x.pct, unit: "%", upIsGood: false, tol: NO_CHANGE_PCT.geomean, vs: "", detail: detail(`${x.c} geomean`) }),
           })),
           caption: `the categories that moved most this week: change over ${OVERVIEW_SPARK_DAYS} days, and this week`,
         }
