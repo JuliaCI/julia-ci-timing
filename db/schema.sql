@@ -138,6 +138,30 @@ CREATE TABLE IF NOT EXISTS coverage (
     change_seq  INTEGER NOT NULL
 );
 
+-- Codecov's report of a master commit, file by file. The report's totals are
+-- kept as fetched: Codecov updates a commit's total as each platform's upload
+-- is processed, so a commit whose coverage.codecov has moved since is fetched
+-- again. sessions is the number of uploads the report merges.
+CREATE TABLE IF NOT EXISTS coverage_reports (
+    commit_sha TEXT PRIMARY KEY,
+    fetched_at TEXT NOT NULL,
+    coverage   REAL,
+    files      INTEGER NOT NULL,
+    lines      INTEGER NOT NULL,
+    hits       INTEGER NOT NULL,
+    sessions   INTEGER,
+    change_seq INTEGER NOT NULL
+);
+
+-- Lines Codecov counts as code, and those run, per file
+CREATE TABLE IF NOT EXISTS coverage_files (
+    commit_sha TEXT NOT NULL REFERENCES coverage_reports (commit_sha),
+    path       TEXT NOT NULL,
+    lines      INTEGER NOT NULL,
+    hits       INTEGER NOT NULL,
+    PRIMARY KEY (commit_sha, path)
+) WITHOUT ROWID;
+
 -- ------------------------------------------------------------ benchmarks --
 
 -- path is the directory under NanosoldierReports/benchmark, e.g. by_date/2026-09/13.

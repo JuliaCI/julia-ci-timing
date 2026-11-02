@@ -70,7 +70,8 @@ only the files that changed. `AGENTS.md` describes their shapes.
   per job attempt: build_id, name, retry, state, duration_s, runnable_at, started_at,
   agent_hostname). Pipelines: `julia-ci` (current), `julia-master` and
   `julia-master-scheduled` (stopped in July 2026). `coverage` holds Codecov and Coveralls
-  percentages per commit.
+  percentages per commit, and `coverage_reports` and `coverage_files` Codecov's report of
+  a master commit file by file (lines and hits), one a day since May 2026.
 - **Benchmarks.** `bench_reports` (one per Nanosoldier report; `kind = 'daily'` for the
   regular ones), `bench_names` (grp, name), `bench_results` (report, benchmark and estimate:
   time_ns, gctime_ns, memory_bytes, allocs), `bench_verdicts` (Nanosoldier's comparison
@@ -226,6 +227,16 @@ SELECT date(started_at) AS day, count(*) AS jobs,
   round(avg(compiler_s)) AS compiler_s, round(avg(sys_output_s)) AS sys_output_s
 FROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'
 GROUP BY day ORDER BY day
+```
+
+The files of the latest Codecov report with the most lines the tests never run:
+
+```sql
+SELECT f.path, f.lines, f.lines - f.hits AS missed, round(100.0 * f.hits / f.lines, 1) AS pct
+FROM coverage_files f
+WHERE f.commit_sha = (SELECT r.commit_sha FROM coverage_reports r JOIN coverage c USING (commit_sha)
+                      WHERE r.files > 0 ORDER BY c.measured_at DESC LIMIT 1)
+ORDER BY missed DESC LIMIT 20
 ```
 
 One runtime benchmark per master build over 30 days, with its instruction count:

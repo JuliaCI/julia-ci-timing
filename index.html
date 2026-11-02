@@ -265,6 +265,18 @@
             >
               Build stages
             </button>
+            <button
+              class="tab-btn"
+              id="tab-ci-coverage"
+              role="tab"
+              aria-selected="false"
+              aria-controls="coverage-view"
+              tabindex="-1"
+              onclick="switchTab('ci-coverage')"
+              title="How much of each file of julia master the tests run, from Codecov"
+            >
+              Coverage
+            </button>
           </div>
         </div>
         <div class="tab-group" role="presentation">
@@ -1688,6 +1700,119 @@
             <table>
               <thead id="sysimage-stats-thead"></thead>
               <tbody id="sysimage-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="ttfx-main view-hidden"
+      id="coverage-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-coverage"
+      tabindex="0"
+    >
+      <div class="ttfx-toolbar">
+        <select
+          class="time-select"
+          id="coverage-time-range"
+          onchange="setCoverageTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="180" selected>Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="0">All time</option>
+        </select>
+        <select
+          class="time-select"
+          id="coverage-days"
+          onchange="setCoverageDays(this.value)"
+          aria-label="Change over"
+          title="The table compares the latest report with the latest one at least this much older"
+        >
+          <option value="7">Change over 7 days</option>
+          <option value="30" selected>Change over 30 days</option>
+          <option value="90">Change over 90 days</option>
+          <option value="180">Change over 180 days</option>
+        </select>
+        <select
+          class="time-select"
+          id="coverage-view-mode"
+          onchange="setCoverageView(this.value)"
+          aria-label="Table rows"
+        >
+          <option value="files" selected>Files</option>
+          <option value="dirs">Directories</option>
+        </select>
+        <select
+          class="time-select"
+          id="coverage-min-lines"
+          onchange="setCoverageMinLines(this.value)"
+          aria-label="Smallest file"
+          title="Files with fewer lines of code are left out, so a 2-line file at 0% does not top the ranking"
+        >
+          <option value="0">Every file</option>
+          <option value="20" selected>20+ lines</option>
+          <option value="100">100+ lines</option>
+          <option value="500">500+ lines</option>
+        </select>
+        <input
+          class="sidebar-filter coverage-filter"
+          id="coverage-filter"
+          type="search"
+          placeholder="Filter paths"
+          oninput="setCoverageFilter(this.value)"
+          aria-label="Filter paths"
+        />
+        <button
+          class="btn btn-primary"
+          id="coverage-btn-reset-zoom"
+          onclick="resetCoverageZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <a
+          class="btn btn-link"
+          href="https://app.codecov.io/github/JuliaLang/julia"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Line by line coverage of julia master"
+          >Codecov</a
+        >
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="coverage-chart-loading">
+                <span class="loading">Loading coverage data...</span>
+              </div>
+              <div class="ttfx-summary-grid coverage-grid" id="coverage-grid">
+                <div class="ttfx-panel"><canvas id="coverage-chart-pct"></canvas></div>
+                <div class="ttfx-panel"><canvas id="coverage-chart-missed"></canvas></div>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="coverage-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize coverage table"
+          ></div>
+          <div class="ttfx-stats" id="coverage-stats" style="height: 420px">
+            <div class="ttfx-stats-caption" id="coverage-stats-caption"></div>
+            <table>
+              <thead id="coverage-stats-thead"></thead>
+              <tbody id="coverage-stats-tbody">
                 <tr>
                   <td class="loading">Loading...</td>
                 </tr>

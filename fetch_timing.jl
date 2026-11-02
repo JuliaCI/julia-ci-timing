@@ -4,6 +4,8 @@
 # Buildkite only retains a window of builds, so the database must already
 # hold the history (the host restores it from the latest backup); the
 # site reads it through db/serve.jl and db/export.jl renders the extracts.
+# It also records each master commit's Codecov and Coveralls totals, and
+# Codecov's report of the commit file by file (coverage_reports, coverage_files).
 
 using HTTP
 using JSON3
@@ -331,6 +333,65 @@ function fetch_coverage_data(db; max_pages=20)
     return coverage
 end
 
+# Codecov's file-level reports of master commits: the newest commits of the last
+# COVERAGE_FILES_DAYS days with a Codecov total and no report fetched at that total.
+# A report is about 0.8 MB, so a few per run spread the backfill over the first
+# ingests.
+const COVERAGE_FILES_DAYS = 180
+const COVERAGE_FILES_PER_RUN = 4
+const CODECOV_REPORT = "https://api.codecov.io/api/v2/github/JuliaLang/repos/julia/report/"
+
+function coverage_reports_due(db; days=COVERAGE_FILES_DAYS, limit=COVERAGE_FILES_PER_RUN)
+    since = Store.iso(now(UTC) - Day(days))
+    r = rows(db, "SELECT c.commit_sha, c.codecov FROM coverage c LEFT JOIN coverage_reports r USING (commit_sha) " *
+                 "WHERE c.codecov IS NOT NULL AND c.measured_at >= ? AND (r.commit_sha IS NULL OR r.coverage IS NOT c.codecov) " *
+                 "ORDER BY c.measured_at DESC LIMIT ?", (since, limit))
+    return [(String(x.commit_sha), Float64(x.codecov)) for x in r]
+end
+
+# The report's coverage column is the commit's total that was due, not the
+# report's own, so a report whose total rounds differently is not fetched again.
+# A commit Codecov has no report for is recorded with no files.
+function write_coverage_report!(db, sha, codecov, report)
+    files = report === nothing ? [] : get(report, :files, [])
+    totals = report === nothing ? nothing : get(report, :totals, nothing)
+    get_total(k) = totals === nothing ? 0 : something(get(totals, k, 0), 0)
+    seq = next_seq!(db)
+    DBInterface.execute(db, "DELETE FROM coverage_files WHERE commit_sha = ?", (sha,))
+    upsert!(upsert_stmt(db, "coverage_reports", ["commit_sha"], ["fetched_at", "coverage", "files", "lines", "hits", "sessions"]),
+            (sha, iso_now(), codecov, length(files), get_total(:lines), get_total(:hits),
+             totals === nothing ? missing : something(get(totals, :sessions, nothing), missing), seq))
+    stmt = upsert_stmt(db, "coverage_files", ["commit_sha", "path"], ["lines", "hits"]; seq=false)
+    for f in files
+        t = f.totals
+        upsert!(stmt, (sha, String(f.name), Int(t.lines), Int(t.hits)))
+    end
+    return 1 + length(files)
+end
+
+function fetch_coverage_reports!(db)
+    n = 0
+    for (sha, codecov) in coverage_reports_due(db)
+        resp = try
+            http_get_retry(CODECOV_REPORT * "?sha=" * sha)
+        catch e
+            @warn "Codecov report request failed" sha error=e
+            break
+        end
+        if resp.status == 404
+            report = nothing
+        elseif resp.status != 200
+            @warn "Codecov report request failed" sha resp.status
+            break
+        else
+            report = JSON3.read(resp.body)
+        end
+        n += transaction(() -> write_coverage_report!(db, sha, codecov, report), db)
+        @info "Fetched Codecov report" sha files=(report === nothing ? 0 : length(report.files))
+    end
+    return n
+end
+
 # A listing that failed (bad token, Buildkite down) is a failed run,
 # recorded in source_runs so /healthz and the daily check see it, not an
 # empty one that would count as success
@@ -379,9 +440,10 @@ function run!(db)
     coverage = fetch_coverage_data(db)
     @info "Coverage data" entries=length(coverage)
 
-    transaction(db) do
+    n = transaction(db) do
         write_timings!(db, build_rows, job_rows) + write_coverage!(db, coverage)
     end
+    return n + fetch_coverage_reports!(db)
 end
 
 if abspath(PROGRAM_FILE) == (@__FILE__)

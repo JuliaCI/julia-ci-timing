@@ -235,6 +235,17 @@ a dashed line at that build in the panels of those stages and shows the note in
 the build's popup. Use it for a step that is not the commit being slower, such as
 build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
 
+File-level coverage (the CI → Coverage tab, `/coverage`) comes from `fetch_timing.jl`,
+which besides each commit's Codecov and Coveralls totals (`coverage`) fetches Codecov's
+report of the newest master commits of the last 180 days, a few per run, into
+`coverage_reports` and `coverage_files` (lines and hits per file). A report is fetched
+again when Codecov's total for the commit moves, since Codecov merges the Linux, Windows
+and macOS uploads as they arrive (`sessions`); a report with fewer of them than usual is
+partial and lower. `api/coverage/files` serves the totals per top-level directory over
+time and every file of the latest report against the latest one at least `days` older,
+preferring one that merged as many uploads. The tab links each file to Codecov for
+line-by-line detail.
+
 Runtime benchmarks (the Benchmarks → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
 records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks on the macOS aarch64 agent;
 the header of `fetch_runtime.jl` says which builds and what each row keeps):
