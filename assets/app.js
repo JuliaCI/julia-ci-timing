@@ -19204,8 +19204,10 @@ function sysimageNoteLines(p, idx, stage, isDark) {
 }
 
 // Raises a panel's y axis so the data stays out from under the note labels,
-// as the TTFX charts do (the ttfxNoteBand plugin measures what is needed)
+// as the TTFX charts do (the ttfxNoteBand plugin measures what is needed).
+// A box zoom's y range is kept as drawn.
 function sysimageNoteClearance(axis) {
+  if (axis.options.min != null || axis.options.max != null) return;
   const area = axis.chart.chartArea;
   const height = area ? area.bottom - area.top : 0;
   if (height <= 0) return;
@@ -19362,6 +19364,7 @@ function updateSysimageCharts() {
       ticks: { color: theme.text, callback: (v) => formatDuration(v) },
       grid: { color: theme.grid },
       afterDataLimits: (axis) => {
+        if (axis.options.min != null || axis.options.max != null) return;
         if (top != null) axis.max = top;
         sysimageNoteClearance(axis);
       },
