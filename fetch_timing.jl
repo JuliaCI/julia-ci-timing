@@ -335,10 +335,11 @@ end
 
 # Codecov's file-level reports of master commits: the newest commits of the last
 # COVERAGE_FILES_DAYS days with a Codecov total and no report fetched at that total.
-# A report is about 0.8 MB, so a few per run spread the backfill over the first
-# ingests.
+# A report is about 0.8 MB and a second to fetch; a run stops starting new ones
+# after COVERAGE_FILES_BUDGET_S, so the backfill takes an ingest or two.
 const COVERAGE_FILES_DAYS = 180
-const COVERAGE_FILES_PER_RUN = 4
+const COVERAGE_FILES_PER_RUN = 200
+const COVERAGE_FILES_BUDGET_S = 60
 const CODECOV_REPORT = "https://api.codecov.io/api/v2/github/JuliaLang/repos/julia/report/"
 
 function coverage_reports_due(db; days=COVERAGE_FILES_DAYS, limit=COVERAGE_FILES_PER_RUN)
@@ -369,9 +370,11 @@ function write_coverage_report!(db, sha, codecov, report)
     return 1 + length(files)
 end
 
-function fetch_coverage_reports!(db)
+function fetch_coverage_reports!(db; budget_s=COVERAGE_FILES_BUDGET_S)
     n = 0
+    deadline = time() + budget_s
     for (sha, codecov) in coverage_reports_due(db)
+        time() > deadline && break
         resp = try
             http_get_retry(CODECOV_REPORT * "?sha=" * sha)
         catch e

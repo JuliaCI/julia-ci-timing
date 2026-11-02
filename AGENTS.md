@@ -237,7 +237,7 @@ build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
 
 File-level coverage (the CI → Coverage tab, `/coverage`) comes from `fetch_timing.jl`,
 which besides each commit's Codecov and Coveralls totals (`coverage`) fetches Codecov's
-report of the newest master commits of the last 180 days, a few per run, into
+report of the newest master commits of the last 180 days, for up to a minute per run, into
 `coverage_reports` and `coverage_files` (lines and hits per file). A report is fetched
 again when Codecov's total for the commit moves, since Codecov merges the Linux, Windows
 and macOS uploads as they arrive (`sessions`); a report with fewer of them than usual is
