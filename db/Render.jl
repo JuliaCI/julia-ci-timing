@@ -487,8 +487,8 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
         n_broken = Int(rows(db, "SELECT COUNT(*) AS n FROM pkgeval_results p JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
                                 "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok'", (Int(reports[2].id), report_id))[1].n)
         newly_broken = [OrderedDict("rank" => Int(r.rank), "name" => String(r.name), "status" => String(r.status), "reason" => js(r.reason),
-                                    "user" => Int(r.user))
-                        for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, ranked.user " *
+                                    "user" => Int(r.user), "error" => js(r.error), "log" => pkgeval_log_url(logs_url, r.name, r.log))
+                        for r in rows(db, dl * "SELECT ranked.rank, k.name, p.status, p.reason, p.error, p.log, ranked.user " *
                                           "FROM ranked CROSS JOIN packages k ON k.name = ranked.name CROSS JOIN pkgeval_results p ON p.package_id = k.id " *
                                           "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
                                           "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok' ORDER BY ranked.rank, p.package_id LIMIT ?",
@@ -1115,7 +1115,7 @@ function commit_pkgeval(db, prefix, sha, t)
     broken = nothing
     n_broken = nothing
     if !isempty(prev)
-        rs = rows(db, "SELECT k.name, p.status, p.reason FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
+        rs = rows(db, "SELECT k.name, p.status, p.reason, p.error, p.log FROM pkgeval_results p JOIN packages k ON k.id = p.package_id " *
                       "JOIN pkgeval_results q ON q.package_id = p.package_id AND q.report_id = ? " *
                       "WHERE p.report_id = ? AND p.status NOT IN ('ok', 'skip') AND q.status = 'ok' ORDER BY k.name", (Int(prev[1].id), Int(r.id)))
         # Reports imported without package rows cannot say
@@ -1123,7 +1123,8 @@ function commit_pkgeval(db, prefix, sha, t)
                    !isempty(rows(db, "SELECT 1 FROM pkgeval_results WHERE report_id = ? LIMIT 1", (Int(prev[1].id),)))
         if has_rows
             n_broken = length(rs)
-            broken = [OrderedDict("name" => String(x.name), "status" => String(x.status), "reason" => js(x.reason))
+            broken = [OrderedDict("name" => String(x.name), "status" => String(x.status), "reason" => js(x.reason),
+                                  "error" => js(x.error), "log" => pkgeval_log_url(r.logs_url, x.name, x.log))
                       for x in first(rs, COMMIT_LIST_LIMIT)]
         end
     end

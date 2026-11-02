@@ -2493,6 +2493,26 @@ th.sorted .sort-indicator {
   font-size: 11px;
   white-space: nowrap;
 }
+.pe-error-line.pe-error-clip {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The package and error line column takes the room the others leave, and clips */
+.commits-reg-table td.pe-error-cell {
+  width: 100%;
+  max-width: 0;
+}
+/* The Overview's newly broken packages, one per line */
+.pe-broken-list {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pe-broken-list li {
+  min-width: 0;
+  margin-bottom: 2px;
+}
 .pkgeval-strip a:hover {
   outline: 1px solid var(--color-fg-default);
 }
