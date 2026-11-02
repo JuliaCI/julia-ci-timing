@@ -302,6 +302,8 @@ const NO_CHANGE_PCT = {
   activity: 10,
   // A pass rate, in percentage points
   passRate: 1,
+  // A coverage share, in percentage points: a day's merges move it by a few hundredths
+  coverage: 0.1,
 };
 // A size change counts as none below this when the size before is unknown
 const NO_CHANGE_BYTES = 1024 * 1024;
@@ -16421,6 +16423,7 @@ function loadOverviewSources(onSource) {
     popular: () => quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
     backlog: () => quiet("agents/backlog", { since: twoWeeksAgo }),
     activity: () => fresh("activity", activityData) || quiet("github/activity", { since: sparkStart }),
+    coverage: () => quiet("coverage/files", { since: sparkStart, days: 7 }),
   };
   return Promise.all(
     Object.entries(sources).map(async ([key, load]) => onSource(key, await load())),
@@ -17922,6 +17925,7 @@ const OVERVIEW_CARDS = [
   { keys: ["builds"], tab: "ci-timing", title: "CI builds", make: () => overviewCICard() },
   { keys: ["bench"], tab: "benchmarks", title: "Performance benchmarks", make: (s) => overviewBenchCard(s.bench) },
   { keys: ["agents", "backlog"], tab: "ci-workers", title: "CI workers", make: (s) => overviewAgentsCard(s.agents, s.backlog) },
+  { keys: ["coverage"], tab: "ci-coverage", title: "Coverage", make: (s) => overviewCoverageCard(s.coverage) },
   { keys: ["activity"], tab: "activity", title: "Repo Activity", make: (s) => overviewActivityCard(s.activity) },
 ];
 
@@ -19481,6 +19485,90 @@ function updateCoverageTable() {
   }
   if (!rows.length) html = `<tr><td colspan="6">No ${dirs ? "directory" : "file"} matches.</td></tr>`;
   document.getElementById("coverage-stats-tbody").innerHTML = html;
+}
+
+// Codecov reports one master commit a day, so a few quiet days mean the
+// coverage job or the fetch has stopped
+const OVERVIEW_COVERAGE_STALE_MS = 3 * OVERVIEW_DAY_MS;
+const OVERVIEW_COVERAGE_FILES = 3;
+
+// The latest report's share of lines run against the report a week older,
+// per top-level directory too, and the files that gained or have the most
+// lines never run. `src` is api/coverage/files compared over 7 days.
+function overviewCoverageCard(src) {
+  if (!src || !src.head) return overviewMissingCard("ci-coverage", "Coverage", "The coverage summary");
+  const { head, base, commits, groups } = src;
+  const colors = overviewColors();
+  const ageMs = Date.now() - Date.parse(head.measured_at);
+  // A report that merged fewer platforms' uploads than the others is partial
+  // and lower, so it is left out of the sparkline
+  const sessions = Math.max(...commits.map((c) => c.sessions || 0));
+  let status;
+  if (ageMs > OVERVIEW_COVERAGE_STALE_MS) status = overviewStatus("warn", `No report for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`);
+  else if ((head.sessions || 0) < sessions) status = overviewStatus("warn", `Latest report partial, ${head.sessions} of ${sessions} uploads`);
+  else status = overviewStatus("ok", "Current");
+  const headPct = coveragePct(head.hits, head.lines);
+  const missed = head.lines - head.hits;
+  const vs = base ? overviewReportDelta(head.measured_at.slice(0, 10), base.measured_at.slice(0, 10)) : null;
+  const delta = base
+    ? overviewDelta({ value: headPct - coveragePct(base.hits, base.lines), unit: "pp", upIsGood: true, digits: 2, tol: NO_CHANGE_PCT.coverage, ...vs })
+    : null;
+  const headIdx = commits.findIndex((c) => c.commit === head.commit);
+  const baseIdx = base ? commits.findIndex((c) => c.commit === base.commit) : -1;
+  const palette = RUNTIME_COLORS[isDarkMode() ? "dark" : "light"];
+  const legendItems = Object.keys(groups).map((g, n) => {
+    const pct = (i) => (i < 0 ? null : coveragePct(groups[g].hits[i], groups[g].lines[i]));
+    const now = pct(headIdx);
+    const before = pct(baseIdx);
+    return {
+      label: g,
+      color: palette[n % palette.length],
+      value: now == null ? "" : `${now.toFixed(1)}%`,
+      delta: now != null && before != null ? overviewDelta({ value: now - before, unit: "pp", upIsGood: true, digits: 2, tol: NO_CHANGE_PCT.coverage, ...vs }) : null,
+    };
+  });
+  const sparkFrom = new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS).toISOString();
+  const spark = overviewSpark(
+    commits.filter((c) => c.measured_at >= sparkFrom && (c.sessions || 0) >= sessions).map((c) => ({ x: Date.parse(c.measured_at), y: coveragePct(c.hits, c.lines) })),
+    { color: colors.accent, label: "Lines run, % of the lines Codecov counts as code", format: (v) => `${v.toFixed(2)}%` },
+  );
+  const fileLink = (f, text) => extLink(`${CODECOV_REPO}/commit/${head.commit}/blob/${f.path}`, escapeHtml(text), `title="${escapeHtml(f.path)} on Codecov"`);
+  const fileName = (f) => f.path.split("/").pop();
+  const lost = src.files
+    .filter((f) => f.base_lines != null)
+    .map((f) => ({ f, d: f.lines - f.hits - (f.base_lines - f.base_hits) }))
+    .filter((x) => x.d > 0)
+    .sort((a, b) => b.d - a.d)
+    .slice(0, OVERVIEW_COVERAGE_FILES)
+    .map((x) => `${fileLink(x.f, fileName(x.f))} <span class="overview-delta-bad">+${x.d.toLocaleString("en-US")}</span>`);
+  const most = [...src.files]
+    .sort((a, b) => b.lines - b.hits - (a.lines - a.hits))
+    .slice(0, OVERVIEW_COVERAGE_FILES)
+    .map((f) => `${fileLink(f, fileName(f))} ${(f.lines - f.hits).toLocaleString("en-US")}`);
+  let missedText = missed.toLocaleString("en-US");
+  if (base) {
+    const d = missed - (base.lines - base.hits);
+    missedText += ` <span class="overview-delta-neutral">(${overviewSigned(d)} vs ${escapeHtml(base.measured_at.slice(0, 10))})</span>`;
+  }
+  const reportLink = overviewExtLink(`${CODECOV_REPO}/commit/${head.commit}/tree`, head.commit.slice(0, 10));
+  return overviewCard({
+    tab: "ci-coverage",
+    title: "Coverage",
+    status,
+    description: "Codecov's line coverage of julia master from the coverage job, one report a day, merged over Linux, Windows and macOS.",
+    headline: `${headPct.toFixed(2)}%`,
+    headlineLabel: `of ${head.lines.toLocaleString("en-US")} lines run by the tests`,
+    delta,
+    legend: legendItems.length ? { items: legendItems, caption: "lines run per top-level directory, and the change over a week" } : null,
+    spark,
+    rows: [
+      ["Lines never run", missedText],
+      ["Most newly unrun", lost.length ? lost.join(", ") : ""],
+      ["Most lines never run", most.join(", ")],
+      ["Latest report", `${reportLink} (${overviewAgo(head.measured_at)}), ${head.sessions ?? "?"} uploads merged`],
+      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+    ],
+  });
 }
 
 // === Build stages ===
