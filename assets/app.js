@@ -10595,7 +10595,11 @@ const PKGEVAL_STATUS_ORDER = ["ok", "fail", "crash", "kill", "skip"];
 // A farm daily's log of a package and the failure's error line, where the
 // API has them; the log link keeps a click from reaching its row
 const pkgevalLogLink = (log) => (log ? ` ${extLink(log, "log ↗", 'class="pe-log" title="Open the log"')}` : "");
-const pkgevalErrorLine = (error) => (error ? `<div class="pe-error-line">${escapeHtml(error)}</div>` : "");
+// Clipped to one line where space is short, with the whole line on hover
+const pkgevalErrorLine = (error, clip = false) =>
+  error
+    ? `<div class="pe-error-line${clip ? " pe-error-clip" : ""}"${clip ? ` title="${escapeHtml(error)}"` : ""}>${escapeHtml(error)}</div>`
+    : "";
 function stopPkgevalLogClicks(root) {
   root.querySelectorAll(".pe-log").forEach((a) => {
     a.onclick = (e) => e.stopPropagation();
@@ -16830,8 +16834,18 @@ function overviewPkgevalNewlyBroken() {
   // The list is capped and leaves out packages without downloads
   const total = d.newly_broken_count ?? broken.length;
   if (!total) return `None since ${escapeHtml(d.previous_date)}`;
-  const names = broken.slice(0, 4).map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.reason || p.status)})`);
-  return `${overviewTabLink("pkgeval", `${total} since ${escapeHtml(d.previous_date)}`)}${names.length ? `: ${names.join(", ")}${total > names.length ? ", …" : ""}` : ""}`;
+  const shown = broken.slice(0, 4);
+  const head = overviewTabLink("pkgeval", `${total} since ${escapeHtml(d.previous_date)}`);
+  // A farm daily recorded each failure's error line and log, so each gets a line of its own
+  if (shown.some((p) => p.error || p.log)) {
+    const items = shown.map(
+      (p) =>
+        `<li>${escapeHtml(p.name)} <span class="text-muted">${escapeHtml(p.reason || p.status)}</span>${pkgevalLogLink(p.log)}${pkgevalErrorLine(p.error, true)}</li>`,
+    );
+    return `${head}${total > shown.length ? ", the most downloaded" : ""}:<ul class="pe-broken-list">${items.join("")}</ul>`;
+  }
+  const names = shown.map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.reason || p.status)})`);
+  return `${head}${names.length ? `: ${names.join(", ")}${total > names.length ? ", …" : ""}` : ""}`;
 }
 
 // The commonest reasons of the latest report with package rows, from the API
@@ -18672,7 +18686,23 @@ function commitPkgevalHtml(data) {
   if (c.crash) text += `, ${c.crash} crashed${delta("crash")}`;
   text += prev ? `, against ${escapeHtml(p.previous.date)}.` : ".";
   let broken = "";
-  if (p.newly_broken_count != null) {
+  const farm = (p.newly_broken || []).some((x) => x.error || x.log);
+  if (p.newly_broken_count && farm) {
+    // A farm daily recorded each failure's error line and log: a table, as for the other sources
+    const pkgLink = (x) => `<a href="?tab=${tabToURLValue("pkgeval")}&pkg=${encodeURIComponent(x.name)}">${escapeHtml(x.name)}</a>`;
+    // The error line goes under the name, so it keeps its room on a phone
+    const row = (x) => `<tr>
+      <td class="pe-error-cell">${pkgLink(x)}${pkgevalErrorLine(x.error, true)}</td>
+      <td>${pkgevalReasonPill(x.reason, x.status)}</td>
+      <td>${pkgevalLogLink(x.log)}</td>
+    </tr>`;
+    const head = [["Package and error line"], ["Reason"], ["Log"]];
+    const rows = p.newly_broken.map(row);
+    const more = p.newly_broken_count - rows.length;
+    broken =
+      `<p class="commit-line"><span class="commit-worse">${p.newly_broken_count} newly broken</span> (passed on ${escapeHtml(p.previous.date)})${more > 0 ? `; the first ${rows.length} by name` : ""}:</p>` +
+      commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "newly broken packages");
+  } else if (p.newly_broken_count != null) {
     const names = p.newly_broken.map(
       (x) =>
         `<a href="?tab=${tabToURLValue("pkgeval")}&pkg=${encodeURIComponent(x.name)}" title="${escapeHtml(x.status + (x.reason ? ": " + x.reason : ""))}">${escapeHtml(x.name)}</a>`,
