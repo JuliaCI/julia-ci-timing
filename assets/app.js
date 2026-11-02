@@ -5171,6 +5171,11 @@ makeResizablePanel({
   });
 })();
 makeResizablePanel({
+  handleId: "coverage-resize-handle",
+  targetId: "coverage-stats",
+  storageKey: "coverage-stats-height",
+});
+makeResizablePanel({
   handleId: "activity-resize-handle",
   targetId: "activity-stats",
   storageKey: "activity-stats-height",
@@ -6752,6 +6757,7 @@ const SOURCE_VIEWS = {
   packages: ["packages"],
   agents: ["agents", "backlog", "usage", "buildhours"],
   github: ["activity"],
+  timing: ["coverage"],
 };
 
 // A tab's first load, once at a time: switching away and back before it
@@ -6772,6 +6778,7 @@ function reloadStaleView(tab) {
   if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
   if (tab === "ci-sizes" && takeStale("sizes") && sizesData) reloadSizesData();
   if (tab === "ci-build-stages" && takeStale("sysimage") && sysimageData) loadSysimageData();
+  if (tab === "ci-coverage" && takeStale("coverage") && coverageData) loadCoverageData();
   if (tab === "ci-runtime" && takeStale("runtime") && runtimeData) {
     runtimePrs = null;
     runtimePrsLoading = null;
@@ -6793,6 +6800,7 @@ const TAB_SOURCES = {
   "ci-runtime": "runtime",
   "ci-sizes": "sizes",
   "ci-build-stages": "sysimage",
+  "ci-coverage": "timing",
   benchmarks: "benchmarks",
   packages: "packages",
   pkgeval: "pkgeval",
@@ -6869,6 +6877,7 @@ const TAB_URL_MAP = {
   "ci-runtime": "bench-runtime",
   "ci-sizes": "bench-sizes",
   "ci-build-stages": "ci-build-stages",
+  "ci-coverage": "ci-coverage",
   packages: "eco-downloads",
   pkgeval: "eco-pkgeval",
   activity: "repo-activity",
@@ -6887,6 +6896,7 @@ const TAB_SHORT_PATH = {
   "ci-runtime": "/runtime",
   "ci-sizes": "/sizes",
   "ci-build-stages": "/build-stages",
+  "ci-coverage": "/coverage",
   packages: "/downloads",
   pkgeval: "/pkgeval",
   activity: "/activity",
@@ -6988,6 +6998,12 @@ const DASHBOARD_PARAMS = new Set([
   "it", // sysimage time range
   "ip", // sysimage platform
   "iw", // sysimage smoothing
+  "vt", // coverage time range
+  "vd", // coverage: days the table compares over
+  "vv", // coverage table rows: files or directories
+  "vm", // coverage: smallest file in the table
+  "vq", // coverage path filter
+  "vs", // coverage table sort
   "rt", // runtime time range
   "rb", // runtime benchmark charted
   "rc", // runtime categories shown
@@ -7105,6 +7121,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     "ci-runtime": "tab-ci-runtime",
     "ci-sizes": "tab-ci-sizes",
     "ci-build-stages": "tab-ci-build-stages",
+    "ci-coverage": "tab-ci-coverage",
     packages: "tab-packages",
     benchmarks: "tab-benchmarks",
     pkgeval: "tab-pkgeval",
@@ -7159,6 +7176,9 @@ function switchTab(tab, { pushHistory = true } = {}) {
     .getElementById("sysimage-view")
     .classList.toggle("view-hidden", tab !== "ci-build-stages");
   document
+    .getElementById("coverage-view")
+    .classList.toggle("view-hidden", tab !== "ci-coverage");
+  document
     .getElementById("activity-view")
     .classList.toggle("view-hidden", tab !== "activity");
   document
@@ -7191,6 +7211,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-runtime" && !runtimeData) loadTabOnce(tab, loadRuntimeData);
   if (tab === "ci-sizes" && !sizesData) loadTabOnce(tab, loadSizesData);
   if (tab === "ci-build-stages" && !sysimageData) loadTabOnce(tab, loadSysimageData);
+  if (tab === "ci-coverage" && !coverageData) loadTabOnce(tab, loadCoverageData);
   if (tab === "packages" && !packagesDownloadsData) loadTabOnce(tab, loadPackagesDownloadsData);
   if (tab === "activity" && !activityData) loadTabOnce(tab, loadActivityData);
   reloadStaleView(tab);
@@ -7225,6 +7246,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   if (tab === "ci-runtime") updateRuntimeURL();
   if (tab === "ci-sizes") updateSizesURL();
   if (tab === "ci-build-stages") updateSysimageURL();
+  if (tab === "ci-coverage") updateCoverageURL();
   if (tab === "packages") updatePackagesURL();
   if (tab === "pkgeval") updatePkgevalURL();
   if (tab === "activity") updateActivityURL();
@@ -7250,6 +7272,7 @@ const TAB_URL_KEYS = {
   "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tl", "tc", "tk", "tq", "tx", "tv", "ts"],
   "ci-sizes": ["zt", "zn", "zm", "zv"],
   "ci-build-stages": ["it", "ip", "iw"],
+  "ci-coverage": ["vt", "vd", "vv", "vm", "vq", "vs"],
   "ci-runtime": ["rt", "rb", "rc", "rr", "rv", "rq", "rp"],
   activity: ["at", "aw"],
   packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
@@ -19100,6 +19123,366 @@ function updateActivityTable() {
   document.getElementById("activity-stats-tbody").innerHTML = html;
 }
 
+// === Coverage ===
+// Codecov's file-level coverage of master, from api/coverage/files: the share
+// of lines run in each top-level directory over time, and a table of every
+// file (or directory) of the latest report against the latest report at least
+// `coverageDays` older, ranked by the lines the tests never run.
+let coverageData = null;
+let coverageCharts = [];
+let coverageTimeRangeDays = 180;
+let coverageSince = null; // the start of the window loaded or on its way, "" for all time
+let coverageDays = 30;
+let coverageView = "files";
+let coverageMinLines = 20;
+let coverageFilter = "";
+let coverageSort = { col: "missed", asc: false };
+const COVERAGE_DAYS = [7, 30, 90, 180];
+const COVERAGE_MIN_LINES = [0, 20, 100, 500];
+const COVERAGE_SORTS = ["path", "pct", "lines", "missed", "change", "missedChange"];
+const CODECOV_REPO = "https://app.codecov.io/github/JuliaLang/julia";
+// A file or directory's coverage moving less than this, in percentage points,
+// is left uncoloured: a few lines of a small file move it a lot
+const COVERAGE_NO_CHANGE_PP = 1;
+
+function coverageWantedSince() {
+  if (coverageTimeRangeDays <= 0) return "";
+  return apiSince(new Date(Date.now() - coverageTimeRangeDays * 864e5));
+}
+
+function applyCoverageURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const vt = params.get("vt");
+  if (vt !== null) {
+    const days = nearestTimeRange(vt);
+    if (days !== null) {
+      coverageTimeRangeDays = days;
+      document.getElementById("coverage-time-range").value = days;
+    }
+  }
+  const vd = parseInt(params.get("vd"), 10);
+  if (COVERAGE_DAYS.includes(vd)) coverageDays = vd;
+  if (params.get("vv") === "dirs") coverageView = "dirs";
+  const vm = parseInt(params.get("vm"), 10);
+  if (COVERAGE_MIN_LINES.includes(vm)) coverageMinLines = vm;
+  coverageFilter = params.get("vq") || "";
+  const vs = params.get("vs");
+  if (vs) {
+    const col = vs.replace(/^-/, "");
+    if (COVERAGE_SORTS.includes(col)) coverageSort = { col, asc: !vs.startsWith("-") };
+  }
+  document.getElementById("coverage-days").value = coverageDays;
+  document.getElementById("coverage-view-mode").value = coverageView;
+  document.getElementById("coverage-min-lines").value = coverageMinLines;
+  document.getElementById("coverage-filter").value = coverageFilter;
+}
+
+function updateCoverageURL() {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  const setOrDelete = (k, v, isDefault) => {
+    if (isDefault) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  };
+  setOrDelete("vt", coverageTimeRangeDays, coverageTimeRangeDays === 180);
+  setOrDelete("vd", coverageDays, coverageDays === 30);
+  setOrDelete("vv", coverageView, coverageView === "files");
+  setOrDelete("vm", coverageMinLines, coverageMinLines === 20);
+  setOrDelete("vq", coverageFilter, !coverageFilter);
+  const sort = `${coverageSort.asc ? "" : "-"}${coverageSort.col}`;
+  setOrDelete("vs", sort, sort === "-missed");
+  history.replaceState(null, "", url);
+}
+
+async function loadCoverageData() {
+  const since = coverageWantedSince();
+  const days = coverageDays;
+  coverageSince = since;
+  try {
+    const d = await apiGet("coverage/files", { since, days });
+    // A wider window or another comparison was asked for meanwhile
+    if (since !== coverageSince || days !== coverageDays) return;
+    coverageData = d;
+    setUpdatedLabels();
+    const loading = document.getElementById("coverage-chart-loading");
+    if (!d.head) {
+      loading.innerHTML = '<span class="loading">No Codecov file reports recorded yet.</span>';
+      document.getElementById("coverage-stats-tbody").innerHTML = "<tr><td>No data</td></tr>";
+      return;
+    }
+    loading.style.display = "none";
+    updateCoverageCharts();
+    updateCoverageTable();
+  } catch (err) {
+    console.error("Failed to load coverage data:", err);
+    document.getElementById("coverage-chart-loading").innerHTML =
+      '<span class="error">Failed to load the coverage data; try reloading the page.</span>';
+    document.getElementById("coverage-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+  }
+}
+
+function setCoverageTimeRange(val) {
+  coverageTimeRangeDays = parseInt(val, 10);
+  updateCoverageURL();
+  const since = coverageWantedSince();
+  // A longer range than the one loaded needs the reports before it
+  if (coverageData && coverageSince !== "" && (since === "" || since < coverageSince)) {
+    loadCoverageData();
+    return;
+  }
+  updateCoverageCharts();
+}
+
+function setCoverageDays(val) {
+  coverageDays = parseInt(val, 10);
+  updateCoverageURL();
+  loadCoverageData();
+}
+
+function setCoverageView(val) {
+  coverageView = val === "dirs" ? "dirs" : "files";
+  updateCoverageURL();
+  updateCoverageTable();
+}
+
+function setCoverageMinLines(val) {
+  coverageMinLines = parseInt(val, 10) || 0;
+  updateCoverageURL();
+  updateCoverageTable();
+}
+
+function setCoverageFilter(val) {
+  coverageFilter = val.trim();
+  updateCoverageURL();
+  updateCoverageTable();
+}
+
+// A directory row's click lists its files
+function showCoverageDir(dir) {
+  coverageView = "files";
+  coverageFilter = dir + "/";
+  document.getElementById("coverage-view-mode").value = "files";
+  document.getElementById("coverage-filter").value = coverageFilter;
+  updateCoverageURL();
+  updateCoverageTable();
+}
+
+const coveragePct = (hits, lines) => (lines > 0 ? (100 * hits) / lines : null);
+
+// The directory a file is counted under: a stdlib as a whole, otherwise the
+// directory holding it
+function coverageDir(path) {
+  const parts = path.split("/");
+  if (parts[0] === "stdlib" && parts.length > 2) return parts.slice(0, 2).join("/");
+  return parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+}
+
+function syncCoverageZoom({ chart }) {
+  const { min, max } = chart.scales.x;
+  for (const c of coverageCharts) {
+    if (c === chart) continue;
+    c.options.scales.x.min = min;
+    c.options.scales.x.max = max;
+    c.update("none");
+  }
+  document.getElementById("coverage-btn-reset-zoom").style.display = "";
+}
+
+function resetCoverageZoom() {
+  document.getElementById("coverage-btn-reset-zoom").style.display = "none";
+  updateCoverageCharts();
+}
+
+function updateCoverageCharts() {
+  if (!coverageData?.head) return;
+  for (const c of coverageCharts) c.destroy();
+  coverageCharts = [];
+  document.getElementById("coverage-btn-reset-zoom").style.display = "none";
+  const theme = chartTheme();
+  const since = coverageWantedSince();
+  const commits = coverageData.commits;
+  const shown = commits.map((c, i) => i).filter((i) => !since || commits[i].measured_at >= since);
+  const groups = Object.keys(coverageData.groups);
+  const palette = RUNTIME_COLORS[isDarkMode() ? "dark" : "light"];
+  const allColor = isDarkMode() ? "#c9d1d9" : "#24292f";
+  const series = [
+    { label: "All", color: allColor, width: 2.5, lines: (i) => commits[i].lines, hits: (i) => commits[i].hits },
+    ...groups.map((g, n) => ({
+      label: g,
+      color: palette[n % palette.length],
+      width: 1.5,
+      lines: (i) => coverageData.groups[g].lines[i],
+      hits: (i) => coverageData.groups[g].hits[i],
+    })),
+  ];
+  const panels = [
+    { id: "pct", title: "Lines run, %", value: (s, i) => coveragePct(s.hits(i), s.lines(i)), fmt: (v) => `${v.toFixed(2)}%`, all: true },
+    { id: "missed", title: "Lines never run", value: (s, i) => (s.lines(i) == null ? null : s.lines(i) - s.hits(i)), fmt: (v) => v.toLocaleString("en-US"), all: false },
+  ];
+  const xs = shown.map((i) => Date.parse(commits[i].measured_at));
+  for (const panel of panels) {
+    const datasets = series
+      .filter((s) => panel.all || s.label !== "All")
+      .map((s) => ({
+        label: s.label,
+        data: shown.map((i, k) => ({ x: xs[k], y: panel.value(s, i), i })).filter((p) => p.y != null),
+        borderColor: s.color,
+        backgroundColor: s.color,
+        borderWidth: s.width,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        stepped: "before",
+      }));
+    const canvas = document.getElementById(`coverage-chart-${panel.id}`);
+    coverageCharts.push(
+      new Chart(canvas, {
+        type: "line",
+        data: { datasets },
+        options: {
+          ...baseChartOptions(),
+          parsing: false,
+          normalized: true,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            title: { display: true, text: panel.title, color: theme.text, font: { size: 12, weight: "600" }, padding: { top: 2, bottom: 6 } },
+            legend: { display: true, labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
+            zoom: zoomOptions(syncCoverageZoom),
+            tooltip: {
+              usePointStyle: true,
+              boxPadding: 4,
+              callbacks: {
+                title: (items) => {
+                  if (!items.length) return "";
+                  const c = commits[items[0].raw.i];
+                  return `${c.measured_at.slice(0, 10)} · ${c.commit.slice(0, 10)}`;
+                },
+                label: (ctx) => ` ${ctx.dataset.label}: ${panel.fmt(ctx.raw.y)}`,
+                footer: (items) => {
+                  if (!items.length) return "";
+                  const c = commits[items[0].raw.i];
+                  return [c.subject ? c.subject.slice(0, 80) : "", `${c.sessions ?? "?"} of the platforms' uploads merged`].filter(Boolean);
+                },
+              },
+            },
+          },
+          onClick: (_, els) => {
+            if (!els.length) return;
+            const c = commits[datasets[els[0].datasetIndex].data[els[0].index].i];
+            window.open(`${CODECOV_REPO}/commit/${c.commit}/tree`, "_blank", "noopener");
+          },
+          scales: {
+            x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd", min: xs[0], max: xs[xs.length - 1] }),
+            y: { ticks: { color: theme.text, callback: (v) => (panel.id === "pct" ? `${v}%` : compactNumber(v)) }, grid: { color: theme.grid } },
+          },
+        },
+      }),
+    );
+  }
+}
+
+// The table's rows: files, or the directories they are counted under, with
+// their change since the base report
+function coverageRows() {
+  const files = coverageData.files;
+  const byKey = new Map();
+  for (const f of files) {
+    const key = coverageView === "dirs" ? coverageDir(f.path) : f.path;
+    let r = byKey.get(key);
+    if (!r) byKey.set(key, (r = { path: key, lines: 0, hits: 0, baseLines: 0, baseHits: 0, files: 0, newFiles: 0 }));
+    r.lines += f.lines;
+    r.hits += f.hits;
+    r.files += 1;
+    if (f.base_lines == null) r.newFiles += 1;
+    else {
+      r.baseLines += f.base_lines;
+      r.baseHits += f.base_hits;
+    }
+  }
+  const q = coverageFilter.toLowerCase();
+  const rows = [];
+  for (const r of byKey.values()) {
+    if (q && !r.path.toLowerCase().includes(q)) continue;
+    if (r.lines < coverageMinLines) continue;
+    r.missed = r.lines - r.hits;
+    r.pct = coveragePct(r.hits, r.lines);
+    const basePct = coverageData.base && r.baseLines > 0 ? coveragePct(r.baseHits, r.baseLines) : null;
+    r.change = basePct == null ? null : r.pct - basePct;
+    r.missedChange = coverageData.base && r.baseLines > 0 ? r.missed - (r.baseLines - r.baseHits) : null;
+    rows.push(r);
+  }
+  return rows;
+}
+
+// Low coverage tinted, so the gaps stand out down the column
+function coveragePctStyle(pct) {
+  if (pct == null || pct >= 80) return "";
+  const color = pct < 50 ? "--color-danger-fg" : "--color-attention-fg";
+  const tint = Math.round(15 + (pct < 50 ? (50 - pct) / 50 : (80 - pct) / 30) * 25);
+  return ` style="background: color-mix(in srgb, var(${color}) ${tint}%, transparent)"`;
+}
+
+function updateCoverageTable() {
+  if (!coverageData?.head) return;
+  const { head, base } = coverageData;
+  const dirs = coverageView === "dirs";
+  const rows = sortRows(coverageRows(), coverageSort, "path");
+  const total = coverageData.files.length;
+  const codecovLink = (c) => extLink(`${CODECOV_REPO}/commit/${c.commit}/tree`, `<code>${escapeHtml(c.commit.slice(0, 10))}</code>`);
+  const headPct = coveragePct(head.hits, head.lines);
+  let caption =
+    `Latest report: ${codecovLink(head)} (${escapeHtml(head.measured_at.slice(0, 10))}), ` +
+    `${headPct.toFixed(2)}% of ${head.lines.toLocaleString("en-US")} lines in ${total.toLocaleString("en-US")} files run, ` +
+    `${(head.lines - head.hits).toLocaleString("en-US")} never.`;
+  if (base) {
+    const d = headPct - coveragePct(base.hits, base.lines);
+    caption += ` Change against ${codecovLink(base)} (${escapeHtml(base.measured_at.slice(0, 10))}): ${d >= 0 ? "+" : ""}${d.toFixed(2)} pp.`;
+    if (base.sessions !== head.sessions) caption += ` <span class="ttfx-popup-muted">That report merged ${base.sessions} platforms' uploads and this one ${head.sessions}, which moves the totals.</span>`;
+  } else caption += ` No report ${coverageDays} days older to compare with.`;
+  caption += ` <span class="ttfx-popup-muted">${rows.length.toLocaleString("en-US")} ${dirs ? "directories" : "files"} shown. Julia's coverage misses code run while the system image is built, so a low file is a lead to check on Codecov.</span>`;
+  document.getElementById("coverage-stats-caption").innerHTML = caption;
+
+  const thead = document.getElementById("coverage-stats-thead");
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["path", dirs ? "Directory" : "File"],
+      ["pct", "Run", "num", "Lines run, as a share of the lines Codecov counts as code"],
+      ["missed", "Never run", "num", "Lines of code the tests never run"],
+      ["lines", "Lines", "num col-secondary", "Lines Codecov counts as code"],
+      ["change", `Change, ${coverageDays} d`, "num", base ? `Against ${base.commit.slice(0, 10)}, in percentage points` : ""],
+      ["missedChange", "Never run, change", "num col-secondary", "Lines never run, against the base report"],
+    ],
+    coverageSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    coverageSort = nextSort(coverageSort, col, (c) => c === "path" || c === "pct");
+    updateCoverageURL();
+    updateCoverageTable();
+  });
+  const signed = (v, digits = 0) => {
+    if (v == null) return "";
+    const text = digits ? v.toFixed(digits) : v.toLocaleString("en-US");
+    return Number(text) === 0 ? (0).toFixed(digits) : `${v > 0 ? "+" : ""}${text}`;
+  };
+  let html = "";
+  for (const r of rows.slice(0, 1000)) {
+    const url = dirs ? `${CODECOV_REPO}/commit/${head.commit}/tree/${r.path}` : `${CODECOV_REPO}/commit/${head.commit}/blob/${r.path}`;
+    const name = dirs
+      ? `<button type="button" class="link-button" onclick="showCoverageDir('${escapeHtml(r.path.replace(/'/g, ""))}')" title="List its ${r.files} files">${escapeHtml(r.path)}</button> ${extLink(url, "Codecov", 'class="gh-link"')}`
+      : extLink(url, escapeHtml(r.path).replace(/\//g, "/<wbr>"), `title="${escapeHtml(r.path)} on Codecov"`);
+    const isNew = r.baseLines === 0 && base;
+    const changeCls = upWorseClass(-changeSign(r.change, COVERAGE_NO_CHANGE_PP));
+    html +=
+      `<tr><td class="coverage-path">${name}${isNew ? ' <span class="ttfx-pr-badge">new</span>' : ""}</td>` +
+      `<td class="num"${coveragePctStyle(r.pct)}>${r.pct == null ? "—" : r.pct.toFixed(1) + "%"}</td>` +
+      `<td class="num">${r.missed.toLocaleString("en-US")}</td>` +
+      `<td class="num col-secondary">${r.lines.toLocaleString("en-US")}</td>` +
+      `<td class="num ${changeCls}">${r.change == null ? "" : signed(r.change, 1)}</td>` +
+      `<td class="num col-secondary">${r.missedChange ? signed(r.missedChange) : ""}</td></tr>`;
+  }
+  if (!rows.length) html = `<tr><td colspan="6">No ${dirs ? "directory" : "file"} matches.</td></tr>`;
+  document.getElementById("coverage-stats-tbody").innerHTML = html;
+}
+
 // === Build stages ===
 // How long the build job of each julia-ci master build spends making the
 // system image, stage by stage, from api/sysimage/summary. The first panel
@@ -21560,7 +21943,7 @@ const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks", "ci-ttfx", "ci-runtime", "ci-sizes"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 // The view holding each tab's toolbar; the two CI pages share one
@@ -21570,6 +21953,7 @@ const PHONE_TOOLBAR_VIEWS = {
   "ci-ttfx": "ttfx-view",
   "ci-sizes": "sizes-view",
   "ci-build-stages": "sysimage-view",
+  "ci-coverage": "coverage-view",
   "ci-runtime": "runtime-view",
   benchmarks: "benchmarks-view",
   packages: "packages-view",
@@ -21782,6 +22166,7 @@ applyTtfxURLParams();
 applySizesURLParams();
 applyActivityURLParams();
 applySysimageURLParams();
+applyCoverageURLParams();
 applyRuntimeURLParams();
 applyCommitURLParams();
 const perfDeepLink = applyPerfURLParams();
@@ -21896,6 +22281,7 @@ function applyTheme() {
   if (sizesChart) updateSizesChart();
   if (activityData) updateActivityCharts();
   if (sysimageData) updateSysimageCharts();
+  if (coverageData) updateCoverageCharts();
   if (runtimeData) {
     updateRuntimeCharts();
     populateRuntimeBenchList();

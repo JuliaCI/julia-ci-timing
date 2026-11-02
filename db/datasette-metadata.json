@@ -52,6 +52,19 @@
         "coverage": {
           "description": "Test coverage of a master commit from Codecov and Coveralls, in percent."
         },
+        "coverage_reports": {
+          "description": "Codecov's file-level report of a master commit, one a day from the coverage job, as fetched: its files, lines and hits in coverage_files.",
+          "columns": {
+            "coverage": "the commit's Codecov total (coverage.codecov) when the report was fetched; a report is fetched again when that total moves",
+            "files": "files in the report; 0 when Codecov had no report for the commit",
+            "lines": "lines Codecov counts as code",
+            "hits": "lines the tests ran",
+            "sessions": "uploads merged into the report, one per platform's coverage job; a report with fewer than usual is partial"
+          }
+        },
+        "coverage_files": {
+          "description": "Lines Codecov counts as code, and the lines the tests ran, per file of a coverage_reports report."
+        },
         "bench_reports": {
           "description": "Nanosoldier benchmark reports. kind 'daily' reports run every few days on the master commit of that day and compare with an earlier daily report (the baseline).",
           "columns": {

@@ -15,6 +15,7 @@ Short paths open a tab directly and forward any other query parameters:
 [/workers](https://perf.julialang.org/workers), [/ttfx](https://perf.julialang.org/ttfx),
 [/runtime](https://perf.julialang.org/runtime),
 [/sizes](https://perf.julialang.org/sizes), [/build-stages](https://perf.julialang.org/build-stages),
+[/coverage](https://perf.julialang.org/coverage),
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),
 [/activity](https://perf.julialang.org/activity).
 Each is a small redirect page under a directory of that name; the `?tab=` URLs

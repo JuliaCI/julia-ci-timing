@@ -1740,6 +1740,69 @@ function sysimage(db; since="")
                        "stages" => SYSIMAGE_STAGES, "platforms" => platforms, "subjects" => subjects)
 end
 
+# --- coverage files ---------------------------------------------------------------
+
+# A path's top-level directory: base, Compiler, stdlib, JuliaSyntax, JuliaLowering
+const COVERAGE_TOP = "CASE WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1) ELSE path END"
+
+function coverage_commit(r)
+    return OrderedDict("commit" => String(r.commit_sha), "measured_at" => js(r.measured_at), "coverage" => js(r.coverage),
+                       "lines" => Int(r.lines), "hits" => Int(r.hits), "files" => Int(r.files), "sessions" => js(r.sessions),
+                       "subject" => js(r.subject))
+end
+
+# Codecov's file-level reports of master commits: every commit's totals in the
+# window and per top-level directory, then the files of the latest report
+# against the latest one at least `days` older
+function coverage_files(db; since="", days=30)
+    window = isempty(since) ? "" : " AND c.measured_at >= ?"
+    params = isempty(since) ? () : (since,)
+    reports = rows(db, "SELECT r.*, c.measured_at, m.subject FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
+                       "LEFT JOIN commits m ON m.sha = r.commit_sha WHERE r.files > 0" * window * " ORDER BY c.measured_at", params)
+    commits = [coverage_commit(r) for r in reports]
+    index = Dict(c["commit"] => i for (i, c) in enumerate(commits))
+    groups = OrderedDict{String,Any}()
+    for r in rows(db, "SELECT f.commit_sha, $COVERAGE_TOP AS top, SUM(f.lines) AS lines, SUM(f.hits) AS hits " *
+                      "FROM coverage_files f JOIN coverage c USING (commit_sha) WHERE 1" * window * " GROUP BY 1, 2 ORDER BY 2", params)
+        i = get(index, String(r.commit_sha), nothing)
+        i === nothing && continue
+        g = get!(() -> OrderedDict("lines" => Vector{Any}(nothing, length(commits)), "hits" => Vector{Any}(nothing, length(commits))),
+                 groups, String(r.top))
+        g["lines"][i] = Int(r.lines)
+        g["hits"][i] = Int(r.hits)
+    end
+    latest = rows(db, "SELECT r.*, c.measured_at, m.subject FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
+                      "LEFT JOIN commits m ON m.sha = r.commit_sha WHERE r.files > 0 ORDER BY c.measured_at DESC LIMIT 1")
+    head = isempty(latest) ? nothing : latest[1]
+    # A report merging fewer uploads than the latest is partial, so one that
+    # merges as many is preferred when there is one in the 7 days before
+    before = head === nothing ? "" : Store.iso(Store.parse_upstream(String(head.measured_at)) - Day(days))
+    base = head === nothing ? [] :
+        rows(db, "SELECT r.*, c.measured_at, m.subject FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
+                 "LEFT JOIN commits m ON m.sha = r.commit_sha WHERE r.files > 0 AND c.measured_at <= ? " *
+                 "ORDER BY c.measured_at >= ? AND coalesce(r.sessions, 0) >= ? DESC, c.measured_at DESC LIMIT 1",
+             (before, Store.iso(Store.parse_upstream(before) - Day(7)), head.sessions === missing ? 0 : head.sessions))
+    base = isempty(base) ? nothing : base[1]
+    files = OrderedDict{String,Any}()
+    if head !== nothing
+        for r in rows(db, "SELECT path, lines, hits FROM coverage_files WHERE commit_sha = ? ORDER BY path", (head.commit_sha,))
+            files[String(r.path)] = OrderedDict("path" => String(r.path), "lines" => Int(r.lines), "hits" => Int(r.hits),
+                                                "base_lines" => nothing, "base_hits" => nothing)
+        end
+    end
+    if base !== nothing
+        for r in rows(db, "SELECT path, lines, hits FROM coverage_files WHERE commit_sha = ?", (base.commit_sha,))
+            f = get(files, String(r.path), nothing)
+            f === nothing && continue
+            f["base_lines"] = Int(r.lines)
+            f["base_hits"] = Int(r.hits)
+        end
+    end
+    return OrderedDict("generated_at" => generated_at(db, "timing"), "days" => days, "commits" => commits, "groups" => groups,
+                       "head" => head === nothing ? nothing : coverage_commit(head),
+                       "base" => base === nothing ? nothing : coverage_commit(base), "files" => collect(values(files)))
+end
+
 # --- runtime benchmarks --------------------------------------------------------
 
 # The suite's categories in its own order; one it adds later goes after them

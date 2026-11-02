@@ -1335,6 +1335,13 @@ th.sorted .sort-indicator {
   .col-phone {
     display: inline;
   }
+  /* The Coverage table keeps the path, the share run, the lines never run and the change */
+  #coverage-stats :is(th, td):is(:nth-child(4), :nth-child(6)) {
+    display: none;
+  }
+  .ttfx-stats td.coverage-path {
+    white-space: normal;
+  }
   /* The History groups table keeps the group, its latest value, the trend and notes */
   #bench-stats :is(th, td):is(:nth-child(3), :nth-child(4), :nth-child(5), :nth-child(7), :nth-child(8)) {
     display: none;
@@ -2903,6 +2910,37 @@ th.sorted .sort-indicator {
     grid-template-rows: 1fr 1fr 1fr;
   }
 }
+/* The Coverage tab's two panels side by side, stacked on a phone */
+.coverage-grid {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+@media (max-width: 700px) {
+  .coverage-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}
+.ttfx-toolbar .coverage-filter {
+  margin: 0;
+  width: 12em;
+}
+.ttfx-stats td.coverage-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.coverage-path .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-fg);
+  font: inherit;
+  cursor: pointer;
+}
+.coverage-path .link-button:hover {
+  text-decoration: underline;
+}
+
 /* The Build stages tab's nine panels: the stacked stages, then one per stage */
 .ttfx-summary-grid.sysimage-grid {
   grid-template-columns: 1fr 1fr 1fr;
