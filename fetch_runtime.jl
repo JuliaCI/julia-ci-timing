@@ -424,14 +424,40 @@ const BACKFILL_ASSET = "runtime-backfill.jsonl.gz"
 
 backfill_job_uuid(sha) = "$BACKFILL_PIPELINE-$sha"
 
+# Master commits the backfill measured that are left out of it: broken builds whose
+# numbers say nothing about the commits around them. The import skips them and
+# `refresh_backfill!` deletes them if they are in the database already.
+const BACKFILL_SKIP = Dict(
+    # #58078 dropped code from the sysimage that the benchmarks then ran without, until
+    # its revert (#58150): up to 50,000 times the instructions, and allocations
+    "860188fb617a2a26042a5d6b64b2e40c960c3ccb" => "#58078, reverted by #58150",
+    "37a754164ba93b5f6c147760a37396415dd815cc" => "#58078, reverted by #58150",
+    "75c44d042a069fec4492be76bcb8d5625b02daee" => "#58078, reverted by #58150",
+)
+
+# Deletes the rows of the commits in BACKFILL_SKIP; the number of jobs deleted
+function delete_skipped_backfill!(db)
+    uuids = [backfill_job_uuid(sha) for sha in keys(BACKFILL_SKIP)]
+    marks = join(fill("?", length(uuids)), ", ")
+    n = query(db, "SELECT count(*) AS n FROM rtb_jobs WHERE job_uuid IN ($marks)", uuids)[1].n
+    n == 0 && return 0
+    transaction(db) do
+        DBInterface.execute(db, "DELETE FROM rtb_results WHERE job_uuid IN ($marks)", uuids)
+        DBInterface.execute(db, "DELETE FROM rtb_jobs WHERE job_uuid IN ($marks)", uuids)
+    end
+    @info "Deleted skipped backfill commits" n
+    return n
+end
+
 """
     backfill_row(sha, results, meta; rc, date, subject) -> Dict
 
 One backfilled commit's row, as `job_row` makes it for a julia-ci job. `date` is the
 commit's merge time (ISO 8601 UTC); without it, the build's commit date (to the minute).
-nothing when neither is known.
+nothing when neither is known, or when the commit is in BACKFILL_SKIP.
 """
 function backfill_row(sha, results, meta; rc, date=nothing, subject="")
+    haskey(BACKFILL_SKIP, sha) && return nothing
     head = getin(meta, :arms, :head)
     if date === nothing
         m = match(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d)", str(getin(head, :date)))
@@ -479,10 +505,16 @@ end
 """
     refresh_backfill!(db) -> Int
 
-Import the commits of the published backfill bundle that the database does not have yet.
-The asset's update time is kept in meta, so an unchanged bundle costs one request.
+Delete the commits in BACKFILL_SKIP, then import the commits of the published backfill
+bundle that the database does not have yet. The asset's update time is kept in meta, so
+an unchanged bundle costs one request.
 """
 function refresh_backfill!(db)
+    deleted = delete_skipped_backfill!(db)
+    deleted + refresh_backfill_bundle!(db)
+end
+
+function refresh_backfill_bundle!(db)
     resp = http_get_retry(BACKFILL_RELEASE, github_headers())
     resp.status == 404 && return 0
     resp.status == 200 || error("looking up the backfill release failed: HTTP $(resp.status)")
