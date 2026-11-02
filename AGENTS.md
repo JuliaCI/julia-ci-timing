@@ -257,6 +257,8 @@ change there means the code or the work changed, whether or not it costs time.
 
 Older master commits come from a backfill measured on manyjulias builds on another
 machine (`db/import_runtime.jl`; the `source` parameter of `runtime/summary` picks one).
+Broken backfilled commits are listed in `BACKFILL_SKIP` in `fetch_runtime.jl`, which the
+import skips and the fetcher deletes.
 The run page, `/runtime-run`, reads a job's artifacts from Buildkite live, so the API
 server needs the Buildkite token.
 
