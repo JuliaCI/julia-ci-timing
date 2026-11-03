@@ -7384,8 +7384,7 @@ const benchMetricParam = (m) => (m === "time" ? "" : m);
 const BENCH_METRIC_LABELS = { time: "Time", gctime: "GC time", memory: "Memory", allocs: "Allocations" };
 let benchVerdicts = null; // { since, verdicts } from api/benchmarks/verdicts
 let benchVerdictsLoading = null;
-let benchSortCol = "trendAbs"; // default view is "groups", which has no date column
-let benchSortAsc = false;
+let benchSort = { col: "trendAbs", asc: false }; // default view is "groups", which has no date column
 let benchGroupColors = {};
 let benchExpandedGroups = new Set();
 let benchGroupDetail = {}; // group => fetched detail data
@@ -7402,8 +7401,7 @@ let benchShowMethodologyAnnotations = false;
 let benchTableView = "groups"; // 'groups', 'runs', or 'noisy'
 let benchNoisyLoading = false;
 let benchNoisyRerender = false; // asked for while loading: drawn again after
-let benchNoisySortCol = "noise"; // 'group', 'name', 'latest', 'noise', 'samples'
-let benchNoisySortAsc = false;
+let benchNoisySort = { col: "noise", asc: false }; // 'group', 'name', 'latest', 'noise', 'samples'
 // Set of "group/name" labels currently displayed in the Noisy table — used by
 // updateBenchChart to plot just these series when in noisy view.
 let benchNoisyVisible = new Set();
@@ -7501,31 +7499,7 @@ function applyBenchURLParams() {
   }
 
   const bv = params.get("bv");
-  if (bv === "groups") {
-    benchTableView = "groups";
-    benchSortCol = "trendAbs";
-    benchSortAsc = false;
-    document.getElementById("bench-view-runs")?.classList.remove("btn-primary");
-    document.getElementById("bench-view-groups")?.classList.add("btn-primary");
-  } else if (bv === "runs") {
-    benchTableView = "runs";
-    benchSortCol = "date";
-    benchSortAsc = false;
-    document
-      .getElementById("bench-view-groups")
-      ?.classList.remove("btn-primary");
-    document.getElementById("bench-view-runs")?.classList.add("btn-primary");
-  } else if (bv === "noisy") {
-    benchTableView = "noisy";
-    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
-    document.getElementById("bench-view-noisy")?.classList.add("btn-primary");
-  } else if (bv === "verdicts") {
-    benchTableView = "verdicts";
-    document.getElementById("bench-view-groups")?.classList.remove("btn-primary");
-    document.getElementById("bench-view-verdicts")?.classList.add("btn-primary");
-  }
-  const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
-  if (minNsLabel) minNsLabel.hidden = benchTableView !== "noisy";
+  if (BENCH_TABLE_VIEWS.includes(bv)) showBenchTableView(bv);
   const bm = params.get("bm");
   if (bm !== null && bm in BENCH_METRIC_LABELS) {
     benchMetric = bm;
@@ -8487,19 +8461,9 @@ function updateBenchChart() {
   }
 }
 
+// Text ascends first and numbers descend, but the runs table's date is newest first
 function sortBenchTable(col) {
-  if (benchSortCol === col) {
-    benchSortAsc = !benchSortAsc;
-  } else {
-    benchSortCol = col;
-    if (benchTableView === "runs") {
-      // Date and commit ascend by default for text; date we want newest first → desc
-      benchSortAsc = col === "commit";
-    } else {
-      // Group/name sort ascending by default; numeric columns descending.
-      benchSortAsc = col === "group" || col === "name";
-    }
-  }
+  benchSort = nextSort(benchSort, col, (c) => (benchTableView === "runs" ? c === "commit" : c === "group" || c === "name"));
   updateBenchTable();
 }
 
@@ -8523,8 +8487,8 @@ function formatTrendPct(pct, tol = NO_CHANGE_PCT.bench) {
 // current sort column and direction. `defaultStrCol` is the field used for
 // stable string fallback (group rows: "group", detail rows: "name").
 function makeBenchRowComparator(defaultStrCol) {
-  const col = benchSortCol;
-  const dir = benchSortAsc ? 1 : -1;
+  const { col } = benchSort;
+  const dir = benchSort.asc ? 1 : -1;
   return (a, b) => {
     const va = a[col];
     const vb = b[col];
@@ -8549,36 +8513,22 @@ function makeBenchRowComparator(defaultStrCol) {
   };
 }
 
-function setBenchTableView(view) {
-  if (view !== "groups" && view !== "runs" && view !== "noisy" && view !== "verdicts") return;
-  if (view === benchTableView) return;
-  const prev = benchTableView;
+const BENCH_TABLE_VIEWS = ["groups", "runs", "noisy", "verdicts"];
+
+// Marks a table view's button as chosen and gives the view its default sort
+function showBenchTableView(view) {
   benchTableView = view;
-  document
-    .getElementById("bench-view-groups")
-    .classList.toggle("btn-primary", view === "groups");
-  document
-    .getElementById("bench-view-runs")
-    .classList.toggle("btn-primary", view === "runs");
-  document
-    .getElementById("bench-view-noisy")
-    ?.classList.toggle("btn-primary", view === "noisy");
-  document
-    .getElementById("bench-view-verdicts")
-    ?.classList.toggle("btn-primary", view === "verdicts");
-  const minNsLabel = document.getElementById("bench-noisy-min-ns-label");
-  if (minNsLabel) minNsLabel.hidden = view !== "noisy";
-  // Reset sort to sensible default for the new view
-  if (view === "runs") {
-    benchSortCol = "date";
-    benchSortAsc = false;
-  } else if (view === "groups") {
-    benchSortCol = "trendAbs";
-    benchSortAsc = false;
-  } else {
-    benchNoisySortCol = "noise";
-    benchNoisySortAsc = false;
-  }
+  for (const v of BENCH_TABLE_VIEWS) document.getElementById(`bench-view-${v}`).classList.toggle("btn-primary", v === view);
+  document.getElementById("bench-noisy-min-ns-label").hidden = view !== "noisy";
+  if (view === "runs") benchSort = { col: "date", asc: false };
+  else if (view === "groups") benchSort = { col: "trendAbs", asc: false };
+  else benchNoisySort = { col: "noise", asc: false };
+}
+
+function setBenchTableView(view) {
+  if (!BENCH_TABLE_VIEWS.includes(view) || view === benchTableView) return;
+  const prev = benchTableView;
+  showBenchTableView(view);
   // When leaving noisy view, drop its plotted series and refresh the chart
   if (prev === "noisy" && view !== "noisy") {
     benchNoisyVisible = new Set();
@@ -8767,7 +8717,7 @@ function renderBenchRunsTable() {
       ["improved", "Improved", "", "Improvements reported by Nanosoldier"],
       ["regressed", "Regressed", "", "Regressions reported by Nanosoldier"],
     ],
-    { col: benchSortCol, asc: benchSortAsc },
+    benchSort,
   );
   bindSortHeaders(thead, sortBenchTable);
 
@@ -8815,7 +8765,7 @@ function renderBenchRunsTable() {
     };
   });
 
-  sortRows(rows, { col: benchSortCol, asc: benchSortAsc }, "date");
+  sortRows(rows, benchSort, "date");
 
   const fmtCount = (n, cls) =>
     n == null ? "—" : n > 0 ? `<span class="${cls}">${n}</span>` : "0";
@@ -8996,12 +8946,7 @@ function attachBenchRowHoverPreview(tbody) {
 }
 
 function sortBenchNoisyTable(col) {
-  if (benchNoisySortCol === col) {
-    benchNoisySortAsc = !benchNoisySortAsc;
-  } else {
-    benchNoisySortCol = col;
-    benchNoisySortAsc = col === "group" || col === "name";
-  }
+  benchNoisySort = nextSort(benchNoisySort, col, (c) => c === "group" || c === "name");
   renderBenchNoisyTable();
 }
 
@@ -9036,7 +8981,7 @@ async function renderBenchNoisyTable() {
       ["samples", "Samples", "", "Number of consecutive run pairs used"],
       [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
     ],
-    { col: benchNoisySortCol, asc: benchNoisySortAsc },
+    benchNoisySort,
   );
   bindSortHeaders(thead, sortBenchNoisyTable);
 
@@ -9106,7 +9051,7 @@ async function renderBenchNoisyTable() {
     }
   }
 
-  sortRows(rows, { col: benchNoisySortCol, asc: benchNoisySortAsc }, "name");
+  sortRows(rows, benchNoisySort, "name");
 
   if (rows.length === 0) {
     const minNote = minNs > 0 ? ` with median ≥ ${minNs} ns` : "";
@@ -9179,7 +9124,7 @@ function renderBenchGroupsTable() {
       [null, "Noise", "bench-noise-header", "Median |Δ%| between consecutive runs (per-benchmark, expand to see)"],
       [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
     ],
-    { col: benchSortCol, asc: benchSortAsc },
+    benchSort,
   );
   bindSortHeaders(thead, sortBenchTable);
 
@@ -11739,8 +11684,7 @@ const ttfxTwinsDrawn = new Set();
 let ttfxSelectedTasks = new Set();
 let ttfxTaskColors = {};
 let ttfxTableView = "prs"; // "prs" | "builds" | "tasks"
-let ttfxTaskSortCol = "latest";
-let ttfxTaskSortAsc = false;
+let ttfxTaskSort = { col: "latest", asc: false };
 // Hand-written notes on individual jobs (data/ttfx_annotations.json), drawn
 // as a dashed line on every TTFX chart and flagged in the builds table
 let ttfxAnnotations = [];
@@ -14997,11 +14941,7 @@ function highlightTtfxBuild(build) {
 }
 
 function sortTtfxTasksTable(col) {
-  if (ttfxTaskSortCol === col) ttfxTaskSortAsc = !ttfxTaskSortAsc;
-  else {
-    ttfxTaskSortCol = col;
-    ttfxTaskSortAsc = col === "task";
-  }
+  ttfxTaskSort = nextSort(ttfxTaskSort, col, (c) => c === "task");
   renderTtfxTasksTable();
 }
 
@@ -15028,10 +14968,10 @@ function renderTtfxTasksTable() {
         ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
         : key === "task" ? "" : `${metricLabel} over the builds in range`;
   // Sorted by GC off, then switched to precompile, which has no such column
-  if (!cols.some(([k]) => k === ttfxTaskSortCol)) ttfxTaskSortCol = "latest";
+  if (!cols.some(([k]) => k === ttfxTaskSort.col)) ttfxTaskSort.col = "latest";
   thead.innerHTML = sortableHeaderRow(
     cols.map(([key, label, cls]) => [key, label, cls, title(key)]),
-    { col: ttfxTaskSortCol, asc: ttfxTaskSortAsc },
+    ttfxTaskSort,
   );
   bindSortHeaders(thead, sortTtfxTasksTable);
 
@@ -15065,7 +15005,7 @@ function renderTtfxTasksTable() {
     tbody.innerHTML = `<tr><td colspan="${cols.length}">No data</td></tr>`;
     return;
   }
-  sortRows(rows, { col: ttfxTaskSortCol, asc: ttfxTaskSortAsc }, "task");
+  sortRows(rows, ttfxTaskSort, "task");
 
 
   let html = "";
