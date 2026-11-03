@@ -312,6 +312,17 @@ const countText = (n, noun) => `${(n ?? 0).toLocaleString("en-US")} ${noun}${n =
 const compactNumber = (n) =>
   n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
+// The geometric mean of positive numbers; null for none
+function geomean(xs) {
+  return xs.length ? Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length) : null;
+}
+
+// The geometric mean of percentage changes, as one
+function geomeanPct(pcts) {
+  const g = geomean(pcts.map((p) => 1 + p / 100));
+  return g == null ? null : (g - 1) * 100;
+}
+
 // "+1.2", "-0.4", or with no `digits` "+1,234"
 function formatSigned(v, digits) {
   const text = digits === undefined ? v.toLocaleString("en-US") : v.toFixed(digits);
@@ -8713,6 +8724,14 @@ function formatBenchDelta(d) {
   return cls ? `<span class="${cls}">${text}</span>` : text;
 }
 
+// Per report, the geometric mean of the selected groups' values of `key`, or
+// null for a report with none
+function benchOverallSeries(reports, key) {
+  return reports.map((r) =>
+    geomean([...benchSelectedGroups].map((g) => r.by_group?.[g]?.[key]).filter((v) => v != null && v > 0)),
+  );
+}
+
 function renderBenchRunsTable() {
   const reports = getFilteredReports();
   const thead = document.getElementById("bench-stats-thead");
@@ -8740,29 +8759,8 @@ function renderBenchRunsTable() {
     return;
   }
 
-  const selected = benchSelectedGroups;
-  const minKey = "minimum_geomean_ns";
-  const meanKey = "mean_geomean_ns";
-
-  const geomeanOf = (vals) => {
-    if (vals.length === 0) return null;
-    const sumLog = vals.reduce((a, v) => a + Math.log(v), 0);
-    return Math.exp(sumLog / vals.length);
-  };
-
-  const computeGeomeans = (key) =>
-    reports.map((r) => {
-      const vals = [];
-      if (r.by_group) {
-        for (const g of selected) {
-          const v = r.by_group[g]?.[key];
-          if (v != null && v > 0) vals.push(v);
-        }
-      }
-      return geomeanOf(vals);
-    });
-  const minGms = computeGeomeans(minKey);
-  const meanGms = computeGeomeans(meanKey);
+  const minGms = benchOverallSeries(reports, "minimum_geomean_ns");
+  const meanGms = benchOverallSeries(reports, "mean_geomean_ns");
 
   const dateToCommit = {};
   if (benchData?.reports) {
@@ -9224,19 +9222,7 @@ function renderBenchGroupsTable() {
 
   // Overall row: geometric mean of selected groups' per-report values.
   // Mirrors the chart's Overall line (geomean of group geomeans).
-  const overallSeries = [];
-  for (const report of reports) {
-    if (!report.by_group) continue;
-    let logSum = 0;
-    let n = 0;
-    for (const g of benchSelectedGroups) {
-      const v = report.by_group[g]?.[key];
-      if (v == null || v <= 0) continue;
-      logSum += Math.log(v);
-      n++;
-    }
-    if (n > 0) overallSeries.push(Math.exp(logSum / n));
-  }
+  const overallSeries = benchOverallSeries(reports, key).filter((v) => v != null);
   const overall =
     overallSeries.length > 0
       ? {
@@ -14748,7 +14734,7 @@ function renderTtfxPrsTable() {
     return;
   }
   renderTtfxCaption();
-  const blocksMean = (s) => (s && s.geomeans.length ? Math.exp(s.geomeans.reduce((a, g) => a + Math.log(g), 0) / s.geomeans.length) : null);
+  const blocksMean = (s) => (s ? geomean(s.geomeans) : null);
   const rows = ttfxPrs.prs.map((p, i) => {
     const r = {
       p,
@@ -14858,14 +14844,14 @@ function showTtfxPrPoints(p) {
   for (const [metric, chart] of Object.entries(ttfxSummaryCharts)) {
     const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
     if (!suite || !suite.data.length) continue;
-    const geomean = (key) =>
+    const layerRatios = (key) =>
       layers.map((q) => {
         const r = ttfxPrChainedSuite(q)[key];
-        return r && r.geomeans.length ? Math.exp(r.geomeans.reduce((a, g) => a + Math.log(g), 0) / r.geomeans.length) : null;
+        return r ? geomean(r.geomeans) : null;
       });
     // With the GC off the suite line is the GC-off values, so it moves by the
     // pull request's GC-off ratios
-    const ratios = geomean(ttfxGcOff && TTFX_METRICS[metric].gcoffIndex != null ? metric + "_gcoff" : metric);
+    const ratios = layerRatios(ttfxGcOff && TTFX_METRICS[metric].gcoffIndex != null ? metric + "_gcoff" : metric);
     if (ratios.some((r) => r == null)) continue;
     const first = suite.data[0];
     const last = suite.data[suite.data.length - 1];
@@ -14874,7 +14860,7 @@ function showTtfxPrPoints(p) {
     // own: the value joins the normal point's label
     const twinIndex = chart.data.datasets.findIndex((d) => d._common && d._twin === "gcoff");
     const twin = twinIndex >= 0 && chart.isDatasetVisible(twinIndex) ? chart.data.datasets[twinIndex] : null;
-    const offRatios = twin && twin.data.length ? geomean(metric + "_gcoff") : null;
+    const offRatios = twin && twin.data.length ? layerRatios(metric + "_gcoff") : null;
     const offLast = offRatios && !offRatios.some((r) => r == null) ? twin.data[twin.data.length - 1] : null;
     const offColor = (own) => (isDark ? "rgba(88, 166, 255, " : "rgba(9, 105, 218, ") + (own ? "0.6)" : "0.35)");
     // The points step past the latest build at a fixed pixel spacing. The axis
@@ -18518,8 +18504,7 @@ function commitTtfxHtml(data) {
   }));
   // Geometric mean of the ratios over the tasks with both, per metric
   const figures = all.map((m, i) => {
-    const logs = tasks.map((x) => x.pcts[i]).filter((p) => p != null).map((p) => Math.log(1 + p / 100));
-    const pct = logs.length ? (Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length) - 1) * 100 : null;
+    const pct = geomeanPct(tasks.map((x) => x.pcts[i]).filter((p) => p != null));
     const label = m.endsWith("_gcoff") ? `${ttfxShortName(m.slice(0, -6))}, GC off` : ttfxShortName(m);
     return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`;
   });
@@ -21269,7 +21254,6 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
   }
 
   // Per category, the geometric mean of its benchmarks' ratios
-  const geo = (ratios) => (ratios.length ? Math.exp(ratios.reduce((a, r) => a + Math.log(r), 0) / ratios.length) : null);
   const catRatio = (cat, base) => {
     const rs = [];
     for (const x of runtimeData.benchmarks) {
@@ -21278,7 +21262,7 @@ function showRuntimeBuildPopup(i, bench = runtimeBench) {
       const w = base(x.name);
       if (v != null && w > 0) rs.push(v / w);
     }
-    return geo(rs);
+    return geomean(rs);
   };
   html += '<div class="ttfx-popup-section" title="The geometric mean of its benchmarks\' ratios">Categories</div>';
   html += head("", false);
@@ -21659,8 +21643,9 @@ function overviewRuntimeCard(src, prs) {
   const weekAgo = overviewWeekBefore(builds.map((x, i) => ({ x, i })).filter(({ i }) => has(i)), latestMs, (e) => Date.parse(e.x.date));
   const value = (name, i) => src.series[name]?.value[i] ?? null;
   const geo = (names, i, j) => {
-    const logs = names.map((n) => [value(n, i), value(n, j)]).filter(([v, w]) => v != null && w > 0).map(([v, w]) => Math.log(v / w));
-    return logs.length ? (Math.exp(logs.reduce((a, l) => a + l, 0) / logs.length) - 1) * 100 : null;
+    const ratios = names.map((n) => [value(n, i), value(n, j)]).filter(([v, w]) => v != null && w > 0).map(([v, w]) => v / w);
+    const g = geomean(ratios);
+    return g == null ? null : (g - 1) * 100;
   };
   const names = (cat) => src.benchmarks.filter((x) => !cat || x.category === cat).map((x) => x.name);
   const detail = (what) =>
@@ -21747,10 +21732,7 @@ function commitRuntimeHtml(data) {
     pct: runtimePct(x.now, x.previous),
     ipct: runtimePct(x.instructions, x.instructions_previous),
   }));
-  const geo = (xs) => {
-    const logs = xs.filter((x) => x.pct != null).map((x) => Math.log(1 + x.pct / 100));
-    return logs.length ? (Math.exp(logs.reduce((a, l) => a + l, 0) / logs.length) - 1) * 100 : null;
-  };
+  const geo = (xs) => geomeanPct(xs.filter((x) => x.pct != null).map((x) => x.pct));
   const cats = [...new Set(rows.map((x) => x.category))];
   const figures = [
     `<div class="commit-figure"><span class="commit-figure-label">All</span>${commitPctHtml(geo(rows), 1.5)}</div>`,
