@@ -420,6 +420,27 @@
         for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
         return list[h % list.length];
       }
+      // Buildkite job priorities (set per build by julia-buildkite); an agent takes the highest waiting first
+      const PRIORITY_NAMES = { 1: "high", 0: "normal", "-1": "low" };
+      const priorityName = (pr) => PRIORITY_NAMES[pr] || `priority ${pr}`;
+      // The waiting jobs and longest wait per priority of `pools` at the latest sample, highest first
+      function priorityQueues(pools, last) {
+        const by = new Map();
+        for (const p of pools)
+          for (const [pr, s] of Object.entries(p.by_priority || {})) {
+            const q = by.get(+pr) || { pr: +pr, waiting: 0, oldest: 0 };
+            q.waiting += last(s.waiting);
+            q.oldest = Math.max(q.oldest, last(s.oldest_wait_s));
+            by.set(+pr, q);
+          }
+        return [...by.values()].filter((q) => q.waiting > 0).sort((a, b) => b.pr - a.pr);
+      }
+      // "66 LOW", leaving out normal, for the sign: the line of people shows the order
+      const prioritySplit = (c) =>
+        c.prio.length > 1 || (c.prio.length === 1 && c.prio[0].pr !== 0)
+          ? c.prio.filter((q) => q.pr !== 0).map((q) => `${q.waiting} ${priorityName(q.pr).toUpperCase()}`)
+          : [];
+
       function mood(busy, cap, waiting) {
         if (waiting > 0) {
           const r = waiting / Math.max(cap, 1);
@@ -482,6 +503,7 @@
             hosts,
             waiting: g.pools.reduce((s, p) => s + last(p.waiting), 0),
             oldest: Math.max(0, ...g.pools.map((p) => last(p.oldest_wait_s))),
+            prio: priorityQueues(g.pools, last),
           });
         }
         const byQueue = new Map();
@@ -508,6 +530,7 @@
             hosts: [...entry.hosts].map(([name, states]) => ({ name, states })).sort(byName),
             waiting: 0,
             oldest: 0,
+            prio: [],
           });
         }
         for (const c of clusters) {
@@ -542,6 +565,16 @@
             cap: sum("cap"),
             waiting: sum("waiting"),
             oldest: Math.max(...parts.map((p) => p.oldest)),
+            prio: Object.values(
+              parts
+                .flatMap((p) => p.prio)
+                .reduce((by, q) => {
+                  const m = by[q.pr] || (by[q.pr] = { pr: q.pr, waiting: 0, oldest: 0 });
+                  m.waiting += q.waiting;
+                  m.oldest = Math.max(m.oldest, q.oldest);
+                  return by;
+                }, {}),
+            ).sort((a, b) => b.pr - a.pr),
             mood: worst.mood,
             caption: worst.caption,
           };
@@ -627,6 +660,12 @@
         beacon: new THREE.MeshBasicMaterial({ color: 0xff2a1a }),
         hit: new THREE.MeshBasicMaterial({ visible: false }),
         people: [0xcb3c33, 0x389826, 0x9558b2, 0x4063d8].map((c) => surface(c, { emissive: c, emissiveIntensity: 0.25 })),
+        // Low priority jobs: the same colours, faded towards grey
+        peopleLow: [0xcb3c33, 0x389826, 0x9558b2, 0x4063d8].map((c) => {
+          const faded = new THREE.Color(c).lerp(new THREE.Color(0x4a525c), 0.8);
+          return surface(faded, { emissive: faded, emissiveIntensity: 0.1 });
+        }),
+        hat: surface(0xf5c518, { metalness: 0.6, roughness: 0.3, emissive: 0xf5c518, emissiveIntensity: 0.35 }),
         skin: surface(0xe8eef5, { emissive: 0x8899aa, emissiveIntensity: 0.2 }),
       };
       const LED = {
@@ -784,7 +823,10 @@
           ctx.font = `500 46px ${MONO}`;
           ctx.fillStyle = "#cfe3f5";
           const parts = [`${c.busy}/${c.cap} BUSY`];
-          if (c.waiting) parts.push(`${c.waiting} QUEUED`);
+          if (c.waiting) {
+            const split = prioritySplit(c);
+            parts.push(`${c.waiting} QUEUED${split.length ? ` (${split.join(", ")})` : ""}`);
+          }
           if (c.gone) parts.push(`${c.gone} OFFLINE`);
           const line = parts.join("  ·  ");
           ctx.fillText(line, 40, 182, w - 80);
@@ -1200,10 +1242,11 @@
         return g;
       }
 
-      // One waiting job: a little person in a Julia colour
-      function makePerson(i) {
+      // One waiting job: a little person in a Julia colour; a high priority job
+      // wears a gold hat and a low priority one is faded
+      function makePerson(i, pr = 0) {
         const g = new THREE.Group();
-        const body = new THREE.Mesh(GEO.body, MAT.people[i % 4]);
+        const body = new THREE.Mesh(GEO.body, (pr < 0 ? MAT.peopleLow : MAT.people)[i % 4]);
         body.position.y = 0.2;
         body.castShadow = true;
         g.add(body);
@@ -1212,7 +1255,46 @@
         head.position.y = 0.44;
         head.castShadow = true;
         g.add(head);
+        if (pr > 0) {
+          const brim = new THREE.Mesh(GEO.cyl, MAT.hat);
+          brim.scale.set(0.11, 0.012, 0.11);
+          brim.position.y = 0.515;
+          const crown = new THREE.Mesh(GEO.cyl, MAT.hat);
+          crown.scale.set(0.06, 0.09, 0.06);
+          crown.position.y = 0.565;
+          g.add(brim, crown);
+        }
+        g.userData.pr = pr;
         return g;
+      }
+
+      // A priority's patch of floor in a queue, `w` by `d` metres: a tinted mat
+      // edged in tape, its name and job count along the edge nearest the aisle
+      const MAT_LABEL_D = 0.3;
+      const MAT_GAP = 0.3;
+      const MAT_COLORS = { 1: "#f5c518", 0: "#22d3ee", "-1": "#7f93a8" };
+      function priorityMat(pr, n, w, d) {
+        const px = 200;
+        const color = MAT_COLORS[pr] || "#7f93a8";
+        const tex = canvasTexture(Math.round(w * px), Math.round(d * px), (ctx, cw, ch) => {
+          ctx.fillStyle = color;
+          ctx.globalAlpha = 0.12;
+          ctx.fillRect(0, 0, cw, ch);
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 6;
+          ctx.setLineDash([24, 12]);
+          ctx.strokeRect(3, 3, cw - 6, ch - 6);
+          ctx.setLineDash([]);
+          const band = MAT_LABEL_D * px;
+          ctx.fillStyle = color;
+          ctx.font = `700 ${Math.round(band * 0.6)}px ${MONO}`;
+          ctx.textBaseline = "middle";
+          ctx.fillText(`${priorityName(pr).toUpperCase()} PRIORITY · ${n}`, 18, ch - band / 2 - 2, cw - 36);
+        });
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+        m.rotation.x = -Math.PI / 2;
+        return m;
       }
 
       // ---------------------------------------------------------------- rows
@@ -1431,19 +1513,54 @@
         row.signW = sign.scale.x;
         row.group.add(sign);
 
-        // The queue: lines in front of the row
+        // The queue: lines in front of the row, highest priority first, as
+        // agents take them. Past MAX_PEOPLE each priority keeps its share.
         const shown = Math.min(c.waiting, MAX_PEOPLE);
+        const scale = shown / Math.max(c.waiting, 1);
+        const order = c.prio.flatMap((q) => Array(scale < 1 ? Math.max(1, Math.round(q.waiting * scale)) : q.waiting).fill(q.pr));
+        // Rounding, or a backlog without the split, leaves people over; they queue as normal
+        const lowAt = order.findIndex((pr) => pr < 0);
+        if (order.length < shown) order.splice(lowAt < 0 ? order.length : lowAt, 0, ...Array(shown - order.length).fill(0));
+        order.length = shown;
         const perLine = perLineFor(width);
-        for (let i = 0; i < shown; i++) {
-          const p = makePerson(i);
-          const line = Math.floor(i / perLine);
-          p.position.set(-width / 2 - 0.4 + (i % perLine) * 0.32 + (line % 2) * 0.16, 0, 0.95 + line * 0.34);
-          p.rotation.y = Math.PI;
-          p.userData.phase = Math.random() * Math.PI * 2;
-          row.people.push(p);
-          row.group.add(p);
+        const x0 = -width / 2 - 0.4;
+        // One block per priority, in order; a queue of only normal jobs needs no mats
+        const groups = [];
+        for (const pr of order) {
+          if (!groups.length || groups[groups.length - 1].pr !== pr) groups.push({ pr, n: 0 });
+          groups[groups.length - 1].n++;
         }
-        row.lines = Math.ceil(shown / perLine);
+        const mats = prioritySplit(c).length > 0;
+        let z = 0.95;
+        let i = 0;
+        for (const grp of groups) {
+          const lines = Math.ceil(grp.n / perLine);
+          for (let k = 0; k < grp.n; k++, i++) {
+            const p = makePerson(i, grp.pr);
+            const line = Math.floor(k / perLine);
+            p.position.set(x0 + (k % perLine) * 0.32 + (line % 2) * 0.16, 0, z + line * 0.34);
+            p.rotation.y = Math.PI;
+            p.userData.phase = Math.random() * Math.PI * 2;
+            row.people.push(p);
+            row.group.add(p);
+          }
+          const last = z + (lines - 1) * 0.34;
+          if (mats) {
+            const cols = Math.min(grp.n, perLine);
+            // Wide enough for its label however few stand on it
+            const w = Math.max((cols - 1) * 0.32 + (lines > 1 ? 0.16 : 0) + 0.44, 1.8);
+            const d = last - z + 0.4 + MAT_LABEL_D;
+            const q = c.prio.find((x) => x.pr === grp.pr);
+            const mat = priorityMat(grp.pr, q ? q.waiting : grp.n, w, d);
+            mat.position.set(x0 - 0.22 + w / 2, 0.004, z - 0.2 + d / 2);
+            row.group.add(mat);
+            z = last + 0.2 + MAT_LABEL_D + MAT_GAP + 0.2;
+          } else {
+            z = last + 0.34;
+          }
+        }
+        // In queue lines, for the row spacing and the hover box
+        row.lines = Math.max(0, Math.ceil((z - 0.95) / 0.34));
 
         // Moody lighting: a dim blue night for sleepers, an alarm for the worst
         if (c.mood === "asleep") {
@@ -2380,6 +2497,8 @@
       function tipLines(c) {
         const lines = [`${c.busy} of ${c.cap} slots busy${c.kind === "other" ? " (queue not monitored here)" : ""}`];
         if (c.waiting) lines.push(`${c.waiting} jobs waiting, the longest for ${hours(c.oldest)}`);
+        if (prioritySplit(c).length)
+          for (const q of c.prio) lines.push(`· ${q.waiting} ${priorityName(q.pr)} priority, the longest for ${hours(q.oldest)}`);
         if (c.gone) lines.push(`${c.gone} agents missing`);
         return lines.map(esc).join("<br>");
       }
@@ -2887,7 +3006,9 @@
           // Stressed rows shake
           const amp = { sweating: 0.004, panicking: 0.012, fire: 0.022 }[mood] || 0;
           if (amp) r.units.children.forEach((u, i) => (u.rotation.z = Math.sin(t * 30 + i * 1.3) * amp));
-          for (const p of r.people) p.position.y = Math.abs(Math.sin(t * 5 + p.userData.phase)) * (mood === "fire" ? 0.12 : 0.05);
+          // Low priority jobs know they will be a while and barely fidget
+          for (const p of r.people)
+            p.position.y = Math.abs(Math.sin(t * 5 + p.userData.phase)) * (mood === "fire" ? 0.12 : 0.05) * (p.userData.pr < 0 ? 0.3 : 1);
           for (const l of r.lights) l.intensity = 4 + Math.sin(t * 13) * 2 + Math.random();
           if (r.beacon) r.beacon.rotation.y = t * 5;
           // Fans turn faster the harder the row works
