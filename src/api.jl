@@ -575,7 +575,8 @@ end
 
 refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
 
-gzip(bytes) = transcode(GzipCompressor, bytes)
+# A body is compressed once per render and then served many times
+gzip(bytes) = transcode(GzipCompressor(level=9), bytes)
 
 function render_gzip(s::Server, segments, params)
     return offload() do
