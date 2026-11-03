@@ -63,6 +63,9 @@
       #scene:active {
         cursor: grabbing;
       }
+      #scene.job {
+        cursor: pointer;
+      }
       .panel {
         position: fixed;
         background: var(--panel);
@@ -423,6 +426,16 @@
       // Buildkite job priorities (set per build by julia-buildkite); an agent takes the highest waiting first
       const PRIORITY_NAMES = { 1: "high", 0: "normal", "-1": "low" };
       const priorityName = (pr) => PRIORITY_NAMES[pr] || `priority ${pr}`;
+      // The jobs of `pools` waiting now, in the order an agent takes them
+      const waitingJobs = (pools) =>
+        pools
+          .flatMap((p) => p.waiting_jobs || [])
+          .sort((a, b) => b.priority - a.priority || a.runnable_at.localeCompare(b.runnable_at));
+      // Where a waiting job leads: its pull request, or its Buildkite build
+      const jobUrl = (j) =>
+        j.pull_request
+          ? `https://github.com/JuliaLang/julia/pull/${j.pull_request}`
+          : `https://buildkite.com/julialang/${encodeURIComponent(j.pipeline)}/builds/${j.build}#${encodeURIComponent(j.job)}`;
       // The waiting jobs and longest wait per priority of `pools` at the latest sample, highest first
       function priorityQueues(pools, last) {
         const by = new Map();
@@ -504,6 +517,7 @@
             waiting: g.pools.reduce((s, p) => s + last(p.waiting), 0),
             oldest: Math.max(0, ...g.pools.map((p) => last(p.oldest_wait_s))),
             prio: priorityQueues(g.pools, last),
+            jobs: waitingJobs(g.pools),
           });
         }
         const byQueue = new Map();
@@ -531,6 +545,7 @@
             waiting: 0,
             oldest: 0,
             prio: [],
+            jobs: [],
           });
         }
         for (const c of clusters) {
@@ -565,6 +580,7 @@
             cap: sum("cap"),
             waiting: sum("waiting"),
             oldest: Math.max(...parts.map((p) => p.oldest)),
+            jobs: parts.flatMap((p) => p.jobs || []).sort((a, b) => b.priority - a.priority || a.runnable_at.localeCompare(b.runnable_at)),
             prio: Object.values(
               parts
                 .flatMap((p) => p.prio)
@@ -1533,10 +1549,26 @@
         const mats = prioritySplit(c).length > 0;
         let z = 0.95;
         let i = 0;
+        // Each person stands for one of the jobs waiting now of their priority, in
+        // turn; past MAX_PEOPLE, or when the list and the counts disagree, some stand for none
+        const jobsOf = new Map();
+        for (const j of c.jobs || []) {
+          if (!jobsOf.has(j.priority)) jobsOf.set(j.priority, []);
+          jobsOf.get(j.priority).push(j);
+        }
         for (const grp of groups) {
           const lines = Math.ceil(grp.n / perLine);
+          const jobs = jobsOf.get(grp.pr) || [];
           for (let k = 0; k < grp.n; k++, i++) {
             const p = makePerson(i, grp.pr);
+            if (jobs[k]) {
+              p.userData.job = jobs[k];
+              // An invisible box around them, easier to point at than the figure
+              const hit = new THREE.Mesh(GEO.box, MAT.hit);
+              hit.scale.set(0.3, 0.62, 0.3);
+              hit.position.y = 0.31;
+              p.add(hit);
+            }
             const line = Math.floor(k / perLine);
             p.position.set(x0 + (k % perLine) * 0.32 + (line % 2) * 0.16, 0, z + line * 0.34);
             p.rotation.y = Math.PI;
@@ -2242,6 +2274,8 @@
 
       const pointers = new Map();
       let gesture = null;
+      // The waiting job a touch tapped last, which a second tap opens
+      let tappedJob = null;
       canvas.addEventListener("contextmenu", (e) => e.preventDefault());
       canvas.addEventListener("pointerdown", (e) => {
         canvas.setPointerCapture(e.pointerId);
@@ -2285,8 +2319,20 @@
           if (walk.on) {
             if (!gesture.moved && e.pointerType === "mouse") canvas.requestPointerLock?.();
           } else if (!gesture.moved && !gesture.panning && e.type === "pointerup" && performance.now() - gesture.at < 500) {
-            const p = pickPoint(e.clientX, e.clientY);
-            if (p) flyTo(p, Math.min(view.radius, 5));
+            // A waiting person opens their job's pull request; on a touch screen
+            // the first tap shows which job it is and a second one opens it
+            const job = jobAt(e.clientX, e.clientY);
+            if (job && (e.pointerType === "mouse" || tappedJob === job)) {
+              tappedJob = null;
+              open(jobUrl(job), "_blank", "noopener");
+            } else if (job) {
+              tappedJob = job;
+              showTip(jobTipHtml(job).replace("Click to open", "Tap again to open"), e.clientX, e.clientY);
+            } else {
+              tappedJob = null;
+              const p = pickPoint(e.clientX, e.clientY);
+              if (p) flyTo(p, Math.min(view.radius, 5));
+            }
           }
           gesture = null;
         }
@@ -2517,23 +2563,59 @@
           `${data}<div class="hosts">${hosts.join(" · ")}</div>`
         );
       }
+      // One waiting job: its pull request or branch, step, priority and wait
+      function jobTipHtml(j) {
+        const waited = Math.max(0, (Date.now() - Date.parse(j.runnable_at)) / 1000);
+        const what = j.pull_request ? `PR #${j.pull_request}` : j.pipeline === "julia-ci" ? `master build ${j.build}` : `${j.pipeline} build ${j.build}`;
+        const lines = [
+          j.name,
+          `${j.pipeline} build ${j.build}${j.branch ? ` · ${j.branch}` : ""}`,
+          `${priorityName(j.priority)} priority, waiting for ${hours(waited)}`,
+        ];
+        return (
+          `<span class="tag" style="color:${MAT_COLORS[j.priority] || "#7f93a8"}">WAITING</span><b>${esc(what)}</b>` +
+          `<div class="data">${lines.map(esc).join("<br>")}</div>` +
+          `<div class="hosts">Click to open the ${j.pull_request ? "pull request" : "build"}</div>`
+        );
+      }
+      // The waiting job of the person under the screen position, unless something solid is in front
+      function jobAt(x, y) {
+        if (!renderer || !roomGroup) return null;
+        ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+        for (const h of ray.intersectObject(roomGroup, true)) {
+          if (h.object.isSprite) continue;
+          let o = h.object;
+          while (o && !o.userData.job) o = o.parent;
+          if (o) return o.userData.job;
+          if (h.object.material.visible !== false && !h.object.material.transparent) return null;
+        }
+        return null;
+      }
+      function showTip(html, cx, cy) {
+        tip.innerHTML = html;
+        tip.style.display = "block";
+        const x = Math.min(cx + 16, innerWidth - tip.offsetWidth - 8);
+        const y = Math.min(cy + 16, innerHeight - tip.offsetHeight - 8);
+        tip.style.left = `${Math.max(8, x)}px`;
+        tip.style.top = `${Math.max(8, y)}px`;
+      }
       function hover(e) {
         if (!renderer || !rows.length) return;
-        ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-        ray.setFromCamera(ndc, camera);
+        const job = jobAt(e.clientX, e.clientY);
+        canvas.classList.toggle("job", !!job);
+        if (job) return showTip(jobTipHtml(job), e.clientX, e.clientY);
         const hit = ray.intersectObjects(rows.map((r) => r.hit))[0];
         if (!hit) {
           tip.style.display = "none";
           return;
         }
-        tip.innerHTML = tipHtml(hit.object.userData.row.c);
-        tip.style.display = "block";
-        const x = Math.min(e.clientX + 16, innerWidth - tip.offsetWidth - 8);
-        const y = Math.min(e.clientY + 16, innerHeight - tip.offsetHeight - 8);
-        tip.style.left = `${Math.max(8, x)}px`;
-        tip.style.top = `${Math.max(8, y)}px`;
+        showTip(tipHtml(hit.object.userData.row.c), e.clientX, e.clientY);
       }
-      canvas.addEventListener("pointerleave", () => (tip.style.display = "none"));
+      canvas.addEventListener("pointerleave", () => {
+        tip.style.display = "none";
+        canvas.classList.remove("job");
+      });
 
       // -------------------------------------------------------------- panel
       function renderList(data) {

@@ -288,6 +288,8 @@
             "build": "the build number within the pipeline",
             "queue": "the queue of the job's agent query rules; with os and arch this is the pool",
             "priority": "the job's Buildkite priority: 1 high (releases, backports, the high priority CI label), 0 normal, -1 low (the low priority CI label). An agent takes the highest waiting first. Jobs before julia-buildkite#702 (late October 2026) all ran at 0",
+            "pull_request": "the JuliaLang/julia pull request the build is for (julia-pr), NULL for a build of a branch; NULL too for jobs recorded before November 2026",
+            "branch": "the build's branch; NULL for jobs recorded before November 2026",
             "runnable_at": "when every dependency had finished and the job could take an agent",
             "started_at": "when an agent started it; NULL while queued, or when canceled before starting",
             "finished_at": "when it finished or was canceled; NULL while queued or running",

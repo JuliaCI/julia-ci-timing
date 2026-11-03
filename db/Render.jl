@@ -2335,7 +2335,9 @@ agents busy with jobs of any other pipeline, from the agent snapshots (see
 `other_running`); their waiting jobs are not known, so it never has any.
 The pool and each julia-pr and julia-ci entry split the same series again by
 the jobs' Buildkite priority under `by_priority`, keyed by the number as a
-string, highest first.
+string, highest first. `waiting_jobs` lists the pool's jobs waiting now in the
+order an agent takes them (highest priority, then longest waiting), each with
+its build, name, priority, and the build's pull request and branch.
 """
 # The start of a window over pool_jobs from `since`: no earlier than the
 # oldest job kept, on a 10-minute multiple, so the Workers charts share it
@@ -2384,6 +2386,17 @@ function pool_backlog(db; since="")
             p.running[first_at(s0)+1] += 1
             p.running[first_at(s1)+1] -= 1
         end
+    end
+    # The jobs waiting now, per pool, in the order an agent takes them
+    waiting_now = Dict{Tuple{String,String,String},Vector{Any}}()
+    queued = join(("'$st'" for st in QUEUED_STATES), ", ")
+    for r in rows(db, "SELECT job_uuid, pipeline, build, name, queue, os, arch, priority, runnable_at, pull_request, branch " *
+                      "FROM pool_jobs WHERE started_at IS NULL AND finished_at IS NULL AND state IN ($queued) " *
+                      "ORDER BY priority DESC, runnable_at, build, name")
+        push!(get!(Vector{Any}, waiting_now, (String(r.queue), String(r.os), String(r.arch))),
+              OrderedDict{String,Any}("job" => r.job_uuid, "pipeline" => r.pipeline, "build" => r.build, "name" => r.name,
+                                      "priority" => r.priority, "runnable_at" => r.runnable_at,
+                                      "pull_request" => coalesce(r.pull_request, nothing), "branch" => coalesce(r.branch, nothing)))
     end
     others = other_running(db, start, step, n)
     gen = agents_generated_at(db)
@@ -2437,7 +2450,8 @@ function pool_backlog(db; since="")
                                                              for (sq, so, sa) in sort!(collect(get(shared, (q, o, a), ())))],
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
                                            "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
-                                           "by_pipeline" => by, "by_priority" => by_priority(per, Returns(true))))
+                                           "by_pipeline" => by, "by_priority" => by_priority(per, Returns(true)),
+                                           "waiting_jobs" => get(waiting_now, (q, o, a), Any[])))
     end
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
     return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,
