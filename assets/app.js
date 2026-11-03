@@ -8432,14 +8432,7 @@ function updateBenchChart() {
     type: "line",
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      transitions: {
-        active: { animation: { duration: 0 } },
-      },
-      animation: {
-        y: { duration: 0 },
-      },
+      ...baseChartOptions(),
       interaction: {
         mode: "near",
         intersect: false,
