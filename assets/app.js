@@ -17,6 +17,21 @@ function nearestTimeRange(value) {
   if (days === 0) return 0;
   return TIME_RANGES.filter((d) => d > 0).reduce((a, b) => (Math.abs(b - days) < Math.abs(a - days) ? b : a));
 }
+
+// A URL parameter left at its default is dropped, to keep links short
+function setParam(url, key, value, isDefault) {
+  if (isDefault) url.searchParams.delete(key);
+  else url.searchParams.set(key, value);
+}
+
+// Puts the shown tab's state in the URL without a history entry. The state
+// is kept, since it marks the entry pushed for an open dialog.
+function writeTabURL(write) {
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue(activeTab));
+  write(url);
+  history.replaceState(history.state, "", url);
+}
 const DATA_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const AGO_UPDATE_INTERVAL = 60 * 1000; // 1 minute
 
@@ -3157,86 +3172,36 @@ function decodeSelection(param) {
 function updateURL() {
   const encoded = encodeSelection();
   const url = new URL(window.location);
-  if (encoded) {
-    url.searchParams.set("s", encoded);
-  } else {
-    url.searchParams.delete("s");
-  }
-  // Add time range if not default (and not custom zoom)
-  if (customXMin === null && timeRangeDays !== DEFAULT_TIME_RANGE) {
-    url.searchParams.set("t", timeRangeDays);
-  } else if (customXMin === null) {
-    url.searchParams.delete("t");
-  }
-  // Add custom zoom ranges if set
-  if (customXMin !== null) {
-    url.searchParams.set("x", `${customXMin}.${customXMax}`);
-    url.searchParams.delete("t");
-  } else {
-    url.searchParams.delete("x");
-  }
-  if (customYMin !== null) {
-    url.searchParams.set("y", `${customYMin}.${customYMax}`);
-  } else {
-    url.searchParams.delete("y");
-  }
-  // Add line type if not default
-  if (lineType !== DEFAULT_LINE_TYPE) {
-    url.searchParams.set("l", lineType);
-  } else {
-    url.searchParams.delete("l");
-  }
+  setParam(url, "s", encoded, !encoded);
+  // A custom zoom replaces the time range
+  setParam(url, "t", timeRangeDays, customXMin !== null || timeRangeDays === DEFAULT_TIME_RANGE);
+  setParam(url, "x", `${customXMin}.${customXMax}`, customXMin === null);
+  setParam(url, "y", `${customYMin}.${customYMax}`, customYMin === null);
+  setParam(url, "l", lineType, lineType === DEFAULT_LINE_TYPE);
   // cv is legacy; tab now fully identifies CI timing/workers.
   url.searchParams.delete("cv");
-  if (jobFilter) url.searchParams.set("jq", jobFilter);
-  else url.searchParams.delete("jq");
-  if (timingView === "usage") {
-    url.searchParams.set("jv", "usage");
-  } else {
-    url.searchParams.delete("jv");
-  }
+  setParam(url, "jq", jobFilter, !jobFilter);
+  setParam(url, "jv", "usage", timingView !== "usage");
   const jf = timingView === "usage" ? encodeUsageFilters() : "";
-  if (jf) {
-    url.searchParams.set("jf", jf);
-  } else {
-    url.searchParams.delete("jf");
-  }
-
-  if (workersFilter) {
-    url.searchParams.set("wq", workersFilter);
-  } else {
-    url.searchParams.delete("wq");
-  }
-  // Add expanded jobs if any
-  if (expandedJobs.size > 0) {
-    const expandedHashes = [...expandedJobs]
-      .filter((name) => jobIndexMap[name] !== undefined)
-      .map(jobHash)
-      .sort();
-    if (expandedHashes.length > 0) {
-      url.searchParams.set("e", "n" + expandedHashes.join("_"));
-    } else {
-      url.searchParams.delete("e");
-    }
-  } else {
-    url.searchParams.delete("e");
-  }
+  setParam(url, "jf", jf, !jf);
+  setParam(url, "wq", workersFilter, !workersFilter);
+  const expandedHashes = [...expandedJobs]
+    .filter((name) => jobIndexMap[name] !== undefined)
+    .map(jobHash)
+    .sort();
+  setParam(url, "e", "n" + expandedHashes.join("_"), !expandedHashes.length);
   // Add excluded states if different from default (canceled only)
   const defaultExcluded = new Set(["canceled"]);
   const isDefaultStates =
     excludedStates.size === defaultExcluded.size &&
     [...excludedStates].every((s) => defaultExcluded.has(s));
-  if (!isDefaultStates) {
-    // Encode as which states are visible (inverse of excluded)
-    const allStates = ["passed", "failed", "timed_out", "canceled"];
-    const visible = allStates.filter((s) => !excludedStates.has(s));
-    // "." separator: "_" would split "timed_out" apart on parse
-    url.searchParams.set("st", visible.join("."));
-  } else {
-    url.searchParams.delete("st");
-  }
+  // Encode as which states are visible (inverse of excluded)
+  const allStates = ["passed", "failed", "timed_out", "canceled"];
+  const visible = allStates.filter((s) => !excludedStates.has(s));
+  // "." separator: "_" would split "timed_out" apart on parse
+  setParam(url, "st", visible.join("."), isDefaultStates);
   dropOtherCIViewParams(url);
-  history.replaceState(null, "", url);
+  history.replaceState(history.state, "", url);
   saveToLocalStorage();
 }
 
@@ -7430,57 +7395,23 @@ function formatNoise(noisePct) {
 }
 
 function updateBenchURL() {
-  const url = new URL(window.location);
-  // Tab
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  // Benchmark time range (default 14)
-  if (benchTimeRangeDays !== 14) {
-
-    url.searchParams.set("bt", benchTimeRangeDays);
-  } else {
-    url.searchParams.delete("bt");
-  }
-  // Benchmark stat type (default minimum)
-  if (benchStatType !== "minimum") {
-    url.searchParams.set("bs", benchStatType);
-  } else {
-    url.searchParams.delete("bs");
-  }
-  // Benchmark table view (default groups)
-  if (benchTableView !== "groups") {
-    url.searchParams.set("bv", benchTableView);
-  } else {
-    url.searchParams.delete("bv");
-  }
-  // Metric (default time)
-  if (benchMetric !== "time") {
-    url.searchParams.set("bm", benchMetric);
-  } else {
-    url.searchParams.delete("bm");
-  }
-  // Noisy view min latency (ns), kept in the URL only while that view is shown
-  if (benchTableView === "noisy" && benchNoisyMinNs !== BENCH_NOISY_DEFAULT_MIN_NS) {
-    url.searchParams.set("bn", benchNoisyMinNs);
-  } else {
-    url.searchParams.delete("bn");
-  }
-  // Benchmark selected groups — encode as deselected groups (shorter when most are selected)
-  const allGroups = Object.keys(benchGroupColors).sort();
-  const deselected = allGroups.filter((g) => !benchSelectedGroups.has(g));
-  if (deselected.length === 0) {
-    url.searchParams.delete("bg");
-  } else if (deselected.length < allGroups.length / 2) {
-    // Encode deselected with leading '-'
-    url.searchParams.set(
-      "bg",
-      "-" + deselected.map(encodeURIComponent).join(","),
-    );
-  } else {
-    // Encode selected
+  writeTabURL((url) => {
+    setParam(url, "bt", benchTimeRangeDays, benchTimeRangeDays === 14);
+    setParam(url, "bs", benchStatType, benchStatType === "minimum");
+    setParam(url, "bv", benchTableView, benchTableView === "groups");
+    setParam(url, "bm", benchMetric, benchMetric === "time");
+    // Noisy view min latency (ns), kept in the URL only while that view is shown
+    setParam(url, "bn", benchNoisyMinNs, benchTableView !== "noisy" || benchNoisyMinNs === BENCH_NOISY_DEFAULT_MIN_NS);
+    // Benchmark selected groups — encode as deselected groups (shorter when most are selected)
+    const allGroups = Object.keys(benchGroupColors).sort();
+    const deselected = allGroups.filter((g) => !benchSelectedGroups.has(g));
     const selected = allGroups.filter((g) => benchSelectedGroups.has(g));
-    url.searchParams.set("bg", selected.map(encodeURIComponent).join(","));
-  }
-  history.replaceState(null, "", url);
+    const bg =
+      deselected.length < allGroups.length / 2
+        ? "-" + deselected.map(encodeURIComponent).join(",")
+        : selected.map(encodeURIComponent).join(",");
+    setParam(url, "bg", bg, deselected.length === 0);
+  });
 }
 
 function applyBenchURLParams() {
@@ -9565,46 +9496,15 @@ function populatePackagesMinorFilterOptions() {
 }
 
 function updatePackagesURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  if (packagesTimeRangeDays !== 365) {
-    url.searchParams.set("edt", packagesTimeRangeDays);
-  } else {
-    url.searchParams.delete("edt");
-  }
-  if (packagesClientType !== "all") {
-    url.searchParams.set("edc", packagesClientType);
-  } else {
-    url.searchParams.delete("edc");
-  }
-  if (packagesSelectedMinors.size > 0) {
-    const selected = [...packagesSelectedMinors].sort(
-      (a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b),
-    );
-    if (selected.length > 0) {
-      url.searchParams.set("edv", selected.map(encodeURIComponent).join(","));
-    } else {
-      url.searchParams.delete("edv");
-    }
-  } else {
-    url.searchParams.delete("edv");
-  }
-  if (packagesProportional) {
-    url.searchParams.set("edp", "1");
-  } else {
-    url.searchParams.delete("edp");
-  }
-  if (packagesViewMode !== "minor") {
-    url.searchParams.set("edm", packagesViewMode);
-  } else {
-    url.searchParams.delete("edm");
-  }
-  if (packagesPackage) {
-    url.searchParams.set("edpkg", packagesPackage);
-  } else {
-    url.searchParams.delete("edpkg");
-  }
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "edt", packagesTimeRangeDays, packagesTimeRangeDays === 365);
+    setParam(url, "edc", packagesClientType, packagesClientType === "all");
+    const minors = [...packagesSelectedMinors].sort((a, b) => parsePackagesMinorRank(a) - parsePackagesMinorRank(b));
+    setParam(url, "edv", minors.map(encodeURIComponent).join(","), !minors.length);
+    setParam(url, "edp", "1", !packagesProportional);
+    setParam(url, "edm", packagesViewMode, packagesViewMode === "minor");
+    setParam(url, "edpkg", packagesPackage, !packagesPackage);
+  });
 }
 
 function applyPackagesURLParams() {
@@ -10562,31 +10462,18 @@ function setPkgevalTimeRange(val) {
 }
 
 function updatePkgevalURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  if (pkgevalTimeRangeDays !== 30) {
-    url.searchParams.set("pt", pkgevalTimeRangeDays);
-  } else {
-    url.searchParams.delete("pt");
-  }
-  const setOrDelete = (key, value) => (value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
-  setOrDelete("pl", pkgevalPanelView === "changes" ? "" : pkgevalPanelView);
-  setOrDelete("pd", pkgevalChangesDay);
-  setOrDelete("pk", pkgevalChangesKind === "broke" ? "" : pkgevalChangesKind || "both");
-  setOrDelete("pf", pkgevalShowFlaky ? "1" : "");
-  setOrDelete("pp", pkgevalProportional ? "" : "0");
-  if (pkgevalPackage) {
-    url.searchParams.set("pkg", pkgevalPackage);
-  } else {
-    url.searchParams.delete("pkg");
-  }
-  url.searchParams.delete("pv");
-  if (pkgevalReasonFilter.length) {
-    url.searchParams.set("pr", pkgevalReasonFilter.join(","));
-  } else {
-    url.searchParams.delete("pr");
-  }
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "pt", pkgevalTimeRangeDays, pkgevalTimeRangeDays === 30);
+    const setNonEmpty = (key, value) => setParam(url, key, value, !value);
+    setNonEmpty("pl", pkgevalPanelView === "changes" ? "" : pkgevalPanelView);
+    setNonEmpty("pd", pkgevalChangesDay);
+    setNonEmpty("pk", pkgevalChangesKind === "broke" ? "" : pkgevalChangesKind || "both");
+    setNonEmpty("pf", pkgevalShowFlaky ? "1" : "");
+    setNonEmpty("pp", pkgevalProportional ? "" : "0");
+    setNonEmpty("pkg", pkgevalPackage);
+    url.searchParams.delete("pv");
+    setNonEmpty("pr", pkgevalReasonFilter.join(","));
+  });
 }
 
 function applyPkgevalURLParams() {
@@ -13128,31 +13015,26 @@ function deselectAllTtfxTasks() {
 }
 
 function updateTtfxURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  const setOrDelete = (k, v, isDefault) => {
-    if (isDefault) url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  };
-  setOrDelete("tm", ttfxMetric, ttfxMetric === "precompile");
-  setOrDelete("tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
-  setOrDelete("tn", "1", !ttfxNormalized);
-  setOrDelete("th", "1", !ttfxHideJumps);
-  setOrDelete("tz", "1", !ttfxShowZero);
-  setOrDelete("tc", "off", !ttfxGcOff);
-  url.searchParams.delete("tg");
-  for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.param) setOrDelete(t.param, "1", !ttfxTwinsDrawn.has(twin));
-  setOrDelete("tv", ttfxTableView, ttfxTableView === "prs");
-  setOrDelete("ts", ttfxMode, ttfxMode === "summary");
-  setOrDelete("tq", ttfxTaskFilter, !ttfxTaskFilter);
-  // Whichever of the selected or the excluded tasks is the shorter list
-  const all = ttfxAllTasks();
-  const selected = ttfxSelectedList();
-  const excluded = all.filter((t) => !ttfxSelectedTasks.has(t));
-  const useExcluded = excluded.length < selected.length;
-  setOrDelete("tk", selected.join(","), !ttfxData || useExcluded || !excluded.length);
-  setOrDelete("tx", excluded.join(","), !ttfxData || !useExcluded || !excluded.length);
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "tm", ttfxMetric, ttfxMetric === "precompile");
+    setParam(url, "tt", ttfxTimeRangeDays, ttfxTimeRangeDays === 90);
+    setParam(url, "tn", "1", !ttfxNormalized);
+    setParam(url, "th", "1", !ttfxHideJumps);
+    setParam(url, "tz", "1", !ttfxShowZero);
+    setParam(url, "tc", "off", !ttfxGcOff);
+    url.searchParams.delete("tg");
+    for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.param) setParam(url, t.param, "1", !ttfxTwinsDrawn.has(twin));
+    setParam(url, "tv", ttfxTableView, ttfxTableView === "prs");
+    setParam(url, "ts", ttfxMode, ttfxMode === "summary");
+    setParam(url, "tq", ttfxTaskFilter, !ttfxTaskFilter);
+    // Whichever of the selected or the excluded tasks is the shorter list
+    const all = ttfxAllTasks();
+    const selected = ttfxSelectedList();
+    const excluded = all.filter((t) => !ttfxSelectedTasks.has(t));
+    const useExcluded = excluded.length < selected.length;
+    setParam(url, "tk", selected.join(","), !ttfxData || useExcluded || !excluded.length);
+    setParam(url, "tx", excluded.join(","), !ttfxData || !useExcluded || !excluded.length);
+  });
 }
 
 // Task selection is applied once the data is loaded (the task list is in it)
@@ -15363,18 +15245,13 @@ function applySizesURLParams() {
 }
 
 function updateSizesURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  const setOrDelete = (k, v, isDefault) => {
-    if (isDefault) url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  };
-  setOrDelete("zt", sizesTimeRangeDays, sizesTimeRangeDays === 365);
-  setOrDelete("zn", "1", !sizesNormalized);
-  setOrDelete("zv", sizesTableView, sizesTableView === "prs");
-  const selected = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m));
-  setOrDelete("zm", selected.join(","), selected.join(",") === SIZES_DEFAULT_METRICS.join(","));
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "zt", sizesTimeRangeDays, sizesTimeRangeDays === 365);
+    setParam(url, "zn", "1", !sizesNormalized);
+    setParam(url, "zv", sizesTableView, sizesTableView === "prs");
+    const selected = Object.keys(SIZES_METRICS).filter((m) => sizesSelected.has(m));
+    setParam(url, "zm", selected.join(","), selected.join(",") === SIZES_DEFAULT_METRICS.join(","));
+  });
 }
 
 async function loadSizesData() {
@@ -18918,13 +18795,10 @@ function applyActivityURLParams() {
 }
 
 function updateActivityURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  if (activityTimeRangeDays === 730) url.searchParams.delete("at");
-  else url.searchParams.set("at", activityTimeRangeDays);
-  if (activitySmoothing === 28) url.searchParams.delete("aw");
-  else url.searchParams.set("aw", activitySmoothing);
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "at", activityTimeRangeDays, activityTimeRangeDays === 730);
+    setParam(url, "aw", activitySmoothing, activitySmoothing === 28);
+  });
 }
 
 async function loadActivityData() {
@@ -19190,20 +19064,15 @@ function applyCoverageURLParams() {
 }
 
 function updateCoverageURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  const setOrDelete = (k, v, isDefault) => {
-    if (isDefault) url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  };
-  setOrDelete("vt", coverageTimeRangeDays, coverageTimeRangeDays === 180);
-  setOrDelete("vd", coverageDays, coverageDays === 30);
-  setOrDelete("vv", coverageView, coverageView === "files");
-  setOrDelete("vm", coverageMinLines, coverageMinLines === 20);
-  setOrDelete("vq", coverageFilter, !coverageFilter);
-  const sort = `${coverageSort.asc ? "" : "-"}${coverageSort.col}`;
-  setOrDelete("vs", sort, sort === "-missed");
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "vt", coverageTimeRangeDays, coverageTimeRangeDays === 180);
+    setParam(url, "vd", coverageDays, coverageDays === 30);
+    setParam(url, "vv", coverageView, coverageView === "files");
+    setParam(url, "vm", coverageMinLines, coverageMinLines === 20);
+    setParam(url, "vq", coverageFilter, !coverageFilter);
+    const sort = `${coverageSort.asc ? "" : "-"}${coverageSort.col}`;
+    setParam(url, "vs", sort, sort === "-missed");
+  });
 }
 
 async function loadCoverageData() {
@@ -19661,16 +19530,11 @@ function applySysimageURLParams() {
 }
 
 function updateSysimageURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  const setOrDelete = (k, v, isDefault) => {
-    if (isDefault) url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  };
-  setOrDelete("it", sysimageTimeRangeDays, sysimageTimeRangeDays === 90);
-  setOrDelete("ip", sysimagePlatform, sysimagePlatform === "aarch64-apple-darwin");
-  setOrDelete("iw", sysimageSmoothing, sysimageSmoothing === 11);
-  history.replaceState(null, "", url);
+  writeTabURL((url) => {
+    setParam(url, "it", sysimageTimeRangeDays, sysimageTimeRangeDays === 90);
+    setParam(url, "ip", sysimagePlatform, sysimagePlatform === "aarch64-apple-darwin");
+    setParam(url, "iw", sysimageSmoothing, sysimageSmoothing === 11);
+  });
 }
 
 async function loadSysimageData() {
@@ -20415,25 +20279,20 @@ function resolveRuntimeHidden() {
 }
 
 function updateRuntimeURL() {
-  const url = new URL(window.location);
-  url.searchParams.set("tab", tabToURLValue(activeTab));
-  const setOrDelete = (k, v, isDefault) => {
-    if (isDefault) url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  };
-  setOrDelete("rt", runtimeTimeRangeDays, runtimeTimeRangeDays === RUNTIME_DEFAULT_DAYS);
-  setOrDelete("rb", runtimeBench, !runtimeBench);
-  if (runtimeData) {
-    const shown = [RUNTIME_ALL, ...runtimeData.categories].filter((c) => !runtimeHidden.has(c));
-    setOrDelete("rc", shown.join(","), runtimeHidden.size === 0);
-  }
-  setOrDelete("rr", runtimeReference, runtimeReference == null);
-  setOrDelete("rs", runtimeSource, runtimeSource == null);
-  setOrDelete("rm", runtimeChartMetric, runtimeChartMetric === "judged");
-  setOrDelete("rv", runtimeTableView, runtimeTableView === "benchmarks");
-  setOrDelete("rq", runtimeFilter, !runtimeFilter);
-  setOrDelete("rp", runtimePr, runtimePr == null);
-  history.replaceState(history.state, "", url);
+  writeTabURL((url) => {
+    setParam(url, "rt", runtimeTimeRangeDays, runtimeTimeRangeDays === RUNTIME_DEFAULT_DAYS);
+    setParam(url, "rb", runtimeBench, !runtimeBench);
+    if (runtimeData) {
+      const shown = [RUNTIME_ALL, ...runtimeData.categories].filter((c) => !runtimeHidden.has(c));
+      setParam(url, "rc", shown.join(","), runtimeHidden.size === 0);
+    }
+    setParam(url, "rr", runtimeReference, runtimeReference == null);
+    setParam(url, "rs", runtimeSource, runtimeSource == null);
+    setParam(url, "rm", runtimeChartMetric, runtimeChartMetric === "judged");
+    setParam(url, "rv", runtimeTableView, runtimeTableView === "benchmarks");
+    setParam(url, "rq", runtimeFilter, !runtimeFilter);
+    setParam(url, "rp", runtimePr, runtimePr == null);
+  });
 }
 
 async function loadRuntimeData() {
