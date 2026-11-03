@@ -6775,57 +6775,16 @@ const takeStale = (view) => staleViews.delete(view);
 // A tab loading for the first time gets the current data anyway, so its mark
 // is just dropped
 function reloadStaleView(tab) {
-  if (tab === "benchmarks" && takeStale("benchmarks") && benchData) reloadBenchData();
-  if (tab === "pkgeval" && takeStale("pkgeval") && pkgevalData) loadPkgevalData();
-  if (tab === "ci-ttfx" && takeStale("ttfx") && ttfxData) reloadTtfxData();
-  if (tab === "ci-sizes" && takeStale("sizes") && sizesData) reloadSizesData();
-  if (tab === "ci-build-stages" && takeStale("sysimage") && sysimageData) loadSysimageData();
-  if (tab === "ci-coverage" && takeStale("coverage") && coverageData) loadCoverageData();
-  if (tab === "ci-runtime" && takeStale("runtime") && runtimeData) {
-    runtimePrs = null;
-    runtimePrsLoading = null;
-    loadRuntimeData();
-  }
-  if (tab === "packages" && takeStale("packages") && packagesDownloadsData) loadPackagesDownloadsData();
-  if (tab === "activity" && takeStale("activity") && activityData) loadActivityData();
-  // The Workers view loads what is marked whenever it draws
-  if (tab === "ci-workers" && (staleViews.has("agents") || staleViews.has("backlog"))) renderWorkerPresence();
-  if (tab === "ci-timing" && timingView === "usage" && staleViews.has("usage")) renderUsageView();
+  const t = TABS[tab];
+  if (t.reloadStale) t.reloadStale();
+  else if (t.stale && takeStale(t.stale) && t.data()) (t.reload || t.load)();
 }
-
-// The source behind each tab, whose update time the header shows. The
-// Overview and Commit tabs draw on all of them and say so themselves.
-const TAB_SOURCES = {
-  "ci-timing": "timing",
-  "ci-workers": "agents",
-  "ci-ttfx": "ttfx",
-  "ci-runtime": "runtime",
-  "ci-sizes": "sizes",
-  "ci-build-stages": "sysimage",
-  "ci-coverage": "timing",
-  benchmarks: "benchmarks",
-  packages: "packages",
-  pkgeval: "pkgeval",
-  activity: "github",
-};
 
 // A body's own generated_at can be older than the last ingest: its ETag only
 // moves when rows change, so a 304 keeps the old body
 function setUpdatedLabels() {
-  const fallback = {
-    timing: data?.generated_at,
-    pkgeval: pkgevalData?.generated_at,
-    ttfx: ttfxData?.generated_at,
-    sizes: sizesData?.generated_at,
-    sysimage: sysimageData?.generated_at,
-    runtime: runtimeData?.generated_at,
-    benchmarks: benchData?.generated_at,
-    packages: packagesDownloadsData?.generated_at,
-    agents: agentsData?.generated_at,
-    github: activityData?.generated_at,
-  };
-  const source = TAB_SOURCES[activeTab];
-  const at = source && (sourceTimes[source] || fallback[source]);
+  const t = TABS[activeTab];
+  const at = t.source && (sourceTimes[t.source] || t.data()?.generated_at);
   const el = document.getElementById("last-updated");
   el.textContent = at ? `Updated ${timeAgo(at)}` : "";
   el.title = at ? formatUtc(at) : "";
@@ -6868,46 +6827,255 @@ async function refreshData() {
 // === Tab Navigation ===
 let activeTab = "overview";
 
-const TAB_URL_MAP = {
-  overview: "overview",
-  commit: "commit",
-  perf: "bench-diff",
-  benchmarks: "bench-history",
-  "ci-timing": "ci-timing",
-  "ci-workers": "ci-workers",
-  "ci-ttfx": "bench-ttfx",
-  "ci-runtime": "bench-runtime",
-  "ci-sizes": "bench-sizes",
-  "ci-build-stages": "ci-build-stages",
-  "ci-coverage": "ci-coverage",
-  packages: "eco-downloads",
-  pkgeval: "eco-pkgeval",
-  activity: "repo-activity",
+// Every tab, by its internal name: `url` is its ?tab= value and `path` the
+// short path its redirect directory gives it, which analytics gets as the page
+// viewed. `source` is the source whose update time the header shows; the
+// Overview and Commit tabs draw on all of them and say so themselves. `keys`
+// are the URL parameters the tab owns; the Timing and Workers tabs share theirs
+// as the `ci` group. `data` is the tab's loaded body, `load` its first load,
+// `stale` the mark a source change leaves on it and `reload` what that mark
+// runs (`load` again by default). `applyURL` reads its parameters at startup
+// and `writeURL` puts its state back on the URL when it is shown.
+const CI_URL_KEYS = {
+  s: "selected jobs",
+  t: "time range (days)",
+  x: "custom x zoom",
+  y: "custom y zoom",
+  l: "line type",
+  e: "expanded jobs in stats table",
+  st: "state filter",
+  jv: "CI timing view (history or worker time)",
+  jf: "worker time filters",
+  jq: "CI timing job filter",
+  wq: "workers text filter",
 };
-
-// The short paths the redirect directories give each tab, sent to analytics
-// as the page viewed
-const TAB_SHORT_PATH = {
-  overview: "/overview",
-  commit: "/commit",
-  perf: "/diff",
-  benchmarks: "/history",
-  "ci-timing": "/timing",
-  "ci-workers": "/workers",
-  "ci-ttfx": "/ttfx",
-  "ci-runtime": "/runtime",
-  "ci-sizes": "/sizes",
-  "ci-build-stages": "/build-stages",
-  "ci-coverage": "/coverage",
-  packages: "/downloads",
-  pkgeval: "/pkgeval",
-  activity: "/activity",
+const TABS = {
+  overview: { url: "overview", path: "/overview", view: "overview-view", show: () => renderOverview() },
+  commit: {
+    url: "commit",
+    path: "/commit",
+    view: "commit-view",
+    keys: { c: "commit lookup ref" },
+    applyURL: applyCommitURLParams,
+    show: () => renderCommitView(),
+  },
+  perf: {
+    url: "bench-diff",
+    path: "/diff",
+    view: "perf-view",
+    // The embedded julia-perf site is loaded the first time the Diff tab is
+    // shown, not on every landing on another tab
+    show: () => {
+      const iframe = document.getElementById("perf-iframe");
+      if (iframe && !iframe.getAttribute("src")) iframe.src = iframe.dataset.src;
+    },
+  },
+  benchmarks: {
+    url: "bench-history",
+    path: "/history",
+    view: "benchmarks-view",
+    source: "benchmarks",
+    keys: {
+      bt: "bench time range",
+      bs: "bench stat type",
+      bv: "bench table view",
+      bm: "bench metric",
+      bg: "bench groups",
+      bn: "bench noisy table minimum time",
+    },
+    data: () => benchData,
+    load: loadBenchmarkData,
+    stale: "benchmarks",
+    reload: reloadBenchData,
+    applyURL: applyBenchURLParams,
+    writeURL: () => benchData && updateBenchURL(),
+  },
+  "ci-timing": {
+    url: "ci-timing",
+    path: "/timing",
+    view: "ci-timing-view",
+    source: "timing",
+    urlGroup: "ci",
+    keys: CI_URL_KEYS,
+    data: () => data,
+    reloadStale: () => timingView === "usage" && staleViews.has("usage") && renderUsageView(),
+    writeURL: () => jobSelectionRestored && updateURL(),
+  },
+  "ci-workers": {
+    url: "ci-workers",
+    path: "/workers",
+    view: "ci-timing-view",
+    source: "agents",
+    urlGroup: "ci",
+    keys: CI_URL_KEYS,
+    data: () => agentsData,
+    // The Workers view loads what is marked whenever it draws
+    reloadStale: () => (staleViews.has("agents") || staleViews.has("backlog")) && renderWorkerPresence(),
+    writeURL: () => jobSelectionRestored && updateURL(),
+  },
+  "ci-ttfx": {
+    url: "bench-ttfx",
+    path: "/ttfx",
+    view: "ttfx-view",
+    source: "ttfx",
+    keys: {
+      tm: "ttfx metric",
+      tt: "ttfx time range",
+      tn: "ttfx normalized (% change) toggle",
+      th: "ttfx hide annotated jumps toggle",
+      tz: "ttfx show zero toggle",
+      tg: "ttfx GC-off twins toggle (retired; read as tc=off)",
+      tl: "ttfx stdlibs-first twin toggle",
+      tc: "ttfx GC mode: every value from the repeats with the GC off",
+      tk: "ttfx selected tasks",
+      tq: "ttfx task filter",
+      tx: "ttfx excluded tasks (when most are selected)",
+      tv: "ttfx table view",
+      ts: "ttfx chart mode (summary or per task)",
+    },
+    data: () => ttfxData,
+    load: loadTtfxData,
+    stale: "ttfx",
+    reload: reloadTtfxData,
+    applyURL: applyTtfxURLParams,
+    // Until the summary is in, the URL still holds the tasks it named
+    writeURL: () => ttfxData && updateTtfxURL(),
+  },
+  "ci-runtime": {
+    url: "bench-runtime",
+    path: "/runtime",
+    view: "runtime-view",
+    source: "runtime",
+    keys: {
+      rt: "runtime time range",
+      rb: "runtime benchmark charted",
+      rc: "runtime categories shown",
+      rr: "runtime reference build",
+      rs: "runtime source (julia-ci or the backfill)",
+      rm: "runtime chart metric",
+      rv: "runtime table view (benchmarks or open pull requests)",
+      rq: "runtime benchmark filter",
+      rp: "runtime pull request shown in the benchmarks table",
+    },
+    data: () => runtimeData,
+    load: loadRuntimeData,
+    stale: "runtime",
+    reload: () => {
+      runtimePrs = null;
+      runtimePrsLoading = null;
+      loadRuntimeData();
+    },
+    applyURL: applyRuntimeURLParams,
+    writeURL: () => updateRuntimeURL(),
+  },
+  "ci-sizes": {
+    url: "bench-sizes",
+    path: "/sizes",
+    view: "sizes-view",
+    source: "sizes",
+    keys: {
+      zt: "sizes time range",
+      zn: "sizes normalized (% change) toggle",
+      zm: "sizes selected metrics",
+      zv: "sizes table view (open pull requests or master commits)",
+    },
+    data: () => sizesData,
+    load: loadSizesData,
+    stale: "sizes",
+    reload: reloadSizesData,
+    applyURL: applySizesURLParams,
+    writeURL: () => updateSizesURL(),
+  },
+  "ci-build-stages": {
+    url: "ci-build-stages",
+    path: "/build-stages",
+    view: "sysimage-view",
+    source: "sysimage",
+    keys: { it: "sysimage time range", ip: "sysimage platform", iw: "sysimage smoothing" },
+    data: () => sysimageData,
+    load: loadSysimageData,
+    stale: "sysimage",
+    applyURL: applySysimageURLParams,
+    writeURL: () => updateSysimageURL(),
+  },
+  "ci-coverage": {
+    url: "ci-coverage",
+    path: "/coverage",
+    view: "coverage-view",
+    source: "timing",
+    keys: {
+      vt: "coverage time range",
+      vd: "coverage: days the table compares over",
+      vv: "coverage table rows: files or directories",
+      vm: "coverage: smallest file in the table",
+      vq: "coverage path filter",
+      vs: "coverage table sort",
+    },
+    data: () => coverageData,
+    load: loadCoverageData,
+    stale: "coverage",
+    applyURL: applyCoverageURLParams,
+    writeURL: () => updateCoverageURL(),
+  },
+  packages: {
+    url: "eco-downloads",
+    path: "/downloads",
+    view: "packages-view",
+    source: "packages",
+    keys: {
+      edt: "ecosystem downloads time range",
+      edc: "ecosystem downloads client type",
+      edv: "ecosystem downloads Julia minor filter",
+      edp: "ecosystem downloads proportional toggle",
+      edm: "ecosystem downloads view mode",
+      edpkg: "ecosystem downloads package",
+    },
+    data: () => packagesDownloadsData,
+    load: loadPackagesDownloadsData,
+    stale: "packages",
+    applyURL: applyPackagesURLParams,
+    writeURL: () => updatePackagesURL(),
+  },
+  pkgeval: {
+    url: "eco-pkgeval",
+    path: "/pkgeval",
+    view: "pkgeval-view",
+    source: "pkgeval",
+    keys: {
+      pt: "pkgeval time range",
+      pp: "pkgeval proportional toggle",
+      pkg: "pkgeval package history",
+      pr: "pkgeval package list reason filter",
+      pv: "legacy pkgeval list view (pv=precompile is pr=precompile)",
+      pl: "pkgeval package list: recent changes or not passing",
+      pd: "pkgeval changes on one report",
+      pk: "pkgeval changes: broke or fixed",
+      pf: "pkgeval changes: show flaky packages",
+    },
+    data: () => pkgevalData,
+    load: loadPkgevalData,
+    stale: "pkgeval",
+    applyURL: applyPkgevalURLParams,
+    writeURL: () => updatePkgevalURL(),
+  },
+  activity: {
+    url: "repo-activity",
+    path: "/activity",
+    view: "activity-view",
+    source: "github",
+    keys: { at: "activity time range", aw: "activity averaging window" },
+    data: () => activityData,
+    load: loadActivityData,
+    stale: "activity",
+    applyURL: applyActivityURLParams,
+    writeURL: () => updateActivityURL(),
+  },
 };
 
 // One analytics page view per tab shown, without the query string
 function trackPageView(tab) {
   if (typeof window.gtag !== "function") return;
-  const path = TAB_SHORT_PATH[tab] || "/";
+  const path = TABS[tab]?.path || "/";
   const btn = document.getElementById("tab-" + tab);
   const label = btn ? btn.textContent.trim() : tab;
   gtag("event", "page_view", {
@@ -6918,20 +7086,20 @@ function trackPageView(tab) {
 }
 
 function tabToURLValue(tab) {
-  return TAB_URL_MAP[tab] || TAB_URL_MAP.overview;
+  return (TABS[tab] || TABS.overview).url;
 }
 
 function tabFromURLValue(value) {
   if (!value) return null;
   // Links from before the group prefixes were shortened
   value = value.replace(/^benchmarks-/, "bench-").replace(/^ecosystem-/, "eco-");
-  for (const [tabName, tabValue] of Object.entries(TAB_URL_MAP)) {
-    if (tabValue === value) return tabName;
+  for (const [tabName, t] of Object.entries(TABS)) {
+    if (t.url === value) return tabName;
   }
   // The internal names, which older links carry, and the short paths' names
-  if (Object.hasOwn(TAB_URL_MAP, value)) return value;
-  for (const [tabName, path] of Object.entries(TAB_SHORT_PATH)) {
-    if (path === "/" + value) return tabName;
+  if (Object.hasOwn(TABS, value)) return value;
+  for (const [tabName, t] of Object.entries(TABS)) {
+    if (t.path === "/" + value) return tabName;
   }
   // The Builds tab, into which the Commits tab had been folded, was removed
   if (value === "ci-builds" || value === "ci-commits") return "ci-timing";
@@ -6945,78 +7113,11 @@ const PERF_ORIGIN = "https://rustserver.perf.julialang.org";
 // so deep links like ?start=abc&end=def&stat=instructions Just Work.
 // "perf" is a legacy single-param fallback that holds the full iframe path.
 const DASHBOARD_PARAMS = new Set([
-  "s", // selected jobs
-  "t", // time range (days)
-  "x", // custom x zoom
-  "y", // custom y zoom
-  "l", // line type
-  "e", // expanded jobs in stats table
-  "st", // state filter
-  "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
-  "jv", // CI timing view (history or worker time)
-  "jf", // worker time filters
-  "jq", // CI timing job filter
-  "wq", // workers text filter
   "tab", // active tab
-  "c", // commit lookup ref
-  "bt", // bench time range
-  "bs", // bench stat type
-  "bv", // bench table view
-  "bm", // bench metric
-  "bg", // bench groups
-  "bn", // bench noisy table minimum time
-  "pt", // pkgeval time range
-  "pp", // pkgeval proportional toggle
-  "pkg", // pkgeval package history
-  "pr", // pkgeval package list reason filter
-  "pv", // legacy pkgeval list view (pv=precompile is pr=precompile)
-  "pl", // pkgeval package list: recent changes or not passing
-  "pd", // pkgeval changes on one report
-  "pk", // pkgeval changes: broke or fixed
-  "pf", // pkgeval changes: show flaky packages
-  "edt", // ecosystem downloads time range
-  "edc", // ecosystem downloads client type
-  "edv", // ecosystem downloads Julia minor filter
-  "edp", // ecosystem downloads proportional toggle
-  "edm", // ecosystem downloads view mode
-  "edpkg", // ecosystem downloads package
-  "tm", // ttfx metric
-  "tt", // ttfx time range
-  "tn", // ttfx normalized (% change) toggle
-  "th", // ttfx hide annotated jumps toggle
-  "tz", // ttfx show zero toggle
-  "tg", // ttfx GC-off twins toggle (retired; read as tc=off)
-  "tl", // ttfx stdlibs-first twin toggle
-  "tc", // ttfx GC mode: every value from the repeats with the GC off
-  "tk", // ttfx selected tasks
-  "tq", // ttfx task filter
-  "tx", // ttfx excluded tasks (when most are selected)
-  "tv", // ttfx table view
-  "ts", // ttfx chart mode (summary or per task)
-  "zt", // sizes time range
-  "zn", // sizes normalized (% change) toggle
-  "zm", // sizes selected metrics
-  "zv", // sizes table view (open pull requests or master commits)
-  "it", // sysimage time range
-  "ip", // sysimage platform
-  "iw", // sysimage smoothing
-  "vt", // coverage time range
-  "vd", // coverage: days the table compares over
-  "vv", // coverage table rows: files or directories
-  "vm", // coverage: smallest file in the table
-  "vq", // coverage path filter
-  "vs", // coverage table sort
-  "rt", // runtime time range
-  "rb", // runtime benchmark charted
-  "rc", // runtime categories shown
-  "rr", // runtime reference build
-  "rv", // runtime table view (benchmarks or open pull requests)
-  "rq", // runtime benchmark filter
-  "rp", // runtime pull request shown in the benchmarks table
-  "at", // activity time range
-  "aw", // activity averaging window
+  "cv", // legacy CI sub-view (tab=ci-timing&cv=workers links)
   "pop", // the TTFX, Runtime, Sizes or Build stages tab's open details popup
   "perf", // legacy: full iframe path
+  ...Object.values(TABS).flatMap((t) => Object.keys(t.keys || {})),
 ]);
 
 // Returns whether the URL carried julia-perf parameters, which makes it a
@@ -7116,24 +7217,8 @@ function switchTab(tab, { pushHistory = true } = {}) {
   }
 
   activeTab = tab;
-  const tabIds = {
-    "ci-timing": "tab-ci-timing",
-    "ci-workers": "tab-ci-workers",
-    "ci-ttfx": "tab-ci-ttfx",
-    "ci-runtime": "tab-ci-runtime",
-    "ci-sizes": "tab-ci-sizes",
-    "ci-build-stages": "tab-ci-build-stages",
-    "ci-coverage": "tab-ci-coverage",
-    packages: "tab-packages",
-    benchmarks: "tab-benchmarks",
-    pkgeval: "tab-pkgeval",
-    perf: "tab-perf",
-    overview: "tab-overview",
-    commit: "tab-commit",
-    activity: "tab-activity",
-  };
-  for (const [name, id] of Object.entries(tabIds)) {
-    const btn = document.getElementById(id);
+  for (const name of Object.keys(TABS)) {
+    const btn = document.getElementById("tab-" + name);
     const selected = name === tab;
     btn.classList.toggle("active", selected);
     btn.setAttribute("aria-selected", selected ? "true" : "false");
@@ -7145,77 +7230,20 @@ function switchTab(tab, { pushHistory = true } = {}) {
     group.classList.toggle("active-group", hasActiveTab);
   });
 
-  const isCITab = tab === "ci-timing" || tab === "ci-workers";
-
-  document
-    .getElementById("ci-timing-view")
-    .classList.toggle("view-hidden", !isCITab);
+  const isCITab = tabURLGroup(tab) === "ci";
   // Hide CI-timing-specific banners
   for (const id of ["stale-data-warning"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = isCITab ? "" : "none";
   }
 
-  document
-    .getElementById("benchmarks-view")
-    .classList.toggle("view-hidden", tab !== "benchmarks");
-  document
-    .getElementById("packages-view")
-    .classList.toggle("view-hidden", tab !== "packages");
-  document
-    .getElementById("pkgeval-view")
-    .classList.toggle("view-hidden", tab !== "pkgeval");
-  document
-    .getElementById("ttfx-view")
-    .classList.toggle("view-hidden", tab !== "ci-ttfx");
-  document
-    .getElementById("runtime-view")
-    .classList.toggle("view-hidden", tab !== "ci-runtime");
-  document
-    .getElementById("sizes-view")
-    .classList.toggle("view-hidden", tab !== "ci-sizes");
-  document
-    .getElementById("sysimage-view")
-    .classList.toggle("view-hidden", tab !== "ci-build-stages");
-  document
-    .getElementById("coverage-view")
-    .classList.toggle("view-hidden", tab !== "ci-coverage");
-  document
-    .getElementById("activity-view")
-    .classList.toggle("view-hidden", tab !== "activity");
-  document
-    .getElementById("perf-view")
-    .classList.toggle("view-hidden", tab !== "perf");
-  document
-    .getElementById("overview-view")
-    .classList.toggle("view-hidden", tab !== "overview");
-  document
-    .getElementById("commit-view")
-    .classList.toggle("view-hidden", tab !== "commit");
+  for (const view of new Set(Object.values(TABS).map((t) => t.view))) {
+    document.getElementById(view).classList.toggle("view-hidden", view !== TABS[tab].view);
+  }
   document.body.classList.toggle("tab-perf-active", tab === "perf");
-  // The embedded julia-perf site is loaded the first time the Diff tab is
-  // shown, not on every landing on another tab
-  if (tab === "perf") {
-    const iframe = document.getElementById("perf-iframe");
-    if (iframe && !iframe.getAttribute("src")) iframe.src = iframe.dataset.src;
-  }
-
-  if (tab === "overview") {
-    renderOverview();
-  }
-  if (tab === "commit") {
-    renderCommitView();
-  }
-
-  if (tab === "benchmarks" && !benchData) loadTabOnce(tab, loadBenchmarkData);
-  if (tab === "pkgeval" && !pkgevalData) loadTabOnce(tab, loadPkgevalData);
-  if (tab === "ci-ttfx" && !ttfxData) loadTabOnce(tab, loadTtfxData);
-  if (tab === "ci-runtime" && !runtimeData) loadTabOnce(tab, loadRuntimeData);
-  if (tab === "ci-sizes" && !sizesData) loadTabOnce(tab, loadSizesData);
-  if (tab === "ci-build-stages" && !sysimageData) loadTabOnce(tab, loadSysimageData);
-  if (tab === "ci-coverage" && !coverageData) loadTabOnce(tab, loadCoverageData);
-  if (tab === "packages" && !packagesDownloadsData) loadTabOnce(tab, loadPackagesDownloadsData);
-  if (tab === "activity" && !activityData) loadTabOnce(tab, loadActivityData);
+  const t = TABS[tab];
+  t.show?.();
+  if (t.load && !t.data()) loadTabOnce(tab, t.load);
   reloadStaleView(tab);
 
   updatePhoneShell(tab);
@@ -7242,16 +7270,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
     history.replaceState(null, "", url);
   }
   // The tab's own parameters, from its state when it has been shown before
-  if (tabURLGroup(tab) === "ci" && jobSelectionRestored) updateURL();
-  if (tab === "benchmarks" && benchData) updateBenchURL();
-  if (tab === "ci-ttfx" && ttfxData) updateTtfxURL();
-  if (tab === "ci-runtime") updateRuntimeURL();
-  if (tab === "ci-sizes") updateSizesURL();
-  if (tab === "ci-build-stages") updateSysimageURL();
-  if (tab === "ci-coverage") updateCoverageURL();
-  if (tab === "packages") updatePackagesURL();
-  if (tab === "pkgeval") updatePkgevalURL();
-  if (tab === "activity") updateActivityURL();
+  t.writeURL?.();
   document.title = tabTitle(tab);
   trackPageView(tab);
 }
@@ -7267,20 +7286,9 @@ function tabTitle(tab) {
 // The URL parameters each tab owns, by the group of tabs that share them.
 // The Diff tab owns every parameter the dashboard does not, which it passes
 // to the julia-perf site in its frame.
-const TAB_URL_KEYS = {
-  ci: ["s", "t", "x", "y", "l", "e", "st", "jv", "jf", "jq", "wq"],
-  commit: ["c"],
-  benchmarks: ["bt", "bs", "bv", "bm", "bg", "bn"],
-  "ci-ttfx": ["tm", "tt", "tn", "th", "tz", "tg", "tl", "tc", "tk", "tq", "tx", "tv", "ts"],
-  "ci-sizes": ["zt", "zn", "zm", "zv"],
-  "ci-build-stages": ["it", "ip", "iw"],
-  "ci-coverage": ["vt", "vd", "vv", "vm", "vq", "vs"],
-  "ci-runtime": ["rt", "rb", "rc", "rr", "rv", "rq", "rp"],
-  activity: ["at", "aw"],
-  packages: ["edt", "edc", "edv", "edp", "edm", "edpkg"],
-  pkgeval: ["pt", "pp", "pkg", "pr", "pv", "pl", "pd", "pk", "pf"],
-};
-const tabURLGroup = (tab) => (tab === "ci-timing" || tab === "ci-workers" ? "ci" : tab);
+const TAB_URL_KEYS = {};
+for (const [name, t] of Object.entries(TABS)) if (t.keys) TAB_URL_KEYS[t.urlGroup || name] = Object.keys(t.keys);
+const tabURLGroup = (tab) => TABS[tab].urlGroup || tab;
 const perfOwnsKey = (k) => k === "perf" || !DASHBOARD_PARAMS.has(k);
 let tabShown = false;
 // The Diff tab's parameters while another tab is shown, to put back on return
@@ -22034,20 +22042,6 @@ const PHONE_SECTIONS = [
   { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
-// The view holding each tab's toolbar; the two CI pages share one
-const PHONE_TOOLBAR_VIEWS = {
-  "ci-timing": "ci-timing-view",
-  "ci-workers": "ci-timing-view",
-  "ci-ttfx": "ttfx-view",
-  "ci-sizes": "sizes-view",
-  "ci-build-stages": "sysimage-view",
-  "ci-coverage": "coverage-view",
-  "ci-runtime": "runtime-view",
-  benchmarks: "benchmarks-view",
-  packages: "packages-view",
-  pkgeval: "pkgeval-view",
-  activity: "activity-view",
-};
 const PHONE_TOOLBARS = ".ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar";
 const phoneLastTab = {};
 let phoneBar = null;
@@ -22100,8 +22094,7 @@ function updatePhoneShell(tab) {
       return `<button type="button" data-tab="${t}" class="${t === tab ? "active" : ""}">${escapeHtml(label)}</button>`;
     })
     .join("");
-  const view = PHONE_TOOLBAR_VIEWS[tab] && document.getElementById(PHONE_TOOLBAR_VIEWS[tab]);
-  const toolbar = view && view.querySelector(PHONE_TOOLBARS);
+  const toolbar = document.getElementById(TABS[tab].view).querySelector(PHONE_TOOLBARS);
   if (toolbar && !toolbar.previousElementSibling?.classList.contains("m-filter-chip")) {
     const chip = document.createElement("button");
     chip.type = "button";
@@ -22246,17 +22239,8 @@ function openPhoneSheet(toolbar) {
 refreshData();
 loadData();
 
-// Apply benchmark URL params before potential tab switch
-applyBenchURLParams();
-applyPackagesURLParams();
-applyPkgevalURLParams();
-applyTtfxURLParams();
-applySizesURLParams();
-applyActivityURLParams();
-applySysimageURLParams();
-applyCoverageURLParams();
-applyRuntimeURLParams();
-applyCommitURLParams();
+// Each tab reads its URL parameters before the landing tab is shown
+for (const t of Object.values(TABS)) t.applyURL?.();
 const perfDeepLink = applyPerfURLParams();
 
 // Switch to correct tab if URL says so

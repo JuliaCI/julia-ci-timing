@@ -41,7 +41,7 @@ docs in the route table, and update `llms.txt` and `docs/querying.md` if
 it is one an agent would reach for. When you add a table or column,
 describe it in `db/datasette-metadata.json`.
 
-Each tab's `?tab=` value is in `TAB_URL_MAP` in `assets/app.js`. Its data comes
+Each tab's `?tab=` value is in `TABS` in `assets/app.js`. Its data comes
 from one of the `fetch_*.jl` scripts, whose headers say what they record, and the route table in `src/api.jl`
 describes every route, `status` and `ready` included.
 
