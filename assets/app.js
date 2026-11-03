@@ -549,7 +549,8 @@ function tapAgainToOpen(open) {
   onClick.open = open;
   return onClick;
 }
-const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap here or the marker again to open" : "");
+const TAP_AGAIN_FOOTER = () => (IS_TOUCH ? "Tap again to open" : "");
+const TOOLTIP_DETAILS_HINT = () => (IS_TOUCH ? "Tap again for details" : "Click for details");
 
 // On a touchscreen a tap on the tooltip opens what it shows, as a second tap
 // on its point does. The tap is kept from the tooltip, which would otherwise
@@ -1602,15 +1603,10 @@ function renderBacklogChart(d) {
             label: (item) => {
               const p = item.dataset._pool;
               const j = item.dataIndex;
-              const slots = p.slots ? ` of ${backlogSlotsText(p)}` : "";
               const waitSplit = backlogSplit(p, j);
               const runSplit = backlogSplit(p, j, "running");
-              const longSplit = backlogSplit(p, j, "oldest_wait_s", formatWait);
-              return (
-                `${item.dataset.label}: ${p.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, ` +
-                `longest ${formatWait(p.oldest_wait_s[j])}${longSplit.includes(",") ? ` (${longSplit})` : ""}; ` +
-                `${p.running[j]} running${runSplit ? ` (${runSplit})` : ""}${slots}`
-              );
+              const waiting = p.waiting[j] ? `${p.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, longest ${formatWait(p.oldest_wait_s[j])}` : "none waiting";
+              return `${item.dataset.label}: ${waiting}; ${p.running[j]} running${runSplit ? ` (${runSplit})` : ""}${p.slots ? ` of ${p.slots}` : ""}`;
             },
           },
         },
@@ -1724,7 +1720,7 @@ function renderBuildHoursChart(d) {
       jobs: builds.reduce((a, b) => a + b.jobs, 0) / builds.length,
     }));
     const color = palette[s.color];
-    return { label: s.label, data, borderColor: color, backgroundColor: color, borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6, clip: false };
+    return { label: s.label, _short: s.short, data, borderColor: color, backgroundColor: color, borderWidth: 1.5, pointRadius: 2.5, pointHitRadius: 6, clip: false };
   });
   const weekAgo = Date.now() - 7 * 86400000;
   const recent = BUILD_HOURS_SERIES.map((s) => {
@@ -1747,7 +1743,7 @@ function renderBuildHoursChart(d) {
             title: (items) => (items.length ? new Date(items[0].parsed.x).toISOString().slice(0, 10) : ""),
             label: (item) => {
               const p = item.raw;
-              return `${item.dataset.label}: ${p.y.toFixed(1)} h ${stat} over ${p.n} build${p.n === 1 ? "" : "s"}, ${Math.round(p.jobs)} jobs each on average`;
+              return `${item.dataset._short}: ${p.y.toFixed(1)} h ${stat} of ${p.n} build${p.n === 1 ? "" : "s"}, ~${Math.round(p.jobs)} jobs`;
             },
           },
         },
@@ -1930,7 +1926,6 @@ function renderBalanceCharts(d) {
                   const f = (v) => (bucket > 1 ? v.toFixed(1) : String(v));
                   return `${item.dataset.label}: ${f(running)} running, ${f(waiting)} waiting, ${item.dataset._slots} slots (${balanceMultiple((running + waiting) / item.dataset._slots)})`;
                 },
-                afterLabel: (item) => (item.dataset._all ? BALANCE_ALL_HELP : ""),
               },
             },
             annotation: {
@@ -2256,24 +2251,29 @@ function convertEmojiText(text) {
 }
 
 // Chart.js draws tooltips on the canvas and never wraps them, so free text
-// in one (commit messages, notes) is split at spaces into lines of at most
-// `width` characters; a longer word keeps its own line
-const TOOLTIP_WRAP_CHARS = 60;
-function wrapTooltipText(text, width = TOOLTIP_WRAP_CHARS) {
-  const lines = [];
-  let line = "";
-  for (const word of String(text).split(/\s+/)) {
-    if (!word) continue;
-    if (line && line.length + 1 + word.length > width) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line ? `${line} ${word}` : word;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
+// in one (commit messages, notes) is kept to its first line, cut short
+const TOOLTIP_TEXT_CHARS = 60;
+function tooltipLine(text, width = TOOLTIP_TEXT_CHARS) {
+  const line = String(text).split("\n")[0].trim();
+  return line.length > width ? line.slice(0, width - 1).trimEnd() + "…" : line;
 }
+
+// A tooltip `filter` that keeps the `max` items with the largest |value|, plus
+// any `pin` keeps, so a tooltip over many series stays short. The number left
+// out is kept on the chart for the "+N more" line.
+function tooltipTopItems(max, value, pin = () => false) {
+  return (item, _, items) => {
+    if (items.length <= max) {
+      item.chart.$tipMore = 0;
+      return true;
+    }
+    const ranked = items.filter((it) => !pin(it)).sort((a, b) => Math.abs(value(b)) - Math.abs(value(a)));
+    const kept = new Set(ranked.slice(0, max - (items.length - ranked.length)));
+    item.chart.$tipMore = ranked.length - kept.size;
+    return pin(item) || kept.has(item);
+  };
+}
+const tooltipMoreLine = (items) => (items.length && items[0].chart.$tipMore ? `+${items[0].chart.$tipMore} more` : "");
 
 // Escape HTML special characters for safe insertion into attributes
 // Whether `text` holds every word of a sidebar search, in any order and case:
@@ -4334,7 +4334,7 @@ function updateChart() {
               lines.push(
                 `${getStateDisplay(meta.state)} · ${formatDuration(ctx.parsed.y)}`,
               );
-              if (meta.message) lines.push(...wrapTooltipText(meta.message));
+              if (meta.message) lines.push(tooltipLine(meta.message));
               if (meta?.agent) lines.push(`🖥️ ${meta.agent}`);
               return lines;
             },
@@ -8465,8 +8465,10 @@ function updateBenchChart() {
           display: false,
         },
         tooltip: {
+          filter: tooltipTopItems(8, (item) => item.raw.y, (item) => item.dataset.label === "Overall"),
           callbacks: {
             footer: TAP_AGAIN_FOOTER,
+            afterBody: tooltipMoreLine,
             title: (items) => {
               if (!items.length) return "";
               const d = items[0].raw.x;
@@ -8474,9 +8476,7 @@ function updateBenchChart() {
             },
             afterTitle: (items) => {
               if (!items.length) return "";
-              return items[0].raw.commit
-                ? `Commit: ${items[0].raw.commit}`
-                : "";
+              return items[0].raw.commit ? items[0].raw.commit.slice(0, 10) : "";
             },
             label: (item) => {
               const raw = item.raw;
@@ -10424,7 +10424,7 @@ function updatePackagesDownloadsChart() {
               if (packagesProportional) {
                 return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toFixed(1)}%`;
               }
-              return ` ${ctx.dataset.label}: ${(ctx.parsed.y || 0).toLocaleString("en-US")}`;
+              return ` ${ctx.dataset.label}: ${Math.round(ctx.parsed.y || 0).toLocaleString("en-US")}`;
             },
           },
         },
@@ -11471,12 +11471,12 @@ function updatePkgevalDeltaChart() {
               const fixed = [...g.fixed, ...g.pfixed];
               if (broke.length) lines.push(`Broke with: ${pkgevalTopReasons(broke)}`);
               if (fixed.length) lines.push(`Fixed from: ${pkgevalTopReasons(fixed)}`);
-              lines.push(`Every flip, flaky included: ${r.raw_breaks} broke, ${r.raw_fixes} fixed`);
+              lines.push(`With flaky: ${r.raw_breaks} broke, ${r.raw_fixes} fixed`);
               if (r.gap_days > PKGEVAL_GAP_DAYS)
-                lines.push(`${r.gap_days} days after the report before: these span every commit in between, and the bar is cut off`);
+                lines.push(`Spans a ${r.gap_days}-day gap; bar cut off`);
               return lines;
             },
-            footer: () => (IS_TOUCH ? "Tap here or the point again to list them" : "Click to list them"),
+            footer: () => (IS_TOUCH ? "Tap again to list them" : "Click to list them"),
           },
         },
       },
@@ -13460,7 +13460,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
             const chart = items[0].chart;
             if (items[0].dataset._ref === "opt") {
               const p = ttfxPairedRatio(b, items[0].dataset._refCommon, metric, items[0].dataset._twin);
-              if (p) lines.push(`vs the regular build of the same commit, measured beside it: ${formatTtfxRatio(p.ratio)} (${p.n} tasks)`);
+              if (p) lines.push(`vs regular build: ${formatTtfxRatio(p.ratio)} (${p.n} tasks)`);
             }
             const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
             if (suite && !items[0].dataset._common) {
@@ -13468,9 +13468,9 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
               if (p) lines.push(`${suite.label} (${suite._common} tasks): ${fmt(p.y)}`);
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
-            if (b.message) lines.push(...wrapTooltipText(b.message));
-            for (const a of ttfxAnnotationsFor(b)) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-            lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click marker for details and links");
+            if (b.message) lines.push(tooltipLine(b.message));
+            for (const a of ttfxAnnotationsFor(b)) lines.push(tooltipLine(`Note: ${a.label || a.description}`));
+            lines.push(TOOLTIP_DETAILS_HINT());
             return lines;
           },
         },
@@ -15614,11 +15614,10 @@ function updateSizesChart() {
               if (!items.length) return "";
               const i = items[0].raw.i;
               const d = sizesData;
-              const lines = [d.sources[i] === "ci" ? `build ${d.builds[i]}, CI tarball` : "manyjulias build"];
               const span = sizesSpan(sizesPrevious(d.values.total || [], i), i);
-              if (span > 1) lines.push(`${span} commits since the previous measured one`);
-              if (d.messages[i]) lines.push(...wrapTooltipText(span > 1 ? `Last: ${d.messages[i]}` : d.messages[i]));
-              lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click marker for details and links");
+              const lines = [`${d.sources[i] === "ci" ? `build ${d.builds[i]}, CI tarball` : "manyjulias build"}${span > 1 ? `, ${span} commits` : ""}`];
+              if (d.messages[i]) lines.push(tooltipLine(span > 1 ? `Last: ${d.messages[i]}` : d.messages[i]));
+              lines.push(TOOLTIP_DETAILS_HINT());
               return lines;
             },
           },
@@ -16485,11 +16484,11 @@ function overviewDonut(segments, { format = (v) => String(v), showPct = true, co
 }
 
 // Sparkline spec: points [{ x: ms, y }] of one series
-function overviewSpark(points, { color, label, format = (v) => String(v), zero = false }) {
+function overviewSpark(points, { color, label, tip = label, format = (v) => String(v), zero = false }) {
   const kept = points.filter((p) => !isNaN(p.x) && p.y != null && !isNaN(p.y));
   if (kept.length < 2) return null;
   kept.sort((a, b) => a.x - b.x);
-  return { points: kept, color, label, format, zero };
+  return { points: kept, color, label, tip, format, zero };
 }
 
 // Sparkline spec with several series: [{ label, color, points }], one line each.
@@ -16654,7 +16653,7 @@ function overviewActivityCard(src) {
     : null;
   const spark = overviewSpark(
     s.open_prs.map((y, i) => ({ x: dayMs(i), y })),
-    { color: colors.accent, label: "Open pull requests at the end of each day", format: (v) => v.toLocaleString("en-US") },
+    { color: colors.accent, label: "Open pull requests at the end of each day", tip: "Open PRs", format: (v) => v.toLocaleString("en-US") },
   );
   // Today's count against the end of the day a week before
   const open = (key) => {
@@ -17012,7 +17011,7 @@ function overviewCICard() {
 
   const spark = overviewSpark(
     builds.filter((b) => b.runMs >= now - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS).map((b) => ({ x: b.runMs, y: b.failed })),
-    { color: colors.bad, label: "Failed or timed-out jobs per build", format: (v) => `${v}`, zero: true },
+    { color: colors.bad, label: "Failed or timed-out jobs per build", tip: "Failed jobs", format: (v) => `${v}`, zero: true },
   );
 
   let status;
@@ -17317,7 +17316,7 @@ function overviewSizesCard(src, prs) {
   const sparkStart = Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS;
   const spark = overviewSpark(
     measured.filter((k) => timeOf(k) >= sparkStart).map((k) => ({ x: timeOf(k), y: totals[k] })),
-    { color: colors.accent, label: "Total unpacked size per master commit", format: formatBytes },
+    { color: colors.accent, label: "Total unpacked size per master commit", tip: "Unpacked size", format: formatBytes },
   );
   // Against the last measured commit at least a week older, unless the
   // measurement switched source in between: that step is not a change
@@ -17765,7 +17764,7 @@ function overviewSparkChart(canvas, spark) {
           displayColors: multi,
           callbacks: {
             title: (items) => formatUtc(items[0].parsed.x),
-            label: (item) => `${multi ? item.dataset.label : spark.label}: ${spark.format(item.parsed.y)}`,
+            label: (item) => `${multi ? item.dataset.label : spark.tip ?? spark.label}: ${spark.format(item.parsed.y)}`,
           },
         },
       },
@@ -19208,7 +19207,7 @@ function updateCoverageCharts() {
                 footer: (items) => {
                   if (!items.length) return "";
                   const c = commits[items[0].raw.i];
-                  return [c.subject ? c.subject.slice(0, 80) : "", `${c.sessions ?? "?"} of the platforms' uploads merged`].filter(Boolean);
+                  return [c.subject ? tooltipLine(c.subject) : "", `${c.sessions ?? "?"} upload${c.sessions === 1 ? "" : "s"} merged`].filter(Boolean);
                 },
               },
             },
@@ -19368,7 +19367,7 @@ function overviewCoverageCard(src) {
   const sparkFrom = new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS).toISOString();
   const spark = overviewSpark(
     commits.filter((c) => c.measured_at >= sparkFrom && (c.sessions || 0) >= sessions).map((c) => ({ x: Date.parse(c.measured_at), y: coveragePct(c.hits, c.lines) })),
-    { color: colors.accent, label: "Lines run, % of the lines Codecov counts as code", format: (v) => `${v.toFixed(2)}%` },
+    { color: colors.accent, label: "Lines run, % of the lines Codecov counts as code", tip: "Coverage", format: (v) => `${v.toFixed(2)}%` },
   );
   const fileLink = (f, text) => extLink(`${CODECOV_REPO}/commit/${head.commit}/blob/${f.path}`, escapeHtml(text), `title="${escapeHtml(f.path)} on Codecov"`);
   const fileName = (f) => f.path.split("/").pop();
@@ -19620,7 +19619,7 @@ function sysimageIndices(p) {
 function sysimageBuildLines(p, i) {
   const subject = sysimageData.subjects?.[p.commits[i]];
   const lines = [];
-  if (subject) lines.push(subject.length > 80 ? subject.slice(0, 79) + "…" : subject);
+  if (subject) lines.push(tooltipLine(subject));
   if (p.agents[i]) lines.push(p.agents[i].replace(/\..*/, ""));
   return lines;
 }
@@ -19773,7 +19772,9 @@ function updateSysimageCharts() {
           .map(([name, v]) => [name, v[i]])
           .filter(([, v]) => v != null)
           .sort((a, b) => b[1] - a[1]);
-        return each.map(([name, v]) => `${name}: ${formatDuration(v)}`);
+        const lines = each.slice(0, 4).map(([name, v]) => `${name}: ${formatDuration(v)}`);
+        if (each.length > 4) lines.push(`+${each.length - 4} more`);
+        return lines;
       }
       if (s === "precompile" && p.precompile_statements[i] != null) return [`${p.precompile_statements[i]} statements`];
       if (s === "stdlib_pkgimages" && p.stdlib_pkgimages_count[i] != null) return [`${p.stdlib_pkgimages_count[i]} pkgimages`];
@@ -20542,10 +20543,10 @@ function runtimeBuildFooter(i) {
   if (prev != null && runtimeData.builds[prev].llvm !== b.llvm) lines.push(`LLVM ${runtimeData.builds[prev].llvm} → ${b.llvm}`);
   const failed = Object.keys(b.failed || {});
   if (failed.length) lines.push(`${failed.length} benchmark${failed.length === 1 ? "" : "s"} failed`);
-  if (b.message) lines.push(...wrapTooltipText(b.message));
+  if (b.message) lines.push(tooltipLine(b.message));
   if (runtimeIsBackfill(b)) lines.push(`Backfill: a manyjulias build on ${b.machine || "another machine"}`);
-  for (const a of runtimeAnnotations.filter((a) => a.build === b.build && !runtimeIsBackfill(b))) lines.push(...wrapTooltipText(`Note: ${a.description}`));
-  lines.push(IS_TOUCH ? "Tap here or the marker again for details and links" : "Click a point for details and links");
+  for (const a of runtimeAnnotations.filter((a) => a.build === b.build && !runtimeIsBackfill(b))) lines.push(tooltipLine(`Note: ${a.label || a.description}`));
+  lines.push(TOOLTIP_DETAILS_HINT());
   return lines;
 }
 
@@ -20665,9 +20666,11 @@ function updateRuntimeCharts() {
           usePointStyle: true,
           boxPadding: 4,
           itemSort: (a, b) => b.raw.y - a.raw.y,
+          filter: tooltipTopItems(7, (item) => item.raw.y, (item) => item.dataset._cat === RUNTIME_ALL),
           callbacks: {
             title: runtimeTooltipTitle,
             label: (ctx) => ` ${ctx.dataset.label}: ${formatSignedPct(ctx.raw.y)}`,
+            afterBody: tooltipMoreLine,
             footer: (items) => (items.length ? runtimeBuildFooter(items[0].raw.i) : []),
           },
         },
@@ -21689,7 +21692,7 @@ function overviewRuntimeCard(src, prs) {
   );
   const spark = overviewSpark(
     chained.map((p) => ({ x: Date.parse(builds[p.x].date), y: (p.y / chained[0].y - 1) * 100 })),
-    { color: colors.accent, label: "Geometric mean of every benchmark per build, as a change from the first build of the month", format: (v) => formatSignedPct(v) },
+    { color: colors.accent, label: "Geometric mean of every benchmark per build, as a change from the first build of the month", tip: "Change since month start", format: (v) => formatSignedPct(v) },
   );
   let status;
   if (ageMs > OVERVIEW_TTFX_STALE_MS) status = overviewStatus("warn", `No result for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`);
