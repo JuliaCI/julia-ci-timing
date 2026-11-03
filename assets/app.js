@@ -1158,8 +1158,6 @@ function poolStalledMachines(backlog, lastMs) {
 // the most jobs each host was seen running at once, marks an idle row whose
 // host is already full with other queues' jobs. With `backlog`, a host that
 // sat out work its pool was waiting on is quiet without waiting days.
-// `julia` marks the rows of the Julia cluster's queues, the rest serving other
-// projects (Yggdrasil, the GPU packages).
 function summarizeAgents(agents, connected, latestMs, hostSlots = null, backlog = null) {
   const perQueue = { build: 0, test: 0, launch: 0, other: 0 };
   for (const name of connected) perQueue[agentQueueGroup(agents[name])]++;
@@ -1213,7 +1211,6 @@ function summarizeAgents(agents, connected, latestMs, hostSlots = null, backlog 
     } else host.status = "idle";
     rows.push(host);
   }
-  for (const row of rows) row.julia = AGENTS_PER_JOB_QUEUES.has(row.rec.queue);
   if (hostSlots) {
     const byHostname = new Map();
     for (const host of hosts.values()) {
@@ -1302,9 +1299,8 @@ async function renderAgentsSection() {
     `<strong>${connected.size}</strong> connected (${queueParts.join(", ")})` +
     (flagged.length ? ", " + flagged.join(", ") : ", none missing");
 
-  // Live table, one section per queue: the Julia cluster's queues first, then
-  // the rest (yggdrasil, the GPU queues, ...) by name, since a queue is what
-  // ties agents to a pipeline. The rows sort within a section.
+  // Live table, one section per queue: the Julia cluster's queues, then the
+  // Secure cluster's. The rows sort within a section.
   const statusOrder = { missing: 0, lost: 0, quiet: 0, stopping: 1, running: 2, connected: 2, idle: 3 };
   const queueRank = (q) => {
     const i = AGENTS_JULIA_QUEUE_ORDER.indexOf(q);
@@ -17565,11 +17561,6 @@ function overviewAgentsCard(src, backlog) {
   const latestMs = Date.parse(src.generated_at);
   const connected = new Set(Object.keys(agents).filter((n) => agents[n].state === "connected"));
   const { rows, perQueue, missing, quiet } = summarizeAgents(agents, connected, latestMs, null, backlog);
-  // Only the Julia cluster's machines colour the card; the rest serve other
-  // projects and are listed without raising the status
-  const juliaMissing = missing.filter((r) => r.julia);
-  const juliaQuiet = quiet.filter((r) => r.julia);
-  const elsewhere = [...missing, ...quiet].filter((r) => !r.julia);
   const running = rows.filter((r) => r.status === "running").reduce((acc, r) => acc + r.running, 0)
     + rows.filter((r) => r.status === "connected" && r.rec.job).length;
   const queue = overviewQueueSummary(backlog);
@@ -17580,16 +17571,16 @@ function overviewAgentsCard(src, backlog) {
   if (Date.now() - latestMs > OVERVIEW_AGENTS_STALE_MS) {
     level = "bad";
     problems.push(`Snapshot ${overviewAgo(src.generated_at)}`);
-  } else if (juliaMissing.length || juliaQuiet.length) {
+  } else if (missing.length || quiet.length) {
     level = "warn";
-    if (juliaMissing.length) problems.push(`${juliaMissing.length} missing`);
-    if (juliaQuiet.length) problems.push(`${juliaQuiet.length} quiet`);
+    if (missing.length) problems.push(`${missing.length} missing`);
+    if (quiet.length) problems.push(`${quiet.length} quiet`);
   }
   if (queue && queue.level !== "ok") {
     if (rank[queue.level] > rank[level]) level = queue.level;
     problems.push(queue.text);
   }
-  const status = overviewStatus(level, problems.length ? problems.join(", ") : elsewhere.length ? "Julia CI all present, no long waits" : "All present, no long waits");
+  const status = overviewStatus(level, problems.length ? problems.join(", ") : "All present, no long waits");
   const donut = overviewDonut([
     { label: "build queue", value: perQueue.build, color: colors.categorical[0] },
     { label: "test queue", value: perQueue.test, color: colors.categorical[1] },
@@ -17610,9 +17601,8 @@ function overviewAgentsCard(src, backlog) {
     rows: [
       ...(queue ? [["Connected agents", String(connected.size)], ...queue.rows] : []),
       ["Running jobs", String(running)],
-      ["Missing agents", juliaMissing.length ? overviewList(juliaMissing.map((r) => r.name)) : ""],
-      ["Quiet hosts", juliaQuiet.length ? overviewList(juliaQuiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
-      ["Offline elsewhere", elsewhere.length ? overviewList(elsewhere.map((r) => `${r.name} (${r.rec.queue || "no queue"})`)) : ""],
+      ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
+      ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
       overviewUpdatedRow(src.generated_at, "Snapshot"),
     ],
   });

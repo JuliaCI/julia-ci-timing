@@ -846,11 +846,13 @@ CREATE TABLE IF NOT EXISTS agent_snapshot_members (
 ) WITHOUT ROWID;
 
 -- fold_key is the name without its ".N" slot suffix, the key the Workers
--- tab folds ephemeral per-job agents on.
+-- tab folds ephemeral per-job agents on. cluster_id is the Buildkite cluster's
+-- ID, NULL for an agent not seen since it was first recorded.
 CREATE TABLE IF NOT EXISTS agents (
     name         TEXT PRIMARY KEY,
     fold_key     TEXT NOT NULL,
     agent_id     TEXT,
+    cluster_id   TEXT,
     hostname     TEXT NOT NULL DEFAULT '',
     queue        TEXT NOT NULL DEFAULT '',
     os           TEXT NOT NULL DEFAULT '',
