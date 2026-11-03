@@ -11,8 +11,8 @@
 # source's change sequence (the last commit that changed that source's
 # rows) and the build, so a browser's revalidation costs nothing until an
 # ingest changes that source or a deploy changes what a route renders.
-# Bodies are rendered once per (request, sequence) and kept gzipped in a
-# bounded cache. Requests take a query-only connection from a small
+# Bodies are rendered once per (request, sequence) and kept gzipped and in
+# zstd in a bounded cache. Requests take a query-only connection from a small
 # pool, so a slow render (all of timing, a big benchmark group) does not
 # hold up the rest.
 #
@@ -78,6 +78,7 @@ end
 mutable struct CacheEntry
     seq::Int                      # the route's change sequence it was rendered at
     body::Vector{UInt8}           # gzipped
+    zbody::Vector{UInt8}          # the same in zstd
     segments::Vector{String}
     params::Dict{String,String}
     hit_at::Float64               # last served, for eviction and for dropping what nobody asks for
@@ -425,7 +426,7 @@ end
 function api_index()
     routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
     return OrderedDict(
-        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, runtime benchmarks, distribution sizes, sysimage build times, package downloads and Buildkite agents, from one SQLite database refreshed every 10 to 30 minutes. All routes are GET and answer JSON, gzipped when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, runtime benchmarks, distribution sizes, sysimage build times, package downloads and Buildkite agents, from one SQLite database refreshed every 10 to 30 minutes. All routes are GET and answer JSON, compressed with zstd or gzip when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
         "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 300 MB)",
@@ -450,22 +451,24 @@ function cache_get(s::Server, key; touch=true)
         e = get(s.cache, key, nothing)
         e === nothing && return nothing
         touch && (e.hit_at = time())
-        return (e.seq, e.body)
+        return (e.seq, (e.body, e.zbody))
     end
 end
 
 # A new entry counts as used now; a render of an existing one (the
 # refresher's) keeps its last use, so what nobody asks for still ages out.
 # The refresher does not bring back an entry evicted while it rendered.
-function cache_put!(s::Server, key, seq, body, segments, params; refresh=false)
+entry_bytes(e::CacheEntry) = length(e.body) + length(e.zbody)
+
+function cache_put!(s::Server, key, seq, bodies, segments, params; refresh=false)
     lock(s.lock) do
         old = get(s.cache, key, nothing)
         refresh && old === nothing && return
         t = time()
         hit_at = old === nothing ? t : old.hit_at
-        old === nothing || (s.cache_bytes -= length(old.body))
-        s.cache[key] = CacheEntry(seq, body, segments, params, hit_at, t)
-        s.cache_bytes += length(body)
+        old === nothing || (s.cache_bytes -= entry_bytes(old))
+        s.cache[key] = CacheEntry(seq, bodies..., segments, params, hit_at, t)
+        s.cache_bytes += entry_bytes(s.cache[key])
         (length(s.cache) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) || return
         # The least recently served goes first. The landing routes stay, so
         # that a crawler walking every package cannot make a visitor wait.
@@ -473,7 +476,7 @@ function cache_put!(s::Server, key, seq, body, segments, params; refresh=false)
         evictable = sort!([(e.hit_at, k) for (k, e) in s.cache if k != key && !(k in pinned)])
         for (_, k) in evictable
             (length(s.cache) > CACHE_MAX_ENTRIES || s.cache_bytes > CACHE_MAX_BYTES) || break
-            s.cache_bytes -= length(s.cache[k].body)
+            s.cache_bytes -= entry_bytes(s.cache[k])
             delete!(s.cache, k)
         end
     end
@@ -483,15 +486,15 @@ function cache_delete!(s::Server, key)
     lock(s.lock) do
         e = pop!(s.cache, key, nothing)
         e === nothing && return
-        s.cache_bytes -= length(e.body)
+        s.cache_bytes -= entry_bytes(e)
     end
 end
 
 # Render a key into the cache, once at a time: a request, the warm-up and the
 # refresher asking for the same key while it renders wait for that render
 # rather than starting another (after a restart they would all compile and
-# run the same heavy query side by side). Returns (seq, body), or nothing
-# when the route has no such resource.
+# run the same heavy query side by side). Returns (seq, (gzip body, zstd
+# body)), or nothing when the route has no such resource.
 function render_cached!(s::Server, key, segments, params, seq; refresh=false)
     while true
         ev, mine = lock(s.lock) do
@@ -502,10 +505,10 @@ function render_cached!(s::Server, key, segments, params, seq; refresh=false)
         end
         if mine
             try
-                body = render_gzip(s, segments, params)
-                body === nothing && return nothing
-                cache_put!(s, key, seq, body, segments, params; refresh)
-                return (seq, body)
+                bodies = render_compressed(s, segments, params)
+                bodies === nothing && return nothing
+                cache_put!(s, key, seq, bodies, segments, params; refresh)
+                return (seq, bodies)
             finally
                 lock(() -> delete!(s.inflight, key), s.lock)
                 notify(ev)
@@ -575,13 +578,17 @@ end
 
 refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
 
-# A body is compressed once per render and then served many times
+# A body is compressed once per render and then served many times. Browsers
+# that take zstd get a body about a fifth smaller than gzip's, and Caddy
+# cannot recompress one that is already gzipped.
 gzip(bytes) = transcode(GzipCompressor(level=9), bytes)
+zstd(bytes) = transcode(ZstdCompressor(level=9), bytes)
+compress(bytes) = (gzip(bytes), zstd(bytes))
 
-function render_gzip(s::Server, segments, params)
+function render_compressed(s::Server, segments, params)
     return offload() do
         value = withdb(db -> render(db, segments, params), s)
-        value === nothing ? nothing : gzip(Vector{UInt8}(JSON3.write(value)))
+        value === nothing ? nothing : compress(Vector{UInt8}(JSON3.write(value)))
     end
 end
 
@@ -592,6 +599,7 @@ target_key(target) = split_target(target)[1]
 json_response(status, value) = HTTP.Response(status, ["Content-Type" => "application/json; charset=utf-8"], JSON3.write(value))
 
 accepts_gzip(req) = occursin("gzip", HTTP.header(req, "Accept-Encoding", ""))
+accepts_zstd(req) = occursin("zstd", HTTP.header(req, "Accept-Encoding", ""))
 
 not_found() = json_response(404, Dict("error" => "not found", "routes" => "/api/ lists every route"))
 
@@ -692,20 +700,21 @@ function api(s::Server, req::HTTP.Request)
     # even while the cache fills after a restart
     HTTP.header(req, "If-None-Match", "") == "W/\"$served-$(BUILD_ID[])\"" && return HTTP.Response(304, headers(served))
     if hit !== nothing
-        body = hit[2]
+        gz, zs = hit[2]
     elseif cacheable
         r = render_cached!(s, key, segments, params, seq)
         r === nothing && return not_found()
         # A render already under way when this request came may be older
-        served, body = r
+        served, (gz, zs) = r
     else
-        body = render_gzip(s, segments, params)
-        body === nothing && return not_found()
+        r = render_compressed(s, segments, params)
+        r === nothing && return not_found()
+        gz, zs = r
     end
-    if accepts_gzip(req)
-        return HTTP.Response(200, push!(headers(served), "Content-Encoding" => "gzip"), body)
-    end
-    return HTTP.Response(200, headers(served), transcode(GzipDecompressor, body))
+    # zstd comes out larger on the smallest bodies
+    accepts_zstd(req) && length(zs) < length(gz) && return HTTP.Response(200, push!(headers(served), "Content-Encoding" => "zstd"), zs)
+    accepts_gzip(req) && return HTTP.Response(200, push!(headers(served), "Content-Encoding" => "gzip"), gz)
+    return HTTP.Response(200, headers(served), transcode(GzipDecompressor, gz))
 end
 
 const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text/javascript; charset=utf-8",
@@ -838,7 +847,7 @@ function warm_up(s::Server)
         withdb(s) do db
             for target in other_targets(db)
                 _, segments, params = split_target(target)
-                gzip(Vector{UInt8}(JSON3.write(render(db, segments, params))))
+                compress(Vector{UInt8}(JSON3.write(render(db, segments, params))))
             end
         end
     end

@@ -15,7 +15,7 @@ include(joinpath(@__DIR__, "..", "db", "Store.jl"))
 using .Store
 include(joinpath(@__DIR__, "..", "db", "Render.jl"))
 using .Render
-using HTTP, SQLite, JSON3, CodecZlib, Dates, DataStructures
+using HTTP, SQLite, JSON3, CodecZlib, CodecZstd, Dates, DataStructures
 
 include("runtime_run.jl")
 using .RuntimeRun

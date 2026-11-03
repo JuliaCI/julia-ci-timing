@@ -28,8 +28,9 @@ end
         for target in targets
             handle(s, HTTP.Request("GET", target, ["Accept-Encoding" => "gzip"]))
         end
-        # A client without gzip, a revalidation, and the paths beside /api/
+        # A client without gzip, one taking zstd, a revalidation, and the paths beside /api/
         handle(s, HTTP.Request("GET", "/api/ttfx/summary"))
+        handle(s, HTTP.Request("GET", "/api/ttfx/summary", ["Accept-Encoding" => "gzip, deflate, br, zstd"]))
         handle(s, HTTP.Request("GET", "/api/ttfx/summary", ["If-None-Match" => "W/\"0-$(BUILD_ID[])\""]))
         handle(s, HTTP.Request("GET", "/healthz"))
         handle(s, HTTP.Request("GET", "/index.html"))
