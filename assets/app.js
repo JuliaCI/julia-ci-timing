@@ -412,6 +412,23 @@ function zoomOptions(onChange) {
   };
 }
 
+// A panel's title in the tabs that draw several charts
+function panelTitle(text, theme) {
+  return { display: true, text, color: theme.text, font: { size: 12, weight: "600" }, padding: { top: 2, bottom: 6 } };
+}
+
+// The options of a panel in those tabs: points given as {x, y}, and pan and
+// zoom that `onZoom` passes on to the other panels
+function panelChartOptions({ title, onZoom, plugins = {}, ...options }) {
+  return {
+    ...baseChartOptions(),
+    parsing: false,
+    normalized: true,
+    ...options,
+    plugins: { title, zoom: zoomOptions(onZoom), ...plugins },
+  };
+}
+
 // Zooming one of a tab's charts zooms the others to the same days
 function syncPanelZoom(chart, charts, resetButtonId) {
   const { min, max } = chart.scales.x;
@@ -18844,26 +18861,17 @@ function updateActivityCharts() {
       new Chart(canvas, {
         type: "line",
         data: { datasets },
-        options: {
-          ...baseChartOptions(),
-          parsing: false,
-          normalized: true,
+        options: panelChartOptions({
+          title: panelTitle(panel.title + (panel.perDay ? avg : ""), theme),
+          onZoom: syncActivityZoom,
           interaction: { mode: "index", intersect: false },
           elements: { line: { tension: 0 } },
           plugins: {
-            title: {
-              display: true,
-              text: panel.title + (panel.perDay ? avg : ""),
-              color: theme.text,
-              font: { size: 12, weight: "600" },
-              padding: { top: 2, bottom: 6 },
-            },
             legend: {
               display: datasets.length > 1,
               labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8 },
             },
             decimation: { enabled: true, algorithm: "min-max" },
-            zoom: zoomOptions(syncActivityZoom),
             tooltip: {
               usePointStyle: true,
               boxPadding: 4,
@@ -18881,7 +18889,7 @@ function updateActivityCharts() {
               grid: { color: theme.grid },
             },
           },
-        },
+        }),
       }),
     );
   }
@@ -19145,15 +19153,12 @@ function updateCoverageCharts() {
       new Chart(canvas, {
         type: "line",
         data: { datasets },
-        options: {
-          ...baseChartOptions(),
-          parsing: false,
-          normalized: true,
+        options: panelChartOptions({
+          title: panelTitle(panel.title, theme),
+          onZoom: syncCoverageZoom,
           interaction: { mode: "index", intersect: false },
           plugins: {
-            title: { display: true, text: panel.title, color: theme.text, font: { size: 12, weight: "600" }, padding: { top: 2, bottom: 6 } },
             legend: { display: true, labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
-            zoom: zoomOptions(syncCoverageZoom),
             tooltip: {
               usePointStyle: true,
               boxPadding: 4,
@@ -19181,7 +19186,7 @@ function updateCoverageCharts() {
             x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd", min: xs[0], max: xs[xs.length - 1] }),
             y: { ticks: { color: theme.text, callback: (v) => (panel.id === "pct" ? `${v}%` : compactNumber(v)) }, grid: { color: theme.grid } },
           },
-        },
+        }),
       }),
     );
   }
@@ -19628,13 +19633,6 @@ function updateSysimageCharts() {
   const xMax = xs[xs.length - 1];
   const smooth = Object.fromEntries(stages.map((s) => [s, sysimageRolling(idx.map((i) => p.stages[s][i]), sysimageSmoothing)]));
   const smoothText = sysimageSmoothing > 1 ? ` (median of ${sysimageSmoothing} builds)` : "";
-  const title = (text) => ({
-    display: true,
-    text,
-    color: theme.text,
-    font: { size: 12, weight: "600" },
-    padding: { top: 2, bottom: 6 },
-  });
   const tooltipTitle = (items) => {
     if (!items.length) return "";
     const i = idx[items[0].raw.k];
@@ -19681,20 +19679,17 @@ function updateSysimageCharts() {
     new Chart(document.getElementById("sysimage-chart-total"), {
       type: "line",
       data: { datasets: stacked },
-      options: {
-        ...baseChartOptions(),
+      options: panelChartOptions({
+        title: panelTitle(`The sysimage, stage by stage${smoothText}`, theme),
+        onZoom: syncSysimageZoom,
         ttfxNotes: true,
-        parsing: false,
-        normalized: true,
         // Every stage at the date under the pointer, when a build is near it
         interaction: { mode: "nearIndex", intersect: false },
         elements: { line: { tension: 0 } },
         onClick: open,
         plugins: {
-          title: title(`The sysimage, stage by stage${smoothText}`),
           annotation: notes("total"),
           legend: { labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8, font: { size: 11 } } },
-          zoom: zoomOptions(syncSysimageZoom),
           tooltip: {
             usePointStyle: true,
             boxPadding: 4,
@@ -19712,7 +19707,7 @@ function updateSysimageCharts() {
           },
         },
         scales: axes(true, null),
-      },
+      }),
     }),
   );
 
@@ -19760,11 +19755,10 @@ function updateSysimageCharts() {
       new Chart(document.getElementById(`sysimage-chart-${s}`), {
         type: "line",
         data: { datasets },
-        options: {
-          ...baseChartOptions(),
+        options: panelChartOptions({
+          title: panelTitle(SYSIMAGE_STAGES[s].label, theme),
+          onZoom: syncSysimageZoom,
           ttfxNotes: true,
-          parsing: false,
-          normalized: true,
           // Only a build near the pointer, not the nearest one wherever it is
           interaction: { mode: "near", intersect: false },
           elements: { line: { tension: 0 } },
@@ -19773,10 +19767,8 @@ function updateSysimageCharts() {
             evt.native.target.style.cursor = elements.some((e) => chart.data.datasets[e.datasetIndex]._raw) ? "pointer" : "";
           },
           plugins: {
-            title: title(SYSIMAGE_STAGES[s].label),
             legend: { display: false },
             annotation: notes(s),
-            zoom: zoomOptions(syncSysimageZoom),
             tooltip: {
               filter: (item) => item.dataset._raw,
               callbacks: {
@@ -19792,7 +19784,7 @@ function updateSysimageCharts() {
             },
           },
           scales: axes(false, top),
-        },
+        }),
       }),
     );
   }
@@ -20557,15 +20549,12 @@ function updateRuntimeCharts() {
   const xMax = Math.max(xs[xs.length - 1], ...refTimes.map((t) => t + refPad));
   // A phone has room for the titles' heads only
   const title = (text, tail = "") => (PHONE_WIDTH.matches ? (tail = "") : 0, {
-    display: true,
-    text: text + tail,
+    ...panelTitle(text + tail, theme),
     color: tail ? "transparent" : theme.text,
     tail,
     headColor: theme.text,
     tailColor: colorToRgba(theme.text, 0.65),
-    font: { size: 12, weight: "600" },
     tailFont: { size: 11, weight: "normal" },
-    padding: { top: 2, bottom: 6 },
   });
   const open = (bench) =>
     tapAgainToOpen((evt, elements, chart) => {
@@ -20621,23 +20610,20 @@ function updateRuntimeCharts() {
   const indexChart = new Chart(document.getElementById("runtime-chart-index"), {
     type: "line",
     data: { datasets },
-    options: {
-      ...baseChartOptions(),
+    options: panelChartOptions({
+      title: title("Category index", ` · geometric mean${RUNTIME_CHART_TEXT[runtimeChartMetric] ? ` of ${RUNTIME_CHART_TEXT[runtimeChartMetric]}` : ""} against ${runtimeBuildName(refBuild)}`),
+      onZoom: syncRuntimeZoom,
       ttfxNotes: true,
-      parsing: false,
-      normalized: true,
       // Every category at the build under the pointer, when the pointer is near a line
       interaction: { mode: "nearLineIndex", intersect: false },
       elements: { line: { tension: 0 } },
       onClick: open(null),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title("Category index", ` · geometric mean${RUNTIME_CHART_TEXT[runtimeChartMetric] ? ` of ${RUNTIME_CHART_TEXT[runtimeChartMetric]}` : ""} against ${runtimeBuildName(refBuild)}`),
         legend: {
           labels: { color: theme.text, usePointStyle: true, pointStyle: "line", boxWidth: 14, font: { size: 11 } },
           onClick: (e, item, legend) => toggleRuntimeCategory(legend.chart.data.datasets[item.datasetIndex]._cat),
         },
-        zoom: zoomOptions(syncRuntimeZoom),
         annotation: {
           interaction: { mode: "nearest", intersect: true },
           annotations: {
@@ -20668,7 +20654,7 @@ function updateRuntimeCharts() {
           suggestedMax: RUNTIME_MIN_SPAN,
         }),
       },
-    },
+    }),
   });
   indexChart.$runtime = "index";
   runtimeCharts.push(indexChart);
@@ -20786,20 +20772,18 @@ function updateRuntimeCharts() {
         ...refs,
       ],
     },
-    options: {
-      ...baseChartOptions(),
+    options: panelChartOptions({
+      title: title(
+        `${RUNTIME_CHART_TITLES[judged ? info.metric : runtimeChartMetric]} per call`,
+        judged ? " · line: fastest process, band: range across processes" : " · fastest process",
+      ),
+      onZoom: syncRuntimeZoom,
       ttfxNotes: true,
-      parsing: false,
-      normalized: true,
       interaction: { mode: "near", intersect: false },
       elements: { line: { tension: 0 } },
       onClick: open(name),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title(
-          `${RUNTIME_CHART_TITLES[judged ? info.metric : runtimeChartMetric]} per call`,
-          judged ? " · line: fastest process, band: range across processes" : " · fastest process",
-        ),
         // The master line and the weekly references, which a click hides
         legend: {
           display: refs.length > 0,
@@ -20811,7 +20795,6 @@ function updateRuntimeCharts() {
             filter: (item, data) => !data.datasets[item.datasetIndex]._band,
           },
         },
-        zoom: zoomOptions(syncRuntimeZoom),
         annotation: notes,
         tooltip: benchTooltip,
       },
@@ -20822,7 +20805,7 @@ function updateRuntimeCharts() {
           ...runtimeMinSpan(has.map((i) => runtimeValue(name, i, key))),
         }),
       },
-    },
+    }),
   });
   runtimeCharts.push(benchChart);
 
@@ -20842,25 +20825,22 @@ function updateRuntimeCharts() {
         },
       ],
     },
-    options: {
-      ...baseChartOptions(),
+    options: panelChartOptions({
+      title: title(
+        "Instructions per call",
+        instr.length
+          ? info.metric === "cycles"
+            ? " · exact across processes, so a step is the code or the work changing"
+            : " · of the calling thread only, which shares the work with others here"
+          : " · no counts for this benchmark",
+      ),
+      onZoom: syncRuntimeZoom,
       ttfxNotes: true,
-      parsing: false,
-      normalized: true,
       interaction: { mode: "near", intersect: false },
       onClick: open(name),
       onHover: (evt, elements) => (evt.native.target.style.cursor = elements.length ? "pointer" : ""),
       plugins: {
-        title: title(
-          "Instructions per call",
-          instr.length
-            ? info.metric === "cycles"
-              ? " · exact across processes, so a step is the code or the work changing"
-              : " · of the calling thread only, which shares the work with others here"
-            : " · no counts for this benchmark",
-        ),
         legend: { display: false },
-        zoom: zoomOptions(syncRuntimeZoom),
         annotation: { ...notes, annotations: runtimeNoteLines(idx, name, theme.isDark) },
         tooltip: {
           callbacks: {
@@ -20879,7 +20859,7 @@ function updateRuntimeCharts() {
         x: xAxis(),
         y: yAxis({ ticks: { color: theme.text, callback: (v) => runtimeCount(v) }, ...runtimeMinSpan(instr.map((i) => runtimeValue(name, i, "instructions"))) }),
       },
-    },
+    }),
   });
   runtimeCharts.push(instrChart);
 }
