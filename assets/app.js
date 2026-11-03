@@ -619,15 +619,32 @@ const API_BASE = "api";
 // rather than waiting on an unreachable server for good
 const API_TIMEOUT_MS = 30000;
 
-// GET an API route; empty parameters are left out of the query
-async function apiGet(path, params = {}, options = {}) {
+// An API route's URL; empty parameters are left out of the query
+function apiURL(path, params = {}) {
   const query = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v != null && v !== ""),
   ).toString();
+  return `${API_BASE}/${path}${query ? "?" + query : ""}`;
+}
+
+// What the Overview has asked for, by URL: { key, body }, where key names its
+// Overview source and body is the promise of the response (null if it failed).
+// An entry goes when an ingest changes its source.
+const overviewBodies = new Map();
+
+// GET an API route. A request the Overview has made already is answered with
+// its body, so a tab shown next does not fetch and parse it again.
+async function apiGet(path, params = {}, options = {}) {
+  const url = apiURL(path, params);
+  const shared = !options.signal && overviewBodies.get(url);
+  if (shared) {
+    const body = await shared.body;
+    if (body) return body;
+  }
   const timeout = AbortSignal.timeout?.(API_TIMEOUT_MS);
   let signal = options.signal || timeout;
   if (options.signal && timeout && AbortSignal.any) signal = AbortSignal.any([options.signal, timeout]);
-  const resp = await fetch(`${API_BASE}/${path}${query ? "?" + query : ""}`, {
+  const resp = await fetch(url, {
     cache: "no-cache",
     ...options,
     signal,
@@ -6858,6 +6875,7 @@ async function refreshData() {
     sourceTimes = status.generated_at || {};
     for (const source of changed) for (const view of SOURCE_VIEWS[source] || []) staleViews.add(view);
     for (const source of changed) for (const key of OVERVIEW_SOURCE_KEYS[source] || []) overviewStale.add(key);
+    for (const [url, { key }] of overviewBodies) if (overviewStale.has(key)) overviewBodies.delete(url);
     if (commitResult && (changed.length > 0 || timingMoved)) commitResult.stale = true;
     if (sourceTimes.timing) checkStaleData(sourceTimes.timing);
     setUpdatedLabels();
@@ -16242,11 +16260,15 @@ function overviewColors() {
 // A source still on its way is undefined; one that failed is null. `keys`
 // limits the load to those sources.
 function loadOverviewSources(onSource, keys = null) {
-  const quiet = (route, params) =>
-    apiGet(route, params).catch((err) => {
+  // A tab asking for the same request is handed the body too
+  const quiet = (key, route, params = {}) => {
+    const body = apiGet(route, params).catch((err) => {
       console.error(`Failed to load ${route}:`, err);
       return null;
     });
+    overviewBodies.set(apiURL(route, params), { key, body });
+    return body;
+  };
   // What another tab has loaded, unless an ingest has changed it since; the
   // mark stays for that tab to reload when it is next shown
   const fresh = (view, d) => (staleViews.has(view) ? null : d);
@@ -16256,28 +16278,28 @@ function loadOverviewSources(onSource, keys = null) {
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
   const benchStart = apiSince(new Date(Date.now() - OVERVIEW_BENCH_DAYS * OVERVIEW_DAY_MS));
   const sources = {
-    pkgeval: () => fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
-    bench: () => fresh("benchmarks", benchData) || quiet("benchmarks/summary", { since: benchStart }),
-    ttfx: () => fresh("ttfx", ttfxData) || quiet("ttfx/summary", { since: sparkStart }),
-    ttfxPrs: () => fresh("ttfx", ttfxPrs) || quiet("ttfx/prs"),
-    runtime: () => fresh("runtime", runtimeData) || quiet("runtime/summary", { since: sparkStart }),
-    runtimePrs: () => fresh("runtime", runtimePrs) || quiet("runtime/prs", { brief: 1 }),
-    sizes: () => fresh("sizes", sizesData) || quiet("sizes/summary", { since: sparkStart }),
-    sizesPrs: () => fresh("sizes", sizesPrs) || quiet("sizes/prs"),
-    packages: () => fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
-    agents: () => quiet("agents/latest"),
-    builds: () => quiet("timing/builds", { since: twoWeeksAgo }),
-    reasons: () => quiet("pkgeval/reasons"),
-    top: () => quiet("downloads/top", { days: 7, client: "user" }),
-    popular: () => quiet("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
-    backlog: () => quiet("agents/backlog", { since: twoWeeksAgo }),
-    activity: () => fresh("activity", activityData) || quiet("github/activity", { since: sparkStart }),
-    coverage: () => quiet("coverage/files", { since: sparkStart, days: 7 }),
+    pkgeval: (get) => fresh("pkgeval", pkgevalData) || get("pkgeval/summary"),
+    bench: (get) => fresh("benchmarks", benchData) || get("benchmarks/summary", { since: benchStart }),
+    ttfx: (get) => fresh("ttfx", ttfxData) || get("ttfx/summary", { since: sparkStart }),
+    ttfxPrs: (get) => fresh("ttfx", ttfxPrs) || get("ttfx/prs"),
+    runtime: (get) => fresh("runtime", runtimeData) || get("runtime/summary", { since: sparkStart }),
+    runtimePrs: (get) => fresh("runtime", runtimePrs) || get("runtime/prs", { brief: 1 }),
+    sizes: (get) => fresh("sizes", sizesData) || get("sizes/summary", { since: sparkStart }),
+    sizesPrs: (get) => fresh("sizes", sizesPrs) || get("sizes/prs"),
+    packages: (get) => fresh("packages", packagesDownloadsData) || get("downloads/summary"),
+    agents: (get) => get("agents/latest"),
+    builds: (get) => get("timing/builds", { since: twoWeeksAgo }),
+    reasons: (get) => get("pkgeval/reasons"),
+    top: (get) => get("downloads/top", { days: 7, client: "user" }),
+    popular: (get) => get("pkgeval/popular", { days: 30, client: "user", limit: 50 }),
+    backlog: (get) => get("agents/backlog", { since: twoWeeksAgo }),
+    activity: (get) => fresh("activity", activityData) || get("github/activity", { since: sparkStart }),
+    coverage: (get) => get("coverage/files", { since: sparkStart, days: 7 }),
   };
   return Promise.all(
     Object.entries(sources)
       .filter(([key]) => !keys || keys.includes(key))
-      .map(async ([key, load]) => onSource(key, await load())),
+      .map(async ([key, load]) => onSource(key, await load((route, params) => quiet(key, route, params)))),
   );
 }
 
