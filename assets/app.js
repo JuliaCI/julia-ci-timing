@@ -1462,6 +1462,24 @@ function backlogSeries(p, pipeline = backlogPipeline) {
   return { waiting: zeros, running: zeros, oldest_wait_s: zeros };
 }
 
+// Buildkite job priorities (set per build by julia-buildkite), highest first.
+// A pool whose jobs waited at more than one gets a line for each, told apart
+// by its dash; the normal line stays solid like an unsplit pool's.
+const BACKLOG_PRIORITIES = {
+  1: { name: "high", dash: [7, 3] },
+  0: { name: "normal", dash: [] },
+  "-1": { name: "low", dash: [2, 3] },
+};
+const backlogPriorityName = (pr) => (BACKLOG_PRIORITIES[pr] ? BACKLOG_PRIORITIES[pr].name : `priority ${pr}`);
+
+// The priorities of series `s` that had jobs waiting in the window, highest first
+function backlogPriorities(s) {
+  return Object.entries(s.by_priority || {})
+    .filter(([, x]) => x.waiting.some((n) => n > 0))
+    .map(([pr]) => pr)
+    .sort((a, b) => b - a);
+}
+
 // "294 master, 634 PR" for sample j, leaving out pipelines with none
 function backlogSplit(p, j, key = "waiting", format = String) {
   return Object.entries(p.by_pipeline || {})
@@ -1543,8 +1561,18 @@ async function renderBacklogSection() {
     ? "Now: " +
       now
         .map((x) => {
-          const split = backlogSplit(x.p, x.p.waiting.length - 1);
-          return `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (${split ? split + ", " : ""}longest ${formatWait(x.w)})`;
+          const j = x.p.waiting.length - 1;
+          const split = backlogSplit(x.p, j);
+          const prios = Object.entries(x.p.by_priority || {}).filter(([, s]) => s.waiting[j] > 0);
+          const prioSplit =
+            prios.length > 1
+              ? prios
+                  .sort(([a], [b]) => b - a)
+                  .map(([pr, s]) => `${s.waiting[j]} ${backlogPriorityName(pr)}`)
+                  .join(", ")
+              : "";
+          const parts = [split, prioSplit].filter(Boolean).join("; ");
+          return `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (${parts ? parts + "; " : ""}longest ${formatWait(x.w)})`;
         })
         .join(", ")
     : "Now: no jobs waiting";
@@ -1565,25 +1593,37 @@ function renderBacklogChart(d) {
     .slice(0, BACKLOG_MAX_POOLS);
   // A filter that leaves no pool to draw hides the whole section
   document.getElementById("backlog-section").hidden = workersFilter !== "" && pools.length === 0;
-  const datasets = pools.map((p, i) => {
+  const values = (p, s) =>
+    metric === "oldest"
+      ? s.oldest_wait_s.map((w) => w / 3600)
+      : metric === "per-slot"
+        ? s.waiting.map((n) => n / p.slots)
+        : s.waiting;
+  const datasets = [];
+  // Per pool, the indices of its datasets, so its legend entry toggles them all
+  const poolDatasets = [];
+  const dashesUsed = new Set();
+  pools.forEach((p, i) => {
     const color = palette[i % palette.length];
     const s = backlogSeries(p);
-    const values =
-      metric === "oldest"
-        ? s.oldest_wait_s.map((w) => w / 3600)
-        : metric === "per-slot"
-          ? s.waiting.map((n) => n / p.slots)
-          : s.waiting;
-    return {
-      label: backlogPoolLabel(p),
-      data: values.map((y, j) => ({ x: t0 + j * stepMs, y })),
-      _pool: p,
-      borderColor: color,
-      backgroundColor: color,
-      borderWidth: 1.5,
-      pointRadius: 0,
-      pointHitRadius: 6,
-    };
+    const prios = backlogPriorities(s);
+    const parts = prios.length > 1 ? prios.map((pr) => [pr, s.by_priority[pr]]) : [[null, s]];
+    poolDatasets.push(parts.map((_, k) => datasets.length + k));
+    for (const [pr, x] of parts) {
+      if (pr !== null) dashesUsed.add(pr);
+      datasets.push({
+        label: backlogPoolLabel(p) + (pr === null ? "" : `, ${backlogPriorityName(pr)} priority`),
+        data: values(p, x).map((y, j) => ({ x: t0 + j * stepMs, y })),
+        _pool: p,
+        _series: pr === null ? null : x,
+        borderColor: color,
+        backgroundColor: color,
+        borderDash: pr === null ? [] : (BACKLOG_PRIORITIES[pr] || { dash: [1, 2] }).dash,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHitRadius: 6,
+      });
+    }
   });
   if (backlogChart) {
     backlogChart.destroy();
@@ -1602,11 +1642,13 @@ function renderBacklogChart(d) {
             title: (items) => (items.length ? formatUtc(items[0].parsed.x) : ""),
             label: (item) => {
               const p = item.dataset._pool;
+              // A priority's own line counts only its jobs; the pipeline split is of the pool's
+              const s = item.dataset._series || p;
               const j = item.dataIndex;
-              const waitSplit = backlogSplit(p, j);
-              const runSplit = backlogSplit(p, j, "running");
-              const waiting = p.waiting[j] ? `${p.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, longest ${formatWait(p.oldest_wait_s[j])}` : "none waiting";
-              return `${item.dataset.label}: ${waiting}; ${p.running[j]} running${runSplit ? ` (${runSplit})` : ""}${p.slots ? ` of ${p.slots}` : ""}`;
+              const waitSplit = s === p ? backlogSplit(p, j) : "";
+              const runSplit = s === p ? backlogSplit(p, j, "running") : "";
+              const waiting = s.waiting[j] ? `${s.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, longest ${formatWait(s.oldest_wait_s[j])}` : "none waiting";
+              return `${item.dataset.label}: ${waiting}; ${s.running[j]} running${runSplit ? ` (${runSplit})` : ""}${p.slots ? ` of ${p.slots}` : ""}`;
             },
           },
         },
@@ -1629,13 +1671,30 @@ function renderBacklogChart(d) {
   });
   const legendEl = document.getElementById("backlog-legend");
   if (legendEl) {
-    legendEl.innerHTML = datasets
+    const dashKey = Object.keys(BACKLOG_PRIORITIES)
+      .filter((pr) => dashesUsed.has(pr))
+      .sort((a, b) => b - a)
       .map(
-        (ds, i) =>
-          `<li><button type="button" data-index="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${ds.borderColor}"></span>${escapeHtml(ds.label)}</button></li>`,
+        (pr) =>
+          `<li class="backlog-legend-key"><svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="currentColor" stroke-width="1.5" stroke-dasharray="${BACKLOG_PRIORITIES[pr].dash.join(" ")}"/></svg>${backlogPriorityName(pr)} priority</li>`,
       )
       .join("");
-    bindDatasetToggles(legendEl, () => backlogChart);
+    legendEl.innerHTML =
+      pools
+        .map(
+          (p, i) =>
+            `<li><button type="button" data-pool="${i}" aria-pressed="true"><span class="backlog-legend-swatch" style="background:${datasets[poolDatasets[i][0]].borderColor}"></span>${escapeHtml(backlogPoolLabel(p))}</button></li>`,
+        )
+        .join("") + dashKey;
+    legendEl.querySelectorAll("button[data-pool]").forEach((btn) => {
+      btn.onclick = () => {
+        const indices = poolDatasets[Number(btn.dataset.pool)];
+        const shown = !backlogChart.isDatasetVisible(indices[0]);
+        for (const k of indices) backlogChart.setDatasetVisibility(k, shown);
+        btn.setAttribute("aria-pressed", String(shown));
+        backlogChart.update("none");
+      };
+    });
   }
 }
 

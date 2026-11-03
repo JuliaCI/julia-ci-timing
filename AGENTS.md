@@ -192,10 +192,12 @@ CI workers card; machines of the other queues are listed there without it.
 
 `fetch_agents.jl` also records every runnable job of julia-pr and julia-ci
 builds in `pool_jobs` (kept 60 days, backfilled 30 on the first run), with the
-pool it asked for (the queue, os and arch of its agent query rules) and when it
-became runnable, started and finished. `api/agents/backlog` samples from it how
-many jobs wait for each pool and for how long, which the Workers tab charts as
-the queue backlog. Other pipelines (julia-buildkite-ci, for one) run on the
+pool it asked for (the queue, os and arch of its agent query rules), its
+Buildkite priority (1 high, 0 normal, -1 low; JuliaCI/julia-buildkite#702 sets
+it per build) and when it became runnable, started and finished.
+`api/agents/backlog` samples from it how many jobs wait for each pool and for
+how long, at each priority, which the Workers tab charts as the queue backlog,
+with a line of its own for each priority that had jobs waiting. Other pipelines (julia-buildkite-ci, for one) run on the
 same agents, so each snapshot also keeps the pipeline of every agent's job in
 `agent_snapshot_members`, and the backlog counts those agents as running under
 `other`. `api/agents/usage` sums the agent time of the jobs that

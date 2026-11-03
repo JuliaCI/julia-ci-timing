@@ -2315,6 +2315,9 @@ series per pipeline are under `by_pipeline`, so master (julia-ci) and pull
 request (julia-pr) jobs can be told apart. Its `other` entry counts the pool's
 agents busy with jobs of any other pipeline, from the agent snapshots (see
 `other_running`); their waiting jobs are not known, so it never has any.
+The pool and each julia-pr and julia-ci entry split the same series again by
+the jobs' Buildkite priority under `by_priority`, keyed by the number as a
+string, highest first.
 """
 # The start of a window over pool_jobs from `since`: no earlier than the
 # oldest job kept, on a 10-minute multiple, so the Workers charts share it
@@ -2337,15 +2340,15 @@ function pool_backlog(db; since="")
     now_s = datetime2unix(now(UTC))
     # Sample i (0-based) is at t0 + i*step; an interval [a, b) covers samples first_at(a) .. first_at(b)-1
     first_at(x) = clamp(ceil(Int, (x - t0) / step), 0, n)
-    # Per pool and pipeline: changes in waiting and running per sample, and the waits
-    pools = OrderedDict{Tuple{String,String,String},Dict{String,Any}}()
-    acc(q, o, a, pipeline) = get!(get!(pools, (q, o, a), Dict{String,Any}()), pipeline) do
+    # Per pool, pipeline and priority: changes in waiting and running per sample, and the waits
+    pools = OrderedDict{Tuple{String,String,String},Dict{Tuple{String,Int},Any}}()
+    acc(q, o, a, pipeline, priority) = get!(get!(pools, (q, o, a), Dict{Tuple{String,Int},Any}()), (pipeline, priority)) do
         (waiting=zeros(Int, n + 1), running=zeros(Int, n + 1), waits=Tuple{Float64,Float64}[])
     end
-    for r in rows(db, "SELECT pipeline, queue, os, arch, state, runnable_at, started_at, finished_at FROM pool_jobs " *
+    for r in rows(db, "SELECT pipeline, queue, os, arch, priority, state, runnable_at, started_at, finished_at FROM pool_jobs " *
                       "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
                   (Store.iso(now_t + Minute(10)), Store.iso(start)))
-        p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline))
+        p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
         a = secs(r.runnable_at)
         # Waiting ends when the job starts, or when it is canceled before starting.
         # A job skipped with its build has neither time and never waited for an agent.
@@ -2369,7 +2372,7 @@ function pool_backlog(db; since="")
     slots, shared, hosts, peak = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
     function series(p)
         # Longest wait at each sample: the earliest start among the jobs still waiting
-        sort!(p.waits)
+        p = (waiting=p.waiting, running=p.running, waits=sort!(p.waits))
         heap = BinaryMinHeap{Tuple{Float64,Float64}}()
         oldest = zeros(Int, n)
         k = 1
@@ -2387,9 +2390,24 @@ function pool_backlog(db; since="")
         return OrderedDict{String,Any}("waiting" => cumsum(p.waiting)[1:n], "running" => cumsum(p.running)[1:n],
                                        "oldest_wait_s" => oldest)
     end
+    # The series of several (pipeline, priority) accumulators together
+    function merged(parts)
+        length(parts) == 1 && return series(only(parts))
+        return series((waiting=sum(x -> x.waiting, parts), running=sum(x -> x.running, parts),
+                       waits=reduce(vcat, (x.waits for x in parts))))
+    end
+    function by_priority(per, keep)
+        prios = sort!(unique(pr for (pl, pr) in keys(per) if keep(pl)); rev=true)
+        return OrderedDict{String,Any}(string(pr) => merged([v for ((pl, x), v) in per if keep(pl) && x == pr]) for pr in prios)
+    end
     out = Any[]
     for ((q, o, a), per) in pools
-        by = OrderedDict{String,Any}(pl => series(per[pl]) for pl in sort!(collect(keys(per))))
+        by = OrderedDict{String,Any}()
+        for pl in sort!(unique(first.(keys(per))))
+            s = merged([v for ((x, _), v) in per if x == pl])
+            s["by_priority"] = by_priority(per, ==(pl))
+            by[pl] = s
+        end
         if haskey(others, (q, o, a))
             by["other"] = OrderedDict{String,Any}("waiting" => zeros(Int, n), "running" => others[(q, o, a)],
                                                   "oldest_wait_s" => zeros(Int, n))
@@ -2401,7 +2419,7 @@ function pool_backlog(db; since="")
                                                              for (sq, so, sa) in sort!(collect(get(shared, (q, o, a), ())))],
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
                                            "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
-                                           "by_pipeline" => by))
+                                           "by_pipeline" => by, "by_priority" => by_priority(per, Returns(true))))
     end
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
     return OrderedDict{String,Any}("generated_at" => gen, "start" => Store.iso(start), "step_s" => step, "n" => n,

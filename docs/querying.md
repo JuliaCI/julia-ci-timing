@@ -131,7 +131,7 @@ only the files that changed. `AGENTS.md` describes their shapes.
   and Secure clusters'), `agent_snapshots` and
   `agent_snapshot_members` (who was connected at each ingest, and the pipeline of each one's job). `pool_jobs` holds every
   runnable job of julia-pr and julia-ci builds from the last 60 days with the pool it asked
-  for (queue, os, arch) and when it became runnable, started and finished: the queue
+  for (queue, os, arch), its Buildkite `priority` (1 high, 0 normal, -1 low) and when it became runnable, started and finished: the queue
   backlog behind `api/agents/backlog`, the worker time shares behind `api/agents/usage`
   and the agent time per build behind `api/agents/build-hours`.
 - **GitHub.** `gh_items` (every issue and pull request of JuliaLang/julia: kind, author,

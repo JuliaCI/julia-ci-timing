@@ -1720,6 +1720,13 @@ th.sorted .sort-indicator {
   height: 10px;
   border-radius: 2px;
 }
+.backlog-legend-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+  color: var(--color-fg-muted);
+}
 .agents-header {
   display: flex;
   flex-wrap: wrap;

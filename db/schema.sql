@@ -869,8 +869,8 @@ CREATE TABLE IF NOT EXISTS agents (
 
 -- One row per script job of the julia-pr and julia-ci builds that could run
 -- (it has a runnable_at), from fetch_agents.jl: the agent pool it asked for
--- (queue, os and arch of its agent query rules) and when it became runnable,
--- started and finished. A job canceled while queued has no started_at and
+-- (queue, os and arch of its agent query rules), its Buildkite priority, and
+-- when it became runnable, started and finished. A job canceled while queued has no started_at and
 -- finishes when it was canceled. Kept for POOL_JOB_RETAIN_DAYS; the Workers
 -- tab draws each pool's backlog from it.
 CREATE TABLE IF NOT EXISTS pool_jobs (
@@ -881,6 +881,7 @@ CREATE TABLE IF NOT EXISTS pool_jobs (
     queue       TEXT NOT NULL DEFAULT '',
     os          TEXT NOT NULL DEFAULT '',
     arch        TEXT NOT NULL DEFAULT '',
+    priority    INTEGER NOT NULL DEFAULT 0,   -- 1 high, 0 normal, -1 low
     state       TEXT NOT NULL,
     runnable_at TEXT NOT NULL,
     started_at  TEXT,

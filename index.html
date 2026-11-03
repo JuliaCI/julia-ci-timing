@@ -845,7 +845,10 @@
                 >Master and pull request jobs ready to run but with no agent
                 yet, per pool (queue, OS and architecture), kept for 60 days.
                 Per slot divides by the slots seen in the last 30 days; the
-                tooltip names pools that share their hosts' slots.</span
+                tooltip names pools that share their hosts' slots. A pool
+                whose jobs waited at more than one Buildkite priority (high
+                for releases and backports, or set by a pull request label)
+                gets a dashed or dotted line for each.</span
               >
             </div>
             <div class="balance-card">

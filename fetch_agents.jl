@@ -16,7 +16,10 @@
 #
 # It also keeps the jobs of the julia-pr and julia-ci builds in `pool_jobs`: when each
 # became runnable, started and finished, and the agent pool (queue, os, arch) it asked
-# for, so the Workers tab can draw how many jobs wait for each pool. A run fetches the
+# for and its Buildkite priority, so the Workers tab can draw how many jobs wait for
+# each pool at each priority. julia-buildkite gives a build's jobs priority 1 (high:
+# releases, backports, the `high priority CI` label), 0 (normal) or -1 (low: the
+# `low priority CI` label); jobs before it had those tiers all ran at 0. A run fetches the
 # builds still going and those finished since the last successful run; the first run
 # backfills POOL_BACKFILL_DAYS.
 #
@@ -175,10 +178,17 @@ function rule_value(rules, key)
     return ""
 end
 
-const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "state", "runnable_at", "started_at", "finished_at"]
+const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "priority", "state", "runnable_at", "started_at", "finished_at"]
 const OPEN_JOB_STATES = ["scheduled", "reserved", "assigned", "accepted", "limited", "limiting", "waiting", "blocked",
                          "running", "canceling", "timing_out"]
 const OPEN_JOB_SQL = "state IN (" * join(("'$s'" for s in OPEN_JOB_STATES), ", ") * ")"
+
+# A job's priority, which the API gives as {"number": n}; Buildkite's default is 0
+function job_priority(job)
+    p = get(job, :priority, nothing)
+    p isa AbstractDict && (p = get(p, :number, nothing))
+    return p isa Number ? Int(p) : 0
+end
 
 # Upsert the runnable script jobs of `builds`; returns how many were written
 function record_pool_jobs!(db, pipeline, builds)
@@ -196,7 +206,7 @@ function record_pool_jobs!(db, pipeline, builds)
             runnable === nothing && continue
             rules = something(get(job, :agent_query_rules, nothing), [])
             upsert!(stmt, (String(job.id), pipeline, Int(build.number), str(get(job, :name, nothing)),
-                           rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"),
+                           rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job),
                            str(get(job, :state, nothing)), at(runnable), at(get(job, :started_at, nothing)),
                            at(get(job, :finished_at, nothing)), seq))
             n += 1
