@@ -199,18 +199,21 @@ const BENCH_GROUP_COLUMNS = Dict("time" => ("geomean_ns", "count"), "gctime" => 
 
 # Per (report, group, statistic) geomean and count of a metric, as the
 # fetcher summarized them
-function bench_group_geomeans(db, metric)
+function bench_group_geomeans(db, metric; since="")
     geomean, count = BENCH_GROUP_COLUMNS[metric]
-    return rows(db, "SELECT report_id, grp, stat, $geomean AS geomean, $count AS count FROM bench_report_groups " *
-                    "WHERE stat IN ('minimum', 'mean') AND $count > 0")
+    isempty(since) && return rows(db, "SELECT report_id, grp, stat, $geomean AS geomean, $count AS count FROM bench_report_groups " *
+                                      "WHERE stat IN ('minimum', 'mean') AND $count > 0")
+    return rows(db, "SELECT g.report_id, g.grp, g.stat, g.$geomean AS geomean, g.$count AS count FROM bench_report_groups g " *
+                    "JOIN bench_reports r ON r.id = g.report_id WHERE r.date >= ? AND g.stat IN ('minimum', 'mean') AND g.$count > 0", (since,))
 end
 
-function bench_summary(db; metric="time")
+function bench_summary(db; metric="time", since="")
     reports = rows(db, "SELECT id, date, path, commit_sha, baseline_date, report_total, report_regressions, report_improvements " *
-                       "FROM bench_reports WHERE kind = 'daily' ORDER BY date")
+                       "FROM bench_reports WHERE kind = 'daily'" * (isempty(since) ? "" : " AND date >= ?") * " ORDER BY date",
+                   isempty(since) ? () : (since,))
     # The files carry the two legacy statistics; median and std stay in the database
     by_report = Dict{Int,Dict{String,Dict{String,Any}}}()
-    for g in bench_group_geomeans(db, metric)
+    for g in bench_group_geomeans(db, metric; since)
         d = get!(by_report, Int(g.report_id), Dict{String,Dict{String,Any}}())
         e = get!(d, String(g.grp), Dict{String,Any}())
         e["$(g.stat)_geomean_ns"] = Float64(g.geomean)
@@ -2009,14 +2012,14 @@ runtime_pr_changes(benchmarks) = OrderedDict(
                                     "verdict" => String(get(b, :verdict, "same")))
     for b in benchmarks if haskey(b, :name))
 
-function runtime_pr_entry(r)
+function runtime_pr_entry(r; brief=false)
     benchmarks = JSON3.read(String(r.benchmarks))
     ratio(b) = (x = get(b, :ratio, nothing); x isa Number ? Float64(x) : 1.0)
     worst = isempty(benchmarks) ? nothing : benchmarks[argmax([ratio(b) for b in benchmarks])]
     best = isempty(benchmarks) ? nothing : benchmarks[argmin([ratio(b) for b in benchmarks])]
     pick(b) = b === nothing ? nothing : OrderedDict(f => get(b, Symbol(f), nothing) for f in RUNTIME_PR_FIELDS)
     errors = JSON3.read(String(r.errors))
-    return OrderedDict(
+    e = OrderedDict{String,Any}(
         "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
         "base_ref" => String(r.base_ref), "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state),
         "web_url" => js(r.web_url), "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
@@ -2026,15 +2029,16 @@ function runtime_pr_entry(r)
         "blocks" => js(r.blocks), "verdict" => String(r.verdict), "n_benchmarks" => Int(r.n_benchmarks),
         "n_regressions" => Int(r.n_regressions), "n_improvements" => Int(r.n_improvements),
         "n_instr_changed" => Int(r.n_instr_changed), "n_errors" => Int(r.n_errors), "geomean" => js(r.geomean),
-        "categories" => JSON3.read(String(r.categories)), "worst" => pick(worst), "best" => pick(best),
-        "notable" => runtime_pr_notable(benchmarks), "changes" => runtime_pr_changes(benchmarks),
-        "errors" => errors[:errors], "failures" => errors[:failures])
+        "worst" => pick(worst), "best" => pick(best), "errors" => errors[:errors], "failures" => errors[:failures])
+    brief || merge!(e, OrderedDict("categories" => JSON3.read(String(r.categories)),
+                                  "notable" => runtime_pr_notable(benchmarks), "changes" => runtime_pr_changes(benchmarks)))
+    return e
 end
 
 # Open pull requests by their latest runtime benchmark comparison, best first: by the
 # geometric mean of every benchmark's ratio, head against base
-function runtime_prs(db)
-    prs = [runtime_pr_entry(r) for r in rows(db, "SELECT * FROM rtb_prs")]
+function runtime_prs(db; brief=false)
+    prs = [runtime_pr_entry(r; brief) for r in rows(db, "SELECT * FROM rtb_prs")]
     sort!(prs; by=p -> (p["geomean"] === nothing, something(p["geomean"], 0.0), p["n_regressions"] - p["n_improvements"]))
     return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-pr", "prs" => prs)
 end

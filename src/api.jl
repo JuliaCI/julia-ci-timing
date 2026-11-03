@@ -238,9 +238,9 @@ const ROUTES = [
     Route("timing/builds", [SINCE],
           "Master builds newest first: state, source (what started the build in Buildkite: webhook for a push, schedule for a scheduled build), wall time, job count and time, and the queue wait of their jobs (median, max, total). Builds before September 2026 have no timestamps and are left out.",
           (db, _, p) -> Render.timing_builds(db; since=instant(p, "since"))),
-    Route("benchmarks/summary", ["metric" => "time (default), gctime, memory or allocs"],
-          "Geometric mean of every Nanosoldier benchmark group on every daily report, and the reports' dates and commits.",
-          (db, _, p) -> Render.bench_summary(db; metric=bench_metric(p))),
+    Route("benchmarks/summary", [SINCE, "metric" => "time (default), gctime, memory or allocs"],
+          "Geometric mean of every Nanosoldier benchmark group on every daily report in the window (all of them without since), and the reports' dates and commits.",
+          (db, _, p) -> Render.bench_summary(db; metric=bench_metric(p), since=instant(p, "since"))),
     Route("benchmarks/groups/<group>", [SINCE, "metric" => "time (default), gctime, memory or allocs"],
           "Every benchmark of one group on every daily report in the window, for the minimum and mean estimates. The group names are the keys of benchmarks/summary.",
           (db, a, p) -> a[1] in Render.bench_groups(db) ? Render.bench_group(db, a[1]; since=instant(p, "since"), metric=bench_metric(p)) : nothing),
@@ -332,9 +332,13 @@ const ROUTES = [
               source in ("", "ci", "manyjulias", "all") || throw(BadRequest("source must be ci, manyjulias or all"))
               Render.runtime(db; since=instant(p, "since"), source)
           end),
-    Route("runtime/prs", [],
+    Route("runtime/prs", ["brief" => "1 to leave out categories, notable and changes, about a twentieth of the size"],
           "Open julia pull requests by their latest runtime benchmark comparison (the head against the master build of the merge-base, interleaved in one julia-pr job), best first by geomean, the geometric mean of every benchmark's ratio head/base (below 1 is faster). verdict is regression when a benchmark or a category regressed robustly, else improvement when one improved; n_regressions, n_improvements and n_instr_changed count the benchmarks, n_errors those that failed on either arm. categories is the job's per-category verdict (geomean and per-block geomeans). changes has every benchmark's ratio, per-block ratios, instruction ratio and verdict. worst and best are the benchmarks with the largest and smallest ratio, notable every benchmark with a robust change or a changed instruction count plus the five furthest from no change; each has its ratio, per-block ratios, instruction ratio, head and base values (cycles or ns) and wall times, and allocations. outdated means the pull request has moved on since the job's commit.",
-          (db, _, _) -> Render.runtime_prs(db)),
+          (db, _, p) -> begin
+              brief = get(p, "brief", "")
+              brief in ("", "0", "1") || throw(BadRequest("brief must be 0 or 1"))
+              Render.runtime_prs(db; brief=brief == "1")
+          end),
     Route("runtime/job/<job_id>", [],
           "Everything one runtime benchmark job (the job_id of a runtime/summary build) recorded: the build, julia version and LLVM, machine, settings and failed processes, the previous master job with results on another commit (previous), and per benchmark its status and first error, value and value_max over blocks, instructions, min_ns, median_ns, allocs, bytes, ops, the benchmark's own tolerance and per_block, each block's value, min_ns and instructions.",
           (db, a, _) -> Render.runtime_job(db, a[1])),
@@ -779,8 +783,8 @@ end
 function landing_targets(today=Date(now(UTC)))
     day(n) = Dates.format(today - Day(n), dateformat"yyyy-mm-dd")
     return ["/api/timing/runs?since=$(day(30))", "/api/timing/builds?since=$(day(14))",
-            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/summary?since=$(day(30))", "/api/ttfx/prs",
-            "/api/runtime/summary?since=$(day(30))", "/api/runtime/prs", "/api/downloads/summary",
+            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/benchmarks/summary?since=$(day(90))", "/api/ttfx/summary", "/api/ttfx/summary?since=$(day(30))", "/api/ttfx/prs",
+            "/api/runtime/summary?since=$(day(30))", "/api/runtime/prs", "/api/runtime/prs?brief=1", "/api/downloads/summary",
             "/api/sizes/summary?since=$(day(30))", "/api/sizes/prs", "/api/agents/backlog?since=$(day(14))",
             "/api/agents/latest", "/api/pkgeval/reasons", "/api/downloads/top?days=7&client=user",
             "/api/pkgeval/popular?days=30&client=user&limit=50", "/api/github/activity?since=$(day(30))",

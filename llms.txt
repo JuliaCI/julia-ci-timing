@@ -32,7 +32,7 @@ CI timing:
 - `/api/timing/runs?since=`: every CI job run in the window (30 days is about 0.2 MB)
 
 Benchmarks:
-- `/api/benchmarks/summary`: the geomean of every benchmark group on every daily report, with its counts of regressions and improvements; the group names are the keys of each report's `by_group`
+- `/api/benchmarks/summary?since=`: the geomean of every benchmark group on every daily report (all of them without `since`), with its counts of regressions and improvements; the group names are the keys of each report's `by_group`
 - `/api/benchmarks/groups/<group>?since=`: every benchmark of one group on every daily report, minimum and mean estimates
 - `/api/benchmarks/verdicts?since=`: Nanosoldier's regressions and improvements
 - `/api/notes/methodology_changes`: benchmarks whose measurement changed, where a step in the series is not a commit's
@@ -54,7 +54,7 @@ TTFX:
 
 Runtime benchmarks:
 - `/api/runtime/summary?since=&source=`: about 200 runtime benchmarks (14 categories: scalar, simd, array, collections, strings, io, dispatch, types, runtime, gc, compiler, inference, apps, parallel) on every master build: per benchmark the judged metric (cycles of the calling thread, instructions, or wall time), its spread over the job's blocks, retired instructions (exact, so a change means the code changed), wall time, allocations; `source=manyjulias` gives the backfill of earlier master commits from manyjulias builds on another machine instead
-- `/api/runtime/prs`: open pull requests by their latest runtime benchmark comparison against the merge-base, with per-category verdicts and the benchmarks that changed
+- `/api/runtime/prs`: open pull requests by their latest runtime benchmark comparison against the merge-base, with per-category verdicts and the benchmarks that changed; `?brief=1` leaves out the per-benchmark detail
 - `/api/runtime/job/<job_id>`: one job's every benchmark with its per-block values
 - `/api/runtime/run/<pipeline>/<build>/<job_id>`: any Runtime benchmarks job of julia-pr, julia-ci or julia-buildkite-ci, read from its Buildkite artifacts on first use: the arms, verdicts (and the confirmation run against a control build), per arm and block each benchmark's 5th-percentile value, quartiles, instructions and allocations; `?bench=<category/name>` gives that benchmark's samples. The page at `/runtime-run?pipeline=...&build=...&job=...` draws it
 - `/api/notes/runtime_annotations`: notes on builds where the benchmark machine or suite changed, so a step there is not a commit's
