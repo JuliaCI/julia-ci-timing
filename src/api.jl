@@ -133,18 +133,20 @@ function offload(f)
 end
 
 # The sources each route family reads, for its ETag; nothing means global.
-# Some PkgEval routes rank the packages by their downloads.
+# Some PkgEval routes rank the packages by their downloads. The index reads no
+# source, so only a deploy changes it.
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
                            "ttfx" => ["ttfx"], "runtime" => ["runtime"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "coverage" => ["timing"], "downloads" => ["packages"], "agents" => ["agents"],
-                           "github" => ["github"])
-const ROUTE_SOURCES_EXACT = Dict(["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "failures"] => ["pkgeval", "packages"],
+                           "github" => ["github"], "commits" => ["timing", "benchmarks", "pkgeval"],
+                           "commit" => ["timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "github"])
+const ROUTE_SOURCES_EXACT = Dict(String[] => String[], ["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "failures"] => ["pkgeval", "packages"],
                                  ["pkgeval", "changes"] => ["pkgeval", "packages"])
 
 function route_seq(s::Server, segments)
     sources = get(ROUTE_SOURCES_EXACT, segments, nothing)
     sources === nothing && (sources = isempty(segments) ? nothing : get(ROUTE_SOURCES, segments[1], nothing))
     return withdb(s; pool=s.seqdb) do db
-        sources === nothing ? Store.current_seq(db) : maximum(src -> Store.source_seq(db, src), sources)
+        sources === nothing ? Store.current_seq(db) : maximum(src -> Store.source_seq(db, src), sources; init=0)
     end
 end
 
