@@ -313,6 +313,11 @@ a site change locally before pushing it:
 
 Check the phone layout too, by loading the page in an iframe about 390 px wide.
 
+The image serves the scripts under `assets/` minified, with source maps beside
+them (the first stage of the `Dockerfile`); a local preview serves them as they
+are. The minifier keeps every name, since the pages' `onclick` attributes call
+the scripts' functions by name.
+
 **The deploy ships only the image.** The host scripts, units, `host.env` and
 Caddyfile under `infra/terraform/files/` reach the machine only through
 cloud-init, when Terraform creates the instance. After merging a change to one,

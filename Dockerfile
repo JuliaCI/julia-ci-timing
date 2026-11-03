@@ -1,6 +1,18 @@
 # Ingest image for perf.julialang.org: the fetchers, the export and the site's
 # static files. Built by .github/workflows/deploy.yml for linux/arm64 and run
 # on the host by the ci-timing-ingest timer (infra/terraform/files).
+
+# The site's scripts, minified for the browser with source maps beside them.
+# Only whitespace and syntax: the pages' onclick attributes call the scripts'
+# top-level functions by name, so no name is shortened. Run on the build
+# machine's own platform, since the output is the same for every one.
+FROM --platform=$BUILDPLATFORM node:24-slim AS scripts
+RUN npm install --global esbuild@0.28.2
+COPY assets/*.js /src/
+RUN cd /src && for f in *.js; do \
+      esbuild "$f" --minify-whitespace --minify-syntax --charset=utf8 --sourcemap --log-level=warning --outfile="/out/$f" || exit 1; \
+    done
+
 # Pinned to the patch Manifest.toml was resolved with. Dependabot proposes
 # the bump; re-resolve the Manifest under the new version with it
 FROM julia:1.13.3
@@ -36,6 +48,7 @@ RUN julia -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 COPY infra/docker/requirements.txt /opt/datasette-requirements.txt
 RUN python3 -m venv /opt/datasette && /opt/datasette/bin/pip install --no-cache-dir -r /opt/datasette-requirements.txt
 COPY . .
+COPY --from=scripts /out/ /app/assets/
 # Precompile the API package (its workload renders every route over the
 # fixture database, so a new server has nothing left to compile), then hand
 # everything to the runtime user (Julia writes logs under the depot)
