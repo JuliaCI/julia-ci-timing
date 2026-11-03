@@ -48,6 +48,15 @@ const ARTIFACT_DIR = "runtime-benchmarks/out/"
 # compression level than the other raw tables
 const RAW_ZSTD_LEVEL = 19
 
+# Benchmarks dropped from the suite because their numbers say nothing about the commit.
+# Their rows are left out of new jobs and pull request comparisons, and
+# `delete_retired!` deletes the ones in the database already. raw_rtb keeps them.
+const RETIRED_BENCHMARKS = Dict(
+    # Its retired instructions step by 56 per call (up to 1.8x) from one master build to
+    # the next with nothing changing deprecations: the cost follows the code layout
+    "dispatch/deprecated_call" => "follows the code layout, not the commit",
+)
+
 # --- one job's results ---------------------------------------------------------
 
 counters_of(r) = something(get(r, :counters, nothing), Dict())
@@ -79,6 +88,7 @@ function summarize_records(records, arm)
     byname = Dict{String,Vector{Any}}()
     for r in records
         String(get(r, :arm, "")) == arm || continue
+        haskey(RETIRED_BENCHMARKS, String(r.name)) && continue
         push!(get!(byname, String(r.name), Any[]), r)
     end
     out = Dict{String,Dict{String,Any}}()
@@ -322,6 +332,57 @@ end
 geomean(xs) = isempty(xs) ? nothing : exp(sum(log, xs) / length(xs))
 
 """
+    pr_benchmarks(benchmarks, categories) -> (benchmarks, summary)
+
+A comparison's benchmarks without the retired ones, and the pull request's verdict
+and counts from them. A category's verdict is compare.json's, retired benchmarks
+included, since it is judged on the category as a whole.
+"""
+function pr_benchmarks(benchmarks, categories)
+    benchmarks = [b for b in benchmarks if !haskey(RETIRED_BENCHMARKS, String(get(b, :name, "")))]
+    nreg = count(b -> get(b, :verdict, "") == "regression", benchmarks)
+    nimp = count(b -> get(b, :verdict, "") == "improvement", benchmarks)
+    sreg = count(c -> get(c, :verdict, "") == "regression", categories)
+    ratios = [Float64(b.ratio) for b in benchmarks if get(b, :ratio, nothing) isa Number && b.ratio > 0]
+    return benchmarks, (verdict = nreg + sreg > 0 ? "regression" : nimp > 0 ? "improvement" : "same",
+                        n_benchmarks = length(benchmarks), n_regressions = nreg, n_improvements = nimp,
+                        n_instr_changed = count(b -> get(b, :instr_changed, false) === true, benchmarks),
+                        geomean = geomean(ratios))
+end
+
+"""
+    delete_retired!(db) -> Int
+
+Delete the results of the benchmarks in RETIRED_BENCHMARKS, and take them out of the
+pull request comparisons, recounting those; the number of rows changed. New rows leave
+them out already, so this runs once for each version of the list, kept in meta.
+"""
+function delete_retired!(db)
+    names = sort!(collect(keys(RETIRED_BENCHMARKS)))
+    stamp = join(names, "\n")
+    seen = query(db, "SELECT value FROM meta WHERE key = 'runtime_retired'")
+    !isempty(seen) && seen[1].value == stamp && return 0
+    marks = join(fill("?", length(names)), ", ")
+    retired = "SELECT 1 FROM json_each(benchmarks) WHERE json_extract(value, '\$.name') IN ($marks)"
+    prs = query(db, "SELECT pr_number, benchmarks, categories FROM rtb_prs WHERE EXISTS ($retired)", names)
+    n = query(db, "SELECT count(*) AS n FROM rtb_results WHERE name IN ($marks)", names)[1].n
+    transaction(db) do
+        DBInterface.execute(db, "DELETE FROM rtb_results WHERE name IN ($marks)", names)
+        seq = next_seq!(db)
+        stmt = DBInterface.prepare(db, "UPDATE rtb_prs SET benchmarks = ?, verdict = ?, n_benchmarks = ?, n_regressions = ?, " *
+                                       "n_improvements = ?, n_instr_changed = ?, geomean = ?, change_seq = ? WHERE pr_number = ?")
+        for r in prs
+            benchmarks, s = pr_benchmarks(JSON3.read(r.benchmarks), JSON3.read(r.categories))
+            DBInterface.execute(stmt, (JSON3.write(benchmarks), s.verdict, s.n_benchmarks, s.n_regressions, s.n_improvements,
+                                       s.n_instr_changed, miss(s.geomean), seq, r.pr_number))
+        end
+        Store.setmeta!(db, "runtime_retired", stamp)
+    end
+    @info "Deleted retired benchmarks" results=n prs=length(prs)
+    return n + length(prs)
+end
+
+"""
     pr_row(pull, build, job, compare, meta) -> Tuple
 
 A pull request's row (in the order of `["pr_number"; PR_COLS]`) from its GitHub listing
@@ -331,14 +392,9 @@ compare.json and results-meta.json.
 function pr_row(pull, build, job, compare, meta)
     arm(label) = getin(meta, :arms, Symbol(String(get(compare, label, String(label)))))
     head, base = arm(:head), arm(:base)
-    benchmarks = collect(get(compare, :benchmarks, []))
     categories = collect(get(compare, :categories, []))
     errors = Dict("errors" => something(get(compare, :errors, nothing), Dict()), "failures" => something(get(compare, :failures, nothing), []))
-    nreg = count(b -> get(b, :verdict, "") == "regression", benchmarks)
-    nimp = count(b -> get(b, :verdict, "") == "improvement", benchmarks)
-    sreg = count(c -> get(c, :verdict, "") == "regression", categories)
-    verdict = nreg + sreg > 0 ? "regression" : nimp > 0 ? "improvement" : "same"
-    ratios = [Float64(b.ratio) for b in benchmarks if get(b, :ratio, nothing) isa Number && b.ratio > 0]
+    benchmarks, s = pr_benchmarks(get(compare, :benchmarks, []), categories)
     blocks = maxornothing([get(b, :blocks, nothing) for b in benchmarks])
     return (Int(pull.number), str(get(pull, :title, nothing)), str(getin(pull, :user, :login)), get(pull, :draft, false) === true ? 1 : 0,
             str(getin(pull, :head, :sha)), str(getin(pull, :base, :ref)),
@@ -346,8 +402,8 @@ function pr_row(pull, build, job, compare, meta)
             at(get(job, :finished_at, nothing)), miss(get(job, :web_url, nothing)),
             isempty(str(getin(head, :commit))) ? String(build.commit) : str(getin(head, :commit)), str(getin(head, :version)),
             str(getin(head, :llvm)), str(getin(base, :commit)), str(getin(base, :version)), str(getin(base, :llvm)),
-            miss(blocks), verdict, length(benchmarks), nreg, nimp, count(b -> get(b, :instr_changed, false) === true, benchmarks),
-            length(keys(errors["errors"])), miss(geomean(ratios)),
+            miss(blocks), s.verdict, s.n_benchmarks, s.n_regressions, s.n_improvements, s.n_instr_changed,
+            length(keys(errors["errors"])), miss(s.geomean),
             JSON3.write(categories), JSON3.write(benchmarks), JSON3.write(errors))
 end
 
@@ -547,6 +603,7 @@ function run!(db)
     transaction(db) do
         write_rows!(db, rows)
     end
+    retired = delete_retired!(db)
     # GitHub's quota or a julia-pr listing failing leaves the rows as they were rather
     # than failing the master results with it
     try
@@ -560,7 +617,7 @@ function run!(db)
     catch e
         @error "Importing the backfill failed" exception=(e, catch_backtrace())
     end
-    return length(rows) + n
+    return length(rows) + retired + n
 end
 
 function main(args=ARGS)
