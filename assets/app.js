@@ -11018,15 +11018,17 @@ function getPkgevalFilteredReports() {
 }
 
 async function loadPkgevalData() {
+  // The panels do not need the summary; the chart of changes is drawn by
+  // whichever of the two arrives last
+  loadPkgevalChanges(true);
+  loadPkgevalPopular();
+  loadPkgevalSignatures();
   try {
     pkgevalData = await apiGet("pkgeval/summary");
     setUpdatedLabels();
 
     document.getElementById("pkgeval-chart-loading").style.display = "none";
     updatePkgevalChart();
-    loadPkgevalChanges(true);
-    loadPkgevalPopular();
-    loadPkgevalSignatures();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
     showLoadError("pkgeval", "the PkgEval data", err, { table: false });
