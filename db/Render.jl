@@ -420,8 +420,29 @@ pkgeval_latest_reports(db) = rows(db, "SELECT r.id, r.date, r.path, r.logs_url F
 
 # Downloads per registry package name over the last `days` days of rollups,
 # ranked by the client's downloads, with the window; nothing without rollups.
-# Summing the window's rollups is the slow part, so callers run it once.
+# Summing the window's rollups is the slow part, so callers run it once, and
+# a ranking is kept until the downloads change. The sequence is read first, so
+# a ranking is never kept under a sequence newer than what it read.
+const RANKINGS = Dict{Tuple{String,Int,String},Tuple{Int,Any}}()
+const RANKINGS_LOCK = ReentrantLock()
+
 function pkgeval_ranking(db, days, client)
+    # An in-memory database has no name to key it by
+    (db.file in ("", ":memory:") || SQLite.intransaction(db)) && return pkgeval_ranking_uncached(db, days, client)
+    key = (db.file, days, client)
+    seq = Store.source_seq(db, "packages")
+    hit = lock(() -> get(RANKINGS, key, nothing), RANKINGS_LOCK)
+    hit !== nothing && hit[1] == seq && return hit[2]
+    r = pkgeval_ranking_uncached(db, days, client)
+    lock(RANKINGS_LOCK) do
+        # Any days value can be asked for, so only a few rankings are kept
+        !haskey(RANKINGS, key) && length(RANKINGS) >= 8 && empty!(RANKINGS)
+        RANKINGS[key] = (seq, r)
+    end
+    return r
+end
+
+function pkgeval_ranking_uncached(db, days, client)
     last = rows(db, "SELECT MAX(date) AS d FROM dl_packages")
     (isempty(last) || last[1].d === missing) && return nothing
     until = String(last[1].d)
