@@ -6657,6 +6657,11 @@ function showTimingLoadError() {
               `;
 }
 
+// The Timing and Workers tabs and the Overview's CI card read the runs; a
+// landing on another tab does without them
+let timingLoad = null;
+const ensureTimingData = () => (timingLoad ??= loadData());
+
 async function loadData() {
   try {
     renderMatrixSkeleton();
@@ -6895,7 +6900,15 @@ const CI_URL_KEYS = {
   wq: "workers text filter",
 };
 const TABS = {
-  overview: { url: "overview", path: "/overview", view: "overview-view", show: () => renderOverview() },
+  overview: {
+    url: "overview",
+    path: "/overview",
+    view: "overview-view",
+    show: () => {
+      ensureTimingData();
+      renderOverview();
+    },
+  },
   commit: {
     url: "commit",
     path: "/commit",
@@ -6942,6 +6955,7 @@ const TABS = {
     source: "timing",
     urlGroup: "ci",
     keys: CI_URL_KEYS,
+    show: ensureTimingData,
     data: () => data,
     reloadStale: () => timingView === "usage" && staleViews.has("usage") && renderUsageView(),
     writeURL: () => jobSelectionRestored && updateURL(),
@@ -6953,6 +6967,7 @@ const TABS = {
     source: "agents",
     urlGroup: "ci",
     keys: CI_URL_KEYS,
+    show: ensureTimingData,
     data: () => agentsData,
     // The Workers view loads what is marked whenever it draws
     reloadStale: () => (staleViews.has("agents") || staleViews.has("backlog")) && renderWorkerPresence(),
@@ -21902,7 +21917,6 @@ function openPhoneSheet(toolbar) {
 }
 
 refreshData();
-loadData();
 
 // Each tab reads its URL parameters before the landing tab is shown
 for (const t of Object.values(TABS)) t.applyURL?.();
