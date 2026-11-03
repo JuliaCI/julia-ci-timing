@@ -260,8 +260,19 @@ function source_run(f, db::SQLite.DB, source::AbstractString)
     end
 end
 
+# Transcoding with a codec instance leaves its native buffers to a finalizer,
+# and the GC does not see that memory, so free them as soon as the call ends
+function transcode_with(codec, bytes)
+    CodecZstd.TranscodingStreams.initialize(codec)
+    try
+        return transcode(codec, bytes)
+    finally
+        CodecZstd.TranscodingStreams.finalize(codec)
+    end
+end
+
 compress_zst(bytes::AbstractVector{UInt8}; level=nothing) =
-    level === nothing ? transcode(ZstdCompressor, Vector{UInt8}(bytes)) : transcode(ZstdCompressor(; level), Vector{UInt8}(bytes))
+    level === nothing ? transcode(ZstdCompressor, Vector{UInt8}(bytes)) : transcode_with(ZstdCompressor(; level), Vector{UInt8}(bytes))
 compress_zst(s::AbstractString; kw...) = compress_zst(codeunits(s); kw...)
 decompress_zst(bytes) = String(transcode(ZstdDecompressor, Vector{UInt8}(bytes)))
 

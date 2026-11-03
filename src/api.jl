@@ -585,8 +585,8 @@ refresher_healthy(s::Server) = time() - s.refreshed_at < REFRESH_HEALTHY_S
 # A body is compressed once per render and then served many times. Browsers
 # that take zstd get a body about a fifth smaller than gzip's, and Caddy
 # cannot recompress one that is already gzipped.
-gzip(bytes) = transcode(GzipCompressor(level=9), bytes)
-zstd(bytes) = transcode(ZstdCompressor(level=9), bytes)
+gzip(bytes) = Store.transcode_with(GzipCompressor(level=9), bytes)
+zstd(bytes) = Store.transcode_with(ZstdCompressor(level=9), bytes)
 compress(bytes) = (gzip(bytes), zstd(bytes))
 
 function render_compressed(s::Server, segments, params)
