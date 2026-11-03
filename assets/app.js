@@ -408,6 +408,23 @@ function syncPanelZoom(chart, charts, resetButtonId) {
   document.getElementById(resetButtonId).style.display = "";
 }
 
+// A tab whose data failed to load says so in place of its chart, and of its
+// table and side list when it has them
+function showLoadError(prefix, what, err, { table = true, colspan = 0, list = null, listHeader = "" } = {}) {
+  console.error(`Failed to load ${what}:`, err);
+  document.getElementById(`${prefix}-chart-loading`).innerHTML =
+    `<span class="error">Failed to load ${what}; try reloading the page.</span>`;
+  if (table) {
+    document.getElementById(`${prefix}-stats-tbody`).innerHTML =
+      `<tr><td${colspan ? ` colspan="${colspan}"` : ""} class="error">Failed to load data</td></tr>`;
+  }
+  if (list) {
+    document.getElementById(list).innerHTML =
+      (listHeader ? `<div class="group-header">${listHeader}</div>` : "") +
+      '<div class="error" style="padding: 12px;">Failed to load</div>';
+  }
+}
+
 // Legend buttons beside a chart that hide and show its datasets; each button
 // carries its dataset's index, and `chartOf(button)` finds its chart
 function bindDatasetToggles(container, chartOf) {
@@ -7863,14 +7880,7 @@ async function loadBenchmarkData() {
     // The group selection needs the group list, so the URL waits for it
     if (activeTab === "benchmarks") updateBenchURL();
   } catch (err) {
-
-    console.error("Failed to load benchmark data:", err);
-    document.getElementById("bench-chart-loading").innerHTML =
-      '<span class="error">Failed to load the benchmark data; try reloading the page.</span>';
-    document.getElementById("bench-group-list").innerHTML =
-      '<div class="group-header">Benchmark Groups</div><div class="error" style="padding: 12px;">Failed to load</div>';
-    document.getElementById("bench-stats-tbody").innerHTML =
-      '<tr><td colspan="6" class="error">Failed to load data</td></tr>';
+    showLoadError("bench", "the benchmark data", err, { colspan: 6, list: "bench-group-list", listHeader: "Benchmark Groups" });
   }
 }
 
@@ -9793,11 +9803,7 @@ async function loadPackagesDownloadsData() {
     loadPackagesTop();
     if (packagesPackage) setPackagesPackage(packagesPackage);
   } catch (err) {
-    console.error("Failed to load ecosystem packages downloads:", err);
-    if (loadingEl) {
-      loadingEl.innerHTML =
-        '<span class="error">Failed to load package downloads; try reloading the page.</span>';
-    }
+    showLoadError("packages", "package downloads", err, { table: false });
   }
 }
 
@@ -11030,9 +11036,7 @@ async function loadPkgevalData() {
     loadPkgevalSignatures();
     if (pkgevalPackage) setPkgevalPackage(pkgevalPackage);
   } catch (err) {
-    console.error("Failed to load pkgeval data:", err);
-    document.getElementById("pkgeval-chart-loading").innerHTML =
-      '<span class="error">Failed to load the PkgEval data; try reloading the page.</span>';
+    showLoadError("pkgeval", "the PkgEval data", err, { table: false });
   }
 }
 
@@ -13124,12 +13128,7 @@ async function loadTtfxData() {
     if (activeTab === "ci-ttfx") updateTtfxURL();
     reopenDetailPopup("ci-ttfx");
   } catch (err) {
-    console.error("Failed to load TTFX data:", err);
-    document.getElementById("ttfx-chart-loading").innerHTML =
-      '<span class="error">Failed to load the TTFX data; try reloading the page.</span>';
-    document.getElementById("ttfx-task-items").innerHTML = '<div class="error">Failed to load</div>';
-    document.getElementById("ttfx-stats-tbody").innerHTML =
-      '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("ttfx", "the TTFX data", err, { list: "ttfx-task-items" });
   }
 }
 
@@ -15255,12 +15254,7 @@ async function loadSizesData() {
     updateSizesTable();
     reopenDetailPopup("ci-sizes");
   } catch (err) {
-    console.error("Failed to load size data:", err);
-    document.getElementById("sizes-chart-loading").innerHTML =
-      '<span class="error">Failed to load the size data; try reloading the page.</span>';
-    document.getElementById("sizes-metric-list").innerHTML =
-      '<div class="group-header">Metrics</div><div class="error">Failed to load</div>';
-    document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("sizes", "the size data", err, { list: "sizes-metric-list", listHeader: "Metrics" });
   }
 }
 
@@ -18791,10 +18785,7 @@ async function loadActivityData() {
     updateActivityCharts();
     updateActivityTable();
   } catch (err) {
-    console.error("Failed to load activity data:", err);
-    document.getElementById("activity-chart-loading").innerHTML =
-      '<span class="error">Failed to load the activity data; try reloading the page.</span>';
-    document.getElementById("activity-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("activity", "the activity data", err);
   }
 }
 
@@ -19060,10 +19051,7 @@ async function loadCoverageData() {
     updateCoverageCharts();
     updateCoverageTable();
   } catch (err) {
-    console.error("Failed to load coverage data:", err);
-    document.getElementById("coverage-chart-loading").innerHTML =
-      '<span class="error">Failed to load the coverage data; try reloading the page.</span>';
-    document.getElementById("coverage-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("coverage", "the coverage data", err);
   }
 }
 
@@ -19503,10 +19491,7 @@ async function loadSysimageData() {
     updateSysimageTable();
     reopenDetailPopup("ci-build-stages");
   } catch (err) {
-    console.error("Failed to load sysimage data:", err);
-    document.getElementById("sysimage-chart-loading").innerHTML =
-      '<span class="error">Failed to load the sysimage data; try reloading the page.</span>';
-    document.getElementById("sysimage-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("sysimage", "the sysimage data", err);
   }
 }
 
@@ -20252,10 +20237,7 @@ async function loadRuntimeData() {
     loadRuntimePrs().then(() => runtimeData && updateRuntimeTable());
     reopenDetailPopup("ci-runtime");
   } catch (err) {
-    console.error("Failed to load runtime benchmark data:", err);
-    document.getElementById("runtime-chart-loading").innerHTML =
-      '<span class="error">Failed to load the runtime benchmark data; try reloading the page.</span>';
-    document.getElementById("runtime-stats-tbody").innerHTML = '<tr><td class="error">Failed to load data</td></tr>';
+    showLoadError("runtime", "the runtime benchmark data", err);
   }
 }
 
