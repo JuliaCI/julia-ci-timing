@@ -6857,7 +6857,7 @@ async function refreshData() {
     sourceSeqs = seqs;
     sourceTimes = status.generated_at || {};
     for (const source of changed) for (const view of SOURCE_VIEWS[source] || []) staleViews.add(view);
-    if (changed.length > 0) overviewLoadedAt = 0;
+    for (const source of changed) for (const key of OVERVIEW_SOURCE_KEYS[source] || []) overviewStale.add(key);
     if (commitResult && (changed.length > 0 || timingMoved)) commitResult.stale = true;
     if (sourceTimes.timing) checkStaleData(sourceTimes.timing);
     setUpdatedLabels();
@@ -16178,8 +16178,21 @@ async function loadSizesPopupFiles(sha, source) {
 // fetched here rather than through the tabs' loaders, which also build their
 // charts.
 let overviewSources = null; // { pkgeval, bench, ttfx, sizes, packages, agents, ... }
-let overviewLoadedAt = 0;
 let overviewLoading = null;
+// The sources an ingest has changed since they were loaded
+const overviewStale = new Set();
+// The sources each status source moves, as the API tags their routes
+const OVERVIEW_SOURCE_KEYS = {
+  timing: ["builds", "coverage"],
+  benchmarks: ["bench"],
+  pkgeval: ["pkgeval", "reasons", "popular"],
+  ttfx: ["ttfx", "ttfxPrs"],
+  runtime: ["runtime", "runtimePrs"],
+  sizes: ["sizes", "sizesPrs"],
+  packages: ["packages", "top", "popular"],
+  agents: ["agents", "backlog"],
+  github: ["activity"],
+};
 let overviewDrawn = []; // per card: { status, charts }
 
 const OVERVIEW_DAY_MS = 24 * 60 * 60 * 1000;
@@ -16226,8 +16239,9 @@ function overviewColors() {
 
 // Each source is stored as it arrives and `onSource` is told its key, so
 // the cards that read it can be drawn without waiting for the slowest one.
-// A source still on its way is undefined; one that failed is null.
-function loadOverviewSources(onSource) {
+// A source still on its way is undefined; one that failed is null. `keys`
+// limits the load to those sources.
+function loadOverviewSources(onSource, keys = null) {
   const quiet = (route, params) =>
     apiGet(route, params).catch((err) => {
       console.error(`Failed to load ${route}:`, err);
@@ -16261,14 +16275,19 @@ function loadOverviewSources(onSource) {
     coverage: () => quiet("coverage/files", { since: sparkStart, days: 7 }),
   };
   return Promise.all(
-    Object.entries(sources).map(async ([key, load]) => onSource(key, await load())),
+    Object.entries(sources)
+      .filter(([key]) => !keys || keys.includes(key))
+      .map(async ([key, load]) => onSource(key, await load())),
   );
 }
 
-async function renderOverview({ force = false } = {}) {
-  const expired = Date.now() - overviewLoadedAt > DATA_REFRESH_INTERVAL;
-  if (!overviewSources || force || expired) {
+async function renderOverview() {
+  // A source that failed to load is tried again
+  const failed = Object.keys(overviewSources || {}).filter((k) => overviewSources[k] === null);
+  if (!overviewSources || overviewStale.size || failed.length) {
     if (!overviewLoading) {
+      const keys = overviewSources ? [...new Set([...overviewStale, ...failed])] : null;
+      overviewStale.clear();
       // A refresh keeps showing the earlier figures until each source's new
       // ones arrive
       const sources = { ...overviewSources };
@@ -16276,13 +16295,11 @@ async function renderOverview({ force = false } = {}) {
       overviewLoading = loadOverviewSources((key, value) => {
         sources[key] = value;
         if (activeTab === "overview" && overviewSources === sources) drawOverview([key]);
-      })
-        .then(() => {
-          overviewLoadedAt = Date.now();
-        })
-        .finally(() => {
-          overviewLoading = null;
-        });
+      }, keys).finally(() => {
+        overviewLoading = null;
+        // Sources that changed again while this load was under way
+        if (overviewStale.size && activeTab === "overview") renderOverview();
+      });
     }
     if (activeTab === "overview") drawOverview();
     await overviewLoading;
