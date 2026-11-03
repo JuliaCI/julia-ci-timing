@@ -2237,7 +2237,7 @@ function convertEmoji(text) {
   for (const [code, url] of Object.entries(emojiImageMap)) {
     result = result.replaceAll(
       code,
-      `<img src="${url}" alt="${code}" class="bk-emoji">`,
+      `<img src="${url}" alt="${code}" class="bk-emoji" width="64" height="64" loading="lazy">`,
     );
   }
   // Then replace remaining emoji codes with unicode
@@ -5956,10 +5956,10 @@ function deselectAllJobs() {
 const platformOrder = ["linux", "macos", "windows", "freebsd"];
 const typeOrder = ["build", "test", "coverage"];
 const platformLabels = {
-  linux: `<img src="${BUILDKITE_EMOJI_BASE}/linux.png" class="bk-emoji"> Linux`,
-  macos: `<img src="${BUILDKITE_EMOJI_BASE}/mac.png" class="bk-emoji"> macOS`,
-  windows: `<img src="${BUILDKITE_EMOJI_BASE}/windows.png" class="bk-emoji"> Windows`,
-  freebsd: `<img src="${BUILDKITE_EMOJI_BASE}/freebsd.png" class="bk-emoji"> FreeBSD`,
+  linux: `<img src="${BUILDKITE_EMOJI_BASE}/linux.png" class="bk-emoji" width="64" height="64" loading="lazy"> Linux`,
+  macos: `<img src="${BUILDKITE_EMOJI_BASE}/mac.png" class="bk-emoji" width="64" height="64" loading="lazy"> macOS`,
+  windows: `<img src="${BUILDKITE_EMOJI_BASE}/windows.png" class="bk-emoji" width="64" height="64" loading="lazy"> Windows`,
+  freebsd: `<img src="${BUILDKITE_EMOJI_BASE}/freebsd.png" class="bk-emoji" width="64" height="64" loading="lazy"> FreeBSD`,
 };
 const typeLabels = {
   build: "Build",
