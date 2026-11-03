@@ -2465,12 +2465,25 @@ const GH_WINDOW_DAYS = 30
 # which is all the listing keeps. `since` (a day or an instant) trims the arrays;
 # the open counts and windows still count everything before it.
 function github_activity(db; since="")
-    items = rows(db, "SELECT kind, author, created_at, closed_at, merged_at FROM gh_items")
-    commits = rows(db, "SELECT author, committed_at FROM commits WHERE committed_at IS NOT NULL")
-    isempty(items) && return OrderedDict("generated_at" => generated_at(db, "github"), "start" => nothing, "series" => OrderedDict())
+    first_at = rows(db, "SELECT MIN(created_at) AS t FROM gh_items")[1].t
+    first_at === missing && return OrderedDict("generated_at" => generated_at(db, "github"), "start" => nothing, "series" => OrderedDict())
     day(s) = Date(SubString(s, 1, 10))
-    first_day = minimum(day(String(r.created_at)) for r in items)
+    first_created = day(String(first_at))
     last_day = Date(now(UTC))
+    start = isempty(since) ? first_created : clamp(Date(since[1:10]), first_created, last_day)
+    # The days counted start a window before `start`, for the trailing windows;
+    # what came before them only adds to the open counts
+    first_day = max(first_created, start - Day(GH_WINDOW_DAYS - 1))
+    from = string(first_day)
+    items = rows(db, "SELECT kind, author, created_at, closed_at, merged_at FROM gh_items WHERE created_at >= ? OR closed_at >= ? OR merged_at >= ?",
+                 (from, from, from))
+    whole = first_day == first_created
+    # Read through the index only for a window: for all of it, a scan is faster
+    commits = rows(db, "SELECT author, committed_at FROM commits WHERE " * (whole ? "+committed_at >= ?" : "committed_at >= ?"), (from,))
+    open_before = whole ? (issues=0, prs=0) :
+        rows(db, "SELECT COALESCE(SUM(kind = 'issue' AND created_at < ?), 0) - COALESCE(SUM(kind = 'issue' AND closed_at < ?), 0) AS issues, " *
+                 "COALESCE(SUM(kind != 'issue' AND created_at < ?), 0) - COALESCE(SUM(kind != 'issue' AND COALESCE(merged_at, closed_at) < ?), 0) AS prs " *
+                 "FROM gh_items", (from, from, from, from))[1]
     n = Dates.value(last_day - first_day) + 1
     ix(s) = Dates.value(day(String(s)) - first_day) + 1
     names = ["issues_opened", "issues_closed", "prs_opened", "prs_merged", "prs_closed", "commits"]
@@ -2484,7 +2497,7 @@ function github_activity(db; since="")
             bump!("issues_closed", r.closed_at)
         else
             bump!("prs_opened", r.created_at)
-            r.author === missing || push!(pr_authors[ix(r.created_at)], String(r.author))
+            r.author === missing || ix(r.created_at) < 1 || push!(pr_authors[ix(r.created_at)], String(r.author))
             if r.merged_at !== missing
                 bump!("prs_merged", r.merged_at)
                 d = (Store.parse_upstream(String(r.merged_at)) - Store.parse_upstream(String(r.created_at))).value / 86_400_000
@@ -2500,8 +2513,8 @@ function github_activity(db; since="")
         counts["commits"][ix(c.committed_at)] += 1
         c.author === missing || push!(commit_authors[ix(c.committed_at)], String(c.author))
     end
-    open_issues = cumsum(counts["issues_opened"] .- counts["issues_closed"])
-    open_prs = cumsum(counts["prs_opened"] .- counts["prs_merged"] .- counts["prs_closed"])
+    open_issues = Int(open_before.issues) .+ cumsum(counts["issues_opened"] .- counts["issues_closed"])
+    open_prs = Int(open_before.prs) .+ cumsum(counts["prs_opened"] .- counts["prs_merged"] .- counts["prs_closed"])
     # Distinct names over the trailing window, by a sliding count per name
     function distinct_window(per_day)
         live = Dict{String,Int}()
@@ -2529,8 +2542,8 @@ function github_activity(db; since="")
     series["commit_authors"] = distinct_window(commit_authors)
     series["pr_authors"] = distinct_window(pr_authors)
     series["merge_days"] = merge_median
-    lo = isempty(since) ? 1 : clamp(Dates.value(Date(since[1:10]) - first_day) + 1, 1, n)
-    return OrderedDict("generated_at" => generated_at(db, "github"), "start" => string(first_day + Day(lo - 1)),
+    lo = Dates.value(start - first_day) + 1
+    return OrderedDict("generated_at" => generated_at(db, "github"), "start" => string(start),
                        "window_days" => GH_WINDOW_DAYS,
                        "series" => OrderedDict(k => v[lo:end] for (k, v) in series))
 end
