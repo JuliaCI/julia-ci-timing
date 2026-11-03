@@ -344,7 +344,8 @@ a {
   overflow: hidden;
   max-width: 100%;
 }
-.ci-toolbar {
+/* The bar of controls atop each tab's view */
+.view-toolbar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1952,30 +1953,22 @@ th.sorted .sort-indicator {
 }
 
 /* Benchmarks view */
-.benchmarks-main {
+.view-main {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
-.benchmarks-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--color-canvas-subtle);
-  border-bottom: 1px solid var(--color-border-default);
-  flex-shrink: 0;
-}
-.benchmarks-content {
+.benchmarks-content,
+.ttfx-content {
   display: flex;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
-.benchmarks-sidebar {
+.benchmarks-sidebar,
+.ttfx-sidebar {
   width: 240px;
   background: var(--color-canvas-subtle);
   border-right: 1px solid var(--color-border-default);
@@ -1984,7 +1977,8 @@ th.sorted .sort-indicator {
   flex-shrink: 0;
   overflow-y: auto;
 }
-.benchmarks-sidebar .group-header {
+.benchmarks-sidebar .group-header,
+.ttfx-sidebar .group-header {
   padding: 8px 12px;
   font-size: 11px;
   font-weight: 600;
@@ -2046,19 +2040,25 @@ th.sorted .sort-indicator {
   white-space: nowrap;
   max-width: 200px;
 }
-.benchmarks-chart-area {
+.benchmarks-chart-area,
+.ttfx-chart-area,
+.pkgeval-chart-area {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
-.benchmarks-chart-container {
+.benchmarks-chart-container,
+.ttfx-chart-container,
+.pkgeval-chart-container {
   flex: 1;
   padding: 12px;
   min-height: 0;
   position: relative;
 }
-.benchmarks-chart-wrapper {
+.benchmarks-chart-wrapper,
+.ttfx-chart-wrapper,
+.pkgeval-chart-wrapper {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -2066,30 +2066,37 @@ th.sorted .sort-indicator {
   bottom: 12px;
   overflow: hidden;
 }
-.benchmarks-chart-wrapper canvas {
+.benchmarks-chart-wrapper canvas,
+.ttfx-chart-wrapper canvas,
+.pkgeval-chart-wrapper canvas {
   touch-action: pan-y;
   max-width: 100% !important;
 }
-.benchmarks-stats {
+.benchmarks-stats,
+.ttfx-stats {
   flex-shrink: 0;
   min-height: 50px;
   max-height: 80vh;
   overflow-y: auto;
   border-top: 1px solid var(--color-border-default);
 }
-.benchmarks-stats table {
+.benchmarks-stats table,
+.ttfx-stats table {
   width: 100%;
   border-collapse: collapse;
   background: var(--color-canvas-subtle);
   font-size: 12px;
 }
 .benchmarks-stats th,
-.benchmarks-stats td {
+.benchmarks-stats td,
+.ttfx-stats th,
+.ttfx-stats td {
   padding: 6px 12px;
   text-align: left;
   border-bottom: 1px solid var(--color-border-muted);
 }
-.benchmarks-stats th {
+.benchmarks-stats th,
+.ttfx-stats th {
   background: var(--color-canvas-inset);
   color: var(--color-fg-muted);
   font-weight: 600;
@@ -2097,8 +2104,8 @@ th.sorted .sort-indicator {
   position: sticky;
   top: 0;
 }
-.benchmarks-stats td {
-
+.benchmarks-stats td,
+.ttfx-stats td {
   font-family:
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
@@ -2330,23 +2337,6 @@ th.sorted .sort-indicator {
 }
 
 /* PkgEval view */
-.pkgeval-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.pkgeval-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--color-canvas-subtle);
-  border-bottom: 1px solid var(--color-border-default);
-  flex-shrink: 0;
-}
 .pkgeval-reports-link {
   font-size: 12px;
   white-space: nowrap;
@@ -2354,31 +2344,10 @@ th.sorted .sort-indicator {
 .packages-prerelease-headline {
   font-weight: 600;
 }
-.pkgeval-chart-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
 .pkgeval-chart-container {
-  flex: 1;
-  padding: 12px;
   /* The report table and the panels below it take fixed heights; the
      chart takes the rest, but never less than this */
   min-height: 180px;
-  position: relative;
-}
-.pkgeval-chart-wrapper {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 16px;
-  bottom: 12px;
-  overflow: hidden;
-}
-.pkgeval-chart-wrapper canvas {
-  touch-action: pan-y;
-  max-width: 100% !important;
 }
 /* Breaks and fixes per report, under the chart and on its time axis */
 .pkgeval-delta-container {
@@ -2765,45 +2734,6 @@ th.sorted .sort-indicator {
 }
 
 /* CI TTFX view */
-.ttfx-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.ttfx-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--color-canvas-subtle);
-  border-bottom: 1px solid var(--color-border-default);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-.ttfx-content {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.ttfx-sidebar {
-  width: 240px;
-  background: var(--color-canvas-subtle);
-  border-right: 1px solid var(--color-border-default);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  overflow-y: auto;
-}
-.ttfx-sidebar .group-header {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-fg-muted);
-  border-bottom: 1px solid var(--color-border-default);
-}
 .ttfx-sidebar .group-item .task-name {
   white-space: nowrap;
   overflow: hidden;
@@ -2820,30 +2750,6 @@ th.sorted .sort-indicator {
 }
 .ttfx-sidebar .group-item.failed .task-latest {
   color: var(--color-danger-fg);
-}
-.ttfx-chart-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.ttfx-chart-container {
-  flex: 1;
-  padding: 12px;
-  min-height: 0;
-  position: relative;
-}
-.ttfx-chart-wrapper {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 16px;
-  bottom: 12px;
-  overflow: hidden;
-}
-.ttfx-chart-wrapper canvas {
-  touch-action: pan-y;
-  max-width: 100% !important;
 }
 .ttfx-summary-grid {
   display: grid;
@@ -2921,7 +2827,7 @@ th.sorted .sort-indicator {
     grid-template-rows: 1fr 1fr;
   }
 }
-.ttfx-toolbar .coverage-filter {
+.filter-toolbar .coverage-filter {
   margin: 0;
   width: 12em;
 }
@@ -3157,43 +3063,16 @@ th.sorted .sort-indicator {
 .ttfx-stats tr.sysimage-total td {
   border-top: 1px solid var(--color-border-default);
 }
-.ttfx-stats {
-  flex-shrink: 0;
-  min-height: 50px;
-  max-height: 80vh;
-  overflow-y: auto;
-  border-top: 1px solid var(--color-border-default);
-}
-.ttfx-stats table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-canvas-subtle);
-  font-size: 12px;
-}
 .ttfx-stats th,
 .ttfx-stats td {
-  padding: 6px 12px;
-  text-align: left;
-  border-bottom: 1px solid var(--color-border-muted);
   white-space: nowrap;
 }
 .ttfx-stats th {
-  background: var(--color-canvas-inset);
-  color: var(--color-fg-muted);
-  font-weight: 600;
-  font-size: 11px;
-  position: sticky;
-  top: 0;
   z-index: 1;
   user-select: none;
 }
 .ttfx-stats th.sortable {
   cursor: pointer;
-}
-.ttfx-stats td {
-  font-family:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
 }
 .ttfx-stats tr {
   cursor: pointer;
@@ -3524,23 +3403,6 @@ a.ttfx-pr-copy {
 }
 
 /* Overview tab */
-.overview-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.overview-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--color-canvas-subtle);
-  border-bottom: 1px solid var(--color-border-default);
-  flex-shrink: 0;
-}
 .overview-headline {
   font-size: 13px;
   font-weight: 600;
@@ -4306,35 +4168,35 @@ a.ttfx-pr-copy {
   .toolbar .julia-logo {
     height: 20px;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .updated {
+  .filter-toolbar > .updated {
     font-size: 12px;
     color: var(--color-fg-muted);
     text-align: right;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) {
+  .filter-toolbar {
     gap: 6px;
     padding: 8px;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > :is(.time-select, .checkbox-dropdown) {
+  .filter-toolbar > :is(.time-select, .checkbox-dropdown) {
     flex: 1 1 calc(50% - 3px);
     min-width: 0;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .checkbox-dropdown > .checkbox-dropdown-btn {
+  .filter-toolbar > .checkbox-dropdown > .checkbox-dropdown-btn {
     width: 100%;
     justify-content: space-between;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .btn {
+  .filter-toolbar > .btn {
     flex: 1 1 0;
     white-space: nowrap;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > .bench-table-view-toggle {
+  .filter-toolbar > .bench-table-view-toggle {
     display: flex;
     flex: 1 1 100%;
   }
   .bench-table-view-toggle > .btn {
     flex: 1 1 0;
   }
-  :is(.ci-toolbar, .benchmarks-toolbar, .pkgeval-toolbar, .ttfx-toolbar) > :is(.package-search, .updated, .bench-noisy-min-ns-label) {
+  .filter-toolbar > :is(.package-search, .updated, .bench-noisy-min-ns-label) {
     flex: 1 1 100%;
     margin: 0;
   }
@@ -4699,10 +4561,10 @@ a.ttfx-pr-copy {
     color: #fff;
   }
 
-  :is(.ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar) {
+  .filter-toolbar {
     display: none;
   }
-  .m-sheet :is(.ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar) {
+  .m-sheet .filter-toolbar {
     display: flex;
     border: 0;
     background: none;

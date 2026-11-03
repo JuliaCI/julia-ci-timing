@@ -21704,7 +21704,7 @@ const PHONE_SECTIONS = [
   { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
-const PHONE_TOOLBARS = ".ci-toolbar, .ttfx-toolbar, .benchmarks-toolbar, .pkgeval-toolbar";
+const PHONE_TOOLBARS = ".filter-toolbar";
 const phoneLastTab = {};
 let phoneBar = null;
 let phoneSubnav = null;

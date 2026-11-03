@@ -520,13 +520,13 @@
     </div>
 
     <div
-      class="overview-main"
+      class="view-main"
       id="overview-view"
       role="tabpanel"
       aria-labelledby="tab-overview"
       tabindex="0"
     >
-      <div class="overview-toolbar">
+      <div class="view-toolbar overview-toolbar">
         <span class="overview-headline" id="overview-headline"></span>
         <span class="overview-note"
           >Changes compare this week with last: the last 7 days against the 7
@@ -550,13 +550,13 @@
     </div>
 
     <div
-      class="overview-main view-hidden"
+      class="view-main view-hidden"
       id="commit-view"
       role="tabpanel"
       aria-labelledby="tab-commit"
       tabindex="0"
     >
-      <div class="overview-toolbar">
+      <div class="view-toolbar overview-toolbar">
         <form class="package-search" onsubmit="submitCommitLookup(event)">
           <label for="commit-ref">Commit or PR:</label>
           <input
@@ -598,7 +598,7 @@
       aria-labelledby="tab-ci-timing tab-ci-workers"
       tabindex="0"
     >
-      <div class="ci-toolbar" id="ci-timing-controls">
+      <div class="view-toolbar filter-toolbar" id="ci-timing-controls">
         <span class="bench-table-view-toggle" id="timing-view-toggle" role="group" aria-label="Timing view">
           <button
             class="btn btn-primary"
@@ -1002,13 +1002,13 @@
     </div>
 
     <div
-      class="pkgeval-main view-hidden"
+      class="view-main view-hidden"
       id="packages-view"
       role="tabpanel"
       aria-labelledby="tab-packages"
       tabindex="0"
     >
-      <div class="pkgeval-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="packages-time-range"
@@ -1104,13 +1104,13 @@
     </div>
 
     <div
-      class="pkgeval-main view-hidden"
+      class="view-main view-hidden"
       id="pkgeval-view"
       role="tabpanel"
       aria-labelledby="tab-pkgeval"
       tabindex="0"
     >
-      <div class="pkgeval-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="pkgeval-time-range"
@@ -1202,13 +1202,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="ttfx-view"
       role="tabpanel"
       aria-labelledby="tab-ci-ttfx"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="ttfx-time-range"
@@ -1379,13 +1379,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="runtime-view"
       role="tabpanel"
       aria-labelledby="tab-ci-runtime"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="runtime-source"
@@ -1498,13 +1498,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="sizes-view"
       role="tabpanel"
       aria-labelledby="tab-ci-sizes"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="sizes-time-range"
@@ -1617,13 +1617,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="sysimage-view"
       role="tabpanel"
       aria-labelledby="tab-ci-build-stages"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="sysimage-time-range"
@@ -1711,13 +1711,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="coverage-view"
       role="tabpanel"
       aria-labelledby="tab-ci-coverage"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="coverage-time-range"
@@ -1824,13 +1824,13 @@
     </div>
 
     <div
-      class="ttfx-main view-hidden"
+      class="view-main view-hidden"
       id="activity-view"
       role="tabpanel"
       aria-labelledby="tab-activity"
       tabindex="0"
     >
-      <div class="ttfx-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="activity-time-range"
@@ -1907,13 +1907,13 @@
     </div>
 
     <div
-      class="benchmarks-main view-hidden"
+      class="view-main view-hidden"
       id="benchmarks-view"
       role="tabpanel"
       aria-labelledby="tab-benchmarks"
       tabindex="0"
     >
-      <div class="benchmarks-toolbar">
+      <div class="view-toolbar filter-toolbar">
         <select
           class="time-select"
           id="bench-time-range"
