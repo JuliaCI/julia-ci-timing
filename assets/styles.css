@@ -1720,6 +1720,162 @@ th.sorted .sort-indicator {
   height: 10px;
   border-radius: 2px;
 }
+/* The jobs waiting now: a bar per pool in its colour from the chart, split by
+   priority into a strong (high), plain (normal) and faded (low) shade of it */
+.backlog-now {
+  --prio-strong: #000000;
+  --prio-strong-ink: #ffffff;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 32px;
+  margin: 4px 0 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.backlog-now[hidden] {
+  display: none;
+}
+.backlog-now-panel {
+  display: grid;
+  grid-template-columns: max-content minmax(80px, 1fr) max-content max-content;
+  column-gap: 10px;
+  row-gap: 3px;
+  flex: 1 1 360px;
+  max-width: 640px;
+  align-content: start;
+}
+.backlog-now-title {
+  grid-column: span 2;
+}
+.backlog-now-panel-bare {
+  grid-template-columns: minmax(80px, 1fr) max-content max-content;
+}
+.backlog-now-panel-bare .backlog-now-title {
+  grid-column: span 1;
+}
+.backlog-now-panel-bare .backlog-now-label {
+  display: none;
+}
+.backlog-now-key {
+  color: var(--color-fg-subtle);
+}
+.backlog-now-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  border-left: 1px dashed var(--color-fg-muted);
+  z-index: 1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .backlog-now {
+    --prio-strong: #ffffff;
+    --prio-strong-ink: #0b0b0b;
+  }
+  :root:not([data-theme="light"]) .backlog-now-row {
+    --pool: var(--pool-dark);
+    --pool-ink: var(--pool-ink-dark);
+  }
+}
+:root[data-theme="dark"] .backlog-now {
+  --prio-strong: #ffffff;
+  --prio-strong-ink: #0b0b0b;
+}
+:root[data-theme="dark"] .backlog-now-row {
+  --pool: var(--pool-dark);
+  --pool-ink: var(--pool-ink-dark);
+}
+.backlog-now-head,
+.backlog-now-row {
+  display: contents;
+}
+.backlog-now-head > span {
+  color: var(--color-fg-muted);
+  padding-bottom: 2px;
+}
+.backlog-now-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-basis: 100%;
+  color: var(--color-fg-muted);
+}
+.backlog-now-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.backlog-now-label {
+  color: var(--color-fg-default);
+  white-space: nowrap;
+}
+.backlog-now-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.backlog-now-bar {
+  display: flex;
+  gap: 2px;
+  height: 15px;
+  min-width: 3px;
+}
+.backlog-now-seg {
+  flex-basis: 0;
+  min-width: 2px;
+  overflow: hidden;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.backlog-now-seg-bare {
+  color: transparent;
+  padding: 0;
+}
+.backlog-now-seg:first-child {
+  border-radius: 0;
+}
+.backlog-now-seg:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.backlog-now-row {
+  --pool: var(--pool-light);
+  --pool-ink: var(--pool-ink-light);
+}
+/* The legend's priority key is in grey */
+.backlog-now-legend {
+  --pool: var(--color-fg-subtle);
+}
+.backlog-now-seg[data-priority="1"],
+.backlog-now-swatch[data-priority="1"] {
+  background: color-mix(in oklab, var(--pool) 55%, var(--prio-strong));
+  color: var(--prio-strong-ink);
+}
+.backlog-now-seg[data-priority="0"],
+.backlog-now-swatch[data-priority="0"] {
+  background: var(--pool);
+  color: var(--pool-ink);
+}
+.backlog-now-seg[data-priority="-1"],
+.backlog-now-swatch[data-priority="-1"] {
+  background: color-mix(in oklab, var(--pool) 40%, var(--color-canvas-default));
+  color: var(--color-fg-default);
+}
+.backlog-now-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.backlog-now-n,
+.backlog-now-aux {
+  text-align: right;
+  color: var(--color-fg-default);
+}
+.backlog-now-aux {
+  color: var(--color-fg-muted);
+}
 .backlog-legend-key {
   display: flex;
   align-items: center;

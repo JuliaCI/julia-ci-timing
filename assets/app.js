@@ -1494,6 +1494,33 @@ const BACKLOG_COLORS = {
   dark: ["#db6d28", "#388bfd", "#a371f7", "#3fb950", "#db61a2", "#d29922", "#79c0ff", "#8b949e"],
 };
 
+// The pools' own colours: the backlog palette, teal in place of its grey, then
+// seven more for the quieter pools, which are told apart by name as much as hue
+const BACKLOG_POOL_COLORS = {
+  light: [...BACKLOG_COLORS.light.slice(0, 7), "#1b7c83",
+          "#cf222e", "#8a5a2b", "#54aeff", "#4d8a00", "#c297ff", "#fb8f44", "#3e1f79"],
+  dark: [...BACKLOG_COLORS.dark.slice(0, 7), "#39c5cf",
+         "#ff7b72", "#a5753f", "#0c63c7", "#7ee787", "#d2a8ff", "#ffa657", "#6e40c9"],
+};
+
+// Black or white, whichever reads better on the colour `hex`
+function inkOn(hex) {
+  const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return (y + 0.05) / 0.05 > 1.05 / (y + 0.05) ? "#0b0b0b" : "#ffffff";
+}
+
+// Each pool owns a colour in the chart and the bars alike, the busiest in the
+// window (the API sorts them so) taking the most distinct. The filter and the
+// selects do not change who owns which.
+const backlogColorIndex = new WeakMap();
+function backlogPoolColor(d, p, theme) {
+  if (!backlogColorIndex.has(d)) backlogColorIndex.set(d, new Map(d.pools.map((q, i) => [q, i])));
+  const colors = BACKLOG_POOL_COLORS[theme];
+  return colors[backlogColorIndex.get(d).get(p) % colors.length];
+}
+
 // Whether the Workers filter keeps a pool: it matches the pool's queue, OS,
 // arch and hosts like the agents table matches an agent's
 const backlogPoolShown = (p) =>
@@ -1546,6 +1573,7 @@ async function renderBacklogSection() {
   if (agentsData && !agentsData.error && !agentsHostSlotsShown && d.host_slots) renderAgentsSection();
   if (d.error || !d.pools || d.pools.length === 0) {
     summaryEl.textContent = d.error ? "Could not load the backlog." : "No jobs recorded yet.";
+    renderBacklogNow(d, []);
     document.getElementById("backlog-section").hidden = false;
     if (backlogChart) {
       backlogChart.destroy();
@@ -1557,33 +1585,121 @@ async function renderBacklogSection() {
     .filter(backlogPoolShown)
     .map((p) => ({ p, n: p.waiting[p.waiting.length - 1], w: p.oldest_wait_s[p.oldest_wait_s.length - 1] }))
     .filter((x) => x.n > 0);
+  renderBacklogNow(d, d.pools.filter(backlogPoolShown));
   summaryEl.innerHTML = now.length
-    ? "Now: " +
-      now
-        .map((x) => {
-          const j = x.p.waiting.length - 1;
-          const split = backlogSplit(x.p, j);
-          const prios = Object.entries(x.p.by_priority || {}).filter(([, s]) => s.waiting[j] > 0);
-          const prioSplit =
-            prios.length > 1
-              ? prios
-                  .sort(([a], [b]) => b - a)
-                  .map(([pr, s]) => `${s.waiting[j]} ${backlogPriorityName(pr)}`)
-                  .join(", ")
-              : "";
-          const parts = [split, prioSplit].filter(Boolean).join("; ");
-          return `${escapeHtml(backlogPoolLabel(x.p))} <strong>${x.n}</strong> waiting (${parts ? parts + "; " : ""}longest ${formatWait(x.w)})`;
-        })
-        .join(", ")
+    ? `Now: <strong>${now.reduce((s, x) => s + x.n, 0)}</strong> waiting in ${now.length} pool${now.length === 1 ? "" : "s"}, ` +
+      `the longest for ${formatWait(Math.max(...now.map((x) => x.w)))}`
     : "Now: no jobs waiting";
   renderBacklogChart(d);
+}
+
+// Now, per pool, two bar panels split by priority: the jobs waiting, and the
+// demand per slot (running and waiting jobs over the pool's slots) with a mark
+// at 1x, past which jobs queue. A row's title has the pipeline split.
+function renderBacklogNow(d, pools) {
+  const el = document.getElementById("backlog-now");
+  if (!el) return;
+  const at = (xs) => (xs && xs.length ? xs[xs.length - 1] : 0);
+  const prios = new Set();
+  const rows = pools.map((p) => {
+    const parts = Object.entries(p.by_priority || {})
+      .map(([pr, s]) => ({ pr, waiting: at(s.waiting), running: at(s.running), oldest: at(s.oldest_wait_s) }))
+      .filter((x) => x.waiting > 0 || x.running > 0)
+      .sort((a, b) => b.pr - a.pr);
+    if (!parts.length) parts.push({ pr: "0", waiting: at(p.waiting), running: at(p.running), oldest: at(p.oldest_wait_s) });
+    return { p, parts, waiting: at(p.waiting), running: at(p.running), oldest: at(p.oldest_wait_s) };
+  });
+  const waitingRows = rows.filter((r) => r.waiting > 0).sort((a, b) => b.waiting - a.waiting);
+  // Row for row with the waiting panel, so its rows line up without names;
+  // pools only running come after
+  const demandRows = [...waitingRows, ...rows.filter((r) => r.waiting === 0 && r.running > 0 && r.p.slots)].map((r) => ({
+    ...r,
+    demand: r.p.slots ? (r.waiting + r.running) / r.p.slots : null,
+  }));
+  el.hidden = waitingRows.length === 0 && demandRows.length === 0;
+  if (el.hidden) return;
+  const fmtX = (x) => `${x.toFixed(1)}×`;
+  const bar = (segs, width, marker) =>
+    `<span class="backlog-now-track">${marker === null ? "" : `<span class="backlog-now-mark" style="left:${marker.toFixed(1)}%"></span>`}` +
+    `<span class="backlog-now-bar" style="width:${width.toFixed(1)}%">${segs}</span></span>`;
+  const seg = (pr, n, tip) => {
+    prios.add(pr);
+    return `<span class="backlog-now-seg" data-priority="${escapeHtml(pr)}" style="flex-grow:${n}" title="${escapeHtml(tip)}">${n}</span>`;
+  };
+  // Each row in its pool's colour from the chart, for either theme
+  const label = (r, text) => {
+    const light = backlogPoolColor(d, r.p, "light");
+    const dark = backlogPoolColor(d, r.p, "dark");
+    const colors = `--pool-light:${light};--pool-dark:${dark};--pool-ink-light:${inkOn(light)};--pool-ink-dark:${inkOn(dark)}`;
+    return (
+      `<div class="backlog-now-row" style="${colors}" title="${escapeHtml(text)}">` +
+      `<span class="backlog-now-label">${escapeHtml(backlogPoolLabel(r.p))}</span>`
+    );
+  };
+  const maxWaiting = Math.max(1, ...waitingRows.map((r) => r.waiting));
+  const waitingHtml = waitingRows.map((r) => {
+    const split = backlogSplit(r.p, r.p.waiting.length - 1);
+    const segs = r.parts
+      .filter((x) => x.waiting > 0)
+      .map((x) => seg(x.pr, x.waiting, `${x.waiting} ${backlogPriorityName(x.pr)} priority waiting, the longest for ${formatWait(x.oldest)}`))
+      .join("");
+    return (
+      label(r, `${backlogPoolLabel(r.p)}: ${r.waiting} waiting${split ? ` (${split})` : ""}, the longest for ${formatWait(r.oldest)}`) +
+      bar(segs, (100 * r.waiting) / maxWaiting, null) +
+      `<span class="backlog-now-n">${r.waiting}</span><span class="backlog-now-aux">${formatWait(r.oldest)}</span></div>`
+    );
+  });
+  const maxDemand = Math.max(1, ...demandRows.map((r) => r.demand || 0));
+  const demandHtml = demandRows.map((r) => {
+    if (r.demand === null)
+      return label(r, `${backlogPoolLabel(r.p)}: no slots seen`) + `<span></span><span class="backlog-now-n">–</span><span></span></div>`;
+    const segs = r.parts
+      .map((x) => seg(x.pr, x.waiting + x.running, `${backlogPriorityName(x.pr)} priority: ${x.running} running, ${x.waiting} waiting`))
+      .join("");
+    return (
+      label(r, `${backlogPoolLabel(r.p)}: ${r.running} running and ${r.waiting} waiting for ${backlogSlotsText(r.p)}`) +
+      bar(segs, (100 * r.demand) / maxDemand, 100 / maxDemand) +
+      `<span class="backlog-now-n">${fmtX(r.demand)}</span><span class="backlog-now-aux">${r.p.slots}</span></div>`
+    );
+  });
+  const legend = [...prios]
+    .sort((a, b) => b - a)
+    .map((pr) => `<span><span class="backlog-now-swatch" data-priority="${escapeHtml(pr)}"></span>${backlogPriorityName(pr)}</span>`)
+    .join("");
+  const panel = (title, cols, body) =>
+    body.length
+      ? `<div class="backlog-now-panel"><div class="backlog-now-head"><span class="backlog-now-title">${title}</span>` +
+        `<span class="backlog-now-n">${cols[0]}</span><span class="backlog-now-aux">${cols[1]}</span></div>${body.join("")}</div>`
+      : "";
+  el.innerHTML =
+    `<div class="backlog-now-legend">Now, in the colours of the chart below and shaded by priority: ${legend}</div>` +
+    panel("Jobs waiting", ["jobs", "longest"], waitingHtml) +
+    panel("Demand per slot <span class=\"backlog-now-key\">(running + waiting jobs; the line is 1×)</span>", ["demand", "slots"], demandHtml);
+  fitBacklogNow(el);
+  if (!backlogNowObserver && typeof ResizeObserver !== "undefined") {
+    backlogNowObserver = new ResizeObserver(() => fitBacklogNow(el));
+    backlogNowObserver.observe(el);
+  }
+}
+
+// Counts go in the bars only where they fit; each is in its segment's title too.
+// When the demand panel sits beside the waiting panel, its rows line up with
+// that panel's, so it leaves out the pool names.
+let backlogNowObserver = null;
+function fitBacklogNow(el) {
+  const panels = el.querySelectorAll(".backlog-now-panel");
+  const sideBySide = panels.length > 1 && panels[0].offsetTop === panels[1].offsetTop;
+  panels.forEach((p, i) => p.classList.toggle("backlog-now-panel-bare", sideBySide && i > 0));
+  for (const s of el.querySelectorAll(".backlog-now-seg")) {
+    s.classList.remove("backlog-now-seg-bare");
+    if (s.scrollWidth > s.clientWidth) s.classList.add("backlog-now-seg-bare");
+  }
 }
 
 function renderBacklogChart(d) {
   const canvas = document.getElementById("backlog-chart");
   if (!canvas || typeof Chart === "undefined") return;
   const { isDark, text: textColor, grid: gridColor } = chartTheme();
-  const palette = BACKLOG_COLORS[isDark ? "dark" : "light"];
   const t0 = Date.parse(d.start);
   const stepMs = d.step_s * 1000;
   const metric = backlogMetric;
@@ -1603,8 +1719,8 @@ function renderBacklogChart(d) {
   // Per pool, the indices of its datasets, so its legend entry toggles them all
   const poolDatasets = [];
   const dashesUsed = new Set();
-  pools.forEach((p, i) => {
-    const color = palette[i % palette.length];
+  pools.forEach((p) => {
+    const color = backlogPoolColor(d, p, isDark ? "dark" : "light");
     const s = backlogSeries(p);
     const prios = backlogPriorities(s);
     const parts = prios.length > 1 ? prios.map((pr) => [pr, s.by_priority[pr]]) : [[null, s]];
