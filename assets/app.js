@@ -16186,6 +16186,8 @@ const OVERVIEW_DOWNLOADS_TOP_MINORS = 4;
 const OVERVIEW_DOWNLOADS_KINDS = [["user", "User"], ["ci", "CI"], ["all", "All"]];
 const OVERVIEW_LIST_LIMIT = 6;
 const OVERVIEW_SPARK_DAYS = 30;
+// The benchmark card's bars, and the reports it asks for
+const OVERVIEW_BENCH_DAYS = 90;
 
 // A categorical set for identities (Julia minors, queues), light and dark,
 // beside the shared outcome colours; text tokens carry the labels, the
@@ -16223,13 +16225,14 @@ function loadOverviewSources(onSource) {
   // reasons of the latest PkgEval report, the week's most requested packages
   const twoWeeksAgo = apiSince(new Date(Date.now() - 2 * OVERVIEW_WEEK_MS));
   const sparkStart = apiSince(new Date(Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS));
+  const benchStart = apiSince(new Date(Date.now() - OVERVIEW_BENCH_DAYS * OVERVIEW_DAY_MS));
   const sources = {
     pkgeval: () => fresh("pkgeval", pkgevalData) || quiet("pkgeval/summary"),
-    bench: () => fresh("benchmarks", benchData) || quiet("benchmarks/summary"),
-    ttfx: () => fresh("ttfx", ttfxData) || quiet("ttfx/summary"),
+    bench: () => fresh("benchmarks", benchData) || quiet("benchmarks/summary", { since: benchStart }),
+    ttfx: () => fresh("ttfx", ttfxData) || quiet("ttfx/summary", { since: sparkStart }),
     ttfxPrs: () => fresh("ttfx", ttfxPrs) || quiet("ttfx/prs"),
     runtime: () => fresh("runtime", runtimeData) || quiet("runtime/summary", { since: sparkStart }),
-    runtimePrs: () => fresh("runtime", runtimePrs) || quiet("runtime/prs"),
+    runtimePrs: () => fresh("runtime", runtimePrs) || quiet("runtime/prs", { brief: 1 }),
     sizes: () => fresh("sizes", sizesData) || quiet("sizes/summary", { since: sparkStart }),
     sizesPrs: () => fresh("sizes", sizesPrs) || quiet("sizes/prs"),
     packages: () => fresh("packages", packagesDownloadsData) || quiet("downloads/summary"),
@@ -16763,7 +16766,7 @@ function overviewBenchCard(src) {
   const delta = weekAgo
     ? overviewDelta({ value: last.report_regressions - weekAgo.report_regressions, digits: 0, upIsGood: false, ...overviewReportDelta(last.date, weekAgo.date) })
     : null;
-  const sparkFrom = Date.now() - 90 * OVERVIEW_DAY_MS;
+  const sparkFrom = Date.now() - OVERVIEW_BENCH_DAYS * OVERVIEW_DAY_MS;
   const bars = overviewBars(
     counted
       .filter((r) => Date.parse(r.date) >= sparkFrom)
