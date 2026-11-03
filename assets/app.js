@@ -312,14 +312,19 @@ const countText = (n, noun) => `${(n ?? 0).toLocaleString("en-US")} ${noun}${n =
 const compactNumber = (n) =>
   n == null || isNaN(n) ? "—" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
+// "+1.2", "-0.4", or with no `digits` "+1,234"
+function formatSigned(v, digits) {
+  const text = digits === undefined ? v.toLocaleString("en-US") : v.toFixed(digits);
+  // A small fall rounds to "-0.0"; it reads as no change
+  if (Number(text.replace(/,/g, "")) === 0) return (0).toFixed(digits ?? 0);
+  return `${v > 0 ? "+" : ""}${text}`;
+}
+
 // "+1.2%", "-0.4%"; `minAbs` turns a change that rounds to nothing into ""
 function formatSignedPct(p, { digits = 1, minAbs = 0 } = {}) {
   if (p == null || !isFinite(p)) return "—";
   if (Math.abs(p) < minAbs) return "";
-  const text = p.toFixed(digits);
-  // A small fall rounds to "-0.0"; it reads as no change
-  if (Number(text) === 0) return `${(0).toFixed(digits)}%`;
-  return `${p > 0 ? "+" : ""}${text}%`;
+  return `${formatSigned(p, digits)}%`;
 }
 
 // The smallest change, in %, that a diff is coloured green or red for. Below it
@@ -2701,33 +2706,29 @@ function formatTrend(
   const { slope, pValue, significant, rSquared, percentChange, absoluteDelta } =
     trend;
   const absSlope = Math.abs(slope);
-  const sign = slope < 0 ? "-" : "+";
 
   // Slope per day in a readable unit; durations are seconds
   let slopeText;
   if (percentageMode) {
     // For percentage mode, slope is in %/day
-    slopeText = `${slope >= 0 ? "+" : ""}${slope.toFixed(2)}%/day`;
+    slopeText = `${formatSigned(slope, 2)}%/day`;
   } else if (absSlope < 1) {
-    slopeText = `${sign}${(absSlope * 1000).toFixed(0)}ms/day`;
+    slopeText = `${formatSigned(slope * 1000, 0)}ms/day`;
   } else if (absSlope < 60) {
-    slopeText = `${sign}${absSlope.toFixed(1)}s/day`;
+    slopeText = `${formatSigned(slope, 1)}s/day`;
   } else {
-    slopeText = `${sign}${(absSlope / 60).toFixed(1)}m/day`;
+    slopeText = `${formatSigned(slope / 60, 1)}m/day`;
   }
 
   // Format absolute delta
   let deltaText;
   if (percentageMode) {
     // For percentage mode, delta is in percentage points
-    deltaText = `${absoluteDelta >= 0 ? "+" : ""}${absoluteDelta.toFixed(1)}pp`;
+    deltaText = `${formatSigned(absoluteDelta, 1)}pp`;
+  } else if (Math.abs(absoluteDelta) < 60) {
+    deltaText = `${formatSigned(absoluteDelta, 1)}s`;
   } else {
-    const absDelta = Math.abs(absoluteDelta);
-    if (absDelta < 60) {
-      deltaText = `${absoluteDelta >= 0 ? "+" : "-"}${absDelta.toFixed(1)}s`;
-    } else {
-      deltaText = `${absoluteDelta >= 0 ? "+" : "-"}${(absDelta / 60).toFixed(1)}m`;
-    }
+    deltaText = `${formatSigned(absoluteDelta / 60, 1)}m`;
   }
 
   // Format percentage change
@@ -12097,7 +12098,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
       html += "</tr></thead><tbody>";
       for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
         const sig = r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1");
-        const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
+        const delta = r.delta ? formatSigned(r.delta) : "";
         html += `<tr class="${r.gone ? "ttfx-compile-gone" : ""}"><td class="ttfx-compile-stmt" title="${escapeHtml(r.stmt)}">${escapeHtml(sig)}</td>`;
         html += `<td class="num" title="${tasksTitle(r.x.tasks)}">${r.gone ? "—" : r.x.tasks.length}</td>`;
         html += `<td class="num">${r.gone ? "—" : r.x.ms.toFixed(1)}</td>`;
@@ -12109,7 +12110,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
       md.push("", `<details><summary>Recompiled methods${scope}: ${rows.filter((r) => !r.gone).length}</summary>`, "");
       md.push(`| method | tasks | ms |${was ? " vs previous |" : ""}`, `|---|---|---|${was ? "---|" : ""}`);
       for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
-        const delta = r.delta ? `${r.delta > 0 ? "+" : ""}${r.delta}` : "";
+        const delta = r.delta ? formatSigned(r.delta) : "";
         md.push(`| \`${r.stmt.replace(/^precompile\(Tuple\{(.*)\}\)$/, "$1")}\` | ${r.gone ? "gone" : r.x.tasks.length} | ${r.gone ? "—" : r.x.ms.toFixed(1)} |${was ? ` ${delta} |` : ""}`);
       }
       if (rows.length > TTFX_POPUP_ROWS) md.push("", `and ${rows.length - TTFX_POPUP_ROWS} more`);
@@ -12770,7 +12771,7 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
     return { text: formatSignedPct(p), cls: ttfxPctClass(p) };
   }
   const d = v - prev;
-  return { text: (d > 0 ? "+" : "") + d.toLocaleString("en-US"), cls: ttfxCountClass(d, prev) };
+  return { text: formatSigned(d), cls: ttfxCountClass(d, prev) };
 }
 
 // The selected tasks with a value for `metric` in every build of the range
@@ -16362,12 +16363,6 @@ function overviewCadence(dates) {
 }
 
 
-function overviewSigned(n, digits = 0) {
-  const s = n.toFixed(digits);
-  if (Number(s) === 0) return (0).toFixed(digits);
-  return n > 0 ? `+${s}` : s;
-}
-
 function overviewTabLink(tab, text) {
   return `<a href="?tab=${tabToURLValue(tab)}" onclick="switchTab('${tab}');return false">${escapeHtml(text)}</a>`;
 }
@@ -16415,7 +16410,7 @@ function overviewDelta({ value, unit = "", upIsGood = true, digits = 1, tol = 0,
   if (upIsGood !== null && sign > 0) tone = upIsGood ? "good" : "bad";
   else if (upIsGood !== null && sign < 0) tone = upIsGood ? "bad" : "good";
   const arrow = rounded > 0 ? "▲" : rounded < 0 ? "▼" : "▬";
-  const text = `${overviewSigned(value, digits)}${unit === "pp" ? " pp" : unit}`;
+  const text = `${formatSigned(value, digits)}${unit === "pp" ? " pp" : unit}`;
   return { tone, arrow, text, vs, detail, value };
 }
 
@@ -16623,7 +16618,7 @@ function overviewActivityCard(src) {
     const now = s[key][n - 1];
     const before = n >= 8 ? s[key][n - 8] : null;
     if (now == null) return "";
-    const d = before == null ? "" : ` <span class="overview-delta-neutral">(${now - before >= 0 ? "+" : ""}${(now - before).toLocaleString("en-US")} this week)</span>`;
+    const d = before == null ? "" : ` <span class="overview-delta-neutral">(${formatSigned(now - before)} this week)</span>`;
     return `${now.toLocaleString("en-US")}${d}`;
   };
   const last = (key) => s[key] && s[key][n - 1];
@@ -16698,10 +16693,10 @@ function overviewPkgevalCard(src) {
   let change = "";
   if (weekAgo) {
     const parts = [
-      `${overviewSigned(last.ok - weekAgo.ok)} ok`,
-      `${overviewSigned(last.fail - weekAgo.fail)} fail`,
-      `${overviewSigned(last.crash - weekAgo.crash)} crash`,
-      `${overviewSigned(last.total - weekAgo.total)} tested`,
+      `${formatSigned(last.ok - weekAgo.ok, 0)} ok`,
+      `${formatSigned(last.fail - weekAgo.fail, 0)} fail`,
+      `${formatSigned(last.crash - weekAgo.crash, 0)} crash`,
+      `${formatSigned(last.total - weekAgo.total, 0)} tested`,
     ];
     change = `${parts.join(", ")} vs the report of ${escapeHtml(weekAgo.date)}`;
   }
@@ -18455,7 +18450,7 @@ function commitCIHtml(data) {
     const cur = data.coverage.current;
     const prev = data.coverage.previous;
     const fmt = (v, p) =>
-      v == null ? "—" : `${v.toFixed(2)}%${p != null ? ` (${overviewSigned(v - p, 2)} pp)` : ""}`;
+      v == null ? "—" : `${v.toFixed(2)}%${p != null ? ` (${formatSigned(v - p, 2)} pp)` : ""}`;
     parts.push(
       `<p class="commit-line">Coverage: Codecov ${fmt(cur.codecov, prev?.codecov)}, Coveralls ${fmt(cur.coveralls, prev?.coveralls)}${prev ? `, against <code>${escapeHtml(prev.commit.slice(0, 8))}</code>` : ""}.</p>`,
     );
@@ -18621,7 +18616,7 @@ function commitPkgevalHtml(data) {
   if (!p) return commitCard("PkgEval", '<p class="commit-line text-muted">No PkgEval daily report includes this commit yet.</p>');
   const c = p.counts;
   const prev = p.previous?.counts;
-  const delta = (k) => (prev ? ` (${overviewSigned(c[k] - prev[k])})` : "");
+  const delta = (k) => (prev ? ` (${formatSigned(c[k] - prev[k], 0)})` : "");
   let text = `${commitRelationHtml(p, "daily run")} ${c.ok} of ${c.total} packages passed${delta("ok")}, ${c.fail} failed${delta("fail")}`;
   if (c.crash) text += `, ${c.crash} crashed${delta("crash")}`;
   text += prev ? `, against ${escapeHtml(p.previous.date)}.` : ".";
@@ -19262,7 +19257,7 @@ function updateCoverageTable() {
     `${(head.lines - head.hits).toLocaleString("en-US")} never.`;
   if (base) {
     const d = headPct - coveragePct(base.hits, base.lines);
-    caption += ` Change against ${codecovLink(base)} (${escapeHtml(base.measured_at.slice(0, 10))}): ${d >= 0 ? "+" : ""}${d.toFixed(2)} pp.`;
+    caption += ` Change against ${codecovLink(base)} (${escapeHtml(base.measured_at.slice(0, 10))}): ${formatSigned(d, 2)} pp.`;
     if (base.sessions !== head.sessions) caption += ` <span class="ttfx-popup-muted">That report merged ${base.sessions} platforms' uploads and this one ${head.sessions}, which moves the totals.</span>`;
   } else caption += ` No report ${coverageDays} days older to compare with.`;
   caption += ` <span class="ttfx-popup-muted">${rows.length.toLocaleString("en-US")} ${dirs ? "directories" : "files"} shown. Julia's coverage misses code run while the system image is built, so a low file is a lead to check on Codecov.</span>`;
@@ -19285,11 +19280,6 @@ function updateCoverageTable() {
     updateCoverageURL();
     updateCoverageTable();
   });
-  const signed = (v, digits = 0) => {
-    if (v == null) return "";
-    const text = digits ? v.toFixed(digits) : v.toLocaleString("en-US");
-    return Number(text) === 0 ? (0).toFixed(digits) : `${v > 0 ? "+" : ""}${text}`;
-  };
   let html = "";
   for (const r of rows.slice(0, 1000)) {
     const url = dirs ? `${CODECOV_REPO}/commit/${head.commit}/tree/${r.path}` : `${CODECOV_REPO}/commit/${head.commit}/blob/${r.path}`;
@@ -19303,8 +19293,8 @@ function updateCoverageTable() {
       `<td class="num"${coveragePctStyle(r.pct)}>${r.pct == null ? "—" : r.pct.toFixed(1) + "%"}</td>` +
       `<td class="num">${r.missed.toLocaleString("en-US")}</td>` +
       `<td class="num col-secondary">${r.lines.toLocaleString("en-US")}</td>` +
-      `<td class="num ${changeCls}">${r.change == null ? "" : signed(r.change, 1)}</td>` +
-      `<td class="num col-secondary">${r.missedChange ? signed(r.missedChange) : ""}</td></tr>`;
+      `<td class="num ${changeCls}">${r.change == null ? "" : formatSigned(r.change, 1)}</td>` +
+      `<td class="num col-secondary">${r.missedChange ? formatSigned(r.missedChange) : ""}</td></tr>`;
   }
   if (!rows.length) html = `<tr><td colspan="6">No ${dirs ? "directory" : "file"} matches.</td></tr>`;
   document.getElementById("coverage-stats-tbody").innerHTML = html;
@@ -19371,7 +19361,7 @@ function overviewCoverageCard(src) {
   let missedText = missed.toLocaleString("en-US");
   if (base) {
     const d = missed - (base.lines - base.hits);
-    missedText += ` <span class="overview-delta-neutral">(${overviewSigned(d)} vs ${escapeHtml(base.measured_at.slice(0, 10))})</span>`;
+    missedText += ` <span class="overview-delta-neutral">(${formatSigned(d, 0)} vs ${escapeHtml(base.measured_at.slice(0, 10))})</span>`;
   }
   const reportLink = overviewExtLink(`${CODECOV_REPO}/commit/${head.commit}/tree`, head.commit.slice(0, 10));
   return overviewCard({
@@ -21192,7 +21182,7 @@ function updateRuntimeTable() {
     html += runtimePctCell(r.ref, tol, "", pr ? " col-secondary" : "");
     html += runtimePctCell(r.median, tol);
     html += runtimePctCell(r.instr, RUNTIME_INSTR_PCT, "", " col-secondary");
-    const d = r.allocsDelta ? ` <span class="${r.allocsDelta > 0 ? "ttfx-up" : "ttfx-down"}">(${r.allocsDelta > 0 ? "+" : ""}${r.allocsDelta.toLocaleString("en-US")})</span>` : "";
+    const d = r.allocsDelta ? ` <span class="${r.allocsDelta > 0 ? "ttfx-up" : "ttfx-down"}">(${formatSigned(r.allocsDelta)})</span>` : "";
     html += `<td class="num col-secondary">${r.allocs == null ? "—" : r.allocs.toLocaleString("en-US")}${d}</td>`;
     html += (pr ? runtimePrChangeCells(r.prChange) : "") + "</tr>";
   }
@@ -21474,7 +21464,7 @@ function runtimePrCategoryCell(c, first) {
   if (!c) return `<td class="${cls}">–</td>`;
   const title = `${c.category}, ${c.n} benchmarks: ${runtimeRatioPct(c.geomean)}; blocks ${(c.per_block || []).map(runtimeRatioPct).join(", ")}; ${c.verdict}`;
   const pct = (c.geomean - 1) * 100;
-  const text = Math.abs(pct) < 0.05 ? "0.0" : `${pct > 0 ? "+" : ""}${pct.toFixed(1)}`;
+  const text = formatSigned(pct, 1);
   return `<td class="${cls} ${runtimeVerdictClass(c.verdict)}" title="${escapeHtml(title)}">${c.verdict !== "same" ? `<b>${text}</b>` : text}</td>`;
 }
 
