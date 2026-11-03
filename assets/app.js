@@ -18,6 +18,19 @@ function nearestTimeRange(value, ranges = TIME_RANGES) {
   return ranges.filter((d) => d > 0).reduce((a, b) => (Math.abs(b - days) < Math.abs(a - days) ? b : a));
 }
 
+// The `since` that loads a range of `days` (all time is ""), starting `padDays`
+// before it and covering at least `minDays`
+function rangeSince(days, padDays = 0, minDays = 0) {
+  if (days <= 0) return "";
+  return apiSince(new Date(Date.now() - (Math.max(days, minDays) + padDays) * 864e5));
+}
+
+// Whether a window from `wanted` starts before the one loaded from `loaded`
+const widensSince = (loaded, wanted) => loaded !== "" && (wanted === "" || wanted < loaded);
+
+// The start of a range of `days` as a timestamp, or -Infinity for all time
+const rangeStart = (days) => (days > 0 ? Date.now() - days * 864e5 : -Infinity);
+
 // The range a URL parameter asks for, snapped to the options of its select
 // (some offer fewer than the others) and shown there; null when there is none
 function readTimeRangeParam(params, key, selectId) {
@@ -6602,9 +6615,9 @@ async function loadData() {
 // Widen the loaded window to the range being shown; the chart redraws when
 // the older runs arrive
 function ensureTimingWindow() {
-  if (!data || timingSince === null || timingSince === "") return;
+  if (!data || timingSince === null) return;
   const wanted = apiSince(getTimeRangeCutoff());
-  if (wanted !== "" && wanted >= timingSince) return;
+  if (!widensSince(timingSince, wanted)) return;
   if (timingExtending === wanted) return;
   timingExtending = wanted;
   const until = timingSince;
@@ -7516,9 +7529,9 @@ async function fetchBenchGroupDetail(group) {
 // Drop windowed detail that no longer covers the range and reload what is
 // selected; in-flight loads for the old window are ignored on arrival
 function ensureBenchDetailWindow() {
-  if (benchDetailSince === null || benchDetailSince === "") return;
+  if (benchDetailSince === null) return;
   const wanted = apiSince(getBenchCutoff());
-  if (wanted !== "" && wanted >= benchDetailSince) return;
+  if (!widensSince(benchDetailSince, wanted)) return;
   benchDetailSince = wanted;
   benchDetailGeneration++;
   benchGroupDetail = {};
@@ -8559,7 +8572,7 @@ function renderBenchVerdictsTable() {
     renderBenchVerdictsTable();
   });
   const since = apiSince(getBenchCutoff());
-  const covered = benchVerdicts && (benchVerdicts.since === since || benchVerdicts.since === "" || (since !== "" && benchVerdicts.since < since));
+  const covered = benchVerdicts && !widensSince(benchVerdicts.since, since);
   if (!covered) {
     if (!benchVerdictsLoading) {
       tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading...</td></tr>';
@@ -15148,14 +15161,12 @@ function formatSizeValue(v, isCount = false) {
 // week before it so the oldest commit shown has one to compare with. All
 // time is "".
 function sizesWantedSince() {
-  if (sizesTimeRangeDays <= 0) return "";
-  const days = Math.max(sizesTimeRangeDays, OVERVIEW_SPARK_DAYS) + 7;
-  return apiSince(new Date(Date.now() - days * OVERVIEW_DAY_MS));
+  return rangeSince(sizesTimeRangeDays, 7, OVERVIEW_SPARK_DAYS);
 }
 
 // The window's start as a timestamp, or -Infinity for all time
 function sizesWindowStart() {
-  return sizesTimeRangeDays > 0 ? Date.now() - sizesTimeRangeDays * 864e5 : -Infinity;
+  return rangeStart(sizesTimeRangeDays);
 }
 
 // The commits in the window as indices into the series' arrays
@@ -15333,7 +15344,7 @@ function selectSizesMetrics(which) {
 function setSizesTimeRange(val) {
   sizesTimeRangeDays = parseInt(val, 10);
   const wanted = sizesWantedSince();
-  if (sizesData && sizesSince !== "" && (wanted === "" || wanted < sizesSince)) {
+  if (sizesData && widensSince(sizesSince, wanted)) {
     sizesSince = wanted;
     reloadSizesData();
   }
@@ -18990,8 +19001,7 @@ const CODECOV_REPO = "https://app.codecov.io/github/JuliaLang/julia";
 const COVERAGE_NO_CHANGE_PP = 1;
 
 function coverageWantedSince() {
-  if (coverageTimeRangeDays <= 0) return "";
-  return apiSince(new Date(Date.now() - coverageTimeRangeDays * 864e5));
+  return rangeSince(coverageTimeRangeDays);
 }
 
 function applyCoverageURLParams() {
@@ -19058,7 +19068,7 @@ function setCoverageTimeRange(val) {
   updateCoverageURL();
   const since = coverageWantedSince();
   // A longer range than the one loaded needs the reports before it
-  if (coverageData && coverageSince !== "" && (since === "" || since < coverageSince)) {
+  if (coverageData && widensSince(coverageSince, since)) {
     loadCoverageData();
     return;
   }
@@ -19457,8 +19467,7 @@ function sysimageColors() {
 }
 
 function sysimageWantedSince() {
-  if (sysimageTimeRangeDays <= 0) return "";
-  return apiSince(new Date(Date.now() - (sysimageTimeRangeDays + 7) * 864e5));
+  return rangeSince(sysimageTimeRangeDays, 7);
 }
 
 function applySysimageURLParams() {
@@ -19571,7 +19580,7 @@ function setSysimageTimeRange(val) {
   updateSysimageURL();
   const since = sysimageWantedSince();
   // A longer range than the one loaded needs the jobs before it
-  if (sysimageData && sysimageSince !== "" && (since === "" || since < sysimageSince)) {
+  if (sysimageData && widensSince(sysimageSince, since)) {
     loadSysimageData();
     return;
   }
@@ -19609,7 +19618,7 @@ function sysimageRolling(vals, w) {
 
 // The jobs of a platform in the range as indices into its arrays
 function sysimageIndices(p) {
-  const start = sysimageTimeRangeDays > 0 ? Date.now() - sysimageTimeRangeDays * 864e5 : -Infinity;
+  const start = rangeStart(sysimageTimeRangeDays);
   const out = [];
   p.started_at.forEach((t, i) => {
     if (t && Date.parse(t) >= start) out.push(i);
@@ -20120,15 +20129,14 @@ const runtimeFormat = (v, metric) =>
 const runtimeMetricText = (metric) =>
   metric === "cycles" ? "cycles of the calling thread" : metric === "instructions" ? "retired instructions" : "wall time";
 
+// A week before the range too, for the medians of its first builds
 function runtimeWantedSince() {
-  if (runtimeTimeRangeDays <= 0) return "";
-  // A week before the range too, for the medians of its first builds
-  return apiSince(new Date(Date.now() - (runtimeTimeRangeDays + 7) * 864e5));
+  return rangeSince(runtimeTimeRangeDays, 7);
 }
 
 // The builds in the range, as indices into runtimeData.builds
 function runtimeIndices() {
-  const start = runtimeTimeRangeDays > 0 ? Date.now() - runtimeTimeRangeDays * 864e5 : -Infinity;
+  const start = rangeStart(runtimeTimeRangeDays);
   const out = [];
   runtimeData.builds.forEach((b, i) => {
     if (runtimeTime(b) >= start) out.push(i);
@@ -20292,7 +20300,7 @@ const RUNTIME_REFS = [
 // One reference series' runs in the range, measured on `machine` (the machine of the
 // newest master build shown) since cycles from another machine do not compare
 function runtimeRefRuns(key, machine) {
-  const start = runtimeTimeRangeDays > 0 ? Date.now() - runtimeTimeRangeDays * 864e5 : -Infinity;
+  const start = rangeStart(runtimeTimeRangeDays);
   return (runtimeData[key] || []).filter((r) => runtimeTime(r) >= start && (!machine || !r.machine || r.machine === machine));
 }
 
@@ -20317,7 +20325,7 @@ function setRuntimeTimeRange(val) {
   updateRuntimeURL();
   const since = runtimeWantedSince();
   // A longer range than the one loaded needs the builds before it
-  if (runtimeData && runtimeSince !== "" && (since === "" || since < runtimeSince)) {
+  if (runtimeData && widensSince(runtimeSince, since)) {
     loadRuntimeData();
     return;
   }
