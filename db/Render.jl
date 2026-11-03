@@ -472,11 +472,12 @@ function pkgeval_popular(db; days=30, limit=50, client="user", statuses=("fail",
     pass_pct(x) = x.total === missing || x.total == 0 ? nothing : round(100 * Float64(x.ok) / Float64(x.total); digits=1)
     # The same share on every report of the past year, weighted by today's downloads
     year_ago = Dates.format(Date(String(reports[1].date)) - Year(1), dateformat"yyyy-mm-dd")
+    # Each report's results are looked up by key, so the year's rows are never scanned
     history = [OrderedDict("date" => String(r.date), "pass_pct" => pass_pct(r))
-               for r in rows(db, dl * "SELECT r.date, SUM(ranked.$metric) AS total, SUM(CASE WHEN p.status = 'ok' THEN ranked.$metric ELSE 0 END) AS ok " *
-                                      "FROM pkgeval_reports r JOIN pkgeval_results p ON p.report_id = r.id " *
-                                      "JOIN packages k ON k.id = p.package_id JOIN ranked ON ranked.name = k.name " *
-                                      "WHERE ranked.rank <= ? AND r.kind = 'daily' AND r.date >= ? GROUP BY r.id ORDER BY r.date",
+               for r in rows(db, dl * ", top AS MATERIALIZED (SELECT k.id, ranked.$metric AS n FROM ranked JOIN packages k ON k.name = ranked.name WHERE ranked.rank <= ?) " *
+                                      "SELECT r.date, SUM(top.n) AS total, SUM(CASE WHEN p.status = 'ok' THEN top.n ELSE 0 END) AS ok " *
+                                      "FROM pkgeval_reports r CROSS JOIN top CROSS JOIN pkgeval_results p ON p.report_id = r.id AND p.package_id = top.id " *
+                                      "WHERE r.kind = 'daily' AND r.date >= ? GROUP BY r.id ORDER BY r.date",
                                   (ranked_json(PKGEVAL_WEIGHT_N), PKGEVAL_WEIGHT_N, year_ago))]
     # Passed the previous report, not this one: the nightly breakage. A skip is the package being left out, not broken.
     newly_broken = Any[]
