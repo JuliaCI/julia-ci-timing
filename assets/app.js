@@ -396,6 +396,18 @@ function zoomOptions(onChange) {
   };
 }
 
+// Zooming one of a tab's charts zooms the others to the same days
+function syncPanelZoom(chart, charts, resetButtonId) {
+  const { min, max } = chart.scales.x;
+  for (const c of charts) {
+    if (c === chart) continue;
+    c.options.scales.x.min = min;
+    c.options.scales.x.max = max;
+    c.update("none");
+  }
+  document.getElementById(resetButtonId).style.display = "";
+}
+
 // Legend buttons beside a chart that hide and show its datasets; each button
 // carries its dataset's index, and `chartOf(button)` finds its chart
 function bindDatasetToggles(container, chartOf) {
@@ -18812,16 +18824,8 @@ function activityRolling(vals, w) {
   return out;
 }
 
-// Zooming one panel zooms them all to the same days
 function syncActivityZoom({ chart }) {
-  const { min, max } = chart.scales.x;
-  for (const c of activityCharts) {
-    if (c === chart) continue;
-    c.options.scales.x.min = min;
-    c.options.scales.x.max = max;
-    c.update("none");
-  }
-  document.getElementById("activity-btn-reset-zoom").style.display = "";
+  syncPanelZoom(chart, activityCharts, "activity-btn-reset-zoom");
 }
 
 function resetActivityZoom() {
@@ -19120,14 +19124,7 @@ function coverageDir(path) {
 }
 
 function syncCoverageZoom({ chart }) {
-  const { min, max } = chart.scales.x;
-  for (const c of coverageCharts) {
-    if (c === chart) continue;
-    c.options.scales.x.min = min;
-    c.options.scales.x.max = max;
-    c.update("none");
-  }
-  document.getElementById("coverage-btn-reset-zoom").style.display = "";
+  syncPanelZoom(chart, coverageCharts, "coverage-btn-reset-zoom");
 }
 
 function resetCoverageZoom() {
@@ -19639,16 +19636,8 @@ function sysimageJobURL(p, i) {
   return `https://buildkite.com/julialang/julia-ci/builds/${p.builds[i]}#${p.jobs[i]}`;
 }
 
-// Zooming one panel zooms them all to the same days
 function syncSysimageZoom({ chart }) {
-  const { min, max } = chart.scales.x;
-  for (const c of sysimageCharts) {
-    if (c === chart) continue;
-    c.options.scales.x.min = min;
-    c.options.scales.x.max = max;
-    c.update("none");
-  }
-  document.getElementById("sysimage-btn-reset-zoom").style.display = "";
+  syncPanelZoom(chart, sysimageCharts, "sysimage-btn-reset-zoom");
 }
 
 function resetSysimageZoom() {
@@ -20558,16 +20547,8 @@ function runtimeNoteLines(idx, name, isDark) {
   return out;
 }
 
-// Zooming one chart zooms them all to the same days
 function syncRuntimeZoom({ chart }) {
-  const { min, max } = chart.scales.x;
-  for (const c of runtimeCharts) {
-    if (c === chart) continue;
-    c.options.scales.x.min = min;
-    c.options.scales.x.max = max;
-    c.update("none");
-  }
-  document.getElementById("runtime-btn-reset-zoom").style.display = "";
+  syncPanelZoom(chart, runtimeCharts, "runtime-btn-reset-zoom");
 }
 
 function resetRuntimeZoom() {
