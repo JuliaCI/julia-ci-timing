@@ -178,7 +178,7 @@ function rule_value(rules, key)
     return ""
 end
 
-const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "priority", "state", "runnable_at", "started_at", "finished_at"]
+const POOL_JOB_COLS = ["pipeline", "build", "name", "queue", "os", "arch", "priority", "pull_request", "branch", "state", "runnable_at", "started_at", "finished_at"]
 const OPEN_JOB_STATES = ["scheduled", "reserved", "assigned", "accepted", "limited", "limiting", "waiting", "blocked",
                          "running", "canceling", "timing_out"]
 const OPEN_JOB_SQL = "state IN (" * join(("'$s'" for s in OPEN_JOB_STATES), ", ") * ")"
@@ -188,6 +188,16 @@ function job_priority(job)
     p = get(job, :priority, nothing)
     p isa AbstractDict && (p = get(p, :number, nothing))
     return p isa Number ? Int(p) : 0
+end
+
+# A build's pull request number, which the API gives as {"id": "123", ...}, or missing
+function build_pull_request(build)
+    pr = get(build, :pull_request, nothing)
+    pr isa AbstractDict || return missing
+    id = get(pr, :id, nothing)
+    id isa Number && return Int(id)
+    n = id === nothing ? nothing : tryparse(Int, String(id))
+    return n === nothing ? missing : n
 end
 
 # Upsert the runnable script jobs of `builds`; returns how many were written
@@ -200,13 +210,15 @@ function record_pool_jobs!(db, pipeline, builds)
     seq = next_seq!(db)
     n = 0
     for build in builds
+        pr = build_pull_request(build)
+        branch = str(get(build, :branch, nothing))
         for job in something(get(build, :jobs, nothing), [])
             get(job, :type, nothing) == "script" || continue
             runnable = get(job, :runnable_at, nothing)
             runnable === nothing && continue
             rules = something(get(job, :agent_query_rules, nothing), [])
             upsert!(stmt, (String(job.id), pipeline, Int(build.number), str(get(job, :name, nothing)),
-                           rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job),
+                           rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job), pr, branch,
                            str(get(job, :state, nothing)), at(runnable), at(get(job, :started_at, nothing)),
                            at(get(job, :finished_at, nothing)), seq))
             n += 1

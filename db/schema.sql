@@ -882,6 +882,8 @@ CREATE TABLE IF NOT EXISTS pool_jobs (
     os          TEXT NOT NULL DEFAULT '',
     arch        TEXT NOT NULL DEFAULT '',
     priority    INTEGER NOT NULL DEFAULT 0,   -- 1 high, 0 normal, -1 low
+    pull_request INTEGER,                     -- the build's pull request (julia-pr)
+    branch      TEXT,
     state       TEXT NOT NULL,
     runnable_at TEXT NOT NULL,
     started_at  TEXT,
