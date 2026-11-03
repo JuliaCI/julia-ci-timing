@@ -1614,6 +1614,20 @@ async function renderBacklogSection() {
 function renderBacklogNow(d, pools) {
   const el = document.getElementById("backlog-now");
   if (!el) return;
+  const html = backlogNowHtml(d, pools);
+  el.hidden = !html;
+  if (el.hidden) return;
+  el.innerHTML = html;
+  fitBacklogNow(el);
+  if (!backlogNowObserver && typeof ResizeObserver !== "undefined") {
+    backlogNowObserver = new ResizeObserver(() => fitBacklogNow(el));
+    backlogNowObserver.observe(el);
+  }
+}
+
+// The panels' HTML, "" with nothing waiting or running. Without the waiting
+// panel, the demand panel stands alone, its rows named and most loaded first.
+function backlogNowHtml(d, pools, { waitingPanel = true, legend = "Now, in the colours of the chart below and shaded by priority:" } = {}) {
   const at = (xs) => (xs && xs.length ? xs[xs.length - 1] : 0);
   const prios = new Set();
   const rows = pools.map((p) => {
@@ -1631,8 +1645,8 @@ function renderBacklogNow(d, pools) {
     ...r,
     demand: r.p.slots ? (r.waiting + r.running) / r.p.slots : null,
   }));
-  el.hidden = waitingRows.length === 0 && demandRows.length === 0;
-  if (el.hidden) return;
+  if (!demandRows.length) return "";
+  if (!waitingPanel) demandRows.sort((a, b) => (b.demand ?? -1) - (a.demand ?? -1));
   const fmtX = (x) => `${x.toFixed(1)}×`;
   const bar = (segs, width, marker) =>
     `<span class="backlog-now-track">${marker === null ? "" : `<span class="backlog-now-mark" style="left:${marker.toFixed(1)}%"></span>`}` +
@@ -1675,12 +1689,16 @@ function renderBacklogNow(d, pools) {
       .map((x) => seg(x.pr, x.waiting + x.running, `${backlogPriorityName(x.pr)} priority: ${x.running} running, ${x.waiting} waiting`))
       .join("");
     return (
-      label(r, `${backlogPoolLabel(r.p)}: ${r.running} running and ${r.waiting} waiting for ${backlogSlotsText(r.p)}`) +
+      label(
+        r,
+        `${backlogPoolLabel(r.p)}: ${r.running} running and ${r.waiting} waiting for ${backlogSlotsText(r.p)}` +
+          (r.waiting ? `, the longest for ${formatWait(r.oldest)}` : ""),
+      ) +
       bar(segs, (100 * r.demand) / maxDemand, 100 / maxDemand) +
       `<span class="backlog-now-n">${fmtX(r.demand)}</span><span class="backlog-now-aux">${r.p.slots}</span></div>`
     );
   });
-  const legend = [...prios]
+  const legendHtml = [...prios]
     .sort((a, b) => b - a)
     .map((pr) => `<span><span class="backlog-now-swatch" data-priority="${escapeHtml(pr)}"></span>${backlogPriorityName(pr)}</span>`)
     .join("");
@@ -1689,15 +1707,11 @@ function renderBacklogNow(d, pools) {
       ? `<div class="backlog-now-panel"><div class="backlog-now-head"><span class="backlog-now-title">${title}</span>` +
         `<span class="backlog-now-n">${cols[0]}</span><span class="backlog-now-aux">${cols[1]}</span></div>${body.join("")}</div>`
       : "";
-  el.innerHTML =
-    `<div class="backlog-now-legend">Now, in the colours of the chart below and shaded by priority: ${legend}</div>` +
-    panel("Jobs waiting", ["jobs", "longest"], waitingHtml) +
-    panel("Demand per slot <span class=\"backlog-now-key\">(running + waiting jobs; the line is 1×)</span>", ["demand", "slots"], demandHtml);
-  fitBacklogNow(el);
-  if (!backlogNowObserver && typeof ResizeObserver !== "undefined") {
-    backlogNowObserver = new ResizeObserver(() => fitBacklogNow(el));
-    backlogNowObserver.observe(el);
-  }
+  return (
+    `<div class="backlog-now-legend">${legend} ${legendHtml}</div>` +
+    (waitingPanel ? panel("Jobs waiting", ["jobs", "longest"], waitingHtml) : "") +
+    panel("Demand per slot <span class=\"backlog-now-key\">(running + waiting jobs; the line is 1×)</span>", ["demand", "slots"], demandHtml)
+  );
 }
 
 // Counts go in the bars only where they fit; each is in its segment's title too.
@@ -16742,9 +16756,9 @@ function overviewLegendHtml({ items, caption }) {
 
 // A card: title linking to the source's tab, a status badge (icon + label,
 // never colour alone), one headline figure with its week-over-week delta, an
-// optional sparkline, then label/value rows beside an optional donut with
-// its legend
-function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, figures, legend, spark, bars, donut, rows }) {
+// optional sparkline and a panel of HTML below it, then label/value rows
+// beside an optional donut with its legend
+function overviewCard({ tab, title, status, description, headline, headlineLabel, delta, figures, legend, spark, bars, panel, donut, rows }) {
   const charts = [];
   const parts = [`<section class="overview-card overview-card-${status.level}" data-tab="${tab}">`];
   parts.push('<header class="overview-card-header">');
@@ -16822,6 +16836,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     parts.push(`<div class="overview-spark overview-bars"><canvas id="${id}" role="img" aria-label="${escapeHtml(bars.label)}"></canvas></div>`);
     charts.push({ id, kind: "bars", spec: bars });
   }
+  if (panel) parts.push(panel);
   const rowsHtml = (rows) =>
     rows
       .map((row) => {
@@ -17808,6 +17823,7 @@ function overviewAgentsCard(src, backlog) {
     headlineLabel: queue ? queue.headlineLabel : "agents connected in the latest snapshot",
     delta: queue ? queue.delta : null,
     spark: queue ? queue.spark : null,
+    panel: queue ? queue.panel : "",
     donut,
     rows: [
       ...(queue ? [["Connected agents", String(connected.size)], ...queue.rows] : []),
@@ -17822,7 +17838,6 @@ function overviewAgentsCard(src, backlog) {
 // A pool whose oldest waiting job has waited this long is flagged
 const OVERVIEW_QUEUE_WARN_S = 60 * 60;
 const OVERVIEW_QUEUE_BAD_S = 6 * 60 * 60;
-const OVERVIEW_QUEUE_ROWS = 4;
 const OVERVIEW_QUEUE_LINES = 5;
 
 // The queue backlog for the CI workers card: the longest current wait as the
@@ -17867,31 +17882,25 @@ function overviewQueueSummary(src) {
           detail: overviewWeekWindowsDetail("Mean jobs waiting for an agent", nowMs),
         })
       : null;
-  // The Workers tab's backlog chart in small: longest wait per busy pool
-  const palette = BACKLOG_COLORS[isDarkMode() ? "dark" : "light"];
+  // The Workers tab's backlog chart in small: longest wait per busy pool, in
+  // the colours of the bars below
+  const theme = isDarkMode() ? "dark" : "light";
   const spark = overviewSparkLines(
     src.pools
       .filter((p) => Math.max(...p.waiting) >= 5)
       .slice(0, OVERVIEW_QUEUE_LINES)
-      .map((p, k) => ({
+      .map((p) => ({
         label: backlogPoolLabel(p),
-        color: palette[k % palette.length],
+        color: backlogPoolColor(src, p, theme),
         points: p.oldest_wait_s.map((w, i) => ({ x: t0 + i * stepMs, y: w / 3600 })),
       })),
     { label: "Longest wait for an agent per pool, hours", format: (v) => formatWait(v * 3600), zero: true },
   );
-  const waitingNow = pools.filter((x) => x.waiting > 0).sort((a, b) => b.oldest - a.oldest);
-  const rows = waitingNow.slice(0, OVERVIEW_QUEUE_ROWS).map((x) => {
-    const split = backlogSplit(x.p, src.n - 1);
-    return [
-      `Waiting: ${x.label}`,
-      `${countText(x.waiting, "job")}${split ? ` (${split})` : ""}, longest ${formatWait(x.oldest)}${x.p.slots ? `, ${backlogSlotsText(x.p)}` : ""}`,
-    ];
-  });
-  if (waitingNow.length > OVERVIEW_QUEUE_ROWS) {
-    rows.push(["Waiting elsewhere", overviewList(waitingNow.slice(OVERVIEW_QUEUE_ROWS).map((x) => `${x.label} ${x.waiting}`))]);
-  }
-  if (!waitingNow.length) rows.push(["Jobs waiting", "none"]);
+  // The Workers tab's demand per slot now, each bar's title giving its detail
+  const demand = backlogNowHtml(src, src.pools, { waitingPanel: false, legend: "Now, shaded by priority:" });
+  const panel = demand ? `<div class="backlog-now overview-backlog-now">${demand}</div>` : "";
+  const waitingNow = pools.filter((x) => x.waiting > 0).length;
+  const rows = waitingNow ? [] : [["Jobs waiting", "none"]];
   return {
     level,
     text: level === "ok" ? "" : `${worst.label} waits ${formatWait(worst.oldest)}`,
@@ -17899,6 +17908,7 @@ function overviewQueueSummary(src) {
     headlineLabel: worst.oldest > 0 ? `longest wait for an agent now, ${escapeHtml(worst.label)}` : "jobs waiting for an agent now",
     delta,
     spark,
+    panel,
     rows,
   };
 }
@@ -18066,6 +18076,8 @@ function drawOverview(changed = null) {
     for (const chart of overviewDrawn[i]?.charts || []) chart.destroy();
     const card = c.keys.some((k) => src[k] === undefined) ? overviewLoadingCard(c.tab, c.title) : c.make(src);
     grid.children[i].outerHTML = card.html;
+    const backlogNow = grid.children[i].querySelector(".backlog-now");
+    if (backlogNow) fitBacklogNow(backlogNow);
     const charts = [];
     for (const { id, kind, spec } of card.charts) {
       const canvas = document.getElementById(id);
