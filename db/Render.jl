@@ -1902,21 +1902,18 @@ function runtime(db; since="", source="")
     for b in builds
         b["failed"] = OrderedDict{String,String}()
     end
-    info = Dict{String,Any}()
-    series = Dict{String,OrderedDict{String,Vector{Any}}}()
     windowed = " WHERE job_uuid IN (SELECT job_uuid FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") * " $cond)"
-    for r in rows(db, "SELECT job_uuid, name, category, metric, status, error, ops, $(join(RUNTIME_SERIES, ", ")) FROM rtb_results" * windowed, params)
+    series, newest = runtime_series(db, windowed, params, index, length(jobs))
+    for r in rows(db, "SELECT job_uuid, name, status, error FROM rtb_results" * windowed * " AND status != 'ok'", params)
         k = get(index, String(r.job_uuid), nothing)
         k === nothing && continue
+        builds[k]["failed"][String(r.name)] = r.error === missing ? String(r.status) : String(r.error)
+    end
+    # The newest build's category, metric and ops describe the benchmark
+    info = Dict{String,Any}()
+    for k in unique(values(newest)), r in rows(db, "SELECT name, category, metric, ops FROM rtb_results WHERE job_uuid = ?", (String(jobs[k].job_uuid),))
         name = String(r.name)
-        # The newest build's category, metric and ops describe the benchmark
-        old = get(info, name, nothing)
-        (old === nothing || k >= old.k) && (info[name] = (category=String(r.category), metric=String(r.metric), ops=js(r.ops), k))
-        s = get!(() -> OrderedDict(c => Vector{Any}(nothing, length(jobs)) for c in RUNTIME_SERIES), series, name)
-        for c in RUNTIME_SERIES
-            s[c][k] = rt_round(getproperty(r, Symbol(c)))
-        end
-        String(r.status) == "ok" || (builds[k]["failed"][name] = r.error === missing ? String(r.status) : String(r.error))
+        get(newest, name, 0) == k && (info[name] = (category=String(r.category), metric=String(r.metric), ops=js(r.ops)))
     end
     names = sort!(collect(keys(info)); by=n -> (runtime_category_rank(info[n].category), n))
     benchmarks = [OrderedDict("name" => n, "category" => info[n].category, "metric" => info[n].metric, "ops" => info[n].ops) for n in names]
@@ -1934,6 +1931,27 @@ function runtime(db; since="", source="")
                        "source" => source, "sources" => sources, "markers" => markers,
                        "categories" => categories, "series_keys" => RUNTIME_SERIES, "benchmarks" => benchmarks, "builds" => builds,
                        "series" => OrderedDict(n => series[n] for n in names), refs...)
+end
+
+# Per benchmark one array per series aligned with the `n` jobs of `index` (job id => its
+# place), and the place of the newest job that has the benchmark. With the whole backfill
+# that is a few hundred thousand rows, so they are read one by one into typed arrays rather
+# than made into named tuples first.
+function runtime_series(db, windowed, params, index::Dict{String,Int}, n)
+    Col = Vector{Union{Nothing,Int,Float64}}
+    series = Dict{String,OrderedDict{String,Col}}()
+    newest = Dict{String,Int}()
+    for r in DBInterface.execute(db, "SELECT job_uuid, name, $(join(RUNTIME_SERIES, ", ")) FROM rtb_results" * windowed, params)
+        k = get(index, r[1]::String, 0)
+        k == 0 && continue
+        name = r[2]::String
+        newest[name] = max(get(newest, name, 0), k)
+        s = get!(() -> OrderedDict(c => Col(nothing, n) for c in RUNTIME_SERIES), series, name)
+        for (i, c) in enumerate(RUNTIME_SERIES)
+            s[c][k] = rt_round(r[i+2]::Union{Missing,Int,Float64})
+        end
+    end
+    return series, newest
 end
 
 const RUNTIME_REF_KINDS = ("release" => "releases", "lts" => "lts", "branch_nightly" => "branch_nightly")
