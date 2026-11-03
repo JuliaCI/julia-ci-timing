@@ -1796,10 +1796,18 @@ function coverage_files(db; since="", days=30)
         g["lines"][i] = Int(r.lines)
         g["hits"][i] = Int(r.hits)
     end
-    latest = rows(db, "SELECT r.*, c.measured_at, m.subject FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
-                      "LEFT JOIN commits m ON m.sha = r.commit_sha WHERE r.files > 0 ORDER BY c.measured_at DESC LIMIT 1")
-    head = isempty(latest) ? nothing : latest[1]
-    # A report merging fewer uploads than the latest is partial, so one that
+    # The platforms' uploads reach Codecov hours apart, so the head is the latest
+    # report that merged as many as any report of the week before it
+    latest = rows(db, "SELECT max(c.measured_at) AS at FROM coverage_reports r JOIN coverage c USING (commit_sha) WHERE r.files > 0")
+    full = latest[1].at === missing ? 0 :
+        rows(db, "SELECT coalesce(max(r.sessions), 0) AS n FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
+                 "WHERE r.files > 0 AND c.measured_at >= ?",
+             (Store.iso(Store.parse_upstream(String(latest[1].at)) - Day(7)),))[1].n
+    head = rows(db, "SELECT r.*, c.measured_at, m.subject FROM coverage_reports r JOIN coverage c USING (commit_sha) " *
+                    "LEFT JOIN commits m ON m.sha = r.commit_sha WHERE r.files > 0 AND coalesce(r.sessions, 0) >= ? " *
+                    "ORDER BY c.measured_at DESC LIMIT 1", (full,))
+    head = isempty(head) ? nothing : head[1]
+    # A report merging fewer uploads than the head is partial, so one that
     # merges as many is preferred when there is one in the 7 days before
     before = head === nothing ? "" : Store.iso(Store.parse_upstream(String(head.measured_at)) - Day(days))
     base = head === nothing ? [] :

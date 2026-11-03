@@ -19354,7 +19354,6 @@ function overviewCoverageCard(src) {
   const sessions = Math.max(...commits.map((c) => c.sessions || 0));
   let status;
   if (ageMs > OVERVIEW_COVERAGE_STALE_MS) status = overviewStatus("warn", `No report for ${overviewFormatDays(Math.floor(ageMs / OVERVIEW_DAY_MS))}`);
-  else if ((head.sessions || 0) < sessions) status = overviewStatus("warn", `Latest report partial, ${head.sessions} of ${sessions} uploads`);
   else status = overviewStatus("ok", "Current");
   const headPct = coveragePct(head.hits, head.lines);
   const missed = head.lines - head.hits;

@@ -67,7 +67,7 @@ Sizes:
 
 Sysimage:
 - `/api/sysimage/summary?since=`: how long the build job of every master build spent making the system image, stage by stage (compiling the compiler, emitting basecompiler, Base, the sysimage's stdlibs, emitting sysbase, the precompile statements, emitting sys, then the stdlib pkgimages), per platform, from the job logs
-- `/api/coverage/files?since=&days=`: Codecov's file-level coverage of master, one report a day: totals per report and per top-level directory over the window, and every file of the latest report (lines, hits) against the latest report at least `days` older
+- `/api/coverage/files?since=&days=`: Codecov's file-level coverage of master, one report a day: totals per report and per top-level directory over the window, and every file of the latest report with every platform's upload merged (lines, hits) against the latest report at least `days` older
 - `/api/notes/sysimage_annotations`: notes on builds where how CI builds julia changed, so a step there is not a commit's
 
 Downloads:

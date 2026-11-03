@@ -242,8 +242,9 @@ report of the newest master commits of the last 180 days, for up to a minute per
 again when Codecov's total for the commit moves, since Codecov merges the Linux, Windows
 and macOS uploads as they arrive (`sessions`); a report with fewer of them than usual is
 partial and lower. `api/coverage/files` serves the totals per top-level directory over
-time and every file of the latest report against the latest one at least `days` older,
-preferring one that merged as many uploads. The tab links each file to Codecov for
+time and every file of the latest report with every upload merged (as many as any report
+of the week before) against the latest one at least `days` older, preferring one that
+merged as many uploads. The tab links each file to Codecov for
 line-by-line detail.
 
 Runtime benchmarks (the Benchmarks → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
