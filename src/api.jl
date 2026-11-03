@@ -767,12 +767,12 @@ end
 function landing_targets(today=Date(now(UTC)))
     day(n) = Dates.format(today - Day(n), dateformat"yyyy-mm-dd")
     return ["/api/timing/runs?since=$(day(30))", "/api/timing/builds?since=$(day(14))",
-            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/prs",
+            "/api/pkgeval/summary", "/api/benchmarks/summary", "/api/ttfx/summary", "/api/ttfx/summary?since=$(day(30))", "/api/ttfx/prs",
             "/api/runtime/summary?since=$(day(30))", "/api/runtime/prs", "/api/downloads/summary",
             "/api/sizes/summary?since=$(day(30))", "/api/sizes/prs", "/api/agents/backlog?since=$(day(14))",
             "/api/agents/latest", "/api/pkgeval/reasons", "/api/downloads/top?days=7&client=user",
             "/api/pkgeval/popular?days=30&client=user&limit=50", "/api/github/activity?since=$(day(30))",
-            "/api/commits?limit=100"]
+            "/api/coverage/files?since=$(day(30))&days=7", "/api/commits?limit=100"]
 end
 
 # Today's landing targets, and the next day's as well once midnight UTC is near
