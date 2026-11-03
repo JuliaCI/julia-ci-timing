@@ -1637,7 +1637,10 @@ function renderBacklogNow(d, pools) {
     );
   };
   const maxWaiting = Math.max(1, ...waitingRows.map((r) => r.waiting));
-  const waitingHtml = waitingRows.map((r) => {
+  // Pools only running get an empty row too, as the demand panel's rows have no names
+  const waitingHtml = demandRows.map((r) => {
+    if (r.waiting === 0)
+      return label(r, `${backlogPoolLabel(r.p)}: none waiting`) + bar("", 0, null) + `<span class="backlog-now-n">0</span><span class="backlog-now-aux">–</span></div>`;
     const split = backlogSplit(r.p, r.p.waiting.length - 1);
     const segs = r.parts
       .filter((x) => x.waiting > 0)
