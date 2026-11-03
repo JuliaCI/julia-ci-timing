@@ -11,11 +11,21 @@ const STORAGE_KEY = "julia-ci-timing-config";
 
 // The option nearest a range from a URL or stored settings, which may hold
 // one no longer offered (15, 120, 240); null when it is not a range
-function nearestTimeRange(value) {
+function nearestTimeRange(value, ranges = TIME_RANGES) {
   const days = parseInt(value, 10);
   if (isNaN(days) || days < 0) return null;
   if (days === 0) return 0;
-  return TIME_RANGES.filter((d) => d > 0).reduce((a, b) => (Math.abs(b - days) < Math.abs(a - days) ? b : a));
+  return ranges.filter((d) => d > 0).reduce((a, b) => (Math.abs(b - days) < Math.abs(a - days) ? b : a));
+}
+
+// The range a URL parameter asks for, snapped to the options of its select
+// (some offer fewer than the others) and shown there; null when there is none
+function readTimeRangeParam(params, key, selectId) {
+  const select = document.getElementById(selectId);
+  const ranges = [...select.options].map((o) => parseInt(o.value, 10)).filter((d) => !isNaN(d));
+  const days = params.get(key) === null ? null : nearestTimeRange(params.get(key), ranges);
+  if (days !== null) select.value = days;
+  return days;
 }
 
 // A URL parameter left at its default is dropped, to keep links short
@@ -3251,14 +3261,7 @@ function applyURLParams() {
   document.getElementById("job-filter").value = jobFilter;
 
   // Apply time range
-  const t = params.get("t");
-  if (t !== null) {
-    const days = nearestTimeRange(t);
-    if (days !== null) {
-      timeRangeDays = days;
-      document.getElementById("time-range").value = days;
-    }
-  }
+  timeRangeDays = readTimeRangeParam(params, "t", "time-range") ?? timeRangeDays;
 
   // Apply custom x range (overrides time range)
   const x = params.get("x");
@@ -7417,15 +7420,7 @@ function updateBenchURL() {
 function applyBenchURLParams() {
   const params = new URLSearchParams(window.location.search);
 
-  const bt = params.get("bt");
-  if (bt !== null) {
-    const days = nearestTimeRange(bt);
-    if (days !== null) {
-      benchTimeRangeDays = days;
-      const sel = document.getElementById("bench-time-range");
-      if (sel) sel.value = days;
-    }
-  }
+  benchTimeRangeDays = readTimeRangeParam(params, "bt", "bench-time-range") ?? benchTimeRangeDays;
 
   const bs = params.get("bs");
   if (bs !== null && ["minimum", "mean"].includes(bs)) {
@@ -9509,15 +9504,7 @@ function updatePackagesURL() {
 
 function applyPackagesURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const edt = params.get("edt");
-  if (edt !== null) {
-    const days = nearestTimeRange(edt);
-    if (days !== null) {
-      packagesTimeRangeDays = days;
-      const sel = document.getElementById("packages-time-range");
-      if (sel) sel.value = days;
-    }
-  }
+  packagesTimeRangeDays = readTimeRangeParam(params, "edt", "packages-time-range") ?? packagesTimeRangeDays;
   const edc = params.get("edc");
   if (edc === "all" || edc === "user" || edc === "ci") {
     packagesClientType = edc;
@@ -10478,15 +10465,7 @@ function updatePkgevalURL() {
 
 function applyPkgevalURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const pt = params.get("pt");
-  if (pt !== null) {
-    const days = nearestTimeRange(pt);
-    if (days !== null) {
-      pkgevalTimeRangeDays = days;
-      const sel = document.getElementById("pkgeval-time-range");
-      if (sel) sel.value = days;
-    }
-  }
+  pkgevalTimeRangeDays = readTimeRangeParam(params, "pt", "pkgeval-time-range") ?? pkgevalTimeRangeDays;
   if (params.get("pp") === "0") {
     pkgevalProportional = false;
     document.getElementById("pkgeval-btn-proportional").textContent = "Show %";
@@ -13056,14 +13035,7 @@ function applyTtfxURLParams() {
     ttfxMetric = tm;
     document.getElementById("ttfx-metric").value = tm;
   }
-  const tt = params.get("tt");
-  if (tt !== null) {
-    const days = nearestTimeRange(tt);
-    if (days !== null) {
-      ttfxTimeRangeDays = days;
-      document.getElementById("ttfx-time-range").value = days;
-    }
-  }
+  ttfxTimeRangeDays = readTimeRangeParam(params, "tt", "ttfx-time-range") ?? ttfxTimeRangeDays;
   if (params.get("tn") === "1") {
     ttfxNormalized = true;
     document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
@@ -15223,14 +15195,7 @@ function sizesSpanText(n) {
 
 function applySizesURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const zt = params.get("zt");
-  if (zt !== null) {
-    const days = nearestTimeRange(zt);
-    if (days !== null) {
-      sizesTimeRangeDays = days;
-      document.getElementById("sizes-time-range").value = days;
-    }
-  }
+  sizesTimeRangeDays = readTimeRangeParam(params, "zt", "sizes-time-range") ?? sizesTimeRangeDays;
   if (params.get("zn") === "1") {
     sizesNormalized = true;
     document.getElementById("sizes-btn-normalize").textContent = "Show bytes";
@@ -18779,14 +18744,7 @@ const activityDayTime = (i) => Date.parse(activityData.start + "T00:00:00Z") + i
 
 function applyActivityURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const at = params.get("at");
-  if (at !== null) {
-    const days = nearestTimeRange(at);
-    if (days !== null) {
-      activityTimeRangeDays = days;
-      document.getElementById("activity-time-range").value = days;
-    }
-  }
+  activityTimeRangeDays = readTimeRangeParam(params, "at", "activity-time-range") ?? activityTimeRangeDays;
   const aw = parseInt(params.get("aw"), 10);
   if (ACTIVITY_SMOOTHINGS.includes(aw)) {
     activitySmoothing = aw;
@@ -19038,14 +18996,7 @@ function coverageWantedSince() {
 
 function applyCoverageURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const vt = params.get("vt");
-  if (vt !== null) {
-    const days = nearestTimeRange(vt);
-    if (days !== null) {
-      coverageTimeRangeDays = days;
-      document.getElementById("coverage-time-range").value = days;
-    }
-  }
+  coverageTimeRangeDays = readTimeRangeParam(params, "vt", "coverage-time-range") ?? coverageTimeRangeDays;
   const vd = parseInt(params.get("vd"), 10);
   if (COVERAGE_DAYS.includes(vd)) coverageDays = vd;
   if (params.get("vv") === "dirs") coverageView = "dirs";
@@ -19512,14 +19463,7 @@ function sysimageWantedSince() {
 
 function applySysimageURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const it = params.get("it");
-  if (it !== null) {
-    const days = nearestTimeRange(it);
-    if (days !== null) {
-      sysimageTimeRangeDays = days;
-      document.getElementById("sysimage-time-range").value = days;
-    }
-  }
+  sysimageTimeRangeDays = readTimeRangeParam(params, "it", "sysimage-time-range") ?? sysimageTimeRangeDays;
   const ip = params.get("ip");
   if (ip) sysimagePlatform = ip;
   const iw = parseInt(params.get("iw"), 10);
@@ -20240,14 +20184,7 @@ const runtimeRunURL = (pipeline, build, job) =>
 
 function applyRuntimeURLParams() {
   const params = new URLSearchParams(window.location.search);
-  const rt = params.get("rt");
-  if (rt !== null) {
-    const days = nearestTimeRange(rt);
-    if (days !== null) {
-      runtimeTimeRangeDays = days;
-      document.getElementById("runtime-time-range").value = days;
-    }
-  }
+  runtimeTimeRangeDays = readTimeRangeParam(params, "rt", "runtime-time-range") ?? runtimeTimeRangeDays;
   if (params.get("rb")) runtimeBench = params.get("rb");
   // The categories shown, when not all are
   const rc = params.get("rc");
