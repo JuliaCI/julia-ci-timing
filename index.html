@@ -79,30 +79,12 @@
         document.head.appendChild(s);
       })();
     </script>
-    <script
-      src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
-      integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
-      crossorigin="anonymous"
-      defer
-    ></script>
-    <script
-      src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
-      integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
-      crossorigin="anonymous"
-      defer
-    ></script>
-    <script
-      src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"
-      integrity="sha384-dwwI6ICEN/0ZQlS5owhUa/6ZzvwUPmjH45bFVCAcjgjTulbHJvlE+TGU3g1k0N3R"
-      crossorigin="anonymous"
-      defer
-    ></script>
-    <script
-      src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"
-      integrity="sha384-3N9GHhCtN3CQef6tNfqgZlv7sQLYIkcChN+uaTZ7xVdzKYp/SjBNPxa92+hM7EAY"
-      crossorigin="anonymous"
-      defer
-    ></script>
+    <!-- Copies of the npm packages' builds. The version is in the name and
+         the query, so the file under a URL never changes and is cached for good -->
+    <script src="assets/vendor/chart.js-4.5.1.min.js?v=4.5.1" defer></script>
+    <script src="assets/vendor/chartjs-adapter-date-fns-3.0.0.min.js?v=3.0.0" defer></script>
+    <script src="assets/vendor/chartjs-plugin-zoom-2.2.0.min.js?v=2.2.0" defer></script>
+    <script src="assets/vendor/chartjs-plugin-annotation-3.1.0.min.js?v=3.1.0" defer></script>
     <link rel="preload" href="assets/fonts/inter-v20-latin.woff2?v=20" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="assets/styles.css?v=__BUILD_COMMIT_SHORT__" />
   </head>
