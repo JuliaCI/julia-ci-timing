@@ -7771,6 +7771,18 @@ function buildBenchMethodologyAnnotations(isDark) {
 
 // Lazily fetch the per-group detail JSON for a selected group and trigger a
 // chart/table redraw when it arrives. No-op if already cached or in-flight.
+// The groups' details arrive one by one, two dozen of them on a first load;
+// they are drawn once per frame rather than once each
+let benchRedrawFrame = null;
+function scheduleBenchRedraw() {
+  if (benchRedrawFrame !== null) return;
+  benchRedrawFrame = requestAnimationFrame(() => {
+    benchRedrawFrame = null;
+    updateBenchChart();
+    updateBenchTable();
+  });
+}
+
 function ensureBenchGroupDetailLoaded(group) {
   if (benchGroupDetail[group] || benchGroupDetailLoading[group]) return;
   const request = fetchBenchGroupDetail(group)
@@ -7779,10 +7791,7 @@ function ensureBenchGroupDetailLoaded(group) {
       benchGroupDetail[group] = data;
       delete benchGroupDetailLoading[group];
       // Only redraw if this group is still selected.
-      if (benchSelectedGroups.has(group)) {
-        updateBenchChart();
-        updateBenchTable();
-      }
+      if (benchSelectedGroups.has(group)) scheduleBenchRedraw();
     })
     .catch((err) => {
       console.error(`Failed to load detail for ${group}:`, err);
@@ -7884,11 +7893,14 @@ async function reloadBenchData() {
 
 async function loadBenchmarkData() {
   try {
-    // Load methodology-change registry first so cutoff helpers have data
-    // before the chart computes anything.
-    await BenchCore.loadMethodologyChanges(`${API_BASE}/notes/methodology_changes`);
+    // The methodology-change registry is in before the chart computes
+    // anything, since the cutoff helpers read it
+    const [, summary] = await Promise.all([
+      BenchCore.loadMethodologyChanges(`${API_BASE}/notes/methodology_changes`),
+      apiGet("benchmarks/summary", { metric: benchMetricParam(benchMetric) }),
+    ]);
     updateBenchMethodologyNotesCount();
-    benchData = await apiGet("benchmarks/summary", { metric: benchMetricParam(benchMetric) });
+    benchData = summary;
     benchDetailSince = apiSince(getBenchCutoff());
 
     document.getElementById("bench-chart-loading").style.display = "none";
