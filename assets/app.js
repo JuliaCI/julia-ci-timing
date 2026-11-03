@@ -2108,6 +2108,12 @@ function median(values) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+// The median of the values given, skipping nulls; null when there are none
+function medianOrNull(values) {
+  const present = values.filter((v) => v != null);
+  return present.length ? median(present) : null;
+}
+
 // Median, mean, extremes and population standard deviation, or null for none
 function summarize(values) {
   if (values.length === 0) return null;
@@ -16306,6 +16312,11 @@ function overviewCadence(dates) {
 }
 
 
+// A card's row saying how old its data is, with the time itself on hover
+function overviewUpdatedRow(at, label = "Data updated") {
+  return [label, at ? `<span title="${formatUtc(at)}">${overviewAgo(at)}</span>` : ""];
+}
+
 function overviewTabLink(tab, text) {
   return `<a href="?tab=${tabToURLValue(tab)}" onclick="switchTab('${tab}');return false">${escapeHtml(text)}</a>`;
 }
@@ -16588,7 +16599,7 @@ function overviewActivityCard(src) {
       ["Master commits, 7 days", fmt(week("commits"))],
       [`Contributors, ${src.window_days} days`, last("commit_authors") != null ? `${fmt(last("commit_authors"))} commit authors, ${fmt(last("pr_authors"))} pull request authors` : ""],
       [`Median time to merge, ${src.window_days} days`, last("merge_days") != null ? overviewFormatDays(last("merge_days")) : ""],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -16678,7 +16689,7 @@ function overviewPkgevalCard(src) {
       ["Popular packages", overviewPkgevalPopular()],
       ["Newly broken", overviewPkgevalNewlyBroken()],
       ["Why packages fail", overviewPkgevalReasons()],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -16783,7 +16794,7 @@ function overviewBenchCard(src) {
       ["Latest report", overviewReportRow(overviewExtLink(nanosoldierReportUrl("benchmark", last.date_path || last.date), last.date), last.date, cadence)],
       ["Commit", last.commit ? commitShaLink(last.commit) : ""],
       ["Groups", groups ? `${groups} benchmark groups` : ""],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -16908,7 +16919,7 @@ function overviewCICard() {
   if (flaky.length) {
     rows.push([`Below ${PASS_RATE_THRESHOLD * 100}% pass rate (${PASS_RATE_DAYS} d)`, overviewList(flaky)]);
   }
-  rows.push(["Data updated", `<span title="${formatUtc(data.generated_at)}">${overviewAgo(data.generated_at)}</span>`]);
+  rows.push(overviewUpdatedRow(data.generated_at));
 
   const spark = overviewSpark(
     builds.filter((b) => b.runMs >= now - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS).map((b) => ({ x: b.runMs, y: b.failed })),
@@ -17078,7 +17089,7 @@ function overviewTtfxCard(src, prs) {
       ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
       ["Most promising PRs", overviewTtfxPrs(prs)],
       ["Builds in last 7 days", String(lastWeek.length)],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -17269,7 +17280,7 @@ function overviewSizesCard(src, prs) {
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
       ["Biggest open PRs", overviewSizesPrs(prs)],
       ["Commits in last 7 days", String(lastWeek.length)],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -17441,7 +17452,7 @@ function overviewPackagesCard(src) {
       ["Biggest shift", biggestShift],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${compactNumber(series[series.length - 1].all)} downloads`],
       ["Most requested", overviewTopPackages()],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -17509,7 +17520,7 @@ function overviewAgentsCard(src, backlog) {
       ["Missing agents", juliaMissing.length ? overviewList(juliaMissing.map((r) => r.name)) : ""],
       ["Quiet hosts", juliaQuiet.length ? overviewList(juliaQuiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
       ["Offline elsewhere", elsewhere.length ? overviewList(elsewhere.map((r) => `${r.name} (${r.rec.queue || "no queue"})`)) : ""],
-      ["Snapshot", `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>`],
+      overviewUpdatedRow(src.generated_at, "Snapshot"),
     ],
   });
 }
@@ -19309,7 +19320,7 @@ function overviewCoverageCard(src) {
       ["Most newly unrun", lost.length ? lost.join(", ") : ""],
       ["Most lines never run", most.join(", ")],
       ["Latest report", `${reportLink} (${overviewAgo(head.measured_at)}), ${head.sessions ?? "?"} uploads merged`],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
@@ -19503,19 +19514,12 @@ function setSysimageSmoothing(val) {
   updateSysimageCharts();
 }
 
-const sysimageMedian = (vals) => {
-  const s = vals.filter((v) => v != null).sort((a, b) => a - b);
-  if (!s.length) return null;
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
-
 // The median of the `w` builds centred on each one, so a step shows where it
 // happened rather than half a window later
 function sysimageRolling(vals, w) {
   if (w <= 1) return vals;
   const h = w >> 1;
-  return vals.map((_, i) => sysimageMedian(vals.slice(Math.max(0, i - h), i + h + 1)));
+  return vals.map((_, i) => medianOrNull(vals.slice(Math.max(0, i - h), i + h + 1)));
 }
 
 // The jobs of a platform in the range as indices into its arrays
@@ -19781,8 +19785,8 @@ function updateSysimageTable() {
         html += `<td class="num${sel}">—</td><td class="num col-secondary${sel}"></td>`;
         continue;
       }
-      const now = sysimageMedian(w.now.map((i) => sysimageValue(w.p, s, i)));
-      const before = sysimageMedian(w.before.map((i) => sysimageValue(w.p, s, i)));
+      const now = medianOrNull(w.now.map((i) => sysimageValue(w.p, s, i)));
+      const before = medianOrNull(w.before.map((i) => sysimageValue(w.p, s, i)));
       const pct = now == null || !before ? null : ((now - before) / before) * 100;
       const cls = pct == null || Math.abs(pct) < 3 ? "" : pct > 0 ? " ttfx-up" : " ttfx-down";
       html +=
@@ -19867,7 +19871,7 @@ function showSysimageJobPopup(platform, i) {
     html += `<tr${s === "total" ? ' class="sysimage-total"' : ""}><th title="${escapeHtml(tip)}">${s === "total" ? `<b>${label}</b>` : escapeHtml(label)}</th>`;
     html += `<td class="num">${formatDuration(v)}${extra}</td>`;
     html += sysimageChangeCell(v, prev == null ? null : sysimageValue(p, s, prev));
-    html += sysimageChangeCell(v, sysimageMedian(base.map((j) => sysimageValue(p, s, j))));
+    html += sysimageChangeCell(v, medianOrNull(base.map((j) => sysimageValue(p, s, j))));
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -19883,7 +19887,7 @@ function showSysimageJobPopup(platform, i) {
     for (const [name, vals] of stdlibs) {
       html += `<tr><th>${escapeHtml(name)}</th><td class="num">${formatDuration(vals[i])}</td>`;
       html += sysimageChangeCell(vals[i], prev == null ? null : vals[prev]);
-      html += sysimageChangeCell(vals[i], sysimageMedian(base.map((j) => vals[j])));
+      html += sysimageChangeCell(vals[i], medianOrNull(base.map((j) => vals[j])));
       html += "</tr>";
     }
     html += "</tbody></table>";
@@ -19925,7 +19929,6 @@ let runtimePr = null; // the pull request whose changes the Benchmarks table sho
 let runtimeAnnotations = [];
 const RUNTIME_ANNOTATION_HINT =
   "Annotations mark changes to the benchmark machine or to the suite that shifted these numbers without a Julia commit being responsible.";
-const RUNTIME_TIME_RANGES = [7, 14, 30, 60, 90, 180, 365, 0];
 const RUNTIME_DEFAULT_DAYS = 30;
 // A build is compared with the median of this many builds before it as well as
 // with the build right before it, which alone is noisier
@@ -19979,7 +19982,7 @@ const RUNTIME_MIN_SPAN = 1;
 function runtimeMinSpan(values, pct = RUNTIME_MIN_SPAN) {
   const vs = values.filter((v) => v != null);
   if (!vs.length) return {};
-  const mid = sysimageMedian(vs);
+  const mid = medianOrNull(vs);
   return { suggestedMin: mid * (1 - pct / 100), suggestedMax: mid * (1 + pct / 100) };
 }
 
@@ -20059,7 +20062,7 @@ function runtimeBefore(name, i, key = "value") {
   return out;
 }
 
-const runtimeBaseline = (name, i, key = "value") => sysimageMedian(runtimeBefore(name, i, key));
+const runtimeBaseline = (name, i, key = "value") => medianOrNull(runtimeBefore(name, i, key));
 
 function runtimeJobURL(b) {
   return b.url || `${buildkiteBuildUrl({ pipeline: "julia-ci", build: b.build })}#${b.job_id}`;
@@ -20896,7 +20899,7 @@ function runtimeSeriesSteps(list, val, min) {
   for (let k = 1; k < list.length; k++) if (runtimeSameSource(list[k], list[k - 1])) wiggles.push(Math.abs(runtimePct(val(list[k]), val(list[k - 1]))));
   wiggles.sort((a, c) => a - c);
   const noise = wiggles.length ? wiggles[Math.floor(0.9 * (wiggles.length - 1))] : 0;
-  const med = (l) => sysimageMedian(l.map(val));
+  const med = (l) => medianOrNull(l.map(val));
   const out = [];
   for (let k = 1; k < list.length; k++) {
     const i = list[k];
@@ -20926,7 +20929,7 @@ function runtimeSteps() {
   for (const x of runtimeData.benchmarks) {
     if (x.metric === "time" || runtimeHidden.has(x.category) || !matchesSearchWords(x.name, runtimeFilter)) continue;
     const has = idx.filter((i) => runtimeValue(x.name, i, "instructions") != null);
-    const med = (list) => sysimageMedian(list.map((i) => runtimeValue(x.name, i)).filter((v) => v != null));
+    const med = (list) => medianOrNull(list.map((i) => runtimeValue(x.name, i)).filter((v) => v != null));
     for (const st of runtimeSeriesSteps(has, (i) => runtimeValue(x.name, i, "instructions"), RUNTIME_INSTR_PCT)) {
       const value = runtimePct(med(st.after), med(st.before));
       out.push({
@@ -21580,7 +21583,7 @@ function overviewRuntimeCard(src, prs) {
   const before = (n) => {
     const vs = [];
     for (let j = latest - 1; j >= 0 && vs.length < RUNTIME_BASELINE && builds[j].source === b.source; j--) if (value(n, j) != null) vs.push(value(n, j));
-    return sysimageMedian(vs);
+    return medianOrNull(vs);
   };
   const movers = src.benchmarks
     .map((x) => ({ x, pct: runtimePct(value(x.name, latest), before(x.name)) }))
@@ -21638,7 +21641,7 @@ function overviewRuntimeCard(src, prs) {
       ["Failing", failing.length && failing.length !== newly.length ? overviewList(failing) : ""],
       ["Open PRs regressing", prs ? `${regressing.length} of ${prs.prs.length}${prList.length ? ": " + prList.join(", ") : ""}` : ""],
       ["Builds in last 7 days", String(builds.filter((x) => Date.parse(x.date) >= Date.now() - OVERVIEW_WEEK_MS).length)],
-      ["Data updated", src.generated_at ? `<span title="${formatUtc(src.generated_at)}">${overviewAgo(src.generated_at)}</span>` : ""],
+      overviewUpdatedRow(src.generated_at),
     ],
   });
 }
