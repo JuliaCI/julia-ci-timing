@@ -1540,24 +1540,6 @@
           title="What each measurement covers"
           >Method</a
         >
-        <span class="bench-table-view-toggle" role="group" aria-label="Table view">
-          <button
-            class="btn btn-primary"
-            id="sizes-view-prs"
-            onclick="setSizesTableView('prs')"
-            title="Open pull requests by how much their latest build changes the size against master"
-          >
-            Open PRs
-          </button>
-          <button
-            class="btn"
-            id="sizes-view-commits"
-            onclick="setSizesTableView('commits')"
-            title="One row per master commit, newest first"
-          >
-            By commit
-          </button>
-        </span>
       </div>
       <div class="ttfx-content">
         <div class="ttfx-sidebar" id="sizes-metric-list">
@@ -1722,15 +1704,6 @@
           <option value="30" selected>Change over 30 days</option>
           <option value="90">Change over 90 days</option>
           <option value="180">Change over 180 days</option>
-        </select>
-        <select
-          class="time-select"
-          id="coverage-view-mode"
-          onchange="setCoverageView(this.value)"
-          aria-label="Table rows"
-        >
-          <option value="files" selected>Files</option>
-          <option value="dirs">Directories</option>
         </select>
         <select
           class="time-select"

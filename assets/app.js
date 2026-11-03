@@ -230,6 +230,21 @@ function phoneListHtml(items) {
 // A sortable table's header row: each column a button, the sorted one with
 // its arrow and aria-sort. `cols` are [key, label, class, title]; a null key
 // is a column that does not sort. `sort` is { col, asc }.
+// A table's caption: the switch between its views ([view, label, title], the
+// setter named so the buttons can call it), then what the view shows
+function tableViewCaption(views, current, setter, text) {
+  const btns = views
+    .map(
+      ([view, label, title]) =>
+        `<button type="button" class="btn${current === view ? " btn-primary" : ""}" onclick="${setter}('${view}')" title="${escapeHtml(title)}">${label}</button>`,
+    )
+    .join("");
+  return (
+    `<div class="runtime-caption"><span class="bench-table-view-toggle" role="group" aria-label="Table view">${btns}</span>` +
+    `<span class="runtime-caption-text">${text}</span></div>`
+  );
+}
+
 function sortableHeaderRow(cols, sort) {
   const cells = cols.map(([key, label, cls = "", title = ""]) => {
     const t = title ? ` title="${escapeHtml(title)}"` : "";
@@ -13170,8 +13185,6 @@ function setTtfxTableView(view) {
 // The table's caption: its own switch between its views, then what the view shows
 function renderTtfxCaption() {
   const n = ttfxPrs && !ttfxPrs.failed ? ` (${ttfxPrs.prs.length})` : "";
-  const btn = (view, label, title) =>
-    `<button type="button" class="btn${ttfxTableView === view ? " btn-primary" : ""}" onclick="setTtfxTableView('${view}')" title="${escapeHtml(title)}">${label}</button>`;
   const text = {
     prs:
       "<b>🚀 Open PRs by TTFX, best first</b> <span class=\"col-secondary\">Each one's latest TTFX CI job, head against master. " +
@@ -13179,12 +13192,16 @@ function renderTtfxCaption() {
     builds: '<b>One row per master build</b> <span class="col-secondary">Suite geometric means over the selected tasks.</span>',
     tasks: '<b>One row per task</b> <span class="col-secondary">The selected metric over the builds in range.</span>',
   }[ttfxTableView];
-  document.getElementById("ttfx-stats-caption").innerHTML =
-    '<div class="runtime-caption"><span class="bench-table-view-toggle" role="group" aria-label="Table view">' +
-    btn("prs", `Open PRs${n}`, "Open pull requests ranked by their latest TTFX comparison against master, best first") +
-    btn("builds", "By commit", "One row per master commit's build: suite geometric means over the selected tasks") +
-    btn("tasks", "By task", "One row per task: the selected metric over the builds in range") +
-    `</span><span class="runtime-caption-text">${text}</span></div>`;
+  document.getElementById("ttfx-stats-caption").innerHTML = tableViewCaption(
+    [
+      ["prs", `Open PRs${n}`, "Open pull requests ranked by their latest TTFX comparison against master, best first"],
+      ["builds", "By commit", "One row per master commit's build: suite geometric means over the selected tasks"],
+      ["tasks", "By task", "One row per task: the selected metric over the builds in range"],
+    ],
+    ttfxTableView,
+    "setTtfxTableView",
+    text,
+  );
 }
 
 function toggleTtfxTask(task) {
@@ -15417,8 +15434,6 @@ function applySizesURLParams() {
   }
   if (params.get("zv") === "commits") {
     sizesTableView = "commits";
-    document.getElementById("sizes-view-prs").classList.remove("btn-primary");
-    document.getElementById("sizes-view-commits").classList.add("btn-primary");
   }
   const zm = params.get("zm");
   if (zm !== null) sizesSelected = new Set(zm.split(",").filter((m) => m in SIZES_METRICS));
@@ -15891,11 +15906,22 @@ function showSizesResetZoom() {
 
 function setSizesTableView(view) {
   sizesTableView = view === "commits" ? "commits" : "prs";
-  for (const v of ["prs", "commits"]) {
-    document.getElementById("sizes-view-" + v).classList.toggle("btn-primary", v === sizesTableView);
-  }
   updateSizesTable();
   updateSizesURL();
+}
+
+// The table's caption, with its switch between its views
+function sizesCaption(text) {
+  const n = sizesPrs && !sizesPrs.failed ? ` (${sizesPrs.prs.length})` : "";
+  return tableViewCaption(
+    [
+      ["prs", `Open PRs${n}`, "Open pull requests by how much their latest build changes the size against master"],
+      ["commits", "By commit", "One row per master commit, newest first"],
+    ],
+    sizesTableView,
+    "setSizesTableView",
+    text,
+  );
 }
 
 function updateSizesTable() {
@@ -15906,7 +15932,11 @@ function updateSizesTable() {
   if (sizesPrs && !sizesPrsLoading?.pending) renderSizesPrsTable();
   if (!sizesPrsLoading) {
     const job = (sizesPrsLoading = { pending: true });
-    if (!sizesPrs) document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="loading">Loading...</td></tr>';
+    if (!sizesPrs) {
+      document.getElementById("sizes-stats-caption").innerHTML = sizesCaption("");
+      document.getElementById("sizes-stats-thead").innerHTML = "";
+      document.getElementById("sizes-stats-tbody").innerHTML = '<tr><td class="loading">Loading...</td></tr>';
+    }
     job.promise = apiGet("sizes/prs")
       .then((d) => (sizesPrs = d))
       .catch((err) => {
@@ -15955,9 +15985,11 @@ function renderSizesPrsTable() {
       return r;
     });
   sortRows(rows, sizesPrsSort, "rank");
-  caption.innerHTML = `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, or a stacked one's own change against the pull request below it, ranked by ${escapeHtml(
-    sizesMetricLabel(rank).toLowerCase(),
-  )}. Click a row for details.</span>`;
+  caption.innerHTML = sizesCaption(
+    `<b>Open pull requests</b> <span class="col-secondary">${prs.length ? `${prs.length} measured. ` : ""}The latest julia-pr build of each against its merge-base with master, or a stacked one's own change against the pull request below it, ranked by ${escapeHtml(
+      sizesMetricLabel(rank).toLowerCase(),
+    )}. Click a row for details.</span>`,
+  );
   thead.innerHTML = sortableHeaderRow(
     [
       ["number", "PR"],
@@ -16220,7 +16252,7 @@ function renderSizesCommitsTable() {
   const thead = document.getElementById("sizes-stats-thead");
   const tbody = document.getElementById("sizes-stats-tbody");
   if (!sizesData?.commits?.length) {
-    caption.innerHTML = "";
+    caption.innerHTML = sizesCaption("");
     thead.innerHTML = "";
     tbody.innerHTML = '<tr><td class="loading">No measurements</td></tr>';
     return;
@@ -16243,9 +16275,11 @@ function renderSizesCommitsTable() {
   });
   const rows = sortRows(all, sizesCommitsSort, "i").slice(0, SIZES_COMMITS_ROWS);
   const newest = sizesCommitsSort.col === "date" && !sizesCommitsSort.asc;
-  caption.innerHTML = `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the previous measured commit${
-    all.length > SIZES_COMMITS_ROWS ? ` (the first ${SIZES_COMMITS_ROWS} of the ${all.length} in the range)` : ""
-  }. Not every commit was measured, so a row can span several commits; its link then lists them. Click a row for details.</span>`;
+  caption.innerHTML = sizesCaption(
+    `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the previous measured commit${
+      all.length > SIZES_COMMITS_ROWS ? ` (the first ${SIZES_COMMITS_ROWS} of the ${all.length} in the range)` : ""
+    }. Not every commit was measured, so a row can span several commits; its link then lists them. Click a row for details.</span>`,
+  );
   thead.innerHTML = sortableHeaderRow(
     [
       ["date", "Date"],
@@ -19186,6 +19220,8 @@ let coverageView = "files";
 let coverageMinLines = 20;
 let coverageFilter = "";
 let coverageSort = { col: "missed", asc: false };
+let coverageCommitsSort = { col: "date", asc: false };
+const COVERAGE_VIEWS = ["files", "dirs", "commits"];
 const COVERAGE_DAYS = [7, 30, 90, 180];
 const COVERAGE_MIN_LINES = [0, 20, 100, 500];
 const COVERAGE_SORTS = ["path", "pct", "lines", "missed", "change", "missedChange"];
@@ -19203,7 +19239,7 @@ function applyCoverageURLParams() {
   coverageTimeRangeDays = readTimeRangeParam(params, "vt", "coverage-time-range") ?? coverageTimeRangeDays;
   const vd = parseInt(params.get("vd"), 10);
   if (COVERAGE_DAYS.includes(vd)) coverageDays = vd;
-  if (params.get("vv") === "dirs") coverageView = "dirs";
+  if (COVERAGE_VIEWS.includes(params.get("vv"))) coverageView = params.get("vv");
   const vm = parseInt(params.get("vm"), 10);
   if (COVERAGE_MIN_LINES.includes(vm)) coverageMinLines = vm;
   coverageFilter = params.get("vq") || "";
@@ -19213,9 +19249,17 @@ function applyCoverageURLParams() {
     if (COVERAGE_SORTS.includes(col)) coverageSort = { col, asc: !vs.startsWith("-") };
   }
   document.getElementById("coverage-days").value = coverageDays;
-  document.getElementById("coverage-view-mode").value = coverageView;
   document.getElementById("coverage-min-lines").value = coverageMinLines;
   document.getElementById("coverage-filter").value = coverageFilter;
+  showCoverageControls();
+}
+
+// The controls for the file and directory rows, which the commit rows do not use
+function showCoverageControls() {
+  for (const id of ["coverage-days", "coverage-min-lines", "coverage-filter"]) {
+    document.getElementById(id).classList.toggle("view-hidden", coverageView === "commits");
+  }
+  updatePhoneChips();
 }
 
 function updateCoverageURL() {
@@ -19264,6 +19308,7 @@ function setCoverageTimeRange(val) {
     return;
   }
   updateCoverageCharts();
+  if (coverageView === "commits") updateCoverageTable();
 }
 
 function setCoverageDays(val) {
@@ -19273,7 +19318,8 @@ function setCoverageDays(val) {
 }
 
 function setCoverageView(val) {
-  coverageView = val === "dirs" ? "dirs" : "files";
+  coverageView = COVERAGE_VIEWS.includes(val) ? val : "files";
+  showCoverageControls();
   updateCoverageURL();
   updateCoverageTable();
 }
@@ -19296,7 +19342,6 @@ function setCoverageFilter(val) {
 function showCoverageDir(dir) {
   coverageView = "files";
   coverageFilter = dir + "/";
-  document.getElementById("coverage-view-mode").value = "files";
   document.getElementById("coverage-filter").value = coverageFilter;
   updateCoverageURL();
   updateCoverageTable();
@@ -19446,8 +19491,26 @@ function coveragePctStyle(pct) {
   return ` style="background: color-mix(in srgb, var(${color}) ${tint}%, transparent)"`;
 }
 
+// The table's caption, with its switch between its views
+function coverageCaption(text) {
+  return tableViewCaption(
+    [
+      ["files", "By file", "One row per file, at the latest report"],
+      ["dirs", "By directory", "One row per directory, a stdlib as a whole, at the latest report"],
+      ["commits", "By commit", "One row per master commit with a report, newest first"],
+    ],
+    coverageView,
+    "setCoverageView",
+    text,
+  );
+}
+
 function updateCoverageTable() {
   if (!coverageData?.head) return;
+  if (coverageView === "commits") {
+    renderCoverageCommitsTable();
+    return;
+  }
   const { head, base } = coverageData;
   const dirs = coverageView === "dirs";
   const rows = sortRows(coverageRows(), coverageSort, "path");
@@ -19464,7 +19527,7 @@ function updateCoverageTable() {
     if (base.sessions !== head.sessions) caption += ` <span class="ttfx-popup-muted">That report merged ${base.sessions} platforms' uploads and this one ${head.sessions}, which moves the totals.</span>`;
   } else caption += ` No report ${coverageDays} days older to compare with.`;
   caption += ` <span class="ttfx-popup-muted">${rows.length.toLocaleString("en-US")} ${dirs ? "directories" : "files"} shown. Julia's coverage misses code run while the system image is built, so a low file is a lead to check on Codecov.</span>`;
-  document.getElementById("coverage-stats-caption").innerHTML = caption;
+  document.getElementById("coverage-stats-caption").innerHTML = coverageCaption(caption);
 
   const thead = document.getElementById("coverage-stats-thead");
   thead.innerHTML = sortableHeaderRow(
@@ -19500,6 +19563,78 @@ function updateCoverageTable() {
       `<td class="num col-secondary">${r.missedChange ? formatSigned(r.missedChange) : ""}</td></tr>`;
   }
   if (!rows.length) html = `<tr><td colspan="6">No ${dirs ? "directory" : "file"} matches.</td></tr>`;
+  document.getElementById("coverage-stats-tbody").innerHTML = html;
+}
+
+// The master commits with a report in the time range, each against the report
+// before it
+function renderCoverageCommitsTable() {
+  const since = coverageWantedSince();
+  const commits = coverageData.commits;
+  const all = [];
+  commits.forEach((c, i) => {
+    if (since && c.measured_at < since) return;
+    const prev = i > 0 ? commits[i - 1] : null;
+    const pct = coveragePct(c.hits, c.lines);
+    all.push({
+      c,
+      prev,
+      i,
+      date: c.measured_at,
+      commit: c.commit,
+      pct,
+      change: prev ? pct - coveragePct(prev.hits, prev.lines) : null,
+      missed: c.lines - c.hits,
+      missedChange: prev ? c.lines - c.hits - (prev.lines - prev.hits) : null,
+      lines: c.lines,
+      sessions: c.sessions,
+      message: c.subject || null,
+    });
+  });
+  const rows = sortRows(all, coverageCommitsSort, "i");
+  const newest = coverageCommitsSort.col === "date" && !coverageCommitsSort.asc;
+  document.getElementById("coverage-stats-caption").innerHTML = coverageCaption(
+    `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the report before it. ` +
+      "Codecov reports about one commit a day, so a row's change can come from any commit since the one before. " +
+      "A change in the uploads merged moves the totals too.</span>",
+  );
+  const thead = document.getElementById("coverage-stats-thead");
+  thead.innerHTML = sortableHeaderRow(
+    [
+      ["date", "Date"],
+      ["commit", "Commit"],
+      ["pct", "Run", "num", "Lines run, as a share of the lines Codecov counts as code"],
+      ["change", "Change", "num", "Against the report before, in percentage points"],
+      ["missed", "Never run", "num", "Lines of code the tests never run"],
+      ["missedChange", "Never run, change", "num col-secondary", "Lines never run, against the report before"],
+      ["lines", "Lines", "num col-secondary", "Lines Codecov counts as code"],
+      ["sessions", "Uploads", "num col-secondary", "The platforms' uploads Codecov merged into the report"],
+      ["message", "Message", "col-secondary"],
+    ],
+    coverageCommitsSort,
+  );
+  bindSortHeaders(thead, (col) => {
+    coverageCommitsSort = nextSort(coverageCommitsSort, col, (c) => c === "commit" || c === "message" || c === "pct");
+    renderCoverageCommitsTable();
+  });
+  let html = "";
+  for (const r of rows) {
+    const { c, prev } = r;
+    const uploadsMoved = prev && prev.sessions !== c.sessions;
+    const changeCls = uploadsMoved ? "col-secondary" : upWorseClass(-changeSign(r.change, COVERAGE_NO_CHANGE_PP));
+    const changeTitle = uploadsMoved ? ` title="${escapeHtml(`The report before merged ${prev.sessions} uploads and this one ${c.sessions}`)}"` : "";
+    html +=
+      `<tr><td>${timeHtml(c.measured_at)}</td>` +
+      `<td>${commitShaLink(c.commit)} ${extLink(`${CODECOV_REPO}/commit/${c.commit}/tree`, "Codecov", 'class="gh-link"')}</td>` +
+      `<td class="num"${coveragePctStyle(r.pct)}>${r.pct.toFixed(2)}%</td>` +
+      `<td class="num ${changeCls}"${changeTitle}>${r.change == null ? "" : formatSigned(r.change, 2)}</td>` +
+      `<td class="num">${r.missed.toLocaleString("en-US")}</td>` +
+      `<td class="num col-secondary">${r.missedChange == null ? "" : formatSigned(r.missedChange)}</td>` +
+      `<td class="num col-secondary">${c.lines.toLocaleString("en-US")}</td>` +
+      `<td class="num col-secondary">${c.sessions ?? ""}</td>` +
+      `<td class="msg col-secondary" title="${escapeHtml(c.subject || "")}">${escapeHtml(c.subject || "")}</td></tr>`;
+  }
+  if (!rows.length) html = '<tr><td colspan="9">No reports in the range.</td></tr>';
   document.getElementById("coverage-stats-tbody").innerHTML = html;
 }
 
