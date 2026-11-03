@@ -104,6 +104,7 @@ const COLUMN_MIGRATIONS = [
     ("pkgeval_results", "error", "TEXT"),
     ("pkgeval_reports", "logs_url", "TEXT"),
     ("pkgeval_results", "log", "TEXT"),
+    ("agents", "cluster_id", "TEXT"),
 ]
 
 function apply_schema!(db::SQLite.DB)

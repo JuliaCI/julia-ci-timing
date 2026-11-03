@@ -2168,6 +2168,18 @@ end
 
 const AGENT_RETAIN_MONTHS = 12
 
+# The clusters whose agents the Workers tab covers: Julia (the build, test and
+# launch queues) and Secure (julia-publish and julia-promote). The others serve
+# the GPU packages, Yggdrasil and the JuliaCI cluster's smoke tests, whose
+# default queue would otherwise pass for Secure's.
+const WORKER_CLUSTERS = ("ae7e6bd1-fde8-433d-bac7-9d2d01108ed6",  # Julia
+                         "fd6c2af4-60c1-40ee-bdd5-88ecb6698fbc")  # Secure
+
+# SQL condition on the agents row `a` for a worker agent. An agent not seen
+# since its cluster was first recorded is kept, so an idle or dead host of
+# the Julia cluster still shows until it runs a job again.
+worker_agent(a) = "($a.cluster_id IS NULL OR $a.cluster_id IN ($(join(("'$c'" for c in WORKER_CLUSTERS), ", "))))"
+
 # Fixed field order, as the fetcher wrote it, so the file diffs cleanly
 job_record(j) = OrderedDict{String,Any}("name" => get(j, :name, ""), "pipeline" => get(j, :pipeline, ""),
                                         "build" => get(j, :build, nothing), "started_at" => get(j, :started_at, ""))
@@ -2185,7 +2197,7 @@ agents_cutoff(gen) = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Month(AGENT_RE
 function agents_latest(db)
     gen = agents_generated_at(db)
     records = OrderedDict{String,Any}()
-    for a in rows(db, "SELECT * FROM agents WHERE last_seen >= ? ORDER BY name", (agents_cutoff(gen),))
+    for a in rows(db, "SELECT * FROM agents a WHERE last_seen >= ? AND $(worker_agent("a")) ORDER BY name", (agents_cutoff(gen),))
         records[String(a.name)] = OrderedDict{String,Any}(
             "hostname" => String(a.hostname), "queue" => String(a.queue), "os" => String(a.os), "arch" => String(a.arch),
             "version" => String(a.version), "state" => String(a.state), "connected_at" => jstr(a.connected_at),
@@ -2199,7 +2211,8 @@ end
 function agent_snapshots(db; since="")
     since = isempty(since) ? agents_cutoff(agents_generated_at(db)) : since
     members = Dict{String,Vector{String}}()
-    for r in rows(db, "SELECT time, agent_name FROM agent_snapshot_members WHERE time >= ? ORDER BY time, agent_name", (since,))
+    for r in rows(db, "SELECT m.time, m.agent_name FROM agent_snapshot_members m LEFT JOIN agents a ON a.name = m.agent_name " *
+                      "WHERE m.time >= ? AND $(worker_agent("a")) ORDER BY m.time, m.agent_name", (since,))
         push!(get!(members, String(r.time), String[]), String(r.agent_name))
     end
     return [OrderedDict("time" => String(r.time), "connected" => get(members, String(r.time), String[]))
@@ -2231,7 +2244,7 @@ function other_running(db, start, step, n)
     counts = Dict{Tuple{String,String,String},Dict{DateTime,Int}}()
     known = join(("'$p'" for p in POOL_PIPELINES), ", ")
     for r in rows(db, "SELECT m.time, a.queue, a.os, a.arch, COUNT(*) AS n FROM agent_snapshot_members m " *
-                      "JOIN agents a ON a.name = m.agent_name WHERE m.time >= ? AND m.pipeline <> '' " *
+                      "JOIN agents a ON a.name = m.agent_name WHERE m.time >= ? AND m.pipeline <> '' AND $(worker_agent("a")) " *
                       "AND m.pipeline NOT IN ($known) GROUP BY m.time, a.queue, a.os, a.arch", (lo,))
         get!(Dict{DateTime,Int}, counts, (String(r.queue), String(r.os), String(r.arch)))[DateTime(String(r.time), Store.ISO_SECONDS)] = Int(r.n)
     end
@@ -2265,14 +2278,14 @@ share a host when their slots there add up to more than that.
 """
 function pool_slots(db, cutoff)
     names = Dict{Tuple{String,String,String},Dict{String,Int}}()
-    for r in rows(db, "SELECT hostname, queue, os, arch, COUNT(*) AS n FROM agents WHERE last_seen >= ? " *
+    for r in rows(db, "SELECT hostname, queue, os, arch, COUNT(*) AS n FROM agents a WHERE last_seen >= ? AND $(worker_agent("a")) " *
                       "GROUP BY hostname, queue, os, arch", (cutoff,))
         get!(Dict{String,Int}, names, (String(r.queue), String(r.os), String(r.arch)))[String(r.hostname)] = Int(r.n)
     end
     peak = Dict{String,Int}()
     for r in rows(db, "SELECT hostname, MAX(n) AS n FROM (SELECT m.time, a.hostname, COUNT(*) AS n " *
                       "FROM agent_snapshot_members m JOIN agents a ON a.name = m.agent_name " *
-                      "WHERE m.time >= ? GROUP BY m.time, a.hostname) GROUP BY hostname", (cutoff,))
+                      "WHERE m.time >= ? AND $(worker_agent("a")) GROUP BY m.time, a.hostname) GROUP BY hostname", (cutoff,))
         peak[String(r.hostname)] = Int(r.n)
     end
     # A host never seen mid-job has no known limit

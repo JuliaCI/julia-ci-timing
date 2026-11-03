@@ -20,6 +20,10 @@
 # builds still going and those finished since the last successful run; the first run
 # backfills POOL_BACKFILL_DAYS.
 #
+# Every agent of the organization is recorded, with its cluster. The site shows only
+# those of the Julia and Secure clusters (Render.WORKER_CLUSTERS); the GPU packages,
+# Yggdrasil and the JuliaCI cluster's smoke tests have agents of their own.
+#
 # The site draws connected agents per queue over time from the history and flags
 # agents that were connected recently but are not now. The build, test, launch and
 # default queues are the exception: their hosts start one agent per job (see
@@ -95,7 +99,11 @@ end
 
 fold_key(name) = replace(name, r"\.\d+$" => "")
 
-const AGENT_COLS = ["fold_key", "agent_id", "hostname", "queue", "os", "arch", "version", "meta_data", "state",
+# The ID of the agent's cluster, the last part of its cluster_url; '' for an
+# unclustered agent. Its name would take the read_clusters scope.
+cluster_id(agent) = something(match(r"[^/]*$", str(get(agent, :cluster_url, nothing)))).match
+
+const AGENT_COLS = ["fold_key", "agent_id", "cluster_id", "hostname", "queue", "os", "arch", "version", "meta_data", "state",
                     "connected_at", "first_seen", "last_seen", "job_json"]
 
 # Fold one API listing into the database. Only agents the API reports as
@@ -121,7 +129,7 @@ function record_snapshot!(db, agents, now_time::DateTime)
             pipelines[name] = rec["job"] === nothing ? "" : rec["job"]["pipeline"]
         end
         tags = something(get(agent, :meta_data, nothing), [])
-        upsert!(stmt, (name, fold_key(name), str(get(agent, :id, nothing)), rec["hostname"], rec["queue"], rec["os"], rec["arch"],
+        upsert!(stmt, (name, fold_key(name), str(get(agent, :id, nothing)), cluster_id(agent), rec["hostname"], rec["queue"], rec["os"], rec["arch"],
                        rec["version"], JSON3.write(String.(tags)), rec["state"], rec["connected_at"], rec["first_seen"],
                        rec["last_seen"], rec["job"] === nothing ? missing : JSON3.write(rec["job"]), seq))
     end
