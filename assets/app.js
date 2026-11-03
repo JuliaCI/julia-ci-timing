@@ -49,6 +49,26 @@ function setParam(url, key, value, isDefault) {
 
 // Puts the shown tab's state in the URL without a history entry. The state
 // is kept, since it marks the entry pushed for an open dialog.
+// A filter box draws and writes the URL once typing pauses, not on every
+// key. A switch of tab first runs what is pending, while its tab is current.
+const TYPING_DELAY_MS = 150;
+const typingPending = new Map();
+function afterTyping(key, run) {
+  clearTimeout(typingPending.get(key)?.timer);
+  const timer = setTimeout(() => {
+    typingPending.delete(key);
+    run();
+  }, TYPING_DELAY_MS);
+  typingPending.set(key, { timer, run });
+}
+function flushTyping() {
+  for (const [key, { timer, run }] of typingPending) {
+    clearTimeout(timer);
+    typingPending.delete(key);
+    run();
+  }
+}
+
 function writeTabURL(write) {
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue(activeTab));
@@ -6355,8 +6375,10 @@ const jobMatchesFilter = (name) => matchesSearchWords(`${name} ${convertEmojiTex
 
 function setJobFilter(q) {
   jobFilter = q.trim();
-  applyJobFilter();
-  updateURL();
+  afterTyping("jobs", () => {
+    applyJobFilter();
+    updateURL();
+  });
 }
 
 // Hide the jobs the filter leaves out, and a group header with none left
@@ -7287,6 +7309,7 @@ function followLandingSection() {
 // browser's back button returns to the previous tab; the startup switch and
 // the one that answers a back or forward navigation only reflect the URL
 function switchTab(tab, { pushHistory = true } = {}) {
+  flushTyping();
   const previousTab = activeTab;
   if (tab === "ci-workers") {
     setCITimingSubview("workers", { updateUrl: false });
@@ -10843,19 +10866,22 @@ function renderPkgevalFailures() {
   const input = panel.querySelector(".pkgeval-failures-filter");
   input.oninput = () => {
     pkgevalFailuresFilter = input.value;
-    renderPkgevalFailuresList();
+    afterTyping("pkgeval-failures", renderPkgevalFailuresList);
   };
   renderPkgevalFailuresList();
 }
 
 // Only the list is drawn again as the filter changes, so the box keeps focus
+// A list this long is enough to scan, and the rest are a filter away
+const PKGEVAL_FAILURES_ROWS = 500;
+
 function renderPkgevalFailuresList() {
   const panel = document.getElementById("pkgeval-popular");
   const list = panel.querySelector(".pkgeval-failures-list");
   if (!list) return;
   const d = pkgevalFailures;
   const shown = d.packages.filter((p) => !pkgevalFailuresFilter || matchesSearchWords(p.name, pkgevalFailuresFilter));
-  const packages = sortRows(shown, pkgevalFailuresSort, "name");
+  const packages = sortRows(shown, pkgevalFailuresSort, "name").slice(0, PKGEVAL_FAILURES_ROWS);
   const isRecent = (p) => p.failing_since === d.date || (p.days != null && p.days <= PKGEVAL_RECENT_DAYS);
   const sinceHtml = (p) =>
     !p.failing_since
@@ -10901,7 +10927,8 @@ function renderPkgevalFailuresList() {
         pkgevalFailuresSort,
       )}</thead>
       <tbody>${rows || '<tr><td colspan="6">No package matches the filter.</td></tr>'}</tbody>
-    </table>`;
+    </table>
+    ${shown.length > packages.length ? `<p class="package-panel-help">Showing ${packages.length} of ${shown.length.toLocaleString("en-US")} packages; filter to see the rest.</p>` : ""}`;
   bindSortHeaders(list.querySelector("thead"), (col) => {
     pkgevalFailuresSort = nextSort(pkgevalFailuresSort, col, (c) => ["rank", "name", "version", "reason"].includes(c));
     renderPkgevalFailuresList();
@@ -11614,7 +11641,7 @@ function renderPkgevalChanges() {
   const input = panel.querySelector(".pkgeval-failures-filter");
   input.oninput = () => {
     pkgevalChangesFilter = input.value;
-    renderPkgevalChangesList();
+    afterTyping("pkgeval-changes", renderPkgevalChangesList);
   };
   renderPkgevalChangesList();
 }
@@ -13178,8 +13205,10 @@ const ttfxTaskMatches = (t) => matchesSearchWords(t, ttfxTaskFilter);
 
 function setTtfxTaskFilter(q) {
   ttfxTaskFilter = q.trim();
-  populateTtfxTaskList();
-  updateTtfxURL();
+  afterTyping("ttfx", () => {
+    populateTtfxTaskList();
+    updateTtfxURL();
+  });
 }
 
 function populateTtfxTaskList() {
@@ -19090,8 +19119,10 @@ function setCoverageMinLines(val) {
 
 function setCoverageFilter(val) {
   coverageFilter = val.trim();
-  updateCoverageURL();
-  updateCoverageTable();
+  afterTyping("coverage", () => {
+    updateCoverageURL();
+    updateCoverageTable();
+  });
 }
 
 // A directory row's click lists its files
@@ -20309,9 +20340,11 @@ document.addEventListener("keydown", (e) => {
 
 function setRuntimeFilter(q) {
   runtimeFilter = q.trim();
-  updateRuntimeURL();
-  populateRuntimeBenchList();
-  if (runtimeTableView === "benchmarks") updateRuntimeTable();
+  afterTyping("runtime", () => {
+    updateRuntimeURL();
+    populateRuntimeBenchList();
+    if (runtimeTableView === "benchmarks") updateRuntimeTable();
+  });
 }
 
 function toggleRuntimeCategory(cat) {
