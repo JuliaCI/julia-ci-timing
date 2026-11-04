@@ -2271,6 +2271,8 @@
         view.idle = 0;
         view.goal = null;
       };
+      // Hold the turn while the mouse moves anywhere on the page, not just while dragging
+      addEventListener("pointermove", () => (view.idle = 0));
 
       const pointers = new Map();
       let gesture = null;
