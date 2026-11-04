@@ -7111,6 +7111,7 @@ async function refreshData() {
     }
     reloadStaleView(activeTab);
     if (changed.length > 0 && activeTab === "overview") renderOverview();
+    else if (changed.length > 0) renderTabStats(activeTab);
     if (commitResult?.stale && activeTab === "commit") renderCommitView();
   } catch (err) {
     if (err.name !== "AbortError") console.warn("Data refresh failed:", err);
@@ -7547,6 +7548,7 @@ function switchTab(tab, { pushHistory = true } = {}) {
   document.body.classList.toggle("tab-perf-active", tab === "perf");
   const t = TABS[tab];
   t.show?.();
+  renderTabStats(tab);
   if (t.load && !t.data()) loadTabOnce(tab, t.load);
   reloadStaleView(tab);
 
@@ -16563,9 +16565,11 @@ function loadOverviewSources(onSource, keys = null) {
 async function renderOverview() {
   // A source that failed to load is tried again
   const failed = Object.keys(overviewSources || {}).filter((k) => overviewSources[k] === null);
-  if (!overviewSources || overviewStale.size || failed.length) {
+  // A tab's stats strip may have loaded some sources before the Overview was shown
+  const missing = overviewSources ? OVERVIEW_KEYS.filter((k) => !(k in overviewSources)) : [];
+  if (!overviewSources || overviewStale.size || failed.length || missing.length) {
     if (!overviewLoading) {
-      const keys = overviewSources ? [...new Set([...overviewStale, ...failed])] : null;
+      const keys = overviewSources ? [...new Set([...overviewStale, ...failed, ...missing])] : null;
       overviewStale.clear();
       // A refresh keeps showing the earlier figures until each source's new
       // ones arrive
@@ -18048,6 +18052,73 @@ const OVERVIEW_CARDS = [
   { keys: ["coverage"], tab: "ci-coverage", title: "Coverage", make: (s) => overviewCoverageCard(s.coverage) },
   { keys: ["activity"], tab: "activity", title: "Repo Activity", make: (s) => overviewActivityCard(s.activity) },
 ];
+const OVERVIEW_KEYS = [...new Set(OVERVIEW_CARDS.flatMap((c) => c.keys))];
+
+// A tab with a `tab-stats-<tab>` strip shows its Overview card's current
+// figures there, above the tab's own charts
+const tabStatsLoading = new Set();
+let tabStatsCharts = [];
+function renderTabStats(tab) {
+  const card = document.getElementById(`tab-stats-${tab}`) && OVERVIEW_CARDS.find((c) => c.tab === tab);
+  if (!card) return;
+  overviewSources ||= {};
+  const keys = card.keys.filter((k) => (overviewSources[k] == null || overviewStale.has(k)) && !tabStatsLoading.has(k));
+  if (!keys.length) return drawTabStats(tab);
+  for (const k of keys) {
+    tabStatsLoading.add(k);
+    overviewStale.delete(k);
+  }
+  const sources = overviewSources;
+  loadOverviewSources((key, value) => {
+    sources[key] = value;
+    if (overviewSources !== sources) return;
+    if (activeTab === tab) drawTabStats(tab);
+    else if (activeTab === "overview") drawOverview([key]);
+  }, keys).finally(() => keys.forEach((k) => tabStatsLoading.delete(k)));
+  drawTabStats(tab);
+}
+
+function drawTabStats(tab) {
+  const host = document.getElementById(`tab-stats-${tab}`);
+  const card = OVERVIEW_CARDS.find((c) => c.tab === tab);
+  for (const chart of tabStatsCharts) chart.destroy();
+  tabStatsCharts = [];
+  if (!host || !card || card.keys.some((k) => overviewSources?.[k] === undefined)) {
+    if (host) host.hidden = true;
+    return;
+  }
+  const built = card.make(overviewSources);
+  host.innerHTML = built.html;
+  const section = host.firstElementChild;
+  // The tab itself says what it is and draws the history
+  for (const sel of [".overview-card-header", ".overview-card-desc", ".overview-spark"]) section.querySelector(sel)?.remove();
+  // The page header already says when the data was updated
+  for (const dt of section.querySelectorAll(".overview-rows dt")) {
+    if (dt.textContent === "Data updated") {
+      dt.nextElementSibling?.remove();
+      dt.remove();
+    }
+  }
+  for (const dd of section.querySelectorAll(".overview-rows dd")) dd.title = dd.textContent.replace(/\s+/g, " ").trim();
+  // A card whose top is only a headline figure leaves room for its rows in two
+  // columns, filled down the first and then the second
+  const labels = [...section.querySelectorAll(".overview-rows > dt")];
+  if (!section.querySelector(".overview-donut, .overview-line-legend") && labels.every((dt) => dt.nextElementSibling?.tagName === "DD")) {
+    const rows = Math.ceil(labels.length / 2);
+    labels.forEach((dt, i) => {
+      const col = 2 * Math.floor(i / rows) + 1;
+      dt.style.gridArea = `${(i % rows) + 1} / ${col}`;
+      dt.nextElementSibling.style.gridArea = `${(i % rows) + 1} / ${col + 1}`;
+    });
+    section.classList.add("tab-stats-spill");
+  }
+  section.classList.add("tab-stats-card");
+  host.hidden = false;
+  for (const { id, kind, spec } of built.charts) {
+    const canvas = document.getElementById(id);
+    if (canvas && kind === "donut") tabStatsCharts.push(overviewDonutChart(canvas, spec));
+  }
+}
 
 // The whole card opens its tab; links inside it, and a click that ends a
 // text selection, keep their own meaning. Not on a touchscreen, where a tap
@@ -22441,6 +22512,7 @@ function applyTheme() {
 
   if (usageCharts.length) drawUsageView();
   if (activeTab === "overview" && overviewSources) drawOverview();
+  else if (document.getElementById(`tab-stats-${activeTab}`)) drawTabStats(activeTab);
 }
 function cycleTheme() {
   const order = ["system", "dark", "light"];

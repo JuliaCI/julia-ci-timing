@@ -5377,3 +5377,65 @@ body.rr-page {
   padding: 40px 0;
   text-align: center;
 }
+
+/* A tab's current figures from its Overview card, in a strip above its charts */
+.tab-stats {
+  flex: none;
+  padding: 10px 16px 0;
+}
+.tab-stats-card {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px 40px;
+  cursor: default;
+}
+.tab-stats-card:hover {
+  background: var(--color-canvas-default);
+  box-shadow: none;
+}
+.tab-stats-card .overview-card-top {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 28px;
+}
+.tab-stats-card .overview-headline-figure {
+  flex: 0 1 auto;
+}
+.tab-stats-card .overview-figure {
+  font-size: 36px;
+}
+/* One line a row; the full value shows on hover */
+.tab-stats-card .overview-rows {
+  row-gap: 4px;
+}
+.tab-stats-card .overview-rows dd {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Also clips a value that holds a list */
+  line-height: 1.4;
+  max-height: 1.4em;
+}
+.tab-stats-spill .overview-rows {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  column-gap: 12px 32px;
+}
+@media (max-width: 1100px) {
+  .tab-stats-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 768px) {
+  .tab-stats {
+    padding: 8px 10px 0;
+  }
+  .tab-stats-card .overview-card-top {
+    flex-wrap: wrap;
+  }
+  /* On a phone the figures alone, so the chart stays in view */
+  .tab-stats-card .overview-rows {
+    display: none;
+  }
+}
