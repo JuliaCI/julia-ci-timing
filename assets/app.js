@@ -19481,7 +19481,10 @@ function updateCoverageCharts() {
       .filter((s) => panel.all || s.label !== "All")
       .map((s) => ({
         label: s.label,
-        data: shown.map((i, k) => ({ x: xs[k], y: panel.value(s, i), i })).filter((p) => p.y != null),
+        // A point for every report, null where the group has none, so the
+        // hover's index picks the same report in every series
+        data: shown.map((i, k) => ({ x: xs[k], y: panel.value(s, i), i })),
+        spanGaps: true,
         borderColor: s.color,
         backgroundColor: s.color,
         borderWidth: s.width,
