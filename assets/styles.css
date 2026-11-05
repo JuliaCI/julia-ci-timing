@@ -1755,14 +1755,59 @@ th.sorted .sort-indicator {
 .backlog-now-title {
   grid-column: span 2;
 }
-.backlog-now-panel-bare {
-  grid-template-columns: minmax(80px, 1fr) max-content max-content;
+.backlog-load-panel {
+  display: grid;
+  /* One scale on both sides of the line: each track's share is its largest bar */
+  grid-template-columns: max-content minmax(0, var(--running-fr)) minmax(0, var(--queue-fr)) repeat(6, max-content);
+  column-gap: 10px;
+  flex: 1 1 100%;
+  align-items: stretch;
 }
-.backlog-now-panel-bare .backlog-now-title {
-  grid-column: span 1;
+.backlog-load-running,
+.backlog-load-queue,
+.backlog-load-running-head,
+.backlog-load-queue-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 1.5px 0;
 }
-.backlog-now-panel-bare .backlog-now-label {
-  display: none;
+.backlog-load-running,
+.backlog-load-running-head {
+  justify-content: flex-end;
+  margin-right: -10px;
+  padding-right: 3px;
+}
+.backlog-load-queue,
+.backlog-load-queue-head {
+  border-left: 1px solid var(--color-fg-muted);
+  padding-left: 3px;
+}
+.backlog-load-running .backlog-now-bar {
+  flex-direction: row-reverse;
+}
+.backlog-load-running .backlog-now-seg:first-child {
+  border-radius: 0;
+}
+.backlog-load-running .backlog-now-seg:last-child {
+  border-radius: 4px 0 0 4px;
+}
+.backlog-now-note {
+  flex-basis: 100%;
+  color: var(--color-fg-subtle);
+}
+@media (max-width: 640px) {
+  .backlog-load-panel {
+    grid-template-columns: max-content minmax(0, var(--running-fr)) minmax(0, var(--queue-fr)) repeat(3, max-content);
+    column-gap: 6px;
+  }
+  .backlog-load-wide {
+    display: none;
+  }
+  .backlog-load-running,
+  .backlog-load-running-head {
+    margin-right: -6px;
+  }
 }
 .backlog-now-key {
   color: var(--color-fg-subtle);
@@ -1869,6 +1914,21 @@ th.sorted .sort-indicator {
 .backlog-now-seg[data-priority="-1"],
 .backlog-now-swatch[data-priority="-1"] {
   background: color-mix(in oklab, var(--pool) 40%, var(--color-canvas-default));
+  color: var(--color-fg-default);
+}
+.backlog-now-seg[data-priority="other"],
+.backlog-now-swatch[data-priority="other"] {
+  background: color-mix(in oklab, var(--pool) 20%, var(--color-canvas-default));
+  color: var(--color-fg-default);
+}
+.backlog-now-seg[data-priority="blocked"],
+.backlog-now-swatch[data-priority="blocked"] {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--pool) 35%, var(--color-canvas-default)) 0 3px,
+    var(--color-canvas-default) 3px 6px
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--pool) 45%, var(--color-canvas-default));
   color: var(--color-fg-default);
 }
 .backlog-now-swatch {

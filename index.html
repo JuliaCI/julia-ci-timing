@@ -840,15 +840,30 @@
                 <option value="julia-ci">Master (julia-ci)</option>
                 <option value="julia-pr">Pull requests (julia-pr)</option>
               </select>
+              <select
+                class="time-select"
+                id="backlog-queue"
+                onchange="setBacklogQueue(this.value)"
+                aria-label="Jobs"
+              >
+                <option value="all" selected>Build and test</option>
+                <option value="build">Build jobs</option>
+                <option value="test">Test jobs</option>
+              </select>
               <span class="agents-summary" id="backlog-summary"></span>
               <span class="agents-help"
                 >Master and pull request jobs ready to run but with no agent
-                yet, per pool (queue, OS and architecture), kept for 60 days.
-                Per slot divides by the slots seen in the last 30 days; the
-                tooltip names pools that share their hosts' slots. A pool
-                whose jobs waited at more than one Buildkite priority (high
-                for releases and backports, or set by a pull request label)
-                gets a dashed or dotted line for each.</span
+                yet, per platform (OS and architecture), kept for 60 days. A
+                platform's build and test jobs use the same machines. The bars
+                show now: jobs running left of the line, and right of it the
+                jobs queued, then those blocked until another job of their build
+                finishes, which the chart does not count. Per slot divides by
+                the slots seen in the last 30 days, counting each machine once.
+                A queue that can use only some of the machines has its own count
+                in brackets, and the demand is still the whole platform's.
+                A platform whose jobs waited at more than one Buildkite priority
+                (high for releases and backports, or set by a pull request
+                label) gets a dashed or dotted line for each.</span
               >
             </div>
             <div class="backlog-now" id="backlog-now" hidden></div>

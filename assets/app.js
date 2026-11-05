@@ -1466,15 +1466,73 @@ let backlogPromise = null;
 let backlogChart = null;
 let backlogMetric = "per-slot";
 let backlogPipeline = "all";
+let backlogQueue = "all";
 const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR", other: "other pipelines" };
 
-// A pool's series for one pipeline, or for all of them
-function backlogSeries(p, pipeline = backlogPipeline) {
-  if (pipeline === "all") return p;
-  const s = p.by_pipeline && p.by_pipeline[pipeline];
+// Several series, or several pools' `now`, as one: counts add up, the longest
+// wait is the longest of any, and the same goes for each pipeline and priority
+function backlogMerged(parts) {
+  const out = {};
+  for (const key of ["waiting", "running", "blocked", "oldest_wait_s"]) {
+    if (parts[0][key] === undefined) continue;
+    const op = key === "oldest_wait_s" ? Math.max : (a, b) => a + b;
+    out[key] = Array.isArray(parts[0][key])
+      ? parts[0][key].map((_, i) => parts.reduce((acc, s) => op(acc, s[key][i]), 0))
+      : parts.reduce((acc, s) => op(acc, s[key]), 0);
+  }
+  for (const field of ["by_pipeline", "by_priority"]) {
+    const keys = new Set(parts.flatMap((s) => Object.keys(s[field] || {})));
+    if (keys.size)
+      out[field] = Object.fromEntries([...keys].map((k) => [k, backlogMerged(parts.filter((s) => s[field]?.[k]).map((s) => s[field][k]))]));
+  }
+  return out;
+}
+
+// The pools as platforms, the busiest in the window first. A platform's build
+// and test jobs compete for one set of machines, so it counts each machine once.
+// Jobs that name no architecture keep a row of their own.
+const backlogPlatformsOf = new WeakMap();
+function backlogPlatforms(d) {
+  if (backlogPlatformsOf.has(d)) return backlogPlatformsOf.get(d);
+  const byKey = new Map();
+  for (const p of d.pools) {
+    const key = p.arch ? `${p.os}/${p.arch}` : backlogPoolLabel(p);
+    if (!byKey.has(key)) byKey.set(key, { label: key, os: p.os, arch: p.arch, pools: [] });
+    byKey.get(key).pools.push(p);
+  }
+  const platforms = [...byKey.values()].map((g) => {
+    const hosts = [...new Set(g.pools.flatMap((p) => p.hosts || []))];
+    const seen = hosts.reduce((acc, h) => acc + (d.host_slots?.[h] || 0), 0);
+    return {
+      ...g,
+      ...backlogMerged(g.pools),
+      queue: g.pools.map((p) => p.queue).join(" "),
+      hosts,
+      slots: seen || Math.max(0, ...g.pools.map((p) => p.slots || 0)) || null,
+      now: backlogMerged(g.pools.map((p) => p.now)),
+    };
+  });
+  for (const g of platforms)
+    g.shared_with = platforms.filter((o) => o !== g && o.hosts.some((h) => g.hosts.includes(h))).map((o) => ({ label: o.label }));
+  platforms.sort((a, b) => Math.max(...b.waiting) - Math.max(...a.waiting));
+  backlogPlatformsOf.set(d, platforms);
+  return platforms;
+}
+
+// A platform's series for one queue and pipeline, or for all of them
+function backlogSeries(g, pipeline = backlogPipeline, queue = backlogQueue) {
+  const pools = queue === "all" ? g.pools : g.pools.filter((p) => p.queue === queue);
+  const base = queue === "all" ? g : pools.length ? backlogMerged(pools) : null;
+  const s = !base || pipeline === "all" ? base : base.by_pipeline?.[pipeline];
   if (s) return s;
-  const zeros = p.waiting.map(() => 0);
+  const zeros = g.waiting.map(() => 0);
   return { waiting: zeros, running: zeros, oldest_wait_s: zeros };
+}
+
+// The slots a queue's jobs can use, which can be fewer than the platform's:
+// some machines serve only one queue
+function backlogSlots(g, queue = backlogQueue) {
+  return queue === "all" ? g.slots : g.pools.find((p) => p.queue === queue)?.slots || null;
 }
 
 // Buildkite job priorities (set per build by julia-buildkite), highest first.
@@ -1502,15 +1560,15 @@ function backlogSplit(p, j, key = "waiting", format = String) {
     .map(([pl, s]) => `${format(s[key][j])} ${BACKLOG_PIPELINE_SHORT[pl] || pl}`)
     .join(", ");
 }
-// Pools drawn at most, the busiest first; one colour each
+// Platforms drawn at most, the busiest first; one colour each
 const BACKLOG_MAX_POOLS = 8;
 const BACKLOG_COLORS = {
   light: ["#bc4c00", "#0969da", "#8250df", "#1a7f37", "#bf3989", "#9a6700", "#0550ae", "#656d76"],
   dark: ["#db6d28", "#388bfd", "#a371f7", "#3fb950", "#db61a2", "#d29922", "#79c0ff", "#8b949e"],
 };
 
-// The pools' own colours: the backlog palette, teal in place of its grey, then
-// seven more for the quieter pools, which are told apart by name as much as hue
+// The platforms' own colours: the backlog palette, teal in place of its grey, then
+// seven more for the quieter ones, which are told apart by name as much as hue
 const BACKLOG_POOL_COLORS = {
   light: [...BACKLOG_COLORS.light.slice(0, 7), "#1b7c83",
           "#cf222e", "#8a5a2b", "#54aeff", "#4d8a00", "#c297ff", "#fb8f44", "#3e1f79"],
@@ -1526,12 +1584,12 @@ function inkOn(hex) {
   return (y + 0.05) / 0.05 > 1.05 / (y + 0.05) ? "#0b0b0b" : "#ffffff";
 }
 
-// Each pool owns a colour in the chart and the bars alike, the busiest in the
-// window (the API sorts them so) taking the most distinct. The filter and the
-// selects do not change who owns which.
+// Each platform owns a colour in the chart and the bars alike, the busiest in the
+// window taking the most distinct. The filter and the selects do not change who
+// owns which.
 const backlogColorIndex = new WeakMap();
 function backlogPoolColor(d, p, theme) {
-  if (!backlogColorIndex.has(d)) backlogColorIndex.set(d, new Map(d.pools.map((q, i) => [q, i])));
+  if (!backlogColorIndex.has(d)) backlogColorIndex.set(d, new Map(backlogPlatforms(d).map((q, i) => [q, i])));
   const colors = BACKLOG_POOL_COLORS[theme];
   return colors[backlogColorIndex.get(d).get(p) % colors.length];
 }
@@ -1541,10 +1599,10 @@ function backlogPoolColor(d, p, theme) {
 const backlogPoolShown = (p) =>
   matchesSearchWords([p.queue, p.os, p.arch, ...(p.hosts || [])].filter(Boolean).join(" "), workersFilter);
 
-const backlogPoolLabel = (p) => `${p.queue || "(no queue)"} ${[p.os, p.arch].filter(Boolean).join("/")}`.trim();
+const backlogPoolLabel = (p) => p.label || `${p.queue || "(no queue)"} ${[p.os, p.arch].filter(Boolean).join("/")}`.trim();
 
-// "20 slots", or "5 slots shared with build macos/aarch64" when the pool's hosts
-// also run other pools' jobs, so its slots are free only while those are idle
+// "20 slots", or "5 slots shared with build macos/aarch64" when the hosts also
+// run jobs of others, so its slots are free only while those are idle
 function backlogSlotsText(p) {
   if (!p.slots) return "";
   const shared = (p.shared_with || []).map(backlogPoolLabel);
@@ -1559,6 +1617,11 @@ function formatWait(seconds) {
 
 function setBacklogPipeline(value) {
   backlogPipeline = ["all", "julia-ci", "julia-pr"].includes(value) ? value : "all";
+  if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
+}
+
+function setBacklogQueue(value) {
+  backlogQueue = ["all", "build", "test"].includes(value) ? value : "all";
   if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
 }
 
@@ -1596,25 +1659,24 @@ async function renderBacklogSection() {
     }
     return;
   }
-  const now = d.pools
-    .filter(backlogPoolShown)
-    .map((p) => ({ p, n: p.waiting[p.waiting.length - 1], w: p.oldest_wait_s[p.oldest_wait_s.length - 1] }))
+  const platforms = backlogPlatforms(d).filter(backlogPoolShown);
+  const now = platforms
+    .map((p) => ({ p, n: p.now.waiting, w: p.now.oldest_wait_s }))
     .filter((x) => x.n > 0);
-  renderBacklogNow(d, d.pools.filter(backlogPoolShown));
+  const blocked = platforms.reduce((s, p) => s + p.now.blocked, 0);
+  renderBacklogNow(d, platforms);
   summaryEl.innerHTML = now.length
-    ? `Now: <strong>${now.reduce((s, x) => s + x.n, 0)}</strong> waiting in ${now.length} pool${now.length === 1 ? "" : "s"}, ` +
-      `the longest for ${formatWait(Math.max(...now.map((x) => x.w)))}`
-    : "Now: no jobs waiting";
+    ? `Now: <strong>${now.reduce((s, x) => s + x.n, 0)}</strong> waiting on ${now.length} platform${now.length === 1 ? "" : "s"}, ` +
+      `the longest for ${formatWait(Math.max(...now.map((x) => x.w)))}, ` +
+      `<strong>${blocked}</strong> more blocked on dependencies, as of ${d.generated_at.slice(11, 16)} UTC`
+    : `Now: no jobs waiting, ${blocked} blocked on dependencies, as of ${d.generated_at.slice(11, 16)} UTC`;
   renderBacklogChart(d);
 }
 
-// Now, per pool, two bar panels split by priority: the jobs waiting, and the
-// demand per slot (running and waiting jobs over the pool's slots) with a mark
-// at 1x, past which jobs queue. A row's title has the pipeline split.
 function renderBacklogNow(d, pools) {
   const el = document.getElementById("backlog-now");
   if (!el) return;
-  const html = backlogNowHtml(d, pools);
+  const html = backlogLoadHtml(d, pools);
   el.hidden = !html;
   if (el.hidden) return;
   el.innerHTML = html;
@@ -1625,106 +1687,168 @@ function renderBacklogNow(d, pools) {
   }
 }
 
-// The panels' HTML, "" with nothing waiting or running. Without the waiting
-// panel, the demand panel stands alone, its rows named and most loaded first.
-function backlogNowHtml(d, pools, { waitingPanel = true, legend = "Now, in the colours of the chart below and shaded by priority:" } = {}) {
-  const at = (xs) => (xs && xs.length ? xs[xs.length - 1] : 0);
-  const prios = new Set();
-  const rows = pools.map((p) => {
-    const parts = Object.entries(p.by_priority || {})
-      .map(([pr, s]) => ({ pr, waiting: at(s.waiting), running: at(s.running), oldest: at(s.oldest_wait_s) }))
-      .filter((x) => x.waiting > 0 || x.running > 0)
-      .sort((a, b) => b.pr - a.pr);
-    if (!parts.length) parts.push({ pr: "0", waiting: at(p.waiting), running: at(p.running), oldest: at(p.oldest_wait_s) });
-    return { p, parts, waiting: at(p.waiting), running: at(p.running), oldest: at(p.oldest_wait_s) };
-  });
-  const waitingRows = rows.filter((r) => r.waiting > 0).sort((a, b) => b.waiting - a.waiting);
-  // Row for row with the waiting panel, so its rows line up without names;
-  // pools only running come after
-  const demandRows = [...waitingRows, ...rows.filter((r) => r.waiting === 0 && r.running > 0 && r.p.slots)].map((r) => ({
-    ...r,
-    demand: r.p.slots ? (r.waiting + r.running) / r.p.slots : null,
-  }));
-  if (!demandRows.length) return "";
-  if (!waitingPanel) demandRows.sort((a, b) => (b.demand ?? -1) - (a.demand ?? -1));
-  const fmtX = (x) => `${x.toFixed(1)}×`;
-  const bar = (segs, width, marker) =>
-    `<span class="backlog-now-track">${marker === null ? "" : `<span class="backlog-now-mark" style="left:${marker.toFixed(1)}%"></span>`}` +
-    `<span class="backlog-now-bar" style="width:${width.toFixed(1)}%">${segs}</span></span>`;
-  const seg = (pr, n, tip) => {
-    prios.add(pr);
-    return `<span class="backlog-now-seg" data-priority="${escapeHtml(pr)}" style="flex-grow:${n}" title="${escapeHtml(tip)}">${n}</span>`;
-  };
-  // Each row in its pool's colour from the chart, for either theme
-  const label = (r, text) => {
-    const light = backlogPoolColor(d, r.p, "light");
-    const dark = backlogPoolColor(d, r.p, "dark");
-    const colors = `--pool-light:${light};--pool-dark:${dark};--pool-ink-light:${inkOn(light)};--pool-ink-dark:${inkOn(dark)}`;
-    return (
-      `<div class="backlog-now-row" style="${colors}" title="${escapeHtml(text)}">` +
-      `<span class="backlog-now-label">${escapeHtml(backlogPoolLabel(r.p))}</span>`
-    );
-  };
-  const maxWaiting = Math.max(1, ...waitingRows.map((r) => r.waiting));
-  // Pools only running get an empty row too, as the demand panel's rows have no names
-  const waitingHtml = demandRows.map((r) => {
-    if (r.waiting === 0)
-      return label(r, `${backlogPoolLabel(r.p)}: none waiting`) + bar("", 0, null) + `<span class="backlog-now-n">0</span><span class="backlog-now-aux">–</span></div>`;
-    const split = backlogSplit(r.p, r.p.waiting.length - 1);
-    const segs = r.parts
-      .filter((x) => x.waiting > 0)
-      .map((x) => seg(x.pr, x.waiting, `${x.waiting} ${backlogPriorityName(x.pr)} priority waiting, the longest for ${formatWait(x.oldest)}`))
-      .join("");
-    return (
-      label(r, `${backlogPoolLabel(r.p)}: ${r.waiting} waiting${split ? ` (${split})` : ""}, the longest for ${formatWait(r.oldest)}`) +
-      bar(segs, (100 * r.waiting) / maxWaiting, null) +
-      `<span class="backlog-now-n">${r.waiting}</span><span class="backlog-now-aux">${formatWait(r.oldest)}</span></div>`
-    );
-  });
-  const maxDemand = Math.max(1, ...demandRows.map((r) => r.demand || 0));
-  const demandHtml = demandRows.map((r) => {
-    if (r.demand === null)
-      return label(r, `${backlogPoolLabel(r.p)}: no slots seen`) + `<span></span><span class="backlog-now-n">–</span><span></span></div>`;
-    const segs = r.parts
-      .map((x) => seg(x.pr, x.waiting + x.running, `${backlogPriorityName(x.pr)} priority: ${x.running} running, ${x.waiting} waiting`))
-      .join("");
-    return (
-      label(
-        r,
-        `${backlogPoolLabel(r.p)}: ${r.running} running and ${r.waiting} waiting for ${backlogSlotsText(r.p)}` +
-          (r.waiting ? `, the longest for ${formatWait(r.oldest)}` : ""),
-      ) +
-      bar(segs, (100 * r.demand) / maxDemand, 100 / maxDemand) +
-      `<span class="backlog-now-n">${fmtX(r.demand)}</span><span class="backlog-now-aux">${r.p.slots}</span></div>`
-    );
-  });
-  const legendHtml = [...prios]
-    .sort((a, b) => b - a)
-    .map((pr) => `<span><span class="backlog-now-swatch" data-priority="${escapeHtml(pr)}"></span>${backlogPriorityName(pr)}</span>`)
-    .join("");
-  const panel = (title, cols, body) =>
-    body.length
-      ? `<div class="backlog-now-panel"><div class="backlog-now-head"><span class="backlog-now-title">${title}</span>` +
-        `<span class="backlog-now-n">${cols[0]}</span><span class="backlog-now-aux">${cols[1]}</span></div>${body.join("")}</div>`
-      : "";
+// The start of a bar row, in its pool's colour from the chart for either theme
+function backlogNowRow(d, p, title) {
+  const light = backlogPoolColor(d, p, "light");
+  const dark = backlogPoolColor(d, p, "dark");
+  const colors = `--pool-light:${light};--pool-dark:${dark};--pool-ink-light:${inkOn(light)};--pool-ink-dark:${inkOn(dark)}`;
   return (
-    `<div class="backlog-now-legend">${legend} ${legendHtml}</div>` +
-    (waitingPanel ? panel("Jobs waiting", ["jobs", "longest"], waitingHtml) : "") +
-    panel("Demand per slot <span class=\"backlog-now-key\">(running + waiting jobs; the line is 1×)</span>", ["demand", "slots"], demandHtml)
+    `<div class="backlog-now-row" style="${colors}" title="${escapeHtml(title)}">` +
+    `<span class="backlog-now-label">${escapeHtml(backlogPoolLabel(p))}</span>`
   );
 }
 
-// Counts go in the bars only where they fit; each is in its segment's title too.
-// When the demand panel sits beside the waiting panel, its rows line up with
-// that panel's, so it leaves out the pool names.
+function backlogNowSeg(key, n, tip) {
+  return `<span class="backlog-now-seg" data-priority="${escapeHtml(key)}" style="flex-grow:${n}" title="${escapeHtml(tip)}">${n}</span>`;
+}
+
+// The pool's priorities now with jobs in `keys`, highest first
+function backlogNowParts(p, keys) {
+  return Object.entries(p.now.by_priority || {})
+    .map(([pr, s]) => ({ pr, ...s }))
+    .filter((x) => keys.some((k) => x[k] > 0))
+    .sort((a, b) => b.pr - a.pr);
+}
+
+// "294 master, 634 PR" of the pool now, leaving out pipelines with none
+function backlogNowSplit(p, key) {
+  return Object.entries(p.now.by_pipeline || {})
+    .filter(([, s]) => s[key] > 0)
+    .map(([pl, s]) => `${s[key]} ${BACKLOG_PIPELINE_SHORT[pl] || pl}`)
+    .join(", ");
+}
+
+function backlogNowLegend(text, keys) {
+  const names = { other: "other pipelines", blocked: "blocked on dependencies" };
+  const order = (k) => (k === "other" ? -2 : k === "blocked" ? -3 : Number(k));
+  const items = [...keys]
+    .sort((a, b) => order(b) - order(a))
+    .map((k) => `<span><span class="backlog-now-swatch" data-priority="${escapeHtml(k)}"></span>${names[k] || backlogPriorityName(k)}</span>`)
+    .join("");
+  return `<div class="backlog-now-legend">${text} ${items}</div>`;
+}
+
+// Now, per platform on one scale: the jobs running left of the line, and right of it
+// the jobs queued for an agent, then those whose dependencies have not finished.
+function backlogLoadHtml(d, pools) {
+  const rows = pools
+    .map((p) => ({ p, ...p.now, other: p.now.by_pipeline?.other?.running || 0 }))
+    .filter((r) => r.waiting > 0 || (r.p.arch && (r.running > 0 || r.blocked > 0)))
+    .sort((a, b) => b.waiting - a.waiting || b.blocked - a.blocked || b.running - a.running);
+  if (!rows.length) return "";
+  const maxRunning = Math.max(1, ...rows.map((r) => r.running));
+  const maxQueue = Math.max(1, ...rows.map((r) => r.waiting + r.blocked));
+  const keys = new Set();
+  const seg = (key, n, tip) => {
+    keys.add(key);
+    return backlogNowSeg(key, n, tip);
+  };
+  const bar = (segs, pct) => (segs ? `<span class="backlog-now-bar" style="width:${pct.toFixed(1)}%">${segs}</span>` : "");
+  const sharing = rows.filter((r) => r.p.shared_with.length).map((r) => r.p.label);
+  const body = rows.map((r) => {
+    const running =
+      backlogNowParts(r.p, ["running"])
+        .map((x) => seg(x.pr, x.running, `${x.running} ${backlogPriorityName(x.pr)} priority running`))
+        .join("") + (r.other ? seg("other", r.other, `${r.other} running for other pipelines`) : "");
+    const queued =
+      backlogNowParts(r.p, ["waiting"])
+        .map((x) => seg(x.pr, x.waiting, `${x.waiting} ${backlogPriorityName(x.pr)} priority queued, the longest for ${formatWait(x.oldest_wait_s)}`))
+        .join("") + (r.blocked ? seg("blocked", r.blocked, `${r.blocked} blocked on dependencies`) : "");
+    const count = (key) => {
+      const split = backlogNowSplit(r.p, key);
+      return `${r[key]}${split ? ` (${split})` : ""}`;
+    };
+    const demand = r.p.slots ? (r.waiting + r.running) / r.p.slots : null;
+    // Launch jobs are small and run on one machine, so its share says nothing
+    const fewer = r.p.pools.filter((q) => q.queue !== "launch" && q.slots && (q.hosts || []).length < r.p.hosts.length);
+    const slotsText = !r.p.slots ? "–" : `${r.p.slots}${fewer.length ? ` (${fewer.map((q) => `${q.queue} ${q.slots}`).join(", ")})` : ""}`;
+    const title =
+      `${backlogPoolLabel(r.p)}: ${count("running")} running, ${count("waiting")} queued` +
+      (r.waiting ? ` (the longest for ${formatWait(r.oldest_wait_s)})` : "") +
+      `, ${count("blocked")} blocked on dependencies` +
+      (r.p.slots ? `, for ${backlogSlotsText(r.p)}` : "") +
+      r.p.pools
+        .map((q) => `\n${q.queue}: ${q.now.running} running${q.slots ? ` of ${q.slots} slots` : ""}, ${q.now.waiting} queued` + (q.now.waiting ? ` (the longest for ${formatWait(q.now.oldest_wait_s)})` : "") + `, ${q.now.blocked} blocked`)
+        .join("");
+    return (
+      backlogNowRow(d, r.p, title) +
+      `<span class="backlog-load-running">${bar(running, (100 * r.running) / maxRunning)}</span>` +
+      `<span class="backlog-load-queue">${bar(queued, (100 * (r.waiting + r.blocked)) / maxQueue)}</span>` +
+      `<span class="backlog-now-n">${r.running}</span>` +
+      `<span class="backlog-now-n">${r.waiting}</span>` +
+      `<span class="backlog-now-aux">${r.blocked}</span>` +
+      `<span class="backlog-now-aux backlog-load-wide">${r.waiting ? formatWait(r.oldest_wait_s) : "–"}</span>` +
+      `<span class="backlog-now-n backlog-load-wide">${demand === null ? "–" : `${demand.toFixed(1)}×`}</span>` +
+      `<span class="backlog-now-aux backlog-load-wide">${slotsText}</span></div>`
+    );
+  });
+  const head =
+    `<div class="backlog-now-head"><span></span><span class="backlog-load-running-head">Running</span><span class="backlog-load-queue-head">Waiting</span>` +
+    `<span class="backlog-now-n">running</span><span class="backlog-now-n">queued</span><span class="backlog-now-aux">blocked</span>` +
+    `<span class="backlog-now-aux backlog-load-wide">longest</span><span class="backlog-now-n backlog-load-wide" title="Running and queued jobs per slot">demand</span><span class="backlog-now-aux backlog-load-wide">slots</span></div>`;
+  return (
+    backlogNowLegend("Now, in the colours of the chart below and shaded by priority:", keys) +
+    `<div class="backlog-load-panel" style="--running-fr:${maxRunning}fr;--queue-fr:${maxQueue}fr">${head}${body.join("")}</div>` +
+    (sharing.length ? `<div class="backlog-now-note">${escapeHtml(sharing.join(" and "))} use some of the same machines, so their slots overlap.</div>` : "")
+  );
+}
+
+// The Overview's panel: demand per slot now (running and queued jobs over the
+// pool's slots), most loaded first, with a mark at 1x, past which jobs queue.
+function backlogDemandHtml(d, pools) {
+  const rows = pools
+    .map((p) => ({ p, ...p.now, other: p.now.by_pipeline?.other?.running || 0 }))
+    .filter((r) => r.waiting > 0 || (r.running > 0 && r.p.slots))
+    .map((r) => ({ ...r, demand: r.p.slots ? (r.waiting + r.running) / r.p.slots : null }))
+    .sort((a, b) => (b.demand ?? -1) - (a.demand ?? -1));
+  if (!rows.length) return "";
+  const maxDemand = Math.max(1, ...rows.map((r) => r.demand || 0));
+  const keys = new Set();
+  const body = rows.map((r) => {
+    if (r.demand === null)
+      return backlogNowRow(d, r.p, `${backlogPoolLabel(r.p)}: no slots seen`) + `<span></span><span class="backlog-now-n">–</span><span></span></div>`;
+    const seg = (key, n, tip) => {
+      keys.add(key);
+      return backlogNowSeg(key, n, tip);
+    };
+    const segs =
+      backlogNowParts(r.p, ["waiting", "running"])
+        .map((x) => seg(x.pr, x.waiting + x.running, `${backlogPriorityName(x.pr)} priority: ${x.running} running, ${x.waiting} waiting`))
+        .join("") + (r.other ? seg("other", r.other, `${r.other} running for other pipelines`) : "");
+    return (
+      backlogNowRow(
+        d,
+        r.p,
+        `${backlogPoolLabel(r.p)}: ${r.running} running and ${r.waiting} waiting for ${backlogSlotsText(r.p)}` +
+          (r.waiting ? `, the longest for ${formatWait(r.oldest_wait_s)}` : ""),
+      ) +
+      `<span class="backlog-now-track"><span class="backlog-now-mark" style="left:${(100 / maxDemand).toFixed(1)}%"></span>` +
+      `<span class="backlog-now-bar" style="width:${((100 * r.demand) / maxDemand).toFixed(1)}%">${segs}</span></span>` +
+      `<span class="backlog-now-n">${r.demand.toFixed(1)}×</span><span class="backlog-now-aux">${r.p.slots}</span></div>`
+    );
+  });
+  return (
+    backlogNowLegend("Now, shaded by priority:", keys) +
+    `<div class="backlog-now-panel"><div class="backlog-now-head"><span class="backlog-now-title">Demand per slot <span class="backlog-now-key">(running + waiting jobs; the line is 1×)</span></span>` +
+    `<span class="backlog-now-n">demand</span><span class="backlog-now-aux">slots</span></div>${body.join("")}</div>`
+  );
+}
+
+// Counts go in the bars only where they fit; each is in its segment's title too
 let backlogNowObserver = null;
 function fitBacklogNow(el) {
-  const panels = el.querySelectorAll(".backlog-now-panel");
-  const sideBySide = panels.length > 1 && panels[0].offsetTop === panels[1].offsetTop;
-  panels.forEach((p, i) => p.classList.toggle("backlog-now-panel-bare", sideBySide && i > 0));
-  for (const s of el.querySelectorAll(".backlog-now-seg")) {
-    s.classList.remove("backlog-now-seg-bare");
-    if (s.scrollWidth > s.clientWidth) s.classList.add("backlog-now-seg-bare");
+  const segs = [...el.querySelectorAll(".backlog-now-seg")];
+  for (const s of segs) s.classList.remove("backlog-now-seg-bare");
+  // Hiding a count resizes its neighbours, which may then no longer fit theirs
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const s of segs) {
+      if (!s.classList.contains("backlog-now-seg-bare") && s.scrollWidth > s.clientWidth) {
+        s.classList.add("backlog-now-seg-bare");
+        changed = true;
+      }
+    }
   }
 }
 
@@ -1736,8 +1860,8 @@ function renderBacklogChart(d) {
   const stepMs = d.step_s * 1000;
   const metric = backlogMetric;
   // Pools that never queued more than a few jobs in the window add nothing but legend
-  const pools = d.pools
-    .filter((p) => backlogPoolShown(p) && Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || p.slots))
+  const pools = backlogPlatforms(d)
+    .filter((p) => backlogPoolShown(p) && Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || backlogSlots(p)))
     .slice(0, BACKLOG_MAX_POOLS);
   // A filter that leaves no pool to draw hides the whole section
   document.getElementById("backlog-section").hidden = workersFilter !== "" && pools.length === 0;
@@ -1745,7 +1869,7 @@ function renderBacklogChart(d) {
     metric === "oldest"
       ? s.oldest_wait_s.map((w) => w / 3600)
       : metric === "per-slot"
-        ? s.waiting.map((n) => n / p.slots)
+        ? s.waiting.map((n) => n / backlogSlots(p))
         : s.waiting;
   const datasets = [];
   // Per pool, the indices of its datasets, so its legend entry toggles them all
@@ -1763,7 +1887,7 @@ function renderBacklogChart(d) {
         label: backlogPoolLabel(p) + (pr === null ? "" : `, ${backlogPriorityName(pr)} priority`),
         data: values(p, x).map((y, j) => ({ x: t0 + j * stepMs, y })),
         _pool: p,
-        _series: pr === null ? null : x,
+        _series: pr === null && s === p ? null : x,
         borderColor: color,
         backgroundColor: color,
         borderDash: pr === null ? [] : (BACKLOG_PRIORITIES[pr] || { dash: [1, 2] }).dash,
@@ -1796,7 +1920,7 @@ function renderBacklogChart(d) {
               const waitSplit = s === p ? backlogSplit(p, j) : "";
               const runSplit = s === p ? backlogSplit(p, j, "running") : "";
               const waiting = s.waiting[j] ? `${s.waiting[j]} waiting${waitSplit ? ` (${waitSplit})` : ""}, longest ${formatWait(s.oldest_wait_s[j])}` : "none waiting";
-              return `${item.dataset.label}: ${waiting}; ${s.running[j]} running${runSplit ? ` (${runSplit})` : ""}${p.slots ? ` of ${p.slots}` : ""}`;
+              return `${item.dataset.label}: ${waiting}; ${s.running[j]} running${runSplit ? ` (${runSplit})` : ""}${backlogSlots(p) ? ` of ${backlogSlots(p)}` : ""}`;
             },
           },
         },
@@ -17852,11 +17976,12 @@ function overviewQueueSummary(src) {
   const t0 = Date.parse(src.start);
   const stepMs = src.step_s * 1000;
   const nowMs = t0 + (src.n - 1) * stepMs;
-  const pools = src.pools.map((p) => ({
+  const platforms = backlogPlatforms(src);
+  const pools = platforms.map((p) => ({
     p,
     label: backlogPoolLabel(p),
-    waiting: p.waiting[src.n - 1],
-    oldest: p.oldest_wait_s[src.n - 1],
+    waiting: p.now.waiting,
+    oldest: p.now.oldest_wait_s,
   }));
   const worst = pools.reduce((a, b) => (b.oldest > a.oldest ? b : a));
   let level = "ok";
@@ -17886,11 +18011,11 @@ function overviewQueueSummary(src) {
           detail: overviewWeekWindowsDetail("Mean jobs waiting for an agent", nowMs),
         })
       : null;
-  // The Workers tab's backlog chart in small: longest wait per busy pool, in
+  // The Workers tab's backlog chart in small: longest wait per busy platform, in
   // the colours of the bars below
   const theme = isDarkMode() ? "dark" : "light";
   const spark = overviewSparkLines(
-    src.pools
+    platforms
       .filter((p) => Math.max(...p.waiting) >= 5)
       .slice(0, OVERVIEW_QUEUE_LINES)
       .map((p) => ({
@@ -17901,7 +18026,7 @@ function overviewQueueSummary(src) {
     { label: "Longest wait for an agent per pool, hours", format: (v) => formatWait(v * 3600), zero: true },
   );
   // The Workers tab's demand per slot now, each bar's title giving its detail
-  const demand = backlogNowHtml(src, src.pools, { waitingPanel: false, legend: "Now, shaded by priority:" });
+  const demand = backlogDemandHtml(src, platforms);
   const panel = demand ? `<div class="backlog-now overview-backlog-now">${demand}</div>` : "";
   const waitingNow = pools.filter((x) => x.waiting > 0).length;
   const rows = waitingNow ? [] : [["Jobs waiting", "none"]];
