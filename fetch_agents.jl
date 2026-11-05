@@ -229,6 +229,27 @@ function record_pool_jobs!(db, pipeline, builds)
     return n
 end
 
+# Keeps how many jobs of unfinished builds wait for another job to finish, per
+# pipeline, pool and priority. They have no runnable_at, so pool_jobs never holds
+# them. Only the latest count is kept, as nothing needs their history yet.
+function record_blocked_jobs!(db, fetched)
+    seen = Set{String}()
+    counts = Dict{Tuple{String,String,String,String,Int},Int}()
+    for (pipeline, builds) in fetched, build in builds
+        get(build, :finished_at, nothing) === nothing && get(build, :state, nothing) != "canceling" || continue
+        for job in something(get(build, :jobs, nothing), [])
+            get(job, :type, nothing) == "script" && get(job, :state, nothing) == "waiting" || continue
+            String(job.id) in seen && continue
+            push!(seen, String(job.id))
+            rules = something(get(job, :agent_query_rules, nothing), [])
+            key = (pipeline, rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job))
+            counts[key] = get(counts, key, 0) + 1
+        end
+    end
+    rows = [(; pipeline=k[1], queue=k[2], os=k[3], arch=k[4], priority=k[5], n=counts[k]) for k in sort!(collect(keys(counts)))]
+    Store.setmeta!(db, "pool_blocked", JSON3.write(rows))
+end
+
 # Builds with open jobs that neither listing returned: they finished before
 # the window, so each is fetched alone to close its jobs
 function stale_builds(db, pipeline, listed)
@@ -262,6 +283,7 @@ function update_pool_jobs!(db, now_time::DateTime)
     end
     return transaction(db) do
         n = sum(record_pool_jobs!(db, p, b) for (p, b) in fetched)
+        record_blocked_jobs!(db, fetched)
         cutoff = Store.iso(now_time - Day(POOL_JOB_RETAIN_DAYS))
         DBInterface.execute(db, "DELETE FROM pool_jobs WHERE runnable_at < ?", (cutoff,))
         @info "Pool jobs recorded" window=key from builds=sum(length, values(fetched)) jobs=n

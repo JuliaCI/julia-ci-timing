@@ -200,7 +200,10 @@ how long, at each priority, which the Workers tab charts as the queue backlog,
 with a line of its own for each priority that had jobs waiting. Other pipelines (julia-buildkite-ci, for one) run on the
 same agents, so each snapshot also keeps the pipeline of every agent's job in
 `agent_snapshot_members`, and the backlog counts those agents as running under
-`other`. `api/agents/usage` sums the agent time of the jobs that
+`other`. Its `now` has each pool at the latest ingest, as the samples round down to 10
+minutes, with `blocked`: the jobs of unfinished builds still waiting for another job to
+finish. They have no runnable time so are not in `pool_jobs`; the fetcher keeps only their
+latest counts, in `meta` under `pool_blocked`. `api/agents/usage` sums the agent time of the jobs that
 finished in the last 7 days, which the Timing tab's Worker time view
 (`?tab=ci-timing&jv=usage`) splits by pipeline, job type, OS and so on;
 clicking slices filters the other charts (`jf=os.Linux~queue.test`).

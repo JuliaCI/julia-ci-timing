@@ -2351,7 +2351,9 @@ The pool and each julia-pr and julia-ci entry split the same series again by
 the jobs' Buildkite priority under `by_priority`, keyed by the number as a
 string, highest first. `waiting_jobs` lists the pool's jobs waiting now in the
 order an agent takes them (highest priority, then longest waiting), each with
-its build, name, priority, and the build's pull request and branch.
+its build, name, priority, and the build's pull request and branch. `now` has the
+pool at the latest agents ingest, which the samples round down to 10 minutes, with
+`blocked`, the jobs of unfinished builds still waiting for another job to finish.
 """
 # The start of a window over pool_jobs from `since`: no earlier than the
 # oldest job kept, on a 10-minute multiple, so the Workers charts share it
@@ -2379,11 +2381,27 @@ function pool_backlog(db; since="")
     acc(q, o, a, pipeline, priority) = get!(get!(pools, (q, o, a), Dict{Tuple{String,Int},Any}()), (pipeline, priority)) do
         (waiting=zeros(Int, n + 1), running=zeros(Int, n + 1), waits=Tuple{Float64,Float64}[])
     end
+    gen = agents_generated_at(db)
+    gen_s = datetime2unix(DateTime(gen, Store.ISO_SECONDS))
+    # The same split as of the latest ingest
+    current = Dict{Tuple{String,String,String},Dict{Tuple{String,Int},Dict{String,Int}}}()
+    tally(q, o, a, pipeline, priority) = get!(get!(current, (q, o, a), Dict{Tuple{String,Int},Dict{String,Int}}()), (pipeline, priority)) do
+        Dict("waiting" => 0, "running" => 0, "blocked" => 0, "oldest_wait_s" => 0)
+    end
     for r in rows(db, "SELECT pipeline, queue, os, arch, priority, state, runnable_at, started_at, finished_at FROM pool_jobs " *
                       "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
                   (Store.iso(now_t + Minute(10)), Store.iso(start)))
         p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
         a = secs(r.runnable_at)
+        if r.finished_at === missing && (r.started_at !== missing || String(r.state) in QUEUED_STATES)
+            c = tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
+            if r.started_at !== missing
+                c["running"] += 1
+            else
+                c["waiting"] += 1
+                c["oldest_wait_s"] = max(c["oldest_wait_s"], round(Int, gen_s - a))
+            end
+        end
         # Waiting ends when the job starts, or when it is canceled before starting.
         # A job skipped with its build has neither time and never waited for an agent.
         b = r.started_at !== missing ? secs(r.started_at) :
@@ -2412,8 +2430,15 @@ function pool_backlog(db; since="")
                                       "priority" => r.priority, "runnable_at" => r.runnable_at,
                                       "pull_request" => coalesce(r.pull_request, nothing), "branch" => coalesce(r.branch, nothing)))
     end
+    stored = rows(db, "SELECT value FROM meta WHERE key = 'pool_blocked'")
+    blocked = isempty(stored) ? [] : JSON3.read(String(stored[1].value))
+    for r in blocked
+        # A pool with only blocked jobs still gets a row
+        acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
+        tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))["blocked"] = Int(r.n)
+    end
     others = other_running(db, start, step, n)
-    gen = agents_generated_at(db)
+    others_now = other_running(db, DateTime(gen, Store.ISO_SECONDS), step, 1)
     slots, shared, hosts, peak = pool_slots(db, Store.iso(DateTime(gen, Store.ISO_SECONDS) - Day(30)))
     function series(p)
         # Longest wait at each sample: the earliest start among the jobs still waiting
@@ -2445,6 +2470,21 @@ function pool_backlog(db; since="")
         prios = sort!(unique(pr for (pl, pr) in keys(per) if keep(pl)); rev=true)
         return OrderedDict{String,Any}(string(pr) => merged([v for ((pl, x), v) in per if keep(pl) && x == pr]) for pr in prios)
     end
+    now_totals(parts) = OrderedDict{String,Any}("waiting" => sum(x -> x["waiting"], parts; init=0),
+                                                "running" => sum(x -> x["running"], parts; init=0),
+                                                "blocked" => sum(x -> x["blocked"], parts; init=0),
+                                                "oldest_wait_s" => maximum(x -> x["oldest_wait_s"], parts; init=0))
+    # Agents busy with other pipelines' jobs count as running, with no priority
+    function pool_now(per, other)
+        totals = now_totals(values(per))
+        totals["running"] += other
+        totals["by_priority"] = OrderedDict(string(pr) => now_totals([v for ((_, x), v) in per if x == pr])
+                                            for pr in sort!(unique(last.(keys(per))); rev=true))
+        totals["by_pipeline"] = OrderedDict{String,Any}(pl => now_totals([v for ((x, _), v) in per if x == pl])
+                                                        for pl in sort!(unique(first.(keys(per)))))
+        other > 0 && (totals["by_pipeline"]["other"] = OrderedDict{String,Any}("waiting" => 0, "running" => other, "blocked" => 0, "oldest_wait_s" => 0))
+        return totals
+    end
     out = Any[]
     for ((q, o, a), per) in pools
         by = OrderedDict{String,Any}()
@@ -2465,6 +2505,8 @@ function pool_backlog(db; since="")
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
                                            "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
                                            "by_pipeline" => by, "by_priority" => by_priority(per, Returns(true)),
+                                           "now" => pool_now(get(current, (q, o, a), Dict{Tuple{String,Int},Dict{String,Int}}()),
+                                                             only(get(others_now, (q, o, a), [0]))),
                                            "waiting_jobs" => get(waiting_now, (q, o, a), Any[])))
     end
     sort!(out; by=p -> -maximum(p["waiting"]; init=0))
