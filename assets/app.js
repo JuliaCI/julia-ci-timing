@@ -1756,7 +1756,7 @@ function backlogLoadHtml(d, pools) {
   const rows = pools
     .map((p) => ({ p, ...p.now, other: p.now.by_pipeline?.other?.running || 0 }))
     .filter((r) => r.waiting > 0 || (r.p.arch && (r.running > 0 || r.blocked > 0)))
-    .sort((a, b) => b.waiting - a.waiting || b.blocked - a.blocked || b.running - a.running);
+    .sort((a, b) => a.p.label.localeCompare(b.p.label));
   if (!rows.length) return "";
   const maxRunning = Math.max(1, ...rows.map((r) => r.running));
   const maxQueue = Math.max(1, ...rows.map((r) => r.waiting + r.blocked));
@@ -1841,13 +1841,13 @@ function backlogLoadHtml(d, pools) {
 }
 
 // The Overview's panel: demand per slot now (running and queued jobs over the
-// pool's slots), most loaded first, with a mark at 1x, past which jobs queue.
+// pool's slots), with a mark at 1x, past which jobs queue.
 function backlogDemandHtml(d, pools) {
   const rows = pools
     .map((p) => ({ p, ...p.now, other: p.now.by_pipeline?.other?.running || 0 }))
     .filter((r) => r.waiting > 0 || (r.running > 0 && r.p.slots))
     .map((r) => ({ ...r, demand: r.p.slots ? (r.waiting + r.running) / r.p.slots : null }))
-    .sort((a, b) => (b.demand ?? -1) - (a.demand ?? -1));
+    .sort((a, b) => a.p.label.localeCompare(b.p.label));
   if (!rows.length) return "";
   const maxDemand = Math.max(1, ...rows.map((r) => r.demand || 0));
   const keys = new Set();
@@ -1909,7 +1909,8 @@ function renderBacklogChart(d) {
   // Pools that never queued more than a few jobs in the window add nothing but legend
   const pools = backlogPlatforms(d)
     .filter((p) => backlogPoolShown(p) && Math.max(...backlogSeries(p).waiting) >= 5 && (metric !== "per-slot" || backlogSlots(p)))
-    .slice(0, BACKLOG_MAX_POOLS);
+    .slice(0, BACKLOG_MAX_POOLS)
+    .sort((a, b) => a.label.localeCompare(b.label));
   // A filter that leaves no pool to draw hides the whole section
   document.getElementById("backlog-section").hidden = workersFilter !== "" && pools.length === 0;
   const values = (p, s) =>
