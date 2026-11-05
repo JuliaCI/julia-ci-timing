@@ -19423,11 +19423,12 @@ function setCoverageFilter(val) {
   });
 }
 
-// A directory row's click lists its files
+// A directory's click lists its files; no directory lists every file
 function showCoverageDir(dir) {
   coverageView = "files";
-  coverageFilter = dir + "/";
+  coverageFilter = dir ? dir + "/" : "";
   document.getElementById("coverage-filter").value = coverageFilter;
+  showCoverageControls();
   updateCoverageURL();
   updateCoverageTable();
 }
@@ -19635,6 +19636,173 @@ function coverageRows() {
   return rows;
 }
 
+// Files as a tree of directories, sized by lines. A directory holding just one
+// directory merges with it, so that a chain like stdlib/REPL/src takes one ring.
+function coverageTree(files) {
+  const newNode = (name, path, isDir) => ({ name, path, lines: 0, hits: 0, children: isDir ? new Map() : null });
+  const root = newNode("", "", true);
+  for (const f of files) {
+    if (f.lines <= 0) continue;
+    root.lines += f.lines;
+    root.hits += f.hits;
+    const parts = f.path.split("/");
+    let node = root;
+    parts.forEach((name, i) => {
+      let child = node.children.get(name);
+      if (!child) node.children.set(name, (child = newNode(name, parts.slice(0, i + 1).join("/"), i < parts.length - 1)));
+      child.lines += f.lines;
+      child.hits += f.hits;
+      node = child;
+    });
+  }
+  const finish = (node) => {
+    while (node.children?.size === 1) {
+      const [only] = node.children.values();
+      if (!only.children) break;
+      node.name = node.name ? `${node.name}/${only.name}` : only.name;
+      node.path = only.path;
+      node.children = only.children;
+    }
+    if (!node.children) return node;
+    node.children = [...node.children.values()].map(finish).sort((a, b) => b.lines - a.lines);
+    return node;
+  };
+  return finish(root);
+}
+
+// Red at 50% of lines run or less, neutral at 80%, green at 100%. The colours
+// are the theme's own, so they follow it without drawing again.
+function coverageSunburstFill(pct) {
+  const mix = (color, share) => `color-mix(in srgb, var(${color}) ${Math.round(Math.min(share, 1) * 100)}%, var(--color-border-default))`;
+  return pct < 80 ? mix("--color-danger-fg", (80 - pct) / 30) : mix("--color-success-fg", (pct - 80) / 20);
+}
+
+// The files the filter leaves as a sunburst, rooted at the deepest directory
+// holding them all: an arc's length is its lines and its colour their coverage.
+// Zooming in sets the filter, so the table follows and the URL keeps it.
+function renderCoverageSunburst() {
+  const el = document.getElementById("coverage-sunburst");
+  const plot = document.getElementById("coverage-sunburst-plot");
+  const info = document.getElementById("coverage-sunburst-info");
+  const crumbsEl = document.getElementById("coverage-sunburst-crumbs");
+  // Drawn at its real size, so that its text stays readable in a short panel
+  const SIZE = Math.min(plot.clientWidth, plot.clientHeight);
+  if (!SIZE) return;
+  const q = coverageFilter.toLowerCase();
+  const root = coverageTree(coverageData.files.filter((f) => f.path.toLowerCase().includes(q)));
+  if (!root.lines) {
+    plot.innerHTML = "";
+    crumbsEl.innerHTML = "";
+    info.textContent = "No file matches.";
+    return;
+  }
+  // The directories above the root, from the whole report so going up always shows more
+  const crumbs = [];
+  for (let node = coverageTree(coverageData.files); node; ) {
+    crumbs.push(node);
+    node = node.path === root.path ? null : node.children?.find((c) => c.children && (c.path === root.path || root.path.startsWith(`${c.path}/`)));
+  }
+  if (crumbs[crumbs.length - 1].path !== root.path) crumbs.push(root);
+  const here = crumbs[crumbs.length - 1];
+  const up = q && crumbs.length === 1 ? crumbs[0] : crumbs[crumbs.length - 2];
+
+  const CENTRE = SIZE / 2;
+  const HOLE = Math.max(48, SIZE * 0.16);
+  const MAX_RINGS = 5;
+  const OUTER = CENTRE - 2;
+  const depthOf = (n) => (n.children ? 1 + Math.max(0, ...n.children.map(depthOf)) : 0);
+  const ring = (OUTER - HOLE) / Math.min(depthOf(root), MAX_RINGS);
+  const at = (r, a) => `${(CENTRE + r * Math.sin(a)).toFixed(2)} ${(CENTRE - r * Math.cos(a)).toFixed(2)}`;
+  const nodes = new Map([[root.path, root]]);
+  let arcs = "";
+  let labels = "";
+  const draw = (node, from, to, depth) => {
+    let a0 = from;
+    for (const c of node.children) {
+      const a1 = a0 + ((to - from) * c.lines) / node.lines;
+      const r0 = HOLE + depth * ring;
+      const r1 = r0 + ring;
+      const end = Math.min(a1, a0 + 2 * Math.PI - 0.001);
+      const large = end - a0 > Math.PI ? 1 : 0;
+      nodes.set(c.path, c);
+      if ((end - a0) * r1 >= 0.5) {
+        const pct = coveragePct(c.hits, c.lines);
+        arcs +=
+          // A full gap would hide a thin arc under it
+          `<path data-path="${escapeHtml(c.path)}" style="fill: ${coverageSunburstFill(pct)}; stroke-width: ${Math.min(1, ((end - a0) * r1) / 6).toFixed(2)}" ` +
+          `d="M${at(r1, a0)}A${r1} ${r1} 0 ${large} 1 ${at(r1, end)}L${at(r0, end)}A${r0} ${r0} 0 ${large} 0 ${at(r0, a0)}Z"/>`;
+        // A name only on the inner arcs long enough to hold it
+        const mid = (a0 + end) / 2;
+        const r = (r0 + r1) / 2;
+        if (depth < 2 && (end - a0) * r > c.name.length * 6.5 + 8 && ring >= 14) {
+          const degrees = (mid * 180) / Math.PI;
+          const turn = mid > Math.PI / 2 && mid < (3 * Math.PI) / 2 ? degrees + 180 : degrees;
+          const [x, y] = at(r, mid).split(" ");
+          labels += `<text x="${x}" y="${y}" transform="rotate(${turn.toFixed(1)} ${x} ${y})">${escapeHtml(c.name)}</text>`;
+        }
+      }
+      if (c.children && depth + 1 < MAX_RINGS) draw(c, a0, a1, depth + 1);
+      a0 = a1;
+    }
+  };
+  if (root.children) draw(root, 0, 2 * Math.PI, 0);
+
+  const crumbHtml = crumbs
+    .map((c, i) => {
+      const name = escapeHtml(c.name || "All");
+      if (i === crumbs.length - 1 && !(q && !c.path)) return `<span>${name}</span>`;
+      return `<button type="button" class="link-button" data-dir="${escapeHtml(c.path)}">${name}</button>`;
+    })
+    .join(" / ");
+  crumbsEl.innerHTML = crumbHtml;
+  plot.innerHTML =
+    `<svg width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" role="img" aria-label="${escapeHtml(`Lines run in ${here.path || "the whole report"}, by directory and file. The table has the same figures.`)}">` +
+    `<g class="coverage-sunburst-arcs">${arcs}</g><g class="coverage-sunburst-labels">${labels}</g>` +
+    `<circle class="coverage-sunburst-hole${up ? " can-go-up" : ""}" cx="${CENTRE}" cy="${CENTRE}" r="${HOLE - 2}"><title>${up ? "Up a level" : ""}</title></circle>` +
+    `<text class="coverage-sunburst-pct" x="${CENTRE}" y="${CENTRE - 8}"></text><text class="coverage-sunburst-sub" x="${CENTRE}" y="${CENTRE + 12}"></text>` +
+    `<text class="coverage-sunburst-sub" x="${CENTRE}" y="${CENTRE + 26}"></text></svg>`;
+
+  const [pctText, linesText, missedText] = plot.querySelectorAll("svg > text");
+  const arcEls = [...plot.querySelectorAll("path")];
+  const hint = IS_TOUCH ? "Tap an arc for its figures, and again to open it" : "Click a directory to zoom in, or a file to open it on Codecov";
+  const show = (path) => {
+    const n = (path != null && nodes.get(path)) || root;
+    pctText.textContent = `${coveragePct(n.hits, n.lines).toFixed(1)}%`;
+    linesText.textContent = `of ${n.lines.toLocaleString("en-US")} lines`;
+    missedText.textContent = `${(n.lines - n.hits).toLocaleString("en-US")} never run`;
+    info.textContent = path == null ? hint : n.path;
+    el.classList.toggle("is-hovering", path != null);
+    for (const a of arcEls) {
+      const p = a.dataset.path;
+      a.classList.toggle("is-related", path != null && (p === path || p.startsWith(`${path}/`) || path.startsWith(`${p}/`)));
+    }
+  };
+  show(null);
+  let touched = null;
+  el.onclick = (e) => {
+    const crumb = e.target.closest("[data-dir]");
+    if (crumb) return showCoverageDir(crumb.dataset.dir);
+    if (e.target.classList.contains("can-go-up")) return showCoverageDir(up.path);
+    const path = e.target.dataset?.path;
+    if (path == null) return;
+    if (IS_TOUCH && touched !== path) {
+      touched = path;
+      show(path);
+      return;
+    }
+    if (nodes.get(path).children) showCoverageDir(path);
+    else window.open(`${CODECOV_REPO}/commit/${coverageData.head.commit}/blob/${path}`, "_blank", "noopener");
+  };
+  if (!IS_TOUCH) {
+    el.onmouseover = (e) => show(e.target.dataset?.path ?? null);
+    el.onmouseleave = () => show(null);
+  }
+}
+
+new ResizeObserver(() => {
+  if (coverageData?.head) renderCoverageSunburst();
+}).observe(document.getElementById("coverage-sunburst-plot"));
+
 // Low coverage tinted, so the gaps stand out down the column
 function coveragePctStyle(pct) {
   if (pct == null || pct >= 80) return "";
@@ -19659,6 +19827,7 @@ function coverageCaption(text) {
 
 function updateCoverageTable() {
   if (!coverageData?.head) return;
+  renderCoverageSunburst();
   if (coverageView === "commits") {
     renderCoverageCommitsTable();
     return;
