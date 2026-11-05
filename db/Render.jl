@@ -2223,10 +2223,13 @@ end
 # now the window is applied here, relative to the latest snapshot.
 agents_cutoff(gen) = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Month(AGENT_RETAIN_MONTHS))
 
-function agents_latest(db)
+"The latest details of the worker agents, or with `queue` of that queue's agents, whichever cluster they are in."
+function agents_latest(db; queue="")
     gen = agents_generated_at(db)
     records = OrderedDict{String,Any}()
-    for a in rows(db, "SELECT * FROM agents a WHERE last_seen >= ? AND $(worker_agent("a")) ORDER BY name", (agents_cutoff(gen),))
+    cutoff = agents_cutoff(gen)
+    which, params = isempty(queue) ? (worker_agent("a"), (cutoff,)) : ("a.queue = ?", (cutoff, queue))
+    for a in rows(db, "SELECT * FROM agents a WHERE last_seen >= ? AND $which ORDER BY name", params)
         records[String(a.name)] = OrderedDict{String,Any}(
             "hostname" => String(a.hostname), "queue" => String(a.queue), "os" => String(a.os), "arch" => String(a.arch),
             "version" => String(a.version), "state" => String(a.state), "connected_at" => jstr(a.connected_at),

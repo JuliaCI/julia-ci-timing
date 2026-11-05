@@ -24,8 +24,8 @@
 # backfills POOL_BACKFILL_DAYS.
 #
 # Every agent of the organization is recorded, with its cluster. The site shows only
-# those of the Julia and Secure clusters (Render.WORKER_CLUSTERS); the GPU packages,
-# Yggdrasil and the JuliaCI cluster's smoke tests have agents of their own.
+# those of the Julia and Secure clusters (Render.WORKER_CLUSTERS), plus Yggdrasil's in the
+# server room; the GPU packages and the JuliaCI cluster's smoke tests have agents of their own.
 #
 # The site draws connected agents per queue over time from the history and flags
 # agents that were connected recently but are not now. The build, test, launch and
