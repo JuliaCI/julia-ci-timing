@@ -259,10 +259,10 @@
         background: currentColor;
       }
       aside .n {
+        grid-column: 2 / -1;
         color: var(--muted);
         font-family: var(--mono);
         font-size: 0.72rem;
-        white-space: nowrap;
       }
       .tag {
         display: inline-block;
@@ -380,6 +380,7 @@
       // queue's row: one row of hardware, a sign per queue stacked above it,
       // and the worst of their moods for the row's lights and effects
       const SHARED_MACHINES = { upload: "cuda" };
+      const YGGDRASIL_QUEUE = "yggdrasil";
       // A queue's own caption, shown in place of the room's commentary on its mood
       const QUEUE_CAPTIONS = { rocm: "Probably overloaded." };
       // Worst last, for picking a shared row's mood
@@ -436,14 +437,14 @@
         j.pull_request
           ? `https://github.com/JuliaLang/julia/pull/${j.pull_request}`
           : `https://buildkite.com/julialang/${encodeURIComponent(j.pipeline)}/builds/${j.build}#${encodeURIComponent(j.job)}`;
-      // The waiting jobs and longest wait per priority of `pools` at the latest sample, highest first
-      function priorityQueues(pools, last) {
+      // The waiting jobs and longest wait per priority of `pools` now, highest first
+      function priorityQueues(pools) {
         const by = new Map();
         for (const p of pools)
-          for (const [pr, s] of Object.entries(p.by_priority || {})) {
+          for (const [pr, s] of Object.entries(p.now.by_priority || {})) {
             const q = by.get(+pr) || { pr: +pr, waiting: 0, oldest: 0 };
-            q.waiting += last(s.waiting);
-            q.oldest = Math.max(q.oldest, last(s.oldest_wait_s));
+            q.waiting += s.waiting;
+            q.oldest = Math.max(q.oldest, s.oldest_wait_s);
             by.set(+pr, q);
           }
         return [...by.values()].filter((q) => q.waiting > 0).sort((a, b) => b.pr - a.pr);
@@ -491,7 +492,6 @@
           if (a.state !== "connected" || !PER_JOB_QUEUES.has(a.queue) || !a.hostname) continue;
           runningOn.set(a.hostname, (runningOn.get(a.hostname) || 0) + 1);
         }
-        const last = (xs) => (xs && xs.length ? xs[xs.length - 1] : 0);
         const uniq = (xs) => [...new Set(xs.filter(Boolean))];
         const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
         const hostSlots = backlog.host_slots || {};
@@ -514,9 +514,11 @@
             // Its Mac minis live on top of the fridge
             fridge: g.pools.every((p) => p.os === "macos" && p.arch === "x86_64"),
             hosts,
-            waiting: g.pools.reduce((s, p) => s + last(p.waiting), 0),
-            oldest: Math.max(0, ...g.pools.map((p) => last(p.oldest_wait_s))),
-            prio: priorityQueues(g.pools, last),
+            waiting: g.pools.reduce((s, p) => s + p.now.waiting, 0),
+            // These cannot use a slot yet, so they count towards neither the mood nor the load
+            blocked: g.pools.reduce((s, p) => s + p.now.blocked, 0),
+            oldest: Math.max(0, ...g.pools.map((p) => p.now.oldest_wait_s)),
+            prio: priorityQueues(g.pools),
             jobs: waitingJobs(g.pools),
           });
         }
@@ -543,6 +545,7 @@
             desktop: DESKTOP_QUEUES.has(q),
             hosts: [...entry.hosts].map(([name, states]) => ({ name, states })).sort(byName),
             waiting: 0,
+            blocked: 0,
             oldest: 0,
             prio: [],
             jobs: [],
@@ -579,6 +582,7 @@
             gone: sum("gone"),
             cap: sum("cap"),
             waiting: sum("waiting"),
+            blocked: sum("blocked"),
             oldest: Math.max(...parts.map((p) => p.oldest)),
             jobs: parts.flatMap((p) => p.jobs || []).sort((a, b) => b.priority - a.priority || a.runnable_at.localeCompare(b.runnable_at)),
             prio: Object.values(
@@ -602,7 +606,10 @@
         return {
           latestMs,
           ci: clusters.filter((c) => c.kind === "ci").sort(byLoad),
-          other: clusters.filter((c) => c.kind === "other").sort(byLoad),
+          // Yggdrasil is a neighbour that always stands last
+          other: clusters
+            .filter((c) => c.kind === "other")
+            .sort((a, b) => (a.queues === YGGDRASIL_QUEUE) - (b.queues === YGGDRASIL_QUEUE) || byLoad(a, b)),
         };
       }
 
@@ -843,6 +850,7 @@
             const split = prioritySplit(c);
             parts.push(`${c.waiting} QUEUED${split.length ? ` (${split.join(", ")})` : ""}`);
           }
+          if (c.blocked) parts.push(`${c.blocked} BLOCKED`);
           if (c.gone) parts.push(`${c.gone} OFFLINE`);
           const line = parts.join("  ·  ");
           ctx.fillText(line, 40, 182, w - 80);
@@ -1499,7 +1507,7 @@
             width += 0.2;
           }
           width -= 0.26;
-          if (c.queues === "yggdrasil" && racks.length) {
+          if (c.queues === YGGDRASIL_QUEUE && racks.length) {
             // The Yggdrasil logo, stuck on the outer side of each end rack
             // The page is also served at /serverroom, without the slash, so a bare relative path would miss
             const sticker = new THREE.TextureLoader().load("../serverroom/yggdrasil.png");
@@ -2068,13 +2076,14 @@
         clockHands.length = 0;
         rows = [...data.ci, ...data.other].map(makeRow);
         // Rows stand side by side in aisles about AISLE_W wide, and the other
-        // queues start an aisle of their own
+        // queues start an aisle of their own, except Yggdrasil, which takes the
+        // last place in whichever aisle it reaches
         const slot = (r) => Math.max(r.width, r.signW) + 1.4;
         const aisleW = Math.max(AISLE_W, ...rows.map(slot));
         const aisles = [];
         for (const r of rows) {
           const a = aisles[aisles.length - 1];
-          if (!a || a.used + slot(r) > aisleW || a.kind !== r.c.kind) aisles.push({ kind: r.c.kind, rows: [r], used: slot(r) });
+          if (!a || a.used + slot(r) > aisleW || (a.kind !== r.c.kind && r.c.queues !== YGGDRASIL_QUEUE)) aisles.push({ kind: r.c.kind, rows: [r], used: slot(r) });
           else {
             a.rows.push(r);
             a.used += slot(r);
@@ -2547,6 +2556,7 @@
         if (c.waiting) lines.push(`${c.waiting} jobs waiting, the longest for ${hours(c.oldest)}`);
         if (prioritySplit(c).length)
           for (const q of c.prio) lines.push(`· ${q.waiting} ${priorityName(q.pr)} priority, the longest for ${hours(q.oldest)}`);
+        if (c.blocked) lines.push(`${c.blocked} more blocked on dependencies`);
         if (c.gone) lines.push(`${c.gone} agents missing`);
         return lines.map(esc).join("<br>");
       }
@@ -2625,7 +2635,7 @@
         const item = (c, i) =>
           `<button type="button" data-i="${i}" title="${MOODS[c.mood].tag}: ${esc(c.caption)}">` +
           `<span class="dot" style="color:${MOODS[c.mood].color}"></span>${esc(c.title)}` +
-          `<span class="n">${c.busy}/${c.cap}${c.waiting ? ` · ${c.waiting} waiting` : ""}${c.kind === "other" ? " · queue n/a" : ""}</span></button>`;
+          `<span class="n">${c.busy}/${c.cap}${c.waiting ? ` · ${c.waiting} waiting` : ""}${c.blocked ? ` · ${c.blocked} blocked` : ""}${c.kind === "other" ? " · queue n/a" : ""}</span></button>`;
         list.innerHTML =
           `<h2>Julia CI</h2>${data.ci.map((c, i) => item(c, i)).join("")}` +
           (data.other.length ? `<h2>The neighbours</h2>${data.other.map((c, i) => item(c, data.ci.length + i)).join("")}` : "");
@@ -3136,7 +3146,7 @@
           const mins = Math.round((Date.now() - data.latestMs) / 60000);
           const age = mins < 1 ? "just now" : mins < 60 ? `${mins} min ago` : `${(mins / 60).toFixed(1)} h ago`;
           document.getElementById("sub").innerHTML =
-            `SNAPSHOT <b>${age}</b> · SLOTS <b>${total("busy")}/${total("cap")}</b> · QUEUED <b>${total("waiting")}</b><br>` +
+            `SNAPSHOT <b>${age}</b> · SLOTS <b>${total("busy")}/${total("cap")}</b> · QUEUED <b>${total("waiting")}</b> · BLOCKED <b>${total("blocked")}</b><br>` +
             `Every unit is a real job slot. <a href="../?tab=ci-workers">Workers tab</a>`;
           renderList(data);
           if (!renderer) return;
