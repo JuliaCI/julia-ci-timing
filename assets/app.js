@@ -19296,7 +19296,7 @@ function updateActivityTable() {
 // `coverageDays` older, ranked by the lines the tests never run.
 let coverageData = null;
 let coverageCharts = [];
-let coverageTimeRangeDays = 180;
+let coverageTimeRangeDays = 30;
 let coverageSince = null; // the start of the window loaded or on its way, "" for all time
 let coverageDays = 30;
 let coverageView = "files";
@@ -19370,7 +19370,7 @@ function showCoverageControls() {
 
 function updateCoverageURL() {
   writeTabURL((url) => {
-    setParam(url, "vt", coverageTimeRangeDays, coverageTimeRangeDays === 180);
+    setParam(url, "vt", coverageTimeRangeDays, coverageTimeRangeDays === 30);
     setParam(url, "vd", coverageDays, coverageDays === 30);
     setParam(url, "vv", coverageView, coverageView === "files");
     setParam(url, "vm", coverageMinLines, coverageMinLines === 20);
