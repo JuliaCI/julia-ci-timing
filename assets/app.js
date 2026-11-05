@@ -1480,7 +1480,7 @@ function backlogMerged(parts) {
       ? parts[0][key].map((_, i) => parts.reduce((acc, s) => op(acc, s[key][i]), 0))
       : parts.reduce((acc, s) => op(acc, s[key]), 0);
   }
-  for (const field of ["by_pipeline", "by_priority"]) {
+  for (const field of ["by_pipeline", "by_priority", "benchmarks"]) {
     const keys = new Set(parts.flatMap((s) => Object.keys(s[field] || {})));
     if (keys.size)
       out[field] = Object.fromEntries([...keys].map((k) => [k, backlogMerged(parts.filter((s) => s[field]?.[k]).map((s) => s[field][k]))]));
@@ -1698,8 +1698,30 @@ function backlogNowRow(d, p, title) {
   );
 }
 
-function backlogNowSeg(key, n, tip) {
-  return `<span class="backlog-now-seg" data-priority="${escapeHtml(key)}" style="flex-grow:${n}" title="${escapeHtml(tip)}">${n}</span>`;
+function backlogNowSeg(key, n, tip, bench = false) {
+  return `<span class="backlog-now-seg" data-priority="${escapeHtml(key)}"${bench ? " data-bench" : ""} style="flex-grow:${n}" title="${escapeHtml(tip)}">${n}</span>`;
+}
+
+// "TTFX: 3 running, 2 queued (master, #64518), the longest for 50 min, 12 blocked"
+function backlogBenchmarksHtml(rows) {
+  const jobs = rows.flatMap((r) => r.p.pools.flatMap((q) => q.waiting_jobs || []));
+  const all = rows.length ? backlogMerged(rows.map((r) => r.p.now)).benchmarks || {} : {};
+  const parts = Object.entries(all).map(([name, b]) => {
+    const mine = jobs.filter((j) => j.benchmark === name).sort((x, y) => x.runnable_at.localeCompare(y.runnable_at));
+    const shown = [...new Map(mine.map((j) => [j.pull_request || `${j.pipeline}/${j.build}`, j])).values()];
+    const links = shown.slice(0, 8).map((j) =>
+      j.pull_request
+        ? `<a href="https://github.com/JuliaLang/julia/pull/${j.pull_request}" target="_blank" rel="noopener">#${j.pull_request}</a>`
+        : `<a href="https://buildkite.com/julialang/${encodeURIComponent(j.pipeline)}/builds/${j.build}" target="_blank" rel="noopener">${j.pipeline === "julia-ci" ? "master" : escapeHtml(j.branch || `build ${j.build}`)}</a>`,
+    );
+    if (shown.length > links.length) links.push(`${shown.length - links.length} more`);
+    return (
+      `<strong>${name}</strong>: ${b.running} running, ${b.waiting} queued` +
+      (mine.length ? ` (${links.join(", ")}), the longest for ${formatWait(b.oldest_wait_s)}` : "") +
+      `, ${b.blocked} blocked`
+    );
+  });
+  return parts.length ? `<div class="backlog-now-benchmarks">${parts.join("<br>")}</div>` : "";
 }
 
 // The pool's priorities now with jobs in `keys`, highest first
@@ -1719,8 +1741,8 @@ function backlogNowSplit(p, key) {
 }
 
 function backlogNowLegend(text, keys) {
-  const names = { other: "other pipelines", blocked: "blocked on dependencies" };
-  const order = (k) => (k === "other" ? -2 : k === "blocked" ? -3 : Number(k));
+  const names = { bench: "TTFX and Runtime benchmarks", other: "other pipelines", blocked: "blocked on dependencies" };
+  const order = (k) => (k === "bench" ? -1.5 : k === "other" ? -2 : k === "blocked" ? -3 : Number(k));
   const items = [...keys]
     .sort((a, b) => order(b) - order(a))
     .map((k) => `<span><span class="backlog-now-swatch" data-priority="${escapeHtml(k)}"></span>${names[k] || backlogPriorityName(k)}</span>`)
@@ -1743,17 +1765,41 @@ function backlogLoadHtml(d, pools) {
     keys.add(key);
     return backlogNowSeg(key, n, tip);
   };
+  // The benchmark jobs of `s` in state `key`, each benchmark outlined in the shade `shade`
+  const benchSegs = (s, key, shade, what) =>
+    Object.entries(s.benchmarks || {})
+      .filter(([, b]) => b[key] > 0)
+      .map(([name, b]) => {
+        keys.add("bench");
+        return backlogNowSeg(shade, b[key], `${b[key]} ${name} ${what}`, true);
+      })
+      .join("");
+  const benchCount = (s, key) => Object.values(s.benchmarks || {}).reduce((acc, b) => acc + b[key], 0);
   const bar = (segs, pct) => (segs ? `<span class="backlog-now-bar" style="width:${pct.toFixed(1)}%">${segs}</span>` : "");
   const sharing = rows.filter((r) => r.p.shared_with.length).map((r) => r.p.label);
   const body = rows.map((r) => {
     const running =
       backlogNowParts(r.p, ["running"])
-        .map((x) => seg(x.pr, x.running, `${x.running} ${backlogPriorityName(x.pr)} priority running`))
+        .map((x) => {
+          const name = backlogPriorityName(x.pr);
+          const rest = x.running - benchCount(x, "running");
+          return (rest > 0 ? seg(x.pr, rest, `${rest} ${name} priority running`) : "") + benchSegs(x, "running", x.pr, `running at ${name} priority`);
+        })
         .join("") + (r.other ? seg("other", r.other, `${r.other} running for other pipelines`) : "");
+    const blockedRest = r.blocked - benchCount(r.p.now, "blocked");
     const queued =
       backlogNowParts(r.p, ["waiting"])
-        .map((x) => seg(x.pr, x.waiting, `${x.waiting} ${backlogPriorityName(x.pr)} priority queued, the longest for ${formatWait(x.oldest_wait_s)}`))
-        .join("") + (r.blocked ? seg("blocked", r.blocked, `${r.blocked} blocked on dependencies`) : "");
+        .map((x) => {
+          const name = backlogPriorityName(x.pr);
+          const rest = x.waiting - benchCount(x, "waiting");
+          return (
+            (rest > 0 ? seg(x.pr, rest, `${rest} ${name} priority queued, the longest for ${formatWait(x.oldest_wait_s)}`) : "") +
+            benchSegs(x, "waiting", x.pr, `queued at ${name} priority`)
+          );
+        })
+        .join("") +
+      (blockedRest > 0 ? seg("blocked", blockedRest, `${blockedRest} blocked on dependencies`) : "") +
+      benchSegs(r.p.now, "blocked", "blocked", "blocked on dependencies");
     const count = (key) => {
       const split = backlogNowSplit(r.p, key);
       return `${r[key]}${split ? ` (${split})` : ""}`;
@@ -1789,6 +1835,7 @@ function backlogLoadHtml(d, pools) {
   return (
     backlogNowLegend("Now, in the colours of the chart below and shaded by priority:", keys) +
     `<div class="backlog-load-panel" style="--running-fr:${maxRunning}fr;--queue-fr:${maxQueue}fr">${head}${body.join("")}</div>` +
+    backlogBenchmarksHtml(rows) +
     (sharing.length ? `<div class="backlog-now-note">${escapeHtml(sharing.join(" and "))} use some of the same machines, so their slots overlap.</div>` : "")
   );
 }

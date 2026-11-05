@@ -230,11 +230,11 @@ function record_pool_jobs!(db, pipeline, builds)
 end
 
 # Keeps how many jobs of unfinished builds wait for another job to finish, per
-# pipeline, pool and priority. They have no runnable_at, so pool_jobs never holds
+# pipeline, pool, priority and benchmark. They have no runnable_at, so pool_jobs never holds
 # them. Only the latest count is kept, as nothing needs their history yet.
 function record_blocked_jobs!(db, fetched)
     seen = Set{String}()
-    counts = Dict{Tuple{String,String,String,String,Int},Int}()
+    counts = Dict{Tuple{String,String,String,String,Int,String},Int}()
     for (pipeline, builds) in fetched, build in builds
         get(build, :finished_at, nothing) === nothing && get(build, :state, nothing) != "canceling" || continue
         for job in something(get(build, :jobs, nothing), [])
@@ -242,11 +242,11 @@ function record_blocked_jobs!(db, fetched)
             String(job.id) in seen && continue
             push!(seen, String(job.id))
             rules = something(get(job, :agent_query_rules, nothing), [])
-            key = (pipeline, rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job))
+            key = (pipeline, rule_value(rules, "queue"), rule_value(rules, "os"), rule_value(rules, "arch"), job_priority(job), Store.benchmark_job(str(get(job, :name, nothing))))
             counts[key] = get(counts, key, 0) + 1
         end
     end
-    rows = [(; pipeline=k[1], queue=k[2], os=k[3], arch=k[4], priority=k[5], n=counts[k]) for k in sort!(collect(keys(counts)))]
+    rows = [(; pipeline=k[1], queue=k[2], os=k[3], arch=k[4], priority=k[5], benchmark=k[6], n=counts[k]) for k in sort!(collect(keys(counts)))]
     Store.setmeta!(db, "pool_blocked", JSON3.write(rows))
 end
 

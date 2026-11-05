@@ -2353,7 +2353,8 @@ string, highest first. `waiting_jobs` lists the pool's jobs waiting now in the
 order an agent takes them (highest priority, then longest waiting), each with
 its build, name, priority, and the build's pull request and branch. `now` has the
 pool at the latest agents ingest, which the samples round down to 10 minutes, with
-`blocked`, the jobs of unfinished builds still waiting for another job to finish.
+`blocked`, the jobs of unfinished builds still waiting for another job to finish,
+and under `benchmarks` the same counts of the TTFX and Runtime benchmarks jobs.
 """
 # The start of a window over pool_jobs from `since`: no earlier than the
 # oldest job kept, on a 10-minute multiple, so the Workers charts share it
@@ -2383,18 +2384,18 @@ function pool_backlog(db; since="")
     end
     gen = agents_generated_at(db)
     gen_s = datetime2unix(DateTime(gen, Store.ISO_SECONDS))
-    # The same split as of the latest ingest
-    current = Dict{Tuple{String,String,String},Dict{Tuple{String,Int},Dict{String,Int}}}()
-    tally(q, o, a, pipeline, priority) = get!(get!(current, (q, o, a), Dict{Tuple{String,Int},Dict{String,Int}}()), (pipeline, priority)) do
+    # The same split as of the latest ingest, and by benchmark
+    current = Dict{Tuple{String,String,String},Dict{Tuple{String,Int,String},Dict{String,Int}}}()
+    tally(q, o, a, pipeline, priority, benchmark) = get!(get!(current, (q, o, a), Dict{Tuple{String,Int,String},Dict{String,Int}}()), (pipeline, priority, benchmark)) do
         Dict("waiting" => 0, "running" => 0, "blocked" => 0, "oldest_wait_s" => 0)
     end
-    for r in rows(db, "SELECT pipeline, queue, os, arch, priority, state, runnable_at, started_at, finished_at FROM pool_jobs " *
+    for r in rows(db, "SELECT pipeline, name, queue, os, arch, priority, state, runnable_at, started_at, finished_at FROM pool_jobs " *
                       "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
                   (Store.iso(now_t + Minute(10)), Store.iso(start)))
         p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
         a = secs(r.runnable_at)
         if r.finished_at === missing && (r.started_at !== missing || String(r.state) in QUEUED_STATES)
-            c = tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
+            c = tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority), Store.benchmark_job(String(r.name)))
             if r.started_at !== missing
                 c["running"] += 1
             else
@@ -2427,6 +2428,7 @@ function pool_backlog(db; since="")
                       "ORDER BY priority DESC, runnable_at, build, name")
         push!(get!(Vector{Any}, waiting_now, (String(r.queue), String(r.os), String(r.arch))),
               OrderedDict{String,Any}("job" => r.job_uuid, "pipeline" => r.pipeline, "build" => r.build, "name" => r.name,
+                                      "benchmark" => Store.benchmark_job(String(r.name)),
                                       "priority" => r.priority, "runnable_at" => r.runnable_at,
                                       "pull_request" => coalesce(r.pull_request, nothing), "branch" => coalesce(r.branch, nothing)))
     end
@@ -2435,7 +2437,8 @@ function pool_backlog(db; since="")
     for r in blocked
         # A pool with only blocked jobs still gets a row
         acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
-        tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))["blocked"] = Int(r.n)
+        # Counts from before the fetcher split them have no benchmark
+        tally(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority), String(get(r, :benchmark, "")))["blocked"] = Int(r.n)
     end
     others = other_running(db, start, step, n)
     others_now = other_running(db, DateTime(gen, Store.ISO_SECONDS), step, 1)
@@ -2470,18 +2473,24 @@ function pool_backlog(db; since="")
         prios = sort!(unique(pr for (pl, pr) in keys(per) if keep(pl)); rev=true)
         return OrderedDict{String,Any}(string(pr) => merged([v for ((pl, x), v) in per if keep(pl) && x == pr]) for pr in prios)
     end
-    now_totals(parts) = OrderedDict{String,Any}("waiting" => sum(x -> x["waiting"], parts; init=0),
+    now_counts(parts) = OrderedDict{String,Any}("waiting" => sum(x -> x["waiting"], parts; init=0),
                                                 "running" => sum(x -> x["running"], parts; init=0),
                                                 "blocked" => sum(x -> x["blocked"], parts; init=0),
                                                 "oldest_wait_s" => maximum(x -> x["oldest_wait_s"], parts; init=0))
+    function now_totals(per)
+        counts = now_counts(values(per))
+        benchmarks = sort!(unique(k[3] for k in keys(per) if !isempty(k[3])))
+        isempty(benchmarks) || (counts["benchmarks"] = OrderedDict(b => now_counts([v for (k, v) in per if k[3] == b]) for b in benchmarks))
+        return counts
+    end
     # Agents busy with other pipelines' jobs count as running, with no priority
     function pool_now(per, other)
-        totals = now_totals(values(per))
+        totals = now_totals(per)
         totals["running"] += other
-        totals["by_priority"] = OrderedDict(string(pr) => now_totals([v for ((_, x), v) in per if x == pr])
-                                            for pr in sort!(unique(last.(keys(per))); rev=true))
-        totals["by_pipeline"] = OrderedDict{String,Any}(pl => now_totals([v for ((x, _), v) in per if x == pl])
-                                                        for pl in sort!(unique(first.(keys(per)))))
+        totals["by_priority"] = OrderedDict(string(pr) => now_totals(filter(kv -> kv.first[2] == pr, per))
+                                            for pr in sort!(unique(k[2] for k in keys(per)); rev=true))
+        totals["by_pipeline"] = OrderedDict{String,Any}(pl => now_totals(filter(kv -> kv.first[1] == pl, per))
+                                                        for pl in sort!(unique(k[1] for k in keys(per))))
         other > 0 && (totals["by_pipeline"]["other"] = OrderedDict{String,Any}("waiting" => 0, "running" => other, "blocked" => 0, "oldest_wait_s" => 0))
         return totals
     end
@@ -2505,7 +2514,7 @@ function pool_backlog(db; since="")
                                            "waiting" => sum(x -> x["waiting"], parts), "running" => sum(x -> x["running"], parts),
                                            "oldest_wait_s" => reduce((x, y) -> max.(x, y), (x["oldest_wait_s"] for x in parts)),
                                            "by_pipeline" => by, "by_priority" => by_priority(per, Returns(true)),
-                                           "now" => pool_now(get(current, (q, o, a), Dict{Tuple{String,Int},Dict{String,Int}}()),
+                                           "now" => pool_now(get(current, (q, o, a), Dict{Tuple{String,Int,String},Dict{String,Int}}()),
                                                              only(get(others_now, (q, o, a), [0]))),
                                            "waiting_jobs" => get(waiting_now, (q, o, a), Any[])))
     end

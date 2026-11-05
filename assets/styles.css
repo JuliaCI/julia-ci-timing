@@ -1792,6 +1792,14 @@ th.sorted .sort-indicator {
 .backlog-load-running .backlog-now-seg:last-child {
   border-radius: 4px 0 0 4px;
 }
+.backlog-now-seg[data-bench],
+.backlog-now-swatch[data-priority="bench"] {
+  box-shadow: inset 0 0 0 1.5px var(--prio-strong);
+}
+.backlog-now-benchmarks {
+  flex-basis: 100%;
+  color: var(--color-fg-default);
+}
 .backlog-now-note {
   flex-basis: 100%;
   color: var(--color-fg-subtle);

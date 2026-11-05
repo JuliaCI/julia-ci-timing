@@ -167,6 +167,15 @@ total_changes(db::SQLite.DB) = Int(query(db, "SELECT total_changes() AS n")[1].n
 meta(db, key) = query(db, "SELECT value FROM meta WHERE key = ?", (key,))[1].value
 setmeta!(db, key, value) = DBInterface.execute(db, "INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, string(value)))
 
+# The benchmark a CI job runs, "" for any other job. The jobs that launch them
+# also name them, but take seconds and are not counted.
+function benchmark_job(name::AbstractString)
+    startswith(name, "Launch") && return ""
+    occursin(r"\bTTFX\b", name) && return "TTFX"
+    occursin(r"\bRuntime benchmarks\b", name) && return "Runtime benchmarks"
+    return ""
+end
+
 """
     next_seq!(db) -> Int
 
