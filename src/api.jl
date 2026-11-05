@@ -353,6 +353,9 @@ const ROUTES = [
     Route("coverage/files", [SINCE, "days" => "how far back the files are compared, 30 days by default"],
           "Codecov's file-level coverage of julia master, one report a day from the coverage job. commits has each report in the window (commit, time, coverage %, lines Codecov counts as code, hits, files, sessions: the uploads merged into it, whose number moves the total) and groups the lines and hits of each top-level directory (base, Compiler, stdlib, ...) per report, aligned with commits. files has every file of head, the latest report that merged every platform's upload (as many as any report of the week before), with its lines and hits, and base_lines and base_hits in base, the latest report at least days older (null where the file is new). Line by line coverage is on app.codecov.io.",
           (db, _, p) -> Render.coverage_files(db; since=instant(p, "since"), days=days_param(p, 30))),
+    Route("coverage/commit/<sha>", [],
+          "Every file of one commit's Codecov report, as recorded: path, lines Codecov counts as code and hits. Any commit under commits in coverage/files has one, and a commit without one is a 404.",
+          (db, a, _) -> Render.coverage_report(db, a[1])),
     Route("downloads/summary", [],
           "Package server requests per day (total, user, CI), by Julia version and release stage, with Julia release tags.",
           (db, _, _) -> Render.downloads(db)),
@@ -806,6 +809,11 @@ function sizes_commit_example(db)
     return isempty(r) ? "0000000" : first(String(r[1].commit_sha), 10)
 end
 
+function coverage_commit_example(db)
+    r = Store.query(db, "SELECT commit_sha FROM coverage_reports WHERE files > 0 ORDER BY fetched_at DESC LIMIT 1")
+    return isempty(r) ? "0000000" : first(String(r[1].commit_sha), 10)
+end
+
 function sizes_pr_example(db)
     r = Store.query(db, "SELECT pr_number FROM size_prs ORDER BY build DESC LIMIT 1")
     return isempty(r) ? "0" : string(r[1].pr_number)
@@ -832,7 +840,7 @@ function other_targets(db)
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
             "/api/ttfx/job/$(ttfx_job_example(db))", "/api/runtime/summary", "/api/runtime/job/$(runtime_job_example(db))",
-            "/api/sysimage/summary", "/api/coverage/files?since=$since",
+            "/api/sysimage/summary", "/api/coverage/files?since=$since", "/api/coverage/commit/$(coverage_commit_example(db))",
             "/api/commit/$(isempty(latest) ? "0000000" : latest[1]["commit"])",
             (isempty(groups) ? String[] : ["/api/benchmarks/groups/$(groups[1])?since=$since"])...]
 end

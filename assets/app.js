@@ -19304,6 +19304,8 @@ let coverageMinLines = 20;
 let coverageFilter = "";
 let coverageSort = { col: "missed", asc: false };
 let coverageCommitsSort = { col: "date", asc: false };
+let coverageHoveredReport = null; // the report a By commit row is showing in the sunburst, instead of the latest
+const coverageReportFiles = new Map(); // each commit's files as they load
 const COVERAGE_VIEWS = ["files", "dirs", "commits"];
 const COVERAGE_DAYS = [7, 30, 90, 180];
 const COVERAGE_MIN_LINES = [0, 20, 100, 500];
@@ -19314,6 +19316,25 @@ const CODECOV_REPO = "https://app.codecov.io/github/JuliaLang/julia";
 const COVERAGE_NO_CHANGE_PP = 1;
 // Codecov merges one upload each from Linux, Windows and macOS
 const COVERAGE_FULL_UPLOADS = 3;
+
+// The line through the report a By commit row is marking on a chart
+const coverageRowMarker = {
+  id: "coverageRowMarker",
+  afterDatasetsDraw(chart) {
+    if (chart.coverageMarkerX == null) return;
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x.getPixelForValue(chart.coverageMarkerX);
+    if (x < chartArea.left || x > chartArea.right) return;
+    ctx.save();
+    ctx.strokeStyle = colorToRgba(chartTheme().text, 0.6);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
 
 function coverageWantedSince() {
   return rangeSince(coverageTimeRangeDays);
@@ -19566,6 +19587,9 @@ function updateCoverageCharts() {
           title: panelTitle(panel.title, theme),
           onZoom: syncCoverageZoom,
           interaction: { mode: "index", intersect: false },
+          onHover: (_, els, chart) => {
+            if (!IS_TOUCH && els.length) hoverCoverageReport(commits[datasets[els[0].datasetIndex].data[els[0].index].i].commit, chart);
+          },
           plugins: {
             legend: { display: true, labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
             tooltip: {
@@ -19597,7 +19621,7 @@ function updateCoverageCharts() {
             y: { ticks: { color: theme.text, callback: (v) => (panel.id === "pct" ? `${v}%` : compactNumber(v)) }, grid: { color: theme.grid } },
           },
         }),
-        plugins: [coveragePartialBands(shown.map((i) => commits[i]), xs)],
+        plugins: [coveragePartialBands(shown.map((i) => commits[i]), xs), coverageRowMarker],
       }),
     );
   }
@@ -19689,7 +19713,13 @@ function renderCoverageSunburst() {
   const SIZE = Math.min(plot.clientWidth, plot.clientHeight);
   if (!SIZE) return;
   const q = coverageFilter.toLowerCase();
-  const root = coverageTree(coverageData.files.filter((f) => f.path.toLowerCase().includes(q)));
+  const report = coverageHoveredReport?.commit;
+  const files = coverageHoveredReport?.files ?? coverageData.files;
+  const hovered = coverageData.commits.find((c) => c.commit === report);
+  document.getElementById("coverage-sunburst-title").textContent = hovered
+    ? `Lines run by directory, ${report.slice(0, 10)} (${hovered.measured_at.slice(0, 10)})${coverageIsPartial(hovered) ? `, partial: ${coverageUploadsText(hovered)}` : ""}`
+    : "Lines run by directory, latest full report";
+  const root = coverageTree(files.filter((f) => f.path.toLowerCase().includes(q)));
   if (!root.lines) {
     plot.innerHTML = "";
     crumbsEl.innerHTML = "";
@@ -19698,7 +19728,7 @@ function renderCoverageSunburst() {
   }
   // The directories above the root, from the whole report so going up always shows more
   const crumbs = [];
-  for (let node = coverageTree(coverageData.files); node; ) {
+  for (let node = coverageTree(files); node; ) {
     crumbs.push(node);
     node = node.path === root.path ? null : node.children?.find((c) => c.children && (c.path === root.path || root.path.startsWith(`${c.path}/`)));
   }
@@ -19791,7 +19821,7 @@ function renderCoverageSunburst() {
       return;
     }
     if (nodes.get(path).children) showCoverageDir(path);
-    else window.open(`${CODECOV_REPO}/commit/${coverageData.head.commit}/blob/${path}`, "_blank", "noopener");
+    else window.open(`${CODECOV_REPO}/commit/${report ?? coverageData.head.commit}/blob/${path}`, "_blank", "noopener");
   };
   if (!IS_TOUCH) {
     el.onmouseover = (e) => show(e.target.dataset?.path ?? null);
@@ -19802,6 +19832,98 @@ function renderCoverageSunburst() {
 new ResizeObserver(() => {
   if (coverageData?.head) renderCoverageSunburst();
 }).observe(document.getElementById("coverage-sunburst-plot"));
+
+// Marks a report on the charts as hovering them does, with a line through it,
+// or clears the mark when given no commit. The chart under the pointer already
+// shows its own hovered points, so it only needs the line.
+function markCoverageCharts(commit, pointerChart) {
+  for (const chart of coverageCharts) {
+    const points = chart.data.datasets[0].data;
+    const k = commit ? points.findIndex((p) => coverageData.commits[p.i].commit === commit) : -1;
+    chart.coverageMarkerX = k < 0 ? null : points[k].x;
+    if (chart === pointerChart) continue;
+    const active = [];
+    if (k >= 0) {
+      chart.data.datasets.forEach((d, datasetIndex) => {
+        if (chart.isDatasetVisible(datasetIndex) && d.data[k].y != null) active.push({ datasetIndex, index: k });
+      });
+    }
+    chart.setActiveElements(active);
+    chart.update("none");
+  }
+}
+
+// Highlights a report's row in the By commit table, and brings it into view
+// when the pointer is on a chart rather than on the table
+function markCoverageRow(commit, scroll) {
+  const tbody = document.getElementById("coverage-stats-tbody");
+  tbody.querySelector("tr.coverage-row-active")?.classList.remove("coverage-row-active");
+  const row = commit && tbody.querySelector(`tr[data-commit="${commit}"]`);
+  if (!row) return;
+  row.classList.add("coverage-row-active");
+  if (!scroll) return;
+  const box = document.getElementById("coverage-stats");
+  const view = box.getBoundingClientRect();
+  const rect = row.getBoundingClientRect();
+  const top = view.top + document.getElementById("coverage-stats-thead").offsetHeight;
+  if (rect.top < top) box.scrollTop -= top - rect.top;
+  else if (rect.bottom > view.bottom) box.scrollTop += rect.bottom - view.bottom;
+}
+
+// The charts, the By commit table and the sunburst follow one hovered report.
+// The sunburst waits a moment, so that moving the pointer across the others
+// does not fetch every report it passes.
+let coverageHoverTimer = null;
+let coverageHoveredCommit = null;
+
+function setCoverageHoveredReport(commit, files) {
+  coverageHoveredReport = commit ? { commit, files } : null;
+  if (coverageData?.head) renderCoverageSunburst();
+}
+
+function clearCoverageHover() {
+  clearTimeout(coverageHoverTimer);
+  if (coverageHoveredCommit) {
+    markCoverageCharts(null);
+    markCoverageRow(null);
+  }
+  coverageHoveredCommit = null;
+  if (coverageHoveredReport) setCoverageHoveredReport(null);
+}
+
+function hoverCoverageReport(commit, pointerChart) {
+  if (commit === coverageHoveredCommit) return;
+  coverageHoveredCommit = commit;
+  markCoverageCharts(commit, pointerChart);
+  markCoverageRow(commit, !!pointerChart);
+  clearTimeout(coverageHoverTimer);
+  coverageHoverTimer = setTimeout(async () => {
+    try {
+      if (!coverageReportFiles.has(commit)) {
+        const files = apiGet(`coverage/commit/${commit}`).then((d) => d.files);
+        coverageReportFiles.set(commit, files);
+        // A failed fetch is tried again the next time the report is hovered
+        files.catch(() => coverageReportFiles.delete(commit));
+      }
+      const files = await coverageReportFiles.get(commit);
+      if (coverageHoveredCommit === commit) setCoverageHoveredReport(commit, files);
+    } catch (err) {
+      console.error("Failed to load the coverage report:", err);
+    }
+  }, 80);
+}
+
+if (!IS_TOUCH) {
+  const tbody = document.getElementById("coverage-stats-tbody");
+  tbody.addEventListener("mouseover", (e) => {
+    const commit = e.target.closest("tr[data-commit]")?.dataset.commit;
+    if (commit) hoverCoverageReport(commit);
+  });
+  tbody.addEventListener("mouseleave", clearCoverageHover);
+  for (const id of ["coverage-chart-pct", "coverage-chart-missed"]) {
+    document.getElementById(id).addEventListener("mouseleave", clearCoverageHover);
+  }
+}
 
 // Low coverage tinted, so the gaps stand out down the column
 function coveragePctStyle(pct) {
@@ -19827,6 +19949,11 @@ function coverageCaption(text) {
 
 function updateCoverageTable() {
   if (!coverageData?.head) return;
+  // The rows it was hovering are gone
+  clearTimeout(coverageHoverTimer);
+  if (coverageHoveredCommit) markCoverageCharts(null);
+  coverageHoveredCommit = null;
+  coverageHoveredReport = null;
   renderCoverageSunburst();
   if (coverageView === "commits") {
     renderCoverageCommitsTable();
@@ -19919,7 +20046,7 @@ function renderCoverageCommitsTable() {
   document.getElementById("coverage-stats-caption").innerHTML = coverageCaption(
     `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the report before it. ` +
       "Codecov reports about one commit a day, so a row's change can come from any commit since the one before. " +
-      "A change in the uploads merged moves the totals too." +
+      "A change in the uploads merged moves the totals too. Hover a row or a chart to see that report on the charts, this table and the sunburst." +
       (all.some((r) => coverageIsPartial(r.c)) ? ` Faded rows are partial: they merged fewer than ${COVERAGE_FULL_UPLOADS} uploads, and their totals can move as more arrive.` : "") +
       "</span>",
   );
@@ -19950,7 +20077,7 @@ function renderCoverageCommitsTable() {
     const changeTitle = uploadsMoved ? ` title="${escapeHtml(`The report before merged ${prev.sessions} uploads and this one ${c.sessions}`)}"` : "";
     const partial = coverageIsPartial(c);
     html +=
-      `<tr${partial ? ' class="coverage-partial"' : ""}><td>${timeHtml(c.measured_at)}</td>` +
+      `<tr data-commit="${c.commit}"${partial ? ' class="coverage-partial"' : ""}><td>${timeHtml(c.measured_at)}</td>` +
       `<td>${commitShaLink(c.commit)} ${extLink(`${CODECOV_REPO}/commit/${c.commit}/tree`, "Codecov", 'class="gh-link"')}` +
       `${partial ? ` <span class="ttfx-pr-badge" title="${escapeHtml(`Merged ${coverageUploadsText(c)}`)}">partial</span>` : ""}</td>` +
       `<td class="num"${coveragePctStyle(r.pct)}>${r.pct.toFixed(2)}%</td>` +

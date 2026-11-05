@@ -1650,6 +1650,10 @@ th.sorted .sort-indicator {
 .tab-group .tab-btn:last-child {
   border-right: none;
 }
+.coverage-row-active > td {
+  background: var(--color-accent-subtle);
+}
+
 .coverage-partial > td {
   opacity: 0.55;
 }

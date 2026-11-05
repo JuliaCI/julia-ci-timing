@@ -249,7 +249,9 @@ time and every file of the latest report with every upload merged (as many as an
 of the week before) against the latest one at least `days` older, preferring one that
 merged as many uploads. The tab links each file to Codecov for
 line-by-line detail, and draws the same files as a sunburst beside the charts: zooming in on
-a directory sets the table's filter (`vq`), which is all the state it keeps.
+a directory sets the table's filter (`vq`), which is all the state it keeps. Hovering a chart or
+a row of the By commit table marks that report on the charts and the row, and draws it in the
+sunburst, from `api/coverage/commit/<sha>`.
 
 Runtime benchmarks (the Benchmarks → Runtime tab, `/runtime`) come from `fetch_runtime.jl`, which
 records the artifacts of the `Runtime benchmarks` job (JuliaCI/julia-ci-benchmarks on the macOS aarch64 agent;

@@ -1836,6 +1836,17 @@ function coverage_files(db; since="", days=30)
                        "base" => base === nothing ? nothing : coverage_commit(base), "files" => collect(values(files)))
 end
 
+# Every file of one commit's Codecov report
+function coverage_report(db, ref)
+    occursin(r"^[0-9a-f]{7,40}$", ref) || return nothing
+    r = rows(db, "SELECT commit_sha FROM coverage_reports WHERE commit_sha GLOB ? AND files > 0 LIMIT 1", (ref * "*",))
+    isempty(r) && return nothing
+    sha = String(r[1].commit_sha)
+    files = [OrderedDict("path" => String(f.path), "lines" => Int(f.lines), "hits" => Int(f.hits))
+             for f in rows(db, "SELECT path, lines, hits FROM coverage_files WHERE commit_sha = ? ORDER BY path", (sha,))]
+    return OrderedDict("generated_at" => generated_at(db, "timing"), "commit" => sha, "files" => files)
+end
+
 # --- runtime benchmarks --------------------------------------------------------
 
 # The suite's categories in its own order; one it adds later goes after them
