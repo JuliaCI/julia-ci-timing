@@ -19312,6 +19312,8 @@ const CODECOV_REPO = "https://app.codecov.io/github/JuliaLang/julia";
 // A file or directory's coverage moving less than this, in percentage points,
 // is left uncoloured: a few lines of a small file move it a lot
 const COVERAGE_NO_CHANGE_PP = 1;
+// Codecov merges one upload each from Linux, Windows and macOS
+const COVERAGE_FULL_UPLOADS = 3;
 
 function coverageWantedSince() {
   return rangeSince(coverageTimeRangeDays);
@@ -19432,6 +19434,62 @@ function showCoverageDir(dir) {
 
 const coveragePct = (hits, lines) => (lines > 0 ? (100 * hits) / lines : null);
 
+const coverageIsPartial = (c) => c.sessions != null && c.sessions < COVERAGE_FULL_UPLOADS;
+const coverageUploadsText = (c) => `${c.sessions} of ${COVERAGE_FULL_UPLOADS} uploads`;
+
+// A pale band over each run of partial reports on a chart, labelled at its newest report
+function coveragePartialBands(reports, xs) {
+  const runs = [];
+  reports.forEach((c, k) => {
+    if (!coverageIsPartial(c)) return;
+    const run = runs[runs.length - 1];
+    if (run && run.to === k - 1) run.to = k;
+    else runs.push({ from: k, to: k });
+  });
+  const pixels = (chart, run) => {
+    const { left, right } = chart.chartArea;
+    const x0 = Math.max(chart.scales.x.getPixelForValue(xs[Math.max(run.from - 1, 0)]), left);
+    const x1 = Math.min(chart.scales.x.getPixelForValue(xs[run.to]), right);
+    return x1 < left || x0 > right ? null : { x0, x1 };
+  };
+  return {
+    id: "coveragePartialBands",
+    beforeDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.fillStyle = colorToRgba(chartTheme().text, 0.1);
+      for (const run of runs) {
+        const p = pixels(chart, run);
+        if (p) ctx.fillRect(p.x0, chartArea.top, Math.max(p.x1 - p.x0, 2), chartArea.height);
+      }
+      ctx.restore();
+    },
+    afterDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      const theme = chartTheme();
+      ctx.save();
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      let leftmost = Infinity;
+      for (const run of [...runs].reverse()) {
+        const p = pixels(chart, run);
+        if (!p) continue;
+        const text = `partial: ${coverageUploadsText(reports[run.to])}`;
+        const w = ctx.measureText(text).width + 10;
+        const x = Math.max(p.x1 - w, chartArea.left);
+        if (x + w > leftmost) continue;
+        leftmost = x;
+        const y = chartArea.bottom - 20;
+        ctx.fillStyle = colorToRgba(theme.isDark ? "#0d1117" : "#ffffff", 0.85);
+        ctx.fillRect(x, y, w, 16);
+        ctx.fillStyle = theme.text;
+        ctx.fillText(text, x + 5, y + 8.5);
+      }
+      ctx.restore();
+    },
+  };
+}
+
 // The directory a file is counted under: a stdlib as a whole, otherwise the
 // directory holding it
 function coverageDir(path) {
@@ -19476,6 +19534,7 @@ function updateCoverageCharts() {
     { id: "missed", title: "Lines never run", value: (s, i) => (s.lines(i) == null ? null : s.lines(i) - s.hits(i)), fmt: (v) => v.toLocaleString("en-US"), all: false },
   ];
   const xs = shown.map((i) => Date.parse(commits[i].measured_at));
+  const isPartialStep = (ctx) => coverageIsPartial(commits[shown[ctx.p1DataIndex]]);
   for (const panel of panels) {
     const datasets = series
       .filter((s) => panel.all || s.label !== "All")
@@ -19485,6 +19544,11 @@ function updateCoverageCharts() {
         // hover's index picks the same report in every series
         data: shown.map((i, k) => ({ x: xs[k], y: panel.value(s, i), i })),
         spanGaps: true,
+        // The steps are drawn at the value of their later report
+        segment: {
+          borderColor: (ctx) => (isPartialStep(ctx) ? colorToRgba(s.color, 0.35) : undefined),
+          borderDash: (ctx) => (isPartialStep(ctx) ? [4, 3] : undefined),
+        },
         borderColor: s.color,
         backgroundColor: s.color,
         borderWidth: s.width,
@@ -19516,7 +19580,8 @@ function updateCoverageCharts() {
                 footer: (items) => {
                   if (!items.length) return "";
                   const c = commits[items[0].raw.i];
-                  return [c.subject ? tooltipLine(c.subject) : "", `${c.sessions ?? "?"} upload${c.sessions === 1 ? "" : "s"} merged`].filter(Boolean);
+                  const uploads = coverageIsPartial(c) ? `Partial report: ${coverageUploadsText(c)} merged` : `${c.sessions ?? "?"} upload${c.sessions === 1 ? "" : "s"} merged`;
+                  return [c.subject ? tooltipLine(c.subject) : "", uploads].filter(Boolean);
                 },
               },
             },
@@ -19531,6 +19596,7 @@ function updateCoverageCharts() {
             y: { ticks: { color: theme.text, callback: (v) => (panel.id === "pct" ? `${v}%` : compactNumber(v)) }, grid: { color: theme.grid } },
           },
         }),
+        plugins: [coveragePartialBands(shown.map((i) => commits[i]), xs)],
       }),
     );
   }
@@ -19612,6 +19678,8 @@ function updateCoverageTable() {
     caption += ` Change against ${codecovLink(base)} (${escapeHtml(base.measured_at.slice(0, 10))}): ${formatSigned(d, 2)} pp.`;
     if (base.sessions !== head.sessions) caption += ` <span class="ttfx-popup-muted">That report merged ${base.sessions} platforms' uploads and this one ${head.sessions}, which moves the totals.</span>`;
   } else caption += ` No report ${coverageDays} days older to compare with.`;
+  const newer = coverageData.commits.filter((c) => c.measured_at > head.measured_at && coverageIsPartial(c));
+  if (newer.length) caption += ` <span class="ttfx-popup-muted">Newer report${newer.length === 1 ? "" : "s"} left out as partial: ${newer.map((c) => `${codecovLink(c)} (${coverageUploadsText(c)})`).join(", ")}.</span>`;
   caption += ` <span class="ttfx-popup-muted">${rows.length.toLocaleString("en-US")} ${dirs ? "directories" : "files"} shown. Julia's coverage misses code run while the system image is built, so a low file is a lead to check on Codecov.</span>`;
   document.getElementById("coverage-stats-caption").innerHTML = coverageCaption(caption);
 
@@ -19682,7 +19750,9 @@ function renderCoverageCommitsTable() {
   document.getElementById("coverage-stats-caption").innerHTML = coverageCaption(
     `<b>Master commits</b> <span class="col-secondary">${newest ? "Newest first, each" : "Each"} against the report before it. ` +
       "Codecov reports about one commit a day, so a row's change can come from any commit since the one before. " +
-      "A change in the uploads merged moves the totals too.</span>",
+      "A change in the uploads merged moves the totals too." +
+      (all.some((r) => coverageIsPartial(r.c)) ? ` Faded rows are partial: they merged fewer than ${COVERAGE_FULL_UPLOADS} uploads, and their totals can move as more arrive.` : "") +
+      "</span>",
   );
   const thead = document.getElementById("coverage-stats-thead");
   thead.innerHTML = sortableHeaderRow(
@@ -19709,15 +19779,17 @@ function renderCoverageCommitsTable() {
     const uploadsMoved = prev && prev.sessions !== c.sessions;
     const changeCls = uploadsMoved ? "col-secondary" : upWorseClass(-changeSign(r.change, COVERAGE_NO_CHANGE_PP));
     const changeTitle = uploadsMoved ? ` title="${escapeHtml(`The report before merged ${prev.sessions} uploads and this one ${c.sessions}`)}"` : "";
+    const partial = coverageIsPartial(c);
     html +=
-      `<tr><td>${timeHtml(c.measured_at)}</td>` +
-      `<td>${commitShaLink(c.commit)} ${extLink(`${CODECOV_REPO}/commit/${c.commit}/tree`, "Codecov", 'class="gh-link"')}</td>` +
+      `<tr${partial ? ' class="coverage-partial"' : ""}><td>${timeHtml(c.measured_at)}</td>` +
+      `<td>${commitShaLink(c.commit)} ${extLink(`${CODECOV_REPO}/commit/${c.commit}/tree`, "Codecov", 'class="gh-link"')}` +
+      `${partial ? ` <span class="ttfx-pr-badge" title="${escapeHtml(`Merged ${coverageUploadsText(c)}`)}">partial</span>` : ""}</td>` +
       `<td class="num"${coveragePctStyle(r.pct)}>${r.pct.toFixed(2)}%</td>` +
       `<td class="num ${changeCls}"${changeTitle}>${r.change == null ? "" : formatSigned(r.change, 2)}</td>` +
       `<td class="num">${r.missed.toLocaleString("en-US")}</td>` +
       `<td class="num col-secondary">${r.missedChange == null ? "" : formatSigned(r.missedChange)}</td>` +
       `<td class="num col-secondary">${c.lines.toLocaleString("en-US")}</td>` +
-      `<td class="num col-secondary">${c.sessions ?? ""}</td>` +
+      `<td class="num col-secondary">${partial ? `${c.sessions} of ${COVERAGE_FULL_UPLOADS}` : (c.sessions ?? "")}</td>` +
       `<td class="msg col-secondary" title="${escapeHtml(c.subject || "")}">${escapeHtml(c.subject || "")}</td></tr>`;
   }
   if (!rows.length) html = '<tr><td colspan="9">No reports in the range.</td></tr>';
