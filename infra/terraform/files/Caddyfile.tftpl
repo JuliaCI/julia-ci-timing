@@ -32,16 +32,29 @@
     @crawlers header_regexp User-Agent `meta-externalagent|^Mozilla/5\.0 \(Macintosh; Intel Mac OS X 10_15_7\) AppleWebKit/537\.36 \(KHTML, like Gecko\) Chrome/120\.0\.0\.0 Safari/537\.36$`
     respond @crawlers 403
     # Per client, so one crawler cannot keep the queries busy. A Datasette
-    # page is one query plus a few static files. The second zone counts
+    # page is one query plus a few static files. The other two zones count
     # every client together: a crawler spread over many addresses still
-    # stops there, and real users are rarely more than two at a time.
+    # stops there, and real users are rarely more than two at a time. The
+    # crawlers claim to be browsers, so scripts have their own total, which
+    # a crawl does not use up.
     rate_limit {
       zone db {
         key {remote_host}
         events 120
         window 1m
       }
-      zone db_all {
+      zone db_browsers {
+        match {
+          header User-Agent Mozilla*
+        }
+        key static
+        events 240
+        window 1m
+      }
+      zone db_scripts {
+        match {
+          not header User-Agent Mozilla*
+        }
         key static
         events 240
         window 1m
