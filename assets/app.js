@@ -19506,13 +19506,17 @@ const COVERAGE_NO_CHANGE_PP = 1;
 // Codecov merges one upload each from Linux, Windows and macOS
 const COVERAGE_FULL_UPLOADS = 3;
 
-// The line through the report a By commit row is marking on a chart
+// The line through the hovered report on a chart. With nothing hovered it marks
+// the report the sunburst and the table show, and draws that report's points
+// too, since the chart only draws the points of a hovered report.
 const coverageRowMarker = {
   id: "coverageRowMarker",
   afterDatasetsDraw(chart) {
-    if (chart.coverageMarkerX == null) return;
+    const atRest = chart.coverageMarkerX == null;
+    const head = atRest ? chart.data.datasets[0].data.findIndex((p) => coverageData.commits[p.i].commit === coverageData.head?.commit) : -1;
+    if (atRest && head < 0) return;
     const { ctx, chartArea, scales } = chart;
-    const x = scales.x.getPixelForValue(chart.coverageMarkerX);
+    const x = scales.x.getPixelForValue(atRest ? chart.data.datasets[0].data[head].x : chart.coverageMarkerX);
     if (x < chartArea.left || x > chartArea.right) return;
     ctx.save();
     ctx.strokeStyle = colorToRgba(chartTheme().text, 0.6);
@@ -19521,6 +19525,15 @@ const coverageRowMarker = {
     ctx.moveTo(x, chartArea.top);
     ctx.lineTo(x, chartArea.bottom);
     ctx.stroke();
+    if (atRest) {
+      chart.data.datasets.forEach((d, datasetIndex) => {
+        if (!chart.isDatasetVisible(datasetIndex) || d.data[head].y == null) return;
+        ctx.fillStyle = d.backgroundColor;
+        ctx.beginPath();
+        ctx.arc(x, scales.y.getPixelForValue(d.data[head].y), d.pointHoverRadius, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
     ctx.restore();
   },
 };
@@ -19806,7 +19819,8 @@ function updateCoverageCharts() {
             window.open(`${CODECOV_REPO}/commit/${c.commit}/tree`, "_blank", "noopener");
           },
           scales: {
-            x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd", min: xs[0], max: xs[xs.length - 1] }),
+            // Room to the right, so that the newest report's marker is clear of the edge
+            x: timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd", min: xs[0], max: xs[xs.length - 1] + 0.02 * (xs[xs.length - 1] - xs[0]) }),
             y: { ticks: { color: theme.text, callback: (v) => (panel.id === "pct" ? `${v}%` : compactNumber(v)) }, grid: { color: theme.grid } },
           },
         }),
