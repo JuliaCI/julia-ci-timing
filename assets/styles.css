@@ -1778,6 +1778,10 @@ th.sorted .sort-indicator {
   margin-right: -10px;
   padding-right: 3px;
 }
+.backlog-load-running-head,
+.backlog-load-queue-head {
+  white-space: nowrap;
+}
 .backlog-load-queue,
 .backlog-load-queue-head {
   border-left: 1px solid var(--color-fg-muted);
@@ -1958,6 +1962,9 @@ th.sorted .sort-indicator {
   gap: 6px;
   padding: 1px 0;
   color: var(--color-fg-muted);
+}
+.agents-header .btn {
+  padding: 2px 8px;
 }
 .agents-header {
   display: flex;

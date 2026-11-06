@@ -850,6 +850,14 @@
                 <option value="build">Build jobs</option>
                 <option value="test">Test jobs</option>
               </select>
+              <button
+                class="btn"
+                id="backlog-bars-per-slot"
+                onclick="toggleBacklogBarsPerSlot()"
+                title="Draw each platform's bars per slot, to compare how loaded the platforms are rather than how many jobs they have. The numbers stay job counts."
+              >
+                Scale by slots
+              </button>
               <span class="agents-summary" id="backlog-summary"></span>
               <span class="agents-help"
                 >Master and pull request jobs ready to run but with no agent
@@ -858,7 +866,8 @@
                 show now: jobs running left of the line, and right of it the
                 jobs queued, then those blocked until another job of their build
                 finishes, which the chart does not count. TTFX and Runtime
-                benchmark jobs are outlined and listed under the bars. Per slot divides by
+                benchmark jobs are outlined and listed under the bars. Scale by slots
+                draws the bars per slot, so a full running bar is every slot busy. Per slot divides by
                 the slots seen in the last 30 days, counting each machine once.
                 A queue that can use only some of the machines has its own count
                 in brackets, and the demand is still the whole platform's.

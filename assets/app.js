@@ -1467,6 +1467,7 @@ let backlogChart = null;
 let backlogMetric = "per-slot";
 let backlogPipeline = "all";
 let backlogQueue = "all";
+let backlogBarsPerSlot = false;
 const BACKLOG_PIPELINE_SHORT = { "julia-ci": "master", "julia-pr": "PR", other: "other pipelines" };
 
 // Several series, or several pools' `now`, as one: counts add up, the longest
@@ -1630,6 +1631,13 @@ function setBacklogMetric(value) {
   if (backlogData && !backlogData.error) renderBacklogChart(backlogData);
 }
 
+function toggleBacklogBarsPerSlot() {
+  backlogBarsPerSlot = !backlogBarsPerSlot;
+  document.getElementById("backlog-bars-per-slot").classList.toggle("btn-primary", backlogBarsPerSlot);
+  if (backlogData && !backlogData.error) renderBacklogNow(backlogData, backlogPlatforms(backlogData).filter(backlogPoolShown));
+  updateURL();
+}
+
 async function renderBacklogSection() {
   const summaryEl = document.getElementById("backlog-summary");
   if (!summaryEl) return;
@@ -1758,8 +1766,11 @@ function backlogLoadHtml(d, pools) {
     .filter((r) => r.waiting > 0 || (r.p.arch && (r.running > 0 || r.blocked > 0)))
     .sort((a, b) => a.p.label.localeCompare(b.p.label));
   if (!rows.length) return "";
-  const maxRunning = Math.max(1, ...rows.map((r) => r.running));
-  const maxQueue = Math.max(1, ...rows.map((r) => r.waiting + r.blocked));
+  // A platform with no known slots has no length per slot, so it draws no bars
+  const scale = (r) => (!backlogBarsPerSlot ? 1 : r.p.slots ? 1 / r.p.slots : 0);
+  // At least one slot's width, so that a platform with every slot busy fills its side
+  const maxRunning = Math.max(1, ...rows.map((r) => r.running * scale(r)));
+  const maxQueue = Math.max(backlogBarsPerSlot ? 0.1 : 1, ...rows.map((r) => (r.waiting + r.blocked) * scale(r)));
   const keys = new Set();
   const seg = (key, n, tip) => {
     keys.add(key);
@@ -1775,7 +1786,7 @@ function backlogLoadHtml(d, pools) {
       })
       .join("");
   const benchCount = (s, key) => Object.values(s.benchmarks || {}).reduce((acc, b) => acc + b[key], 0);
-  const bar = (segs, pct) => (segs ? `<span class="backlog-now-bar" style="width:${pct.toFixed(1)}%">${segs}</span>` : "");
+  const bar = (segs, pct) => (segs && pct ? `<span class="backlog-now-bar" style="width:${pct.toFixed(1)}%">${segs}</span>` : "");
   const sharing = rows.filter((r) => r.p.shared_with.length).map((r) => r.p.label);
   const body = rows.map((r) => {
     const running =
@@ -1818,8 +1829,8 @@ function backlogLoadHtml(d, pools) {
         .join("");
     return (
       backlogNowRow(d, r.p, title) +
-      `<span class="backlog-load-running">${bar(running, (100 * r.running) / maxRunning)}</span>` +
-      `<span class="backlog-load-queue">${bar(queued, (100 * (r.waiting + r.blocked)) / maxQueue)}</span>` +
+      `<span class="backlog-load-running">${bar(running, (100 * r.running * scale(r)) / maxRunning)}</span>` +
+      `<span class="backlog-load-queue">${bar(queued, (100 * (r.waiting + r.blocked) * scale(r)) / maxQueue)}</span>` +
       `<span class="backlog-now-n">${r.running}</span>` +
       `<span class="backlog-now-n">${r.waiting}</span>` +
       `<span class="backlog-now-aux">${r.blocked}</span>` +
@@ -1828,8 +1839,9 @@ function backlogLoadHtml(d, pools) {
       `<span class="backlog-now-aux backlog-load-wide">${slotsText}</span></div>`
     );
   });
+  const perSlot = backlogBarsPerSlot ? " per slot" : "";
   const head =
-    `<div class="backlog-now-head"><span></span><span class="backlog-load-running-head">Running</span><span class="backlog-load-queue-head">Waiting</span>` +
+    `<div class="backlog-now-head"><span></span><span class="backlog-load-running-head">Running${perSlot}</span><span class="backlog-load-queue-head">Waiting${perSlot}</span>` +
     `<span class="backlog-now-n">running</span><span class="backlog-now-n">queued</span><span class="backlog-now-aux">blocked</span>` +
     `<span class="backlog-now-aux backlog-load-wide">longest</span><span class="backlog-now-n backlog-load-wide" title="Running and queued jobs per slot">demand</span><span class="backlog-now-aux backlog-load-wide">slots</span></div>`;
   return (
@@ -3684,6 +3696,7 @@ function updateURL() {
   const jf = timingView === "usage" ? encodeUsageFilters() : "";
   setParam(url, "jf", jf, !jf);
   setParam(url, "wq", workersFilter, !workersFilter);
+  setParam(url, "ws", "1", !backlogBarsPerSlot);
   const expandedHashes = [...expandedJobs]
     .filter((name) => jobIndexMap[name] !== undefined)
     .map(jobHash)
@@ -3707,7 +3720,7 @@ function updateURL() {
 // The CI parameters the shown view reads. The Timing and Workers tabs
 // share their state, but each URL only carries what its view uses.
 function ciViewURLKeys() {
-  if (ciSubview === "workers") return ["wq"];
+  if (ciSubview === "workers") return ["wq", "ws"];
   if (timingView === "usage") return ["jv", "jf"];
   return ["s", "t", "x", "y", "l", "e", "st", "jq"];
 }
@@ -3797,6 +3810,8 @@ function applyURLParams() {
     const filterEl = document.getElementById("workers-filter");
     if (filterEl) filterEl.value = workersFilter;
   }
+  backlogBarsPerSlot = params.get("ws") === "1";
+  document.getElementById("backlog-bars-per-slot").classList.toggle("btn-primary", backlogBarsPerSlot);
 
   // Apply expanded jobs
   const e = params.get("e");
@@ -7314,6 +7329,7 @@ const CI_URL_KEYS = {
   jf: "worker time filters",
   jq: "CI timing job filter",
   wq: "workers text filter",
+  ws: "queue backlog bars scaled by slots toggle",
 };
 const TABS = {
   overview: {
