@@ -1,0 +1,14 @@
+#!/bin/sh
+# Logs available memory and each container's process memory to the journal, so
+# that after a lock-up the previous boot's journal shows what filled the host.
+# Reads the cgroups directly, as docker stats takes seconds and starts more work.
+line="available=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo)MB"
+containers="$(docker ps --no-trunc --format '{{.ID}} {{.Names}}')"
+while read -r id name; do
+  [ -n "$id" ] || continue
+  anon="$(awk '/^anon /{print int($2/1048576)}' "/sys/fs/cgroup/system.slice/docker-$id.scope/memory.stat" 2>/dev/null)"
+  line="$line $name=${anon:-?}MB"
+done <<EOF
+$containers
+EOF
+echo "$line"

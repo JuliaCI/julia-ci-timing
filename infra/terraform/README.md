@@ -42,6 +42,9 @@ On the host (all from cloud-init, files under `files/`):
   `runtime/latest.tar.gz` and publishes `/data/ci-timing.sqlite.gz`. A fresh
   data volume restores from it, so run it by hand before replacing the host.
 - `ci-timing-archive.timer`: weekly dated copy of the latest backup.
+- `ci-timing-memlog.timer`: every minute, logs available memory and each
+  container's process memory to the journal (`journalctl -u ci-timing-memlog`,
+  `-b -1` for the boot before a lock-up).
 - `ci-timing-deploy <image@sha256:...>`: what the workflow runs over SSM: pull,
   refresh the site directory, restart Datasette, start the new API beside the
   old one and stop the old one once the new one is warm, start one ingest.

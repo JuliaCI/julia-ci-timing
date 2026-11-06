@@ -1,0 +1,8 @@
+[Unit]
+Description=Log the host's and containers' memory use
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ci-timing-memlog
+# A host short of memory can stall this; the next minute's run must still start
+TimeoutStartSec=50s

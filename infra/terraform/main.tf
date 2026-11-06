@@ -459,6 +459,7 @@ locals {
     "/usr/local/bin/ci-timing-restore-if-empty"            = "0755"
     "/usr/local/bin/ci-timing-deploy"                      = "0755"
     "/usr/local/bin/ci-timing-bootstrap"                   = "0755"
+    "/usr/local/bin/ci-timing-memlog"                      = "0755"
     "/etc/systemd/system/ci-timing-caddy.service"          = "0644"
     "/etc/systemd/system/ci-timing-datasette.service"      = "0644"
     "/etc/systemd/system/ci-timing-api@.service"           = "0644"
@@ -471,6 +472,8 @@ locals {
     "/etc/systemd/system/ci-timing-backup.timer"           = "0644"
     "/etc/systemd/system/ci-timing-archive.service"        = "0644"
     "/etc/systemd/system/ci-timing-archive.timer"          = "0644"
+    "/etc/systemd/system/ci-timing-memlog.service"         = "0644"
+    "/etc/systemd/system/ci-timing-memlog.timer"           = "0644"
     "/etc/systemd/journald.conf.d/ci-timing-journald.conf" = "0644"
   }
   user_data_files = merge(

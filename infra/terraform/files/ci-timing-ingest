@@ -28,7 +28,10 @@ export BUILDKITE_API_TOKEN
 # dies, the container does not), and its name would refuse every later run
 docker rm -f "$container" >/dev/null 2>&1 || true
 # --init: a PID 1 that forwards the CLI's proxied SIGTERM to the fetchers
+# --memory: a run that grows too far is killed and the next one tries again,
+# rather than locking up the host. A full run's processes use about 520 MB.
 docker run --rm --name "$container" --init \
+  --memory 1200m \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
