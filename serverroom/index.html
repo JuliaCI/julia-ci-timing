@@ -929,20 +929,24 @@
       }
 
       // A Mac mini; a table holds two rows of them
+      // A Mac mini's size: drawn larger than life, with a real one's
+      // proportions (0.197 m square and 0.036 m tall, Intel to M2)
+      const MINI_SCALE = 1.725
+      const MINI = { w: 0.197 * MINI_SCALE, h: 0.036 * MINI_SCALE };
       function makeMini(state, led, name = null) {
         const g = new THREE.Group();
         const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.mini : MAT.miniOff);
-        body.scale.set(0.34, 0.07, 0.34);
-        body.position.y = 0.035;
+        body.scale.set(MINI.w, MINI.h, MINI.w);
+        body.position.y = MINI.h / 2;
         body.castShadow = true;
         g.add(body);
         const l = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
         l.scale.set(0.03, 0.012, 0.01);
-        l.position.set(0.12, 0.035, 0.172);
+        l.position.set(0.12, MINI.h / 2, MINI.w / 2 + 0.002);
         g.add(l);
         if (name) {
           const tag = nameTag(name);
-          tag.position.set(0, 0.0705, 0.02);
+          tag.position.set(0, MINI.h + 0.0005, 0.02);
           g.add(tag);
         }
         return g;
@@ -1398,7 +1402,7 @@
           fridgeUnits.forEach(({ s, h }, i) => {
             const m = makeMini(s, row.leds[i % 4], h.name);
             const pile = Math.floor(i / 3);
-            m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * 0.075, 0);
+            m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * (MINI.h + 0.005), 0);
             m.rotation.y = Math.sin(i * 2.3) * 0.25;
             fridge.add(m);
           });
