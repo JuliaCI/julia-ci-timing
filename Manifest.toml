@@ -79,10 +79,10 @@ version = "1.0.7"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "Dates", "EnumX", "Logging", "PrecompileTools", "Random", "Reseau", "SHA", "TranscodingStreams", "URIs", "UUIDs", "Zlib_jll"]
-git-tree-sha1 = "4a5ca8aaf013767dc2b8d881e2b2f890e5104639"
+git-tree-sha1 = "779aaa01f905311a6a2c21b04517da84efb0be3c"
 registries = "General"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "2.13.1"
+version = "2.14.2"
 
 [[deps.InlineStrings]]
 git-tree-sha1 = "06b65886c7577a3784d616e29f1302c2e36e389d"
@@ -205,10 +205,10 @@ version = "1.0.0"
 
 [[deps.SQLite]]
 deps = ["DBInterface", "Random", "SQLite_jll", "Serialization", "Tables", "WeakRefStrings"]
-git-tree-sha1 = "250925bde5e0848674e51f9797f56e0358e62cf5"
+git-tree-sha1 = "0393b6a3322096e1e269df61ef205a4acfb5a801"
 registries = "General"
 uuid = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
-version = "1.10.0"
+version = "1.11.0"
 
 [[deps.SQLite_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll", "dlfcn_win32_jll"]
