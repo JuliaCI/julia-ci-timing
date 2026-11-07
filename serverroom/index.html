@@ -929,24 +929,32 @@
       }
 
       // A Mac mini; a table holds two rows of them
-      // A Mac mini's size: drawn larger than life, with a real one's
-      // proportions (0.197 m square and 0.036 m tall, Intel to M2)
-      const MINI_SCALE = 1.725
-      const MINI = { w: 0.197 * MINI_SCALE, h: 0.036 * MINI_SCALE };
+      // Mac mini models' real sizes in metres, each drawn MINI_SCALE larger
+      // than life: the Intel to M2 design, 0.197 m square and 0.036 m tall,
+      // and the smaller, taller M4 to M6 one, 0.127 m square and 0.05 m tall
+      const MINI_SCALE = 1.725;
+      const MINI_MODELS = { intel: { w: 0.197, h: 0.036 }, m6: { w: 0.127, h: 0.05 } };
+      const miniSize = (model) => ({ w: MINI_MODELS[model].w * MINI_SCALE, h: MINI_MODELS[model].h * MINI_SCALE });
+      // The older design, which the minis on the fridge are
+      const MINI = miniSize("intel");
+      // Which model a host is, by name: the jonagold runners are M6 minis
+      const miniModel = (name) => (name && name.startsWith("jonagold") ? "m6" : "intel");
       function makeMini(state, led, name = null) {
+        const size = miniSize(miniModel(name));
         const g = new THREE.Group();
         const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.mini : MAT.miniOff);
-        body.scale.set(MINI.w, MINI.h, MINI.w);
-        body.position.y = MINI.h / 2;
+        body.scale.set(size.w, size.h, size.w);
+        body.position.y = size.h / 2;
         body.castShadow = true;
         g.add(body);
+        // The status light, near the front's right-hand corner
         const l = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
         l.scale.set(0.03, 0.012, 0.01);
-        l.position.set(0.12, MINI.h / 2, MINI.w / 2 + 0.002);
+        l.position.set(size.w * 0.35, size.h / 2, size.w / 2 + 0.002);
         g.add(l);
         if (name) {
           const tag = nameTag(name);
-          tag.position.set(0, MINI.h + 0.0005, 0.02);
+          tag.position.set(0, size.h + 0.0005, 0.02);
           g.add(tag);
         }
         return g;
