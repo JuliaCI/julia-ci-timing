@@ -229,7 +229,10 @@ sys) and of the stdlib pkgimages after it, with each stdlib's load in
 `sysimage_stdlibs`. The build prints most of these; the two emit stages it prints
 nothing for are timed from Buildkite's line timestamps. `api/sysimage/summary`
 serves them per platform. The Linux jobs share their machine with other jobs, so
-compare medians over several builds.
+compare medians over several builds. A platform's pool can also mix kinds of machine about twice as fast
+as each other (the M6 Mac minis, `jonagold-*`, from build 1448), so the tab follows one
+kind at a time: the hostname without its serial or index, by default the one that ran
+most of the platform's latest 20 jobs, picked with `im=` (`all` for every kind).
 
 Hand-written notes on julia-ci builds where how CI builds julia changed live in
 `data/sysimage_annotations.json` (same wrapper), served like the TTFX notes from

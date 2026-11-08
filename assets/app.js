@@ -20391,6 +20391,17 @@ let sysimageSince = null; // the start of the window loaded or on its way, "" fo
 let sysimagePlatform = "aarch64-apple-darwin";
 let sysimageSmoothing = 11;
 const SYSIMAGE_SMOOTHINGS = [1, 5, 11, 25];
+// The machines of the platform the charts follow: a class of agent hostnames
+// (sysimageMachineClass), "all", or null for the class that ran most of the
+// platform's recent jobs. A platform's pool can mix machines whose times differ
+// by a factor of two (the M6 Macs from build 1448 next to the older ones), so
+// drawing them as one series jumps whenever the job lands on another kind.
+let sysimageMachine = null;
+// The default class is the one that ran most of the platform's latest this many
+// jobs, so a new kind of machine that takes over the pool is followed within days
+const SYSIMAGE_MACHINE_JOBS = 20;
+// What is known of a class's hardware, for its option in the selector
+const SYSIMAGE_MACHINE_NOTES = { jonagold: "M6" };
 // Hand-written notes on julia-ci builds where how CI builds julia changed
 // (data/sysimage_annotations.json): { build, kind, label, description, url,
 // stages, platforms }, the last three optional
@@ -20444,6 +20455,7 @@ function applySysimageURLParams() {
   sysimageTimeRangeDays = readTimeRangeParam(params, "it", "sysimage-time-range") ?? sysimageTimeRangeDays;
   const ip = params.get("ip");
   if (ip) sysimagePlatform = ip;
+  sysimageMachine = params.get("im") || null;
   const iw = parseInt(params.get("iw"), 10);
   if (SYSIMAGE_SMOOTHINGS.includes(iw)) {
     sysimageSmoothing = iw;
@@ -20455,6 +20467,7 @@ function updateSysimageURL() {
   writeTabURL((url) => {
     setParam(url, "it", sysimageTimeRangeDays, sysimageTimeRangeDays === 90);
     setParam(url, "ip", sysimagePlatform, sysimagePlatform === "aarch64-apple-darwin");
+    setParam(url, "im", sysimageMachine ?? "", sysimageMachine == null);
     setParam(url, "iw", sysimageSmoothing, sysimageSmoothing === 11);
   });
 }
@@ -20471,6 +20484,7 @@ async function loadSysimageData() {
     setUpdatedLabels();
     document.getElementById("sysimage-chart-loading").style.display = "none";
     populateSysimagePlatforms();
+    populateSysimageMachines();
     updateSysimageCharts();
     updateSysimageTable();
     reopenDetailPopup("ci-build-stages");
@@ -20541,6 +20555,79 @@ function populateSysimagePlatforms() {
     .join("");
 }
 
+// The kind of machine an agent is: its hostname without the domain and without
+// the serial number or index that tells machines of a kind apart
+// (jonagold-LT91LJJ76P, macmini-aarch64-2, amdci4.julia.csail.mit.edu)
+function sysimageMachineClass(agent) {
+  if (!agent) return "unknown";
+  return agent.replace(/\..*/, "").replace(/-(?:[A-Z0-9]{6,}|\d+)$/, "");
+}
+
+// The class that ran most of a platform's latest SYSIMAGE_MACHINE_JOBS jobs
+// (they are in time order)
+function sysimageDefaultMachine(pl) {
+  const p = sysimageData?.platforms[pl];
+  if (!p) return "all";
+  const counts = new Map();
+  for (const a of p.agents.slice(-SYSIMAGE_MACHINE_JOBS)) {
+    const c = sysimageMachineClass(a);
+    counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  let best = "all";
+  let n = 0;
+  for (const [c, k] of counts) if (k > n) [best, n] = [c, k];
+  return best;
+}
+
+// The machine class a platform's charts and table column follow, or "all"
+function sysimageMachineFor(pl) {
+  return (pl === sysimagePlatform && sysimageMachine) || sysimageDefaultMachine(pl);
+}
+
+// The machine classes of the selected platform, the latest to run a job first,
+// with how many jobs of the range each ran
+function populateSysimageMachines() {
+  const select = document.getElementById("sysimage-machine");
+  const p = sysimageData?.platforms[sysimagePlatform];
+  if (!p) {
+    select.innerHTML = "";
+    return;
+  }
+  const start = rangeStart(sysimageTimeRangeDays);
+  const classes = new Map();
+  p.started_at.forEach((t, i) => {
+    const c = sysimageMachineClass(p.agents[i]);
+    const e = classes.get(c) || { last: "", n: 0, hosts: new Set() };
+    if (t && t > e.last) e.last = t;
+    if (t && Date.parse(t) >= start) {
+      e.n++;
+      e.hosts.add(p.agents[i]);
+    }
+    classes.set(c, e);
+  });
+  const current = sysimageMachineFor(sysimagePlatform);
+  const def = sysimageDefaultMachine(sysimagePlatform);
+  const option = (value, text) => `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(text)}</option>`;
+  const total = sysimageIndices(sysimagePlatform, "all").length;
+  select.innerHTML =
+    option("all", `All machines (${total})`) +
+    [...classes]
+      .sort((a, b) => b[1].last.localeCompare(a[1].last))
+      .map(([c, e]) => {
+        const hw = SYSIMAGE_MACHINE_NOTES[c] ? `, ${SYSIMAGE_MACHINE_NOTES[c]}` : "";
+        const hosts = e.hosts.size > 1 ? `${e.hosts.size} machines, ` : "";
+        return option(c, `${c}${hw} (${hosts}${e.n} jobs)${c === def ? " · default" : ""}`);
+      })
+      .join("");
+}
+
+function setSysimageMachine(val) {
+  sysimageMachine = val === sysimageDefaultMachine(sysimagePlatform) ? null : val;
+  updateSysimageURL();
+  updateSysimageCharts();
+  updateSysimageTable();
+}
+
 function setSysimageTimeRange(val) {
   sysimageTimeRangeDays = parseInt(val, 10);
   updateSysimageURL();
@@ -20550,12 +20637,15 @@ function setSysimageTimeRange(val) {
     loadSysimageData();
     return;
   }
+  populateSysimageMachines();
   updateSysimageCharts();
   updateSysimageTable();
 }
 
 function setSysimagePlatform(val) {
   sysimagePlatform = val;
+  sysimageMachine = null;
+  populateSysimageMachines();
   updateSysimageURL();
   updateSysimageCharts();
   updateSysimageTable();
@@ -20575,12 +20665,15 @@ function sysimageRolling(vals, w) {
   return vals.map((_, i) => medianOrNull(vals.slice(Math.max(0, i - h), i + h + 1)));
 }
 
-// The jobs of a platform in the range as indices into its arrays
-function sysimageIndices(p) {
+// The jobs of a platform in the range on its machine class (sysimageMachineFor)
+// as indices into its arrays
+function sysimageIndices(pl, machine = sysimageMachineFor(pl)) {
+  const p = sysimageData.platforms[pl];
+  if (!p) return [];
   const start = rangeStart(sysimageTimeRangeDays);
   const out = [];
   p.started_at.forEach((t, i) => {
-    if (t && Date.parse(t) >= start) out.push(i);
+    if (t && Date.parse(t) >= start && (machine === "all" || sysimageMachineClass(p.agents[i]) === machine)) out.push(i);
   });
   return out;
 }
@@ -20614,9 +20707,9 @@ function updateSysimageCharts() {
   document.getElementById("sysimage-btn-reset-zoom").style.display = "none";
   const grid = document.getElementById("sysimage-grid");
   const p = sysimageData.platforms[sysimagePlatform];
-  const idx = p ? sysimageIndices(p) : [];
+  const idx = sysimageIndices(sysimagePlatform);
   if (!idx.length) {
-    grid.innerHTML = '<div class="workers-empty">No build jobs of this platform in the selected time range.</div>';
+    grid.innerHTML = '<div class="workers-empty">No build jobs of this platform and machine in the selected time range.</div>';
     return;
   }
   const stages = Object.keys(SYSIMAGE_STAGES);
@@ -20800,7 +20893,9 @@ function updateSysimageTable() {
     platforms
       .map((pl) => {
         const sel = pl === sysimagePlatform ? " sysimage-selected" : "";
-        return `<th class="num${sel}" colspan="2"><button class="btn-link" data-platform="${escapeHtml(pl)}" title="Show ${escapeHtml(pl)}">${escapeHtml(pl)}</button></th>`;
+        const m = sysimageMachineFor(pl);
+        const machine = m === "all" ? "all machines" : m;
+        return `<th class="num${sel}" colspan="2"><button class="btn-link" data-platform="${escapeHtml(pl)}" title="Show ${escapeHtml(pl)}">${escapeHtml(pl)}</button><div class="col-secondary" title="The machines this column's jobs ran on">${escapeHtml(machine)}</div></th>`;
       })
       .join("") +
     `</tr>`;
@@ -20814,7 +20909,7 @@ function updateSysimageTable() {
   let spanDays = SYSIMAGE_TABLE_DAYS;
   for (const pl of platforms) {
     const p = sysimageData.platforms[pl];
-    const idx = sysimageIndices(p);
+    const idx = sysimageIndices(pl);
     if (!idx.length) continue;
     const t = (i) => Date.parse(p.started_at[i]);
     const first = t(idx[0]);
@@ -20854,7 +20949,7 @@ function updateSysimageTable() {
   const days = sysimageTimeRangeDays > 0 ? `the last ${sysimageTimeRangeDays} days` : "all the history";
   const span = spanDays >= 1 ? `${Math.round(spanDays)} days` : `${Math.max(1, Math.round(spanDays * 24))} hours`;
   document.getElementById("sysimage-stats-caption").innerHTML =
-    `<b>Now against the start of the range</b> <span class="col-secondary">The median of each stage over the last ${span} of ${days}, and its change from the first ${span}. Linux jobs share their machine with other jobs, so expect noise there.</span>`;
+    `<b>Now against the start of the range</b> <span class="col-secondary">The median of each stage over the last ${span} of ${days}, and its change from the first ${span}, on the kind of machine under each platform (the one that ran most of its recent jobs, unless picked above the charts). Linux jobs share their machine with other jobs, so expect noise there.</span>`;
 }
 
 // One build's level is compared with the median of this many builds before it
@@ -20892,9 +20987,13 @@ function showSysimageJobPopup(platform, i) {
   const sha = p.commits[i];
   const subject = sysimageData.subjects?.[sha] || "";
   const pr = ttfxBuildPr({ message: subject });
-  const prev = i > 0 ? i - 1 : null;
-  const base = [];
-  for (let j = i - 1; j >= 0 && base.length < SYSIMAGE_POPUP_BASELINE; j--) base.push(j);
+  // Against the jobs before it on the same kind of machine, unless every kind is shown
+  const machine = sysimageMachineFor(platform) === "all" ? null : sysimageMachineClass(p.agents[i]);
+  const before = [];
+  for (let j = i - 1; j >= 0 && before.length <= SYSIMAGE_POPUP_BASELINE; j--)
+    if (machine == null || sysimageMachineClass(p.agents[j]) === machine) before.push(j);
+  const prev = before.length ? before[0] : null;
+  const base = before.slice(0, SYSIMAGE_POPUP_BASELINE);
   const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
 
   let html = '<div class="ttfx-popup-actions">';
@@ -20947,7 +21046,9 @@ function showSysimageJobPopup(platform, i) {
     }
     html += "</tbody></table>";
   }
-  html += `<div class="ttfx-popup-muted ttfx-popup-hint">Previous: the ${escapeHtml(platform)} job of the build before this one. ${
+  html += `<div class="ttfx-popup-muted ttfx-popup-hint">Previous: the ${escapeHtml(platform)} job of the build before this one${
+    machine == null ? "" : ` that ran on a ${escapeHtml(machine)} machine, as do the ${base.length} before`
+  }. ${
     platform.includes("linux") ? "The Linux jobs share their machine with other jobs, so one build against another is noisy; the median is the steadier comparison." : ""
   }</div>`;
 

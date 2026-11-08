@@ -1641,6 +1641,13 @@
         </select>
         <select
           class="time-select"
+          id="sysimage-machine"
+          onchange="setSysimageMachine(this.value)"
+          aria-label="Machine"
+          title="The kind of machine whose jobs the charts show: a platform's pool can mix machines whose times differ by a factor of two. By default the one that ran most of the platform's recent jobs."
+        ></select>
+        <select
+          class="time-select"
           id="sysimage-smoothing"
           onchange="setSysimageSmoothing(this.value)"
           aria-label="Smoothing"
