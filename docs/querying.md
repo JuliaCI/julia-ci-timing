@@ -106,7 +106,7 @@ only the files that changed. `AGENTS.md` describes their shapes.
   julia version and commit, LLVM, machine, suite commit, blocks; `pipeline` `manyjulias` for
   the backfill of earlier master commits from manyjulias builds on another machine, never
   comparable with `julia-ci`'s) and `rtb_results` (job and
-  benchmark: `value`, the minimum over blocks of the judged metric, cycles, instructions or ns per
+  benchmark: `value`, the minimum over blocks of each block's 5th percentile of the judged metric (the minimum for instructions), cycles, instructions or ns per
   `metric`; `value_max`; `instructions`, exact across processes; `min_ns`, `allocs`,
   `bytes`, `ops`; `status` and `error`; the per-block values as JSON). `rtb_prs` holds the
   latest comparison of each open pull request (verdict, counts, geomean, and

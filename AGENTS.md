@@ -267,9 +267,10 @@ the header of `fetch_runtime.jl` says which builds and what each row keeps):
 one `rtb_jobs` row per job and one `rtb_results` row per benchmark, reduced over the job's
 blocks (each block its own process). A benchmark is judged on `metric`: `cycles` of the
 calling thread, `instructions` for the inference benchmarks, or `time` for work that leaves
-it. `value` is the minimum over blocks of each block's minimum of that metric (cycles,
-instructions or ns), `value_max` the largest of those
-block minima; `instructions` (retired, per call) are exact from process to process, so a
+it. `value` is the minimum over blocks of each block's 5th percentile over samples of that
+metric (cycles or ns; for instructions the minimum), what `compare.jl` judges (the
+backfill's bundle has no samples, so its rows keep each block's minimum), and
+`value_max` the largest of those block values; `instructions` (retired, per call) are exact from process to process, so a
 change there means the code or the work changed, whether or not it costs time.
 `api/runtime/summary` serves them per benchmark as arrays aligned with `builds`:
 

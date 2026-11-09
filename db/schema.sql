@@ -646,9 +646,11 @@ CREATE TABLE IF NOT EXISTS rtb_jobs (
 CREATE INDEX IF NOT EXISTS rtb_jobs_build ON rtb_jobs (build_created_at, build);
 
 -- One row per job and benchmark, reduced over the blocks that ran it. value is
--- the minimum over blocks of the per-block minimum of the judged metric (cycles,
--- or ns for time), value_max the maximum of those per-block minima; the per-block
--- values are kept in block order, as JSON arrays.
+-- the minimum over blocks of each block's 5th percentile over samples of the judged
+-- metric (cycles, or ns for time; the minimum for instructions), value_max the
+-- maximum of those block values (the backfill, pipeline manyjulias, has no samples
+-- and keeps each block's minimum); the per-block values are kept in block order, as
+-- JSON arrays.
 CREATE TABLE IF NOT EXISTS rtb_results (
     job_uuid           TEXT NOT NULL REFERENCES rtb_jobs (job_uuid),
     name               TEXT NOT NULL,                -- category/benchmark, e.g. simd/sum_f64
