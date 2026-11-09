@@ -11,8 +11,9 @@
 #
 # For every finished job of a julia-ci master or release branch build this keeps one row
 # in rtb_jobs and one per benchmark in rtb_results, reduced over the blocks: the minimum
-# of the judged metric (cycles, or wall time for the benchmarks whose work leaves the
-# calling thread), its maximum over blocks, the retired instructions, the wall time,
+# over blocks of each block's 5th percentile of the judged metric (cycles, or wall time
+# for the benchmarks whose work leaves the calling thread; instructions their minimum),
+# its maximum over blocks, the retired instructions, the wall time,
 # allocations and the per-block values. The parsed artifacts are kept, compressed, in
 # raw_rtb. rtb_prs keeps the latest compare.json of each open pull request (see below).
 # The weekly julia-ci build that measures published releases (TTFX_RELEASE) runs the
@@ -68,7 +69,21 @@ function record_metric(r)
     m = String(get(r, :metric, "time"))
     return m in ("cycles", "instructions") && has_counter(r, Symbol(m)) ? m : "time"
 end
-record_value(r, metric) = metric == "time" ? Float64(r.min_ns) : Float64(minimum(counters_of(r)[Symbol(metric)]))
+# A block's value, as compare.jl takes it: the 5th percentile over samples of cycles or
+# wall time, not the minimum, since a process now and then records one sample far below
+# all the others (the minimum of `parallel/spawn_fetch` moved 33% from one master build
+# to the next, its 5th percentile 2%). Instruction counts have no such samples and keep
+# their minimum.
+low(v) = Float64(sort(v)[cld(length(v), 20)])
+function record_value(r, metric)
+    metric == "instructions" && return Float64(minimum(counters_of(r)[:instructions]))
+    metric == "cycles" && return low(counters_of(r)[:cycles])
+    times = get(r, :times_ns, nothing)
+    return times === nothing || isempty(times) ? Float64(r.min_ns) : low(times)
+end
+# What `value` holds; rows kept in raw_rtb and reduced otherwise are reduced again once
+# (`rereduce!`)
+const VALUE_REDUCTION = "p5"
 record_instructions(r) = has_counter(r, :instructions) ? Float64(minimum(counters_of(r)[:instructions])) : nothing
 
 num(x) = x === nothing ? nothing : Float64(x)
@@ -80,7 +95,7 @@ maxornothing(v) = (v = filter(!isnothing, v); isempty(v) ? nothing : maximum(v))
     summarize_records(records, arm) -> Dict{String,Dict}
 
 The records of one arm reduced over their blocks, per benchmark: the minimum and maximum
-over blocks of the judged metric's per-block minimum, the minimum instructions, wall
+over blocks of each block's value of the judged metric (`record_value`), the minimum instructions, wall
 time, allocations and bytes, and each block's values. A benchmark none of whose blocks
 ran is kept with its status and first error.
 """
@@ -593,6 +608,40 @@ function refresh_backfill_bundle!(db)
     return length(rows)
 end
 
+# --- a change of reduction ------------------------------------------------------------
+
+"""
+    rereduce!(db) -> Int
+
+When the rows were reduced otherwise than VALUE_REDUCTION, reduce every job kept in
+raw_rtb again with `summarize_records`, rewriting the value, value_max and block_values
+of its results; the number of jobs. Runs once per reduction, kept in meta. The backfill
+cannot follow: its bundle carries each block already reduced to one value (its minimum),
+with no samples, so its rows keep that.
+"""
+function rereduce!(db)
+    seen = query(db, "SELECT value FROM meta WHERE key = 'runtime_value_reduction'")
+    !isempty(seen) && seen[1].value == VALUE_REDUCTION && return 0
+    jobs = query(db, "SELECT job_uuid FROM raw_rtb WHERE results_zst IS NOT NULL")
+    transaction(db) do
+        seq = next_seq!(db)
+        upd = DBInterface.prepare(db, "UPDATE rtb_results SET value = ?, value_max = ?, block_values = ? WHERE job_uuid = ? AND name = ?")
+        bump = DBInterface.prepare(db, "UPDATE rtb_jobs SET change_seq = ? WHERE job_uuid = ?")
+        for j in jobs
+            r = query(db, "SELECT results_zst, meta_zst FROM raw_rtb WHERE job_uuid = ?", (j.job_uuid,))[1]
+            results = JSON3.read(decompress_zst(r.results_zst))
+            meta = r.meta_zst === missing ? nothing : JSON3.read(decompress_zst(r.meta_zst))
+            for (name, b) in summarize_records(results, measured_arm(meta))
+                DBInterface.execute(upd, (miss(b["value"]), miss(b["value_max"]), jsonarr(b["block_values"]), j.job_uuid, name))
+            end
+            DBInterface.execute(bump, (seq, j.job_uuid))
+        end
+        Store.setmeta!(db, "runtime_value_reduction", VALUE_REDUCTION)
+    end
+    @info "Reduced the kept jobs again" jobs=length(jobs) reduction=VALUE_REDUCTION
+    return length(jobs)
+end
+
 # --- main ------------------------------------------------------------------------
 
 function run!(db)
@@ -604,6 +653,7 @@ function run!(db)
         write_rows!(db, rows)
     end
     retired = delete_retired!(db)
+    rereduced = rereduce!(db)
     # GitHub's quota or a julia-pr listing failing leaves the rows as they were rather
     # than failing the master results with it
     try
@@ -617,7 +667,7 @@ function run!(db)
     catch e
         @error "Importing the backfill failed" exception=(e, catch_backtrace())
     end
-    return length(rows) + retired + n
+    return length(rows) + retired + rereduced + n
 end
 
 function main(args=ARGS)
