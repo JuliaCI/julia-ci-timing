@@ -14657,6 +14657,11 @@ function ttfxVerdict(...verdicts) {
 
 const ttfxVerdictClass = (v) => (v === "regression" ? "ttfx-up" : v === "improvement" ? "ttfx-down" : "");
 
+// A suite geomean's verdict as the TTFX job counted it: a difference that was GC moving
+// between load and run is not counted
+const ttfxSuiteVerdict = (s) => (s && s.gc_moved ? "same" : s && s.verdict);
+const TTFX_GC_MOVED_NOTE = "GC moved between load and run, not counted";
+
 // A task's robust changes of the metrics `kinds`, as "load +3.1%, +2.9%; run -1.0%"
 function ttfxTaskChanges(t, kinds) {
   return kinds
@@ -14766,7 +14771,8 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
   const head = ["suite geomean", st ? `this PR vs ${parent}` : "change per block", "GC off"];
   if (chained) head.push("stack vs master (est.)");
   lines.push("", `| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`);
-  const cell = (x) => (!x ? "—" : x.verdict !== "same" ? `**${blocks(x)}** (${x.verdict})` : blocks(x));
+  const cell = (x) =>
+    !x ? "—" : x.gc_moved ? `${blocks(x)} (${TTFX_GC_MOVED_NOTE})` : x.verdict !== "same" ? `**${blocks(x)}** (${x.verdict})` : blocks(x);
   for (const m of metrics) {
     const on = p.suite[m];
     if (!on) continue;
@@ -14919,11 +14925,11 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   for (const m of [...metrics, ...details]) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
-    const v = ttfxVerdict(on && on.verdict, off && off.verdict);
+    const v = ttfxVerdict(ttfxSuiteVerdict(on), off && off.verdict);
     const note = details.includes(m) ? "; not in the score" : "";
     html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
-    html += `<td class="${ttfxVerdictClass(v)}">${v}</td>`;
+    html += `<td class="${ttfxVerdictClass(v)}">${on && on.gc_moved ? TTFX_GC_MOVED_NOTE : v}</td>`;
     if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
     html += "</tr>";
   }
@@ -15216,8 +15222,8 @@ function renderTtfxPrsTable() {
         html += `<td class="num${start}">–</td>`;
         return;
       }
-      const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${x.verdict}), ${x.n_tasks} tasks`;
-      html += `<td class="num ${ttfxVerdictClass(x.verdict)}${start}" title="${escapeHtml(title)}">${ttfxRatioPct(blocksMean(x))}</td>`;
+      const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${x.gc_moved ? TTFX_GC_MOVED_NOTE : x.verdict}), ${x.n_tasks} tasks`;
+      html += `<td class="num ${ttfxVerdictClass(ttfxSuiteVerdict(x))}${start}" title="${escapeHtml(title)}">${ttfxRatioPct(blocksMean(x))}</td>`;
     });
     const better = p.tasks.filter((t) => t.improvements.length);
     const worse = p.tasks.filter((t) => t.regressions.length);
@@ -23221,7 +23227,7 @@ function prCardMetricsTable(p) {
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];
     html += `<tr><th>${escapeHtml(ttfxMetricLabel(m))}</th>`;
-    html += on.geomeans.map((g) => `<td class="${cls(on.verdict)}">${ttfxRatioPct(g)}</td>`).join("");
+    html += on.geomeans.map((g) => `<td class="${cls(ttfxSuiteVerdict(on))}">${ttfxRatioPct(g)}</td>`).join("");
     html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(ttfxRatioPct).join(", ") : "—"}</td></tr>`;
   }
   return html + "</tbody></table>";
