@@ -1,4 +1,12 @@
 {
   "schema_version": 1,
-  "annotations": []
+  "annotations": [
+    {
+      "build": 1573,
+      "kind": "runner",
+      "label": "M2 → M6",
+      "description": "The runtime benchmarks moved from the M2 Mac minis (honeycrisp-*) to the M6 Mac minis (jonagold-*), which have room for them (julia-buildkite#789). Timings before and after this build come from different CPUs and are not comparable.",
+      "url": "https://github.com/JuliaCI/julia-buildkite/pull/789"
+    }
+  ]
 }
