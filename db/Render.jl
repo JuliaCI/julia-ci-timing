@@ -659,8 +659,27 @@ end
 # The first TTFX_RESULT_METRICS come from the job's results (ttfx_results, as many as
 # the job's n_metrics), the rest from its trace logs (ttfx_traces)
 const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                      "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "recompiled", "recompile_s"]
-const TTFX_RESULT_METRICS = 11
+                      "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load", "recompiled", "recompile_s"]
+const TTFX_RESULT_METRICS = 12
+# Measured once per job rather than per task (ttfx_startup), in each build's `startup`
+const TTFX_STARTUP_METRICS = ["startup", "startup_repl"]
+
+# Each job's startup times per arm, as [startup, startup_repl]; `where` limits the jobs
+function ttfx_startup_values(db, where="", params=())
+    out = Dict{String,Dict{String,Any}}()
+    for r in rows(db, "SELECT job_uuid, arm, startup, startup_repl FROM ttfx_startup$where", params)
+        r.startup === missing && r.startup_repl === missing && continue
+        get!(out, String(r.job_uuid), Dict{String,Any}())[String(r.arm)] = Any[js(r.startup), js(r.startup_repl)]
+    end
+    return out
+end
+
+# One job's [startup, startup_repl] for the arm it reports, nothing when it has none
+function ttfx_job_startup(db, uuid)
+    r = rows(db, "SELECT s.startup, s.startup_repl FROM ttfx_startup s JOIN ttfx_jobs j ON j.job_uuid = s.job_uuid " *
+                 "WHERE s.job_uuid = ? AND s.arm = coalesce(j.selected_arm, 'head')", (uuid,))
+    return isempty(r) ? nothing : Any[js(r[1].startup), js(r[1].startup_repl)]
+end
 
 function ttfx(db; since="")
     where, params = where_clause("build_created_at", since, "")
@@ -682,6 +701,7 @@ function ttfx(db; since="")
         tr === nothing && return vals
         return Any[vals; fill(nothing, TTFX_RESULT_METRICS - length(vals)); tr]
     end
+    startup = ttfx_startup_values(db, windowed, params)
     failures = Dict{String,Dict{String,String}}()
     for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures" * windowed, params)
         get!(failures, String(r.job_uuid), Dict{String,String}())[String(r.task)] = String(r.error)
@@ -727,6 +747,12 @@ function ttfx(db; since="")
                 "snippets" => String(j.snippets), "blocks" => js(j.blocks), "n_tasks" => js(j.n_tasks),
                 "tasks" => Dict(k => task_values(v, n, get(job_traces, k, nothing)) for (k, v) in tasks),
                 "failed" => get(failures, String(j.job_uuid), Dict{String,String}())))
+            arms = get(startup, String(j.job_uuid), nothing)
+            if arms !== nothing
+                s = get(arms, String(coalesce(j.selected_arm, "head")), nothing)
+                s === nothing || (out[end]["startup"] = s)
+                kind == "opt" && haskey(arms, "base") && (out[end]["base_startup"] = arms["base"])
+            end
             kind == "opt" && (out[end]["base"] = get(bases, String(j.job_uuid), Dict{String,Any}()))
         end
         return out
@@ -747,7 +773,7 @@ function ttfx(db; since="")
     opt = jobs("opt")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
-                       "metrics" => TTFX_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts,
+                       "metrics" => TTFX_METRICS, "startup_metrics" => TTFX_STARTUP_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts,
                        "branch_nightly" => branch_nightly, "opt" => opt)
 end
 
@@ -1053,6 +1079,7 @@ function commit_ttfx(db, prefix, sha)
                          for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (uuid,)))
     failures(uuid) = Dict(String(r.task) => String(r.error) for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ?", (uuid,)))
     now_ = results(String(j.job_uuid))
+    startup_now = ttfx_job_startup(db, String(j.job_uuid))
     failed = failures(String(j.job_uuid))
     before = isempty(prev) ? Dict{String,Any}() : results(String(prev[1].job_uuid))
     failed_before = isempty(prev) ? Dict{String,String}() : failures(String(prev[1].job_uuid))
@@ -1065,6 +1092,9 @@ function commit_ttfx(db, prefix, sha)
                        "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff,
                        "previous" => isempty(prev) ? nothing : OrderedDict("build" => Int(prev[1].build), "commit" => first(String(prev[1].commit_sha), 8)),
                        "counts" => isempty(prev) ? nothing : ttfx_job_counts(db, String(j.job_uuid), String(prev[1].job_uuid)),
+                       "startup" => startup_now === nothing ? nothing :
+                                    OrderedDict("metrics" => TTFX_STARTUP_METRICS, "now" => startup_now,
+                                                "previous" => isempty(prev) ? nothing : ttfx_job_startup(db, String(prev[1].job_uuid))),
                        "tasks" => tasks, "releases" => isempty(now_) ? Any[] : ttfx_release_ratios(db, String(j.job_uuid), metrics))
 end
 
@@ -1254,6 +1284,7 @@ function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
     results(u) = Dict(String(r.task) => [js(getproperty(r, Symbol(m))) for m in metrics]
                       for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (u,)))
     now_ = results(uuid)
+    now_startup = ttfx_job_startup(db, uuid)
     release = newest_release_ttfx_job(db, "kind = 'release'")
     lts = newest_release_ttfx_job(db, "kind = 'lts'")
     branch = latest_ttfx_job(db, "kind IN ('branch_nightly', 'release_branch')")
@@ -1283,6 +1314,16 @@ function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
                                     "job_id" => String(j.job_uuid), "date" => String(j.build_created_at), "url" => js(j.web_url),
                                     "ratio" => ratio, "n_tasks" => counts)
         pr_suite === nothing || (e["head"] = head)
+        # Startup, measured once per job, in the order of TTFX_STARTUP_METRICS
+        s, rs = now_startup, ttfx_job_startup(db, String(j.job_uuid))
+        if s !== nothing && rs !== nothing
+            e["startup"] = Any[good(s[k]) && good(rs[k]) ? s[k] / rs[k] : nothing for k in eachindex(TTFX_STARTUP_METRICS)]
+            if pr_suite !== nothing
+                pr(m) = haskey(pr_suite, m) ? collect(Float64, pr_suite[m].geomeans) : Float64[]
+                e["startup_head"] = Any[(g = e["startup"][k]; p = pr(m); g === nothing || isempty(p) ? nothing : g * exp(sum(log, p) / length(p)))
+                                        for (k, m) in enumerate(TTFX_STARTUP_METRICS)]
+            end
+        end
         push!(against, e)
     end
     return against

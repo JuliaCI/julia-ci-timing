@@ -95,7 +95,9 @@ only the files that changed. `AGENTS.md` describes their shapes.
   precompile, load, run, warm, and load, run and warm with the GC off, in seconds, and
   the MethodInstances the task script invalidated; `load_stdlibs` is the load with every
   stdlib added to the project and loaded first, `precompile_stdlibs` that project's added
-  precompile and `run_stdlibs` the run after that load), `ttfx_invalidation_causes` (the top
+  precompile and `run_stdlibs` the run after that load; `startup_load` runs from spawning the
+  process to the end of its load), `ttfx_startup` (julia's own startup, timed once per job
+  and arm before the tasks: `julia -e ''` and to the REPL's first prompt), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
   methods compiled again because an invalidation dropped their code),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX

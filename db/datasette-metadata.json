@@ -165,7 +165,17 @@
             "invalidated_rejected": "of those, package-image code not reinstated on load because an edge no longer held",
             "load_stdlibs": "load on the first run in a copy of the task's project with every stdlib added and imported before the task's packages, so they load beside many methods from outside their own dependencies; null before the driver measured it",
             "precompile_stdlibs": "Pkg.precompile() of that copy right after the task's own: mostly the extensions the stdlibs trigger; not compared between builds",
-            "run_stdlibs": "run of the task script in that copy, after its stdlibs-first load; null before the job recorded it"
+            "run_stdlibs": "run of the task script in that copy, after its stdlibs-first load; null before the job recorded it",
+            "startup_load": "from spawning the first run's process to the end of its load phase: julia's startup plus the load, so work moved between the two cancels out; null before 2026-11-12"
+          }
+        },
+        "ttfx_startup": {
+          "description": "julia's own startup, timed by each TTFX job before the tasks (startup.json; from 2026-11-12): per arm, the lowest over the ABBA blocks of each block's median run.",
+          "columns": {
+            "startup": "seconds from spawning julia --startup-file=no -e '' to its exit",
+            "startup_repl": "seconds from spawning an interactive julia on a pseudo-terminal to its first julia> prompt",
+            "runs": "timed -e '' runs over the blocks",
+            "error": "the first failure of either"
           }
         },
         "ttfx_invalidation_causes": {
@@ -208,7 +218,7 @@
             "verdict": "improvement, regression or same",
             "n_improvements": "robust improvements, per task and metric plus suite metrics",
             "n_regressions": "robust regressions, counted the same way",
-            "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count",
+            "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count; startup and startup_repl are julia's own startup, measured once per job, with base and head seconds per block",
             "tasks": "JSON: the tasks with a robust improvement or regression, their ratios and notes",
             "ci_commit": "the pull request head the CI columns were looked up for",
             "ci_build": "the newest julia-pr build of ci_commit, NULL when it has none",
@@ -218,7 +228,7 @@
           }
         },
         "raw_ttfx": {
-          "description": "The TTFX job's result files as fetched, zstd-compressed."
+          "description": "The TTFX job's result files as fetched, zstd-compressed: results.json, results-meta.json and startup.json."
         },
         "dl_resource_types": {
           "description": "Package server requests per day by resource type, status and client type, as published by julialang-logs."

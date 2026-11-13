@@ -3105,6 +3105,16 @@ th.sorted .sort-indicator {
   width: 100%;
   height: 100%;
 }
+/* The TTFX summary shows the four task panels, the startup view its two */
+#ttfx-summary-grid[data-mode="summary"] > .ttfx-panel[data-metric^="startup"],
+#ttfx-summary-grid[data-mode="startup"] > .ttfx-panel:not([data-metric^="startup"]) {
+  display: none;
+}
+@media (min-width: 769px) and (min-height: 501px) {
+  #ttfx-summary-grid[data-mode="startup"] {
+    grid-template-rows: auto 1fr;
+  }
+}
 /* display: grid above would otherwise beat the hidden attribute */
 .ttfx-summary-grid[hidden],
 .ttfx-single[hidden] {
@@ -5113,7 +5123,9 @@ a.ttfx-pr-copy {
   .ttfx-summary-grid[data-metric="precompile"] > .ttfx-panel[data-metric="precompile"],
   .ttfx-summary-grid[data-metric="load"] > .ttfx-panel[data-metric="load"],
   .ttfx-summary-grid[data-metric="run"] > .ttfx-panel[data-metric="run"],
-  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"] {
+  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"],
+  .ttfx-summary-grid[data-metric="startup"] > .ttfx-panel[data-metric="startup"],
+  .ttfx-summary-grid[data-metric="startup_repl"] > .ttfx-panel[data-metric="startup_repl"] {
     display: block;
   }
 

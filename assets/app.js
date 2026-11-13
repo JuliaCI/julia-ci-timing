@@ -7423,7 +7423,7 @@ const TABS = {
       tq: "ttfx task filter",
       tx: "ttfx excluded tasks (when most are selected)",
       tv: "ttfx table view",
-      ts: "ttfx chart mode (summary or per task)",
+      ts: "ttfx chart mode (summary, per task or startup)",
     },
     data: () => ttfxData,
     load: loadTtfxData,
@@ -12164,13 +12164,23 @@ const TTFX_ANNOTATION_HINT =
 // rather than their geomean, it is never drawn as % change, and it has no
 // summary panel: only the per-task chart draws it. A `detail` has no summary
 // panel, builds-table column or pill either: it is in the build and pull
-// request details, and the per-task chart draws it when picked. `short` names
-// a metric in running text.
+// request details, and the per-task chart draws it when picked. A `job` metric
+// is measured once per job: its value is entry `job` of the build's `startup`,
+// held by a stand-in task, so it has a summary panel but no per-task lines or
+// twins.
+// `short` names a metric in running text.
 const TTFX_METRICS = {
+  // julia's own startup, timed once per job before the tasks rather than per
+  // task: `julia -e ''` to its exit, and an interactive julia to its first prompt
+  startup: { label: "Startup", short: "startup", job: 0 },
+  startup_repl: { label: "Interactive startup", short: "interactive startup", job: 1 },
   precompile: { label: "Precompile", index: 0 },
   load: { label: "Load (cold)", index: 1, gcoffIndex: 4, stdlibsIndex: 8 },
   run: { label: "Run (cold)", index: 2, gcoffIndex: 5, stdlibsIndex: 10 },
   warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
+  // From spawning the cold process to the end of its load, so a build that moves
+  // work between startup and the first package load shows here as no change
+  startup_load: { label: "Startup+load (cold)", short: "startup+load", index: 11, detail: true },
   // The load in a copy of the task's project with every stdlib added and
   // imported first, so its packages load beside many methods from outside
   // their own dependencies, as in a session with several unrelated packages
@@ -12181,7 +12191,7 @@ const TTFX_METRICS = {
   precompile_stdlibs: { label: "Stdlibs precompile (added)", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
   // Marked "# recompile" in the task's trace log: compiled again because an
   // invalidation had dropped the code compiled before
-  recompiled: { label: "Recompiled methods", index: 11, count: true },
+  recompiled: { label: "Recompiled methods", index: 12, count: true },
   // MethodInstances the task script's load and run invalidated, by method
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", index: 7, count: true },
@@ -12225,7 +12235,7 @@ function ttfxBuildPr(b) {
 // and for an optimized build both against the regular build beside it
 function ttfxBuildSuiteRows(b, builds, series, tasks, task) {
   const i = series.indexOf(b);
-  return Object.keys(TTFX_METRICS).filter((key) => !ttfxIsDetail(key) || ttfxBuildHas(b, key)).map((key) => {
+  return Object.keys(TTFX_METRICS).filter((key) => (!ttfxIsDetail(key) && !ttfxIsJob(key)) || ttfxBuildHas(b, key)).map((key) => {
     const common = ttfxSuiteTasks(builds, tasks, key);
     const gcoff = ttfxShowsTwin("gcoff", key);
     let prev = null;
@@ -12335,7 +12345,8 @@ function showTtfxBuildPopup(b, task) {
   const pairedCell = (p) => (p ? `<td class="num ${ttfxPctClass((p.ratio - 1) * 100)}" title="${p.n} tasks">${formatTtfxRatio(p.ratio)}</td>` : '<td class="num"></td>');
   const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
   for (const r of suiteRows) {
-    html += `<tr><th title="${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks">${escapeHtml(ttfxShownLabel(r.key))}</th>`;
+    const over = ttfxIsJob(r.key) ? TTFX_JOB_NOTE : `${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks`;
+    html += `<tr><th title="${over}">${escapeHtml(ttfxShownLabel(r.key))}</th>`;
     html += `<td class="num">${formatTtfxValue(r.g, r.key)}${offHtml(r.off)}</td>`;
     html += `<td class="num ${r.change.cls}">${r.change.text}</td>`;
     if (paired) html += pairedCell(r.paired);
@@ -12870,8 +12881,28 @@ function ttfxIndex(metric, twin = null) {
   return (ttfxGcOff && m.gcoffIndex != null ? m.gcoffIndex : m.index) ?? null;
 }
 
+// The task that holds a job metric's value: the compare script's name for it
+const TTFX_STARTUP_TASK = "julia/startup";
+
+function ttfxIsJob(metric = ttfxMetric) {
+  return TTFX_METRICS[metric]?.job != null;
+}
+const TTFX_JOB_NOTE = "Timed once per job, before the tasks: the median of its runs in each ABBA block, the lowest block";
+
+// " (12 tasks)" after a suite value's label; nothing for a job metric, which has no tasks
+function ttfxTasksNote(metric, n) {
+  return ttfxIsJob(metric) ? "" : ` (${n} tasks)`;
+}
+
+// A job metric's value in `startup`, a build's or an optimized build's `base_startup`
+function ttfxJobValue(startup, metric) {
+  const x = startup && startup[TTFX_METRICS[metric].job];
+  return x > 0 ? x : null;
+}
+
 // `twin`: the value of that twin, null for a metric without one
 function ttfxValue(b, task, metric = ttfxMetric, twin = null) {
+  if (ttfxIsJob(metric)) return task === TTFX_STARTUP_TASK && !twin ? ttfxJobValue(b.startup, metric) : null;
   const v = b.tasks && b.tasks[task];
   if (!v) return null;
   const m = TTFX_METRICS[metric];
@@ -12889,7 +12920,7 @@ const TTFX_JUMP_WINDOW = 5;
 // Value indices the steps are measured for: every time metric and twin
 const TTFX_TIME_SLOTS =
   1 +
-  Math.max(...Object.values(TTFX_METRICS).filter((m) => !m.count).flatMap((m) => [m.index, ...Object.values(TTFX_TWINS).map((t) => m[t.index] ?? -1)]));
+  Math.max(...Object.values(TTFX_METRICS).filter((m) => !m.count && m.index != null).flatMap((m) => [m.index, ...Object.values(TTFX_TWINS).map((t) => m[t.index] ?? -1)]));
 
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
@@ -13121,6 +13152,7 @@ function ttfxHasPanel(metric = ttfxMetric) {
 
 // Whether any task of a build has a value of `metric`
 function ttfxBuildHas(b, metric) {
+  if (ttfxIsJob(metric)) return ttfxJobValue(b.startup, metric) != null;
   const i = ttfxIndex(metric);
   return Object.values(b.tasks || {}).some((v) => v[i] != null);
 }
@@ -13144,6 +13176,11 @@ function ttfxSuiteValue(b, tasks, metric = ttfxMetric, twin = null) {
 // ratio of a time metric, with the number of tasks both arms measured; null
 // for any other run or a count
 function ttfxPairedRatio(b, tasks, metric = ttfxMetric, twin = null) {
+  if (ttfxIsJob(metric)) {
+    const h = ttfxJobValue(b.startup, metric);
+    const r = ttfxJobValue(b.base_startup, metric);
+    return h && r && !twin ? { ratio: h / r, n: 1 } : null;
+  }
   const i = ttfxIndex(metric, twin);
   if (!b.base || TTFX_METRICS[metric].count || i == null) return null;
   let s = 0;
@@ -13171,6 +13208,8 @@ function ttfxNormalizedFor(metric = ttfxMetric) {
 }
 
 function formatTtfxValue(v, metric = ttfxMetric) {
+  // Startup is a fraction of a second, where a change of a few ms matters
+  if (ttfxIsJob(metric)) return v == null ? "—" : v < 1 ? `${(v * 1000).toFixed(v < 0.1 ? 1 : 0)} ms` : formatTtfxSeconds(v);
   if (!ttfxIsCount(metric)) return formatTtfxSeconds(v);
   return v == null ? "—" : Math.round(v).toLocaleString("en-US");
 }
@@ -13192,6 +13231,8 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
 // over time. Per metric, since a task's run can round to 0 while its
 // precompile is fine.
 function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, twin = null) {
+  // A job metric does not depend on which tasks are selected
+  if (ttfxIsJob(metric)) tasks = [TTFX_STARTUP_TASK];
   // The builds that measured any of `tasks`: a task added to the job later
   // (Ferrite in October 2026) then has a line of its own from when it starts,
   // instead of none because the builds before it measured other tasks
@@ -13274,8 +13315,8 @@ function setTtfxMetric(val) {
   if (!TTFX_METRICS[val]) return;
   ttfxMetric = val;
   document.getElementById("ttfx-metric").value = val;
-  // A count or a detail has no summary panel
-  if (!ttfxHasPanel() && ttfxMode === "summary") applyTtfxMode("tasks");
+  const mode = ttfxModeFor(val);
+  if (mode !== ttfxMode) applyTtfxMode(mode);
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxTable();
@@ -13317,7 +13358,7 @@ function updateTtfxGcButtons() {
 
 // The charts drawn now, by summary panel or "task" for the per-task chart
 function ttfxChartsByKey() {
-  return ttfxMode === "summary" ? { ...ttfxSummaryCharts } : ttfxChart ? { task: ttfxChart } : {};
+  return ttfxDrawsPanels() ? { ...ttfxSummaryCharts } : ttfxChart ? { task: ttfxChart } : {};
 }
 
 // Flipping the GC keeps each chart's axes, so the lines move against fixed
@@ -13501,8 +13542,9 @@ function applyTtfxURLParams() {
     ttfxTwinsDrawn.add(twin);
     document.getElementById(t.button).classList.add("btn-primary");
   }
-  // A count or a detail has no summary panel
-  applyTtfxMode(params.get("ts") === "tasks" || !ttfxHasPanel() ? "tasks" : "summary");
+  // A count or a detail has no summary panel, and the startup view only startup's
+  if (params.get("ts") === "startup" && !ttfxIsJob()) ttfxMetric = "startup";
+  applyTtfxMode(ttfxModeFor(ttfxMetric, params.get("ts") === "tasks" ? "tasks" : "summary"));
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
@@ -13614,7 +13656,7 @@ function populateTtfxTaskList() {
   const latest = ttfxLatestMeasured(getTtfxFilteredBuilds());
   // The summary has no one metric, so each task shows what a user waits for
   // in all: precompiling, then loading and running it warm
-  const summary = ttfxMode === "summary";
+  const summary = ttfxDrawsPanels();
   const metricLabel = summary ? `precompile + warm load and run${ttfxGcOff ? ", GC off" : ""}` : ttfxShownLabel().toLowerCase();
   const valueOf = (t) => {
     if (!summary) return ttfxValue(latest, t);
@@ -13833,12 +13875,13 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
           },
           label: (item) => {
             const ds = item.dataset;
+            const job = ttfxIsJob(metric);
             const label = TTFX_REFS[ds._ref]?.versioned
-              ? `Julia ${item.raw.build.version} (${TTFX_REFS[ds._ref].versioned}${ds._twin ? ", " + TTFX_TWINS[ds._twin].label : ""}, ${ds._refTasks} tasks)`
+              ? `Julia ${item.raw.build.version} (${TTFX_REFS[ds._ref].versioned}${ds._twin ? ", " + TTFX_TWINS[ds._twin].label : ""}${job ? "" : `, ${ds._refTasks} tasks`})`
               : ds._ref
-                ? `${ds.label} (${ds._refTasks} tasks)`
+                ? `${ds.label}${ttfxTasksNote(metric, ds._refTasks)}`
               : ds._common
-                ? `${ds.label} (${ds._common} tasks)`
+                ? `${ds.label}${ttfxTasksNote(metric, ds._common)}`
                 : ds.label;
             let gap = "";
             if (ds._twin) {
@@ -13859,12 +13902,12 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
             const chart = items[0].chart;
             if (items[0].dataset._ref === "opt") {
               const p = ttfxPairedRatio(b, items[0].dataset._refCommon, metric, items[0].dataset._twin);
-              if (p) lines.push(`vs regular build: ${formatTtfxRatio(p.ratio)} (${p.n} tasks)`);
+              if (p) lines.push(`vs regular build: ${formatTtfxRatio(p.ratio)}${ttfxTasksNote(metric, p.n)}`);
             }
             const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
             if (suite && !items[0].dataset._common) {
               const p = suite.data.find((q) => q.build === b);
-              if (p) lines.push(`${suite.label} (${suite._common} tasks): ${fmt(p.y)}`);
+              if (p) lines.push(`${suite.label}${ttfxTasksNote(metric, suite._common)}: ${fmt(p.y)}`);
             }
             lines.push(`build ${b.build}${failed ? `, ${failed} task${failed > 1 ? "s" : ""} failed` : ""}`);
             if (b.message) lines.push(tooltipLine(b.message));
@@ -14285,21 +14328,41 @@ function resetTtfxZoom() {
 
 // Sets the mode and its buttons and containers, without drawing
 function applyTtfxMode(mode) {
-  ttfxMode = mode === "tasks" ? "tasks" : "summary";
-  for (const m of ["summary", "tasks"]) {
+  ttfxMode = TTFX_MODES.includes(mode) ? mode : "summary";
+  for (const m of TTFX_MODES) {
     document.getElementById("ttfx-mode-" + m).classList.toggle("btn-primary", m === ttfxMode);
   }
-  document.getElementById("ttfx-summary-grid").hidden = ttfxMode !== "summary";
+  const grid = document.getElementById("ttfx-summary-grid");
+  grid.hidden = !ttfxDrawsPanels();
+  grid.dataset.mode = ttfxMode;
   document.getElementById("ttfx-single").hidden = ttfxMode !== "tasks";
-  // The summary draws every time metric, so the picker only serves the per-task chart
-  document.getElementById("ttfx-metric").classList.toggle("view-hidden", ttfxMode === "summary");
+  // The panels draw every metric of their view, so the picker only serves the per-task chart
+  document.getElementById("ttfx-metric").classList.toggle("view-hidden", ttfxDrawsPanels());
   destroyTtfxCharts();
+}
+
+// The summary and startup views draw panels, one per metric; the per-task view one chart
+const TTFX_MODES = ["summary", "tasks", "startup"];
+function ttfxDrawsPanels() {
+  return ttfxMode !== "tasks";
+}
+
+// The view that shows `metric`, staying in the current one when it can: a job metric
+// is in the startup view alone, a count or a detail in the per-task chart alone
+function ttfxModeFor(metric, mode = ttfxMode) {
+  if (ttfxIsJob(metric)) return "startup";
+  if (!ttfxHasPanel(metric)) return "tasks";
+  return mode === "startup" ? "summary" : mode;
+}
+
+// Whether the panel of `metric` belongs to the current view
+function ttfxInView(metric) {
+  return ttfxHasPanel(metric) && ttfxIsJob(metric) === (ttfxMode === "startup");
 }
 
 function setTtfxMode(mode) {
   applyTtfxMode(mode);
-  // The summary has no panel for a count or a detail
-  if (ttfxMode === "summary" && !ttfxHasPanel()) return setTtfxMetric("precompile");
+  if (ttfxModeFor(ttfxMetric) !== ttfxMode) return setTtfxMetric(ttfxMode === "startup" ? "startup" : "precompile");
   populateTtfxTaskList();
   updateTtfxChart();
   updateTtfxURL();
@@ -14308,12 +14371,22 @@ function setTtfxMode(mode) {
 // Phones show one chart at a time: pills pick the metric, and in summary
 // mode only that metric's panel is shown (a count switches to the per-task
 // chart)
-const TTFX_PILL_LABELS = { precompile: "Precompile", load: "Load", run: "Run", warm: "Warm", recompiled: "Recompiled", invalidated: "Invalidated" };
+const TTFX_PILL_LABELS = {
+  startup: "Startup",
+  startup_repl: "Interactive",
+  precompile: "Precompile",
+  load: "Load",
+  run: "Run",
+  warm: "Warm",
+  recompiled: "Recompiled",
+  invalidated: "Invalidated",
+};
 function updateTtfxMetricPills() {
   const el = document.getElementById("ttfx-metric-pills");
   if (!el) return;
   el.innerHTML = Object.keys(TTFX_METRICS)
-    .filter((m) => !ttfxIsDetail(m))
+    // The startup view's pills pick its panels; the other views' every other metric
+    .filter((m) => !ttfxIsDetail(m) && ttfxIsJob(m) === (ttfxMode === "startup"))
     .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')">${TTFX_PILL_LABELS[m]}</button>`)
     .join("");
   document.getElementById("ttfx-summary-grid").dataset.metric = ttfxMetric;
@@ -14329,7 +14402,7 @@ function updateTtfxChart() {
   normalize.title = normalize.disabled
     ? "A count is drawn as recorded: it is often 0, which has no % change"
     : "Plot every series as % change from its first build in the range";
-  if (ttfxMode === "summary") updateTtfxSummaryCharts();
+  if (ttfxDrawsPanels()) updateTtfxSummaryCharts();
   else updateTtfxTaskChart();
 }
 
@@ -14412,8 +14485,9 @@ function updateTtfxSummaryCharts() {
     }
     syncing = false;
   };
+  const panels = [];
   for (const metric of Object.keys(TTFX_METRICS)) {
-    if (!ttfxHasPanel(metric)) continue;
+    if (!ttfxInView(metric)) continue;
     const canvas = document.getElementById("ttfx-chart-" + metric);
     const common = ttfxSuiteTasks(builds, tasks, metric);
     const label = ttfxShownLabel(metric);
@@ -14425,13 +14499,19 @@ function updateTtfxSummaryCharts() {
       title: `${label} `,
       titleTail: !common.length
         ? "None recorded in this range"
-        : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
+        : `${ttfxIsJob(metric) ? "Median run, lowest block" : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}`}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
       legendDisplay: false,
       onZoomChange,
       builds,
     });
     options.scales.y.title.display = false;
     for (const ds of datasets) ds.hidden = ttfxSummaryHidden.has(ttfxSummarySeriesKey(ds));
+    panels.push({ metric, canvas, datasets, options });
+  }
+  // One time axis for every panel of the view, whichever series start later
+  const xs = panels.flatMap((p) => p.datasets.flatMap((d) => d.data.map((q) => q.x)));
+  for (const { metric, canvas, datasets, options } of panels) {
+    if (xs.length) Object.assign(options.scales.x, { min: Math.min(...xs), max: Math.max(...xs) });
     if (ttfxSummaryCharts[metric]) ttfxSummaryCharts[metric].destroy();
     ttfxSummaryCharts[metric] = new Chart(canvas, { type: "line", data: { datasets }, options });
   }
@@ -14535,7 +14615,9 @@ function renderTtfxBuildsTable() {
         key,
         ttfxShownLabel(key),
         "num",
-        `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
+        ttfxIsJob(key)
+          ? TTFX_JOB_NOTE
+          : `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
       ]),
       ["message", "Message", "col-secondary"],
     ],
@@ -14658,9 +14740,12 @@ function ttfxVerdict(...verdicts) {
 const ttfxVerdictClass = (v) => (v === "regression" ? "ttfx-up" : v === "improvement" ? "ttfx-down" : "");
 
 // A suite geomean's verdict as the TTFX job counted it: a difference that was GC moving
-// between load and run is not counted
-const ttfxSuiteVerdict = (s) => (s && s.gc_moved ? "same" : s && s.verdict);
+// between load and run, or work moving between startup and load, is not counted
+const ttfxSuiteVerdict = (s) => (s && (s.gc_moved || s.startup_moved) ? "same" : s && s.verdict);
 const TTFX_GC_MOVED_NOTE = "GC moved between load and run, not counted";
+const TTFX_STARTUP_MOVED_NOTE = "moved between startup and load, not counted";
+// Why a suite difference was not counted, or ""
+const ttfxSuiteNote = (s) => (s && s.gc_moved ? TTFX_GC_MOVED_NOTE : s && s.startup_moved ? TTFX_STARTUP_MOVED_NOTE : "");
 
 // A task's robust changes of the metrics `kinds`, as "load +3.1%, +2.9%; run -1.0%"
 function ttfxTaskChanges(t, kinds) {
@@ -14772,7 +14857,7 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
   if (chained) head.push("stack vs master (est.)");
   lines.push("", `| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`);
   const cell = (x) =>
-    !x ? "—" : x.gc_moved ? `${blocks(x)} (${TTFX_GC_MOVED_NOTE})` : x.verdict !== "same" ? `**${blocks(x)}** (${x.verdict})` : blocks(x);
+    !x ? "—" : ttfxSuiteNote(x) ? `${blocks(x)} (${ttfxSuiteNote(x)})` : x.verdict !== "same" ? `**${blocks(x)}** (${x.verdict})` : blocks(x);
   for (const m of metrics) {
     const on = p.suite[m];
     if (!on) continue;
@@ -14876,7 +14961,7 @@ function allStatsButton(ref, { pr = false } = {}) {
 
 // The detail metrics a pull request's job compared, shown after the scored ones
 function ttfxPrDetailMetrics(p) {
-  return Object.keys(TTFX_METRICS).filter((m) => ttfxIsDetail(m) && p.suite && p.suite[m]);
+  return Object.keys(TTFX_METRICS).filter((m) => (ttfxIsDetail(m) || ttfxIsJob(m)) && p.suite && p.suite[m]);
 }
 
 function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
@@ -14927,9 +15012,9 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(ttfxSuiteVerdict(on), off && off.verdict);
     const note = details.includes(m) ? "; not in the score" : "";
-    html += `<tr><th title="Over ${on ? on.n_tasks : 0} tasks${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    html += `<tr><th title="${ttfxIsJob(m) ? TTFX_JOB_NOTE : `Over ${on ? on.n_tasks : 0} tasks`}${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
-    html += `<td class="${ttfxVerdictClass(v)}">${on && on.gc_moved ? TTFX_GC_MOVED_NOTE : v}</td>`;
+    html += `<td class="${ttfxVerdictClass(v)}">${ttfxSuiteNote(on) || v}</td>`;
     if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
     html += "</tr>";
   }
@@ -15070,6 +15155,9 @@ let ttfxPrsSort = { col: "rank", asc: true };
 // Last come the counts from the job's untimed trace run, as head less base:
 // exact numbers, so they have no blocks and no verdict.
 const TTFX_PR_COLUMNS = [
+  { key: "startup", label: "Startup", group: "Startup" },
+  { key: "startup_repl", label: "Interactive", group: "Startup" },
+  { key: "startup_load", label: "+load", group: "Startup" },
   { key: "precompile", label: "Precompile", group: "" },
   { key: "load", label: "Load", group: "Cold" },
   { key: "run", label: "Run", group: "Cold" },
@@ -15122,6 +15210,10 @@ function ttfxPrColumnTitle(c) {
     return "MethodInstances the task scripts invalidated, by method definitions or as package-image code rejected on load, summed over the tasks: head less base. From the job's untimed trace run, so an exact count with no blocks; the totals and the tasks that changed most are in the tooltip.";
   if (c.key === "recompiled")
     return "Methods compiled again because an invalidation had dropped their code, from the task scripts' trace logs, summed over the tasks: head less base. The totals and the tasks that changed most are in the tooltip.";
+  if (ttfxIsJob(c.key))
+    return `${ttfxMetricLabel(c.key)}, head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust. Not in the score.`;
+  if (c.key === "startup_load")
+    return "Startup+load (cold): from starting the cold run's julia process to the end of its load. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. A load change it does not share was work moved between startup and load, which the job does not count. Not in the score.";
   const base = c.key.replace(/_gcoff$/, "");
   const what = c.key.endsWith("_gcoff")
     ? `${ttfxMetricLabel(base)} with the GC off, from the first of the GC-off repeats`
@@ -15222,7 +15314,7 @@ function renderTtfxPrsTable() {
         html += `<td class="num${start}">–</td>`;
         return;
       }
-      const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${x.gc_moved ? TTFX_GC_MOVED_NOTE : x.verdict}), ${x.n_tasks} tasks`;
+      const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${ttfxSuiteNote(x) || x.verdict})${ttfxIsJob(c.key) ? "" : `, ${x.n_tasks} tasks`}`;
       html += `<td class="num ${ttfxVerdictClass(ttfxSuiteVerdict(x))}${start}" title="${escapeHtml(title)}">${ttfxRatioPct(blocksMean(x))}</td>`;
     });
     const better = p.tasks.filter((t) => t.improvements.length);
@@ -15269,7 +15361,7 @@ function ttfxPrChainedSuite(p) {
 }
 
 function showTtfxPrPoints(p) {
-  if (ttfxMode !== "summary" || !ttfxPrChainedSuite(p)) return;
+  if (!ttfxDrawsPanels() || !ttfxPrChainedSuite(p)) return;
   const layers = [...(p.stack ? p.stack.parents : [])]
     .reverse()
     .map((pr) => ttfxPrs.prs.find((x) => x.pr === pr))
@@ -15409,7 +15501,7 @@ function clearProjectedPoints(chart, prefix) {
 
 // Light up build `build` on the per-task chart or on every summary panel
 function highlightTtfxBuild(build) {
-  const charts = ttfxMode === "summary" ? Object.values(ttfxSummaryCharts) : [ttfxChart];
+  const charts = ttfxDrawsPanels() ? Object.values(ttfxSummaryCharts) : [ttfxChart];
   for (const c of charts) {
     const points = build == null ? [] : chartPointsWhere(c, (raw) => raw.build.build === build);
     setChartActivePoints(c, points, preferredPoint(c, points, (ds) => ds._common));
@@ -17501,13 +17593,17 @@ function overviewTtfxCard(src, prs) {
   // measured and on its own scale, so their trends overlap
   const sparkBuilds = builds.filter((b) => ttfxBuildTime(b) >= Date.now() - OVERVIEW_SPARK_DAYS * OVERVIEW_DAY_MS);
   const weekAgo = overviewWeekBefore(sparkBuilds, latestMs, ttfxBuildTime);
-  const lines = OVERVIEW_TTFX_METRICS.map((m, k) => {
+  // Startup came later, so it takes the next colour and the others keep theirs
+  const colorOf = (m) => colors.categorical[(OVERVIEW_TTFX_METRICS.indexOf(m) + OVERVIEW_TTFX_METRICS.length - 1) % OVERVIEW_TTFX_METRICS.length];
+  const lines = OVERVIEW_TTFX_METRICS.map((m) => {
     const common = ttfxCommonTasks(sparkBuilds, src.tasks || [], m);
     const now = ttfxGeomean(latest, common, m);
     const before = weekAgo ? ttfxGeomean(weekAgo, common, m) : null;
+    const what = ttfxIsJob(m) ? `${ttfxMetricLabel(m)}, the median run` : `${TTFX_PILL_LABELS[m]} geomean over ${common.length} snippets`;
     return {
       label: TTFX_PILL_LABELS[m],
-      color: colors.categorical[k],
+      color: colorOf(m),
+      format: (v) => formatTtfxValue(v, m),
       n: common.length,
       now,
       points: sparkBuilds.map((b) => ({ x: ttfxBuildTime(b), y: ttfxGeomean(b, common, m) })),
@@ -17518,7 +17614,7 @@ function overviewTtfxCard(src, prs) {
               unit: "%",
               upIsGood: false,
               tol: NO_CHANGE_PCT.geomean,
-              detail: `${TTFX_PILL_LABELS[m]} geomean over ${common.length} snippets: ${formatTtfxSeconds(now)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxSeconds(before)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
+              detail: `${what}: ${formatTtfxValue(now, m)} in build #${latest.build} (${latest.date} UTC) against ${formatTtfxValue(before, m)} in #${weekAgo.build} (${weekAgo.date} UTC), the last build at least a week older`,
             })
           : null,
     };
@@ -17569,12 +17665,12 @@ function overviewTtfxCard(src, prs) {
   const weekDays = weekAgo ? Math.round((latestMs - ttfxBuildTime(weekAgo)) / OVERVIEW_DAY_MS) : null;
   const legend = shown.length
     ? {
-        items: shown.map((l) => ({ label: l.label, color: l.color, value: formatTtfxSeconds(l.now), delta: l.delta })),
-        caption: `each metric's geomean in the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
+        items: shown.map((l) => ({ label: l.label, color: l.color, value: l.format(l.now), delta: l.delta })),
+        caption: `startup (julia -e ''), then each metric's geomean, in the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
       }
     : null;
   const spark = overviewSparkLines(lines, {
-    label: "Geomean per build of precompile, load, run and warm, each on its own scale",
+    label: "julia's startup, and the geomean per build of precompile, load, run and warm, each on its own scale",
     format: formatTtfxSeconds,
     independent: true,
   });
@@ -17593,7 +17689,7 @@ function overviewTtfxCard(src, prs) {
     title: "TTFX",
     status,
     description:
-      "Time to precompile, load and run a set of packages and representative workloads.",
+      "Time to start julia, and to precompile, load and run a set of packages and representative workloads.",
     figures,
     legend,
     spark,
@@ -17612,7 +17708,7 @@ function overviewTtfxCard(src, prs) {
 const overviewReleaseClass = (pct, tol) =>
   upWorseClass(changeSign(pct, tol), "overview-delta-bad", "overview-delta-good") || "overview-delta-neutral";
 
-const OVERVIEW_TTFX_METRICS = ["precompile", "load", "run", "warm"];
+const OVERVIEW_TTFX_METRICS = ["startup", "precompile", "load", "run", "warm"];
 
 // A run of master against the latest weekly run of a release series, per
 // time metric over the snippets both measured
@@ -17622,7 +17718,8 @@ function overviewTtfxRelease(src, b, rel) {
     const x = ttfxGeomean(b, tasks, m);
     const y = ttfxGeomean(rel, tasks, m);
     if (x == null || !y) return null;
-    return { pct: (100 * (x - y)) / y, title: `${formatTtfxSeconds(x)} against ${formatTtfxSeconds(y)}, geomean over ${tasks.length} snippets` };
+    const over = ttfxIsJob(m) ? `${ttfxMetricLabel(m)}, the median run` : `geomean over ${tasks.length} snippets`;
+    return { pct: (100 * (x - y)) / y, title: `${formatTtfxValue(x, m)} against ${formatTtfxValue(y, m)}, ${over}` };
   });
 }
 
@@ -17631,7 +17728,7 @@ function overviewTtfxRelease(src, b, rel) {
 function overviewTtfxPaired(src, opt) {
   return OVERVIEW_TTFX_METRICS.map((m) => {
     const r = ttfxPairedRatio(opt, src.tasks || [], m);
-    return r && { pct: (r.ratio - 1) * 100, title: `Geomean over ${r.n} snippets measured in the same job` };
+    return r && { pct: (r.ratio - 1) * 100, title: ttfxIsJob(m) ? `${ttfxMetricLabel(m)}, measured in the same job` : `Geomean over ${r.n} snippets measured in the same job` };
   });
 }
 
@@ -18167,6 +18264,7 @@ function overviewSparkChart(canvas, spark) {
         pointHoverRadius: 4,
         pointHoverBackgroundColor: s.color,
         tension: 0.3,
+        _format: s.format,
       })),
     },
     options: {
@@ -18185,7 +18283,7 @@ function overviewSparkChart(canvas, spark) {
           displayColors: multi,
           callbacks: {
             title: (items) => formatUtc(items[0].parsed.x),
-            label: (item) => `${multi ? item.dataset.label : spark.tip ?? spark.label}: ${spark.format(item.parsed.y)}`,
+            label: (item) => `${multi ? item.dataset.label : spark.tip ?? spark.label}: ${(item.dataset._format ?? spark.format)(item.parsed.y)}`,
           },
         },
       },
@@ -18785,19 +18883,23 @@ function prReleaseLabel(version, kind, lts) {
 function ttfxReleasesHtml(metrics, against, base = null) {
   if (!against || !against.length) return "";
   const pct = (g) => (g == null ? null : (g - 1) * 100);
+  // Startup, once per job, after the task metrics when any run has it
+  const startup = against.some((a) => a.startup) ? ["startup", "startup_repl"] : [];
   let html = '<table class="ttfx-popup-table"><thead><tr><th></th>';
-  html += metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+  html += [...metrics, ...startup].map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
   html += "</tr></thead><tbody>";
+  const cell = (head, ratio, title) => {
+    const main = pct(base ? head : ratio);
+    let out = `<td class="num ${prReleaseClass(main, NO_CHANGE_PCT.geomean)}" title="${title}">${formatSignedPct(main)}`;
+    if (base) out += ` <span class="ttfx-popup-muted" title="Merge-base">${formatSignedPct(pct(ratio))}</span>`;
+    return out + "</td>";
+  };
   for (const a of against) {
     const label = prReleaseLabel(a.version, a.kind, a.kind === "lts");
     const title = `Run of ${formatUtc(a.date)}, build #${a.build}`;
     html += `<tr><th title="${escapeHtml(title)}">${a.url ? extLink(a.url, label) : label}</th>`;
-    metrics.forEach((_, i) => {
-      const main = pct(base ? a.head[i] : a.ratio[i]);
-      html += `<td class="num ${prReleaseClass(main, NO_CHANGE_PCT.geomean)}" title="Geomean over ${a.n_tasks[i]} tasks">${formatSignedPct(main)}`;
-      if (base) html += ` <span class="ttfx-popup-muted" title="Merge-base">${formatSignedPct(pct(a.ratio[i]))}</span>`;
-      html += "</td>";
-    });
+    metrics.forEach((_, i) => (html += cell(a.head?.[i], a.ratio[i], `Geomean over ${a.n_tasks[i]} tasks`)));
+    startup.forEach((_, i) => (html += cell(a.startup_head?.[i], a.startup?.[i], "The median run of each job")));
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -19048,6 +19150,14 @@ function commitTtfxHtml(data) {
     const label = m.endsWith("_gcoff") ? `${ttfxShortName(m.slice(0, -6))}, GC off` : ttfxShortName(m);
     return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`;
   });
+  // julia's own startup, once per job
+  const s = t.startup;
+  if (s)
+    s.metrics.forEach((m, i) => {
+      const pct = commitPct(s.now[i], s.previous?.[i]);
+      const title = `${formatTtfxValue(s.now[i], m)}${s.previous?.[i] ? ` against ${formatTtfxValue(s.previous[i], m)}` : ""}`;
+      figures.push(`<div class="commit-figure" title="${escapeHtml(title)}"><span class="commit-figure-label">${escapeHtml(ttfxShortName(m))}</span>${commitPctHtml(pct, 2)}</div>`);
+    });
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";
   if (failed.length) {

@@ -23,6 +23,12 @@
 # script invalidated, and the top causes (ttfx_invalidation_causes). Separately, every
 # job's ttfx/trace-compile.tar.gz is parsed for the methods compiled again because an
 # invalidation dropped their code (ttfx_traces, ttfx_recompiles; see refresh_traces!).
+# Jobs from 2026-11-12 on (JuliaCI/julia-buildkite#777) also time julia's own startup
+# before the tasks, uploaded as ttfx/startup.json: per arm and block, many runs of
+# `julia -e ''` and of the REPL to its first prompt. ttfx_startup keeps each arm's
+# minimum over blocks of the block medians. Their results.json records add
+# `preload_times`, from spawning the task's process to its first marker, which with the
+# load gives the `startup_load` metric.
 # It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
@@ -48,7 +54,7 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
 # fetched again in case the job already recorded it, the rest are padded.
 const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                 "load_stdlibs", "precompile_stdlibs", "run_stdlibs")
+                 "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load")
 const REFETCH_BUILDS = 30
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
@@ -112,6 +118,9 @@ function summarize_records(records, arm)
         load_stdlibs = nanmin([Float64(gcoff(r, :load_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :load_times_stdlibs))])
         precompile_stdlibs = nanmin([Float64(r.precompile_time_stdlibs) for r in ok if get(r, :precompile_time_stdlibs, nothing) !== nothing])
         run_stdlibs = nanmin([Float64(gcoff(r, :run_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :run_times_stdlibs))])
+        # From spawning the process to the end of its cold load, as the job judges it
+        startup_load = nanmin([Float64(gcoff(r, :preload_times)[1]) + Float64(r.load_times[1]) for r in ok
+                               if !isempty(gcoff(r, :preload_times)) && !isempty(r.load_times)])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
         k = findfirst(r -> get(r, :invalidations, nothing) !== nothing, ok)
         inv = k === nothing ? nothing : record_invalidations(ok[k])
@@ -119,12 +128,32 @@ function summarize_records(records, arm)
         tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
                           round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff),
                           inv === nothing ? nothing : inv.invalidated,
-                          round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs)]
+                          round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs), round3(startup_load)]
     end
     return tasks, failed, invalidations
 end
 
-function build_row(build, job, results, meta)
+# startup.json records, per arm: the minimum over blocks of each block's median of the
+# `julia -e ''` runs and of the REPL runs, and the first error. A metric no block measured
+# is nothing; a REPL that never prompted leaves `error_repl` but not `status`.
+function summarize_startup(records)
+    out = Dict{String,Any}()
+    median(x) = (s = sort(x); n = length(s); isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
+    for arm in unique(String(get(r, :arm, "")) for r in records)
+        recs = [r for r in records if String(get(r, :arm, "")) == arm]
+        ok = [r for r in recs if get(r, :status, "") == "ok"]
+        block_medians(key) = [median(Float64.(r[key])) for r in ok if !isempty(get(r, key, []))]
+        best(key) = (v = block_medians(key); isempty(v) ? nothing : round(minimum(v); digits=4))
+        errs = [get(r, key, nothing) for key in (:error, :error_repl) for r in recs]
+        k = findfirst(!isnothing, errs)
+        out[arm] = (; startup=best(:startup_times), startup_repl=best(:startup_repl_times),
+                    runs=sum(length(get(r, :startup_times, [])) for r in ok; init=0),
+                    error=k === nothing ? nothing : first(String(errs[k]), 300))
+    end
+    return out
+end
+
+function build_row(build, job, results, meta, startup=nothing)
     arms = meta === nothing ? nothing : get(meta, :arms, nothing)
     order = meta === nothing ? [] : get(meta, :arm_order, [])
     arm = "head" in String.(order) || (arms !== nothing && haskey(arms, :head)) ? "head" :
@@ -174,6 +203,7 @@ function build_row(build, job, results, meta)
         "_results" => results,
         "_meta" => meta,
         "_invalidations" => invalidations,
+        "_startup" => startup,
     )
 end
 
@@ -181,7 +211,7 @@ end
 # when the job uploaded no such artifact; nothing altogether when the listing or a
 # download failed, so the caller leaves the job for the next run instead of recording
 # an empty row.
-function fetch_job_artifacts(build, job; pipeline=CI_PIPELINE, paths=("ttfx/results.json", "ttfx/results-meta.json"))
+function fetch_job_artifacts(build, job; pipeline=CI_PIPELINE, paths=("ttfx/results.json", "ttfx/results-meta.json", "ttfx/startup.json"))
     artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$pipeline/builds/$(build.number)/jobs/$(job.id)/artifacts")
     artifacts === nothing && return nothing
     function get_json(path)
@@ -238,7 +268,7 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
                     @warn "Could not fetch the artifacts; the job is retried next run" build=build.number
                     continue
                 end
-                results, meta = fetched
+                results, meta, startup = fetched
                 if results === nothing && key in refetch
                     @warn "The artifacts are gone; the row keeps what it has" build=build.number
                     push!(expired, String(job.id))
@@ -248,7 +278,7 @@ function fetch_new_rows(known::Set{String}; refetch::Set{String}=Set{String}(), 
                 if results === nothing
                     @info "No results artifact" build=build.number
                 end
-                push!(rows, build_row(build, job, results, meta))
+                push!(rows, build_row(build, job, results, meta, startup))
                 push!(known, key)
                 new_in_page += 1
             end
@@ -285,7 +315,7 @@ function write_row!(db, r, seq, stmts)
                         something(r["n_tasks"], missing), length(METRICS), r["_arm"], at(get(job, :started_at, nothing)),
                         at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
                         r["_results"] === nothing ? 0 : 1, seq))
-    for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples", "ttfx_invalidation_causes")
+    for t in ("ttfx_results", "ttfx_failures", "ttfx_arms", "ttfx_samples", "ttfx_invalidation_causes", "ttfx_startup")
         DBInterface.execute(db, "DELETE FROM $t WHERE job_uuid = ?", (uuid,))
     end
     for (task, vals) in r["tasks"]
@@ -315,12 +345,19 @@ function write_row!(db, r, seq, stmts)
                 jsonstr(get(rec, :load_times_gcoff, nothing)), jsonstr(get(rec, :run_times_gcoff, nothing)), jsonstr(get(rec, :total_times_gcoff, nothing)),
                 str_or_missing(get(rec, :error_stdlibs, nothing)),
                 get(rec, :precompile_time_stdlibs, nothing) === nothing ? missing : Float64(rec.precompile_time_stdlibs),
-                jsonstr(get(rec, :load_times_stdlibs, nothing)), jsonstr(get(rec, :run_times_stdlibs, nothing))))
+                jsonstr(get(rec, :load_times_stdlibs, nothing)), jsonstr(get(rec, :run_times_stdlibs, nothing)),
+                jsonstr(get(rec, :preload_times, nothing))))
+        end
+    end
+    if r["_startup"] !== nothing
+        for (arm, s) in summarize_startup(r["_startup"])
+            DBInterface.execute(stmts.startup, (uuid, arm, something(s.startup, missing), something(s.startup_repl, missing), s.runs,
+                                                something(s.error, missing)))
         end
     end
     # The artifacts expire on Buildkite; keep what was parsed
-    DBInterface.execute(stmts.raw, (uuid, iso_now(), r["_results"] === nothing ? missing : compress_zst(JSON3.write(r["_results"])),
-                                    r["_meta"] === nothing ? missing : compress_zst(JSON3.write(r["_meta"]))))
+    zst(x) = x === nothing ? missing : compress_zst(JSON3.write(x))
+    DBInterface.execute(stmts.raw, (uuid, iso_now(), zst(r["_results"]), zst(r["_meta"]), zst(r["_startup"])))
 end
 
 function write_rows!(db, rows)
@@ -334,8 +371,9 @@ function write_rows!(db, rows)
         arm = DBInterface.prepare(db, "INSERT INTO ttfx_arms (job_uuid, arm, commit_sha, version) VALUES (?, ?, ?, ?)"),
         sample = DBInterface.prepare(db, "INSERT INTO ttfx_samples (job_uuid, seq, task, arm, block, status, error, error_gcoff, precompile_s, " *
                                          "load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s, error_stdlibs, precompile_stdlibs_s, " *
-                                         "load_stdlibs_s, run_stdlibs_s) VALUES ($(join(fill("?", 19), ", ")))"),
-        raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst) VALUES (?, ?, ?, ?)"))
+                                         "load_stdlibs_s, run_stdlibs_s, preload_s) VALUES ($(join(fill("?", 20), ", ")))"),
+        startup = DBInterface.prepare(db, "INSERT INTO ttfx_startup (job_uuid, arm, startup, startup_repl, runs, error) VALUES (?, ?, ?, ?, ?, ?)"),
+        raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst, startup_zst) VALUES (?, ?, ?, ?, ?)"))
     for r in rows
         write_row!(db, r, seq, stmts)
     end
@@ -453,6 +491,8 @@ end
 # request, for ranking them; nothing older is kept.
 
 const PR_PIPELINE = "julia-pr"
+# The task name compare.json gives the startup records
+const STARTUP_TASK = "julia/startup"
 # Builds listed per run: the first fill reaches back a month, later runs only need the
 # builds since the last one, with a margin. A TTFX job can finish more than a day after
 # its build was created, behind the macOS queue, so they also reach back to the oldest
@@ -544,7 +584,17 @@ function pr_row(pull, build, job, compare, meta)
     head, base = arm(:head), arm(:base)
     # Only what the verdict rests on; the notes quote whole error messages
     flagged = Any[]
+    suite = Dict{String,Any}(String(k) => v for (k, v) in pairs(something(get(compare, :suite, nothing), Dict())))
     for (name, t) in pairs(something(get(compare, :tasks, nothing), Dict()))
+        # Startup is measured once per build, so it joins the suite results rather than the tasks
+        if String(name) == STARTUP_TASK
+            for (m, v) in pairs(get(t, :metrics, Dict()))
+                haskey(v, :ratios) || continue
+                suite[String(m)] = Dict("geomeans" => v.ratios, "verdict" => get(v, :verdict, "same"), "n_tasks" => 1,
+                                        "base" => get(v, :base, nothing), "head" => get(v, :head, nothing))
+            end
+            continue
+        end
         imps, regs = get(t, :improvements, []), get(t, :regressions, [])
         isempty(imps) && isempty(regs) && continue
         metrics = Dict(String(m) => Dict(k => v[k] for k in (:ratios, :gcoff_ratios) if haskey(v, k))
@@ -565,7 +615,7 @@ function pr_row(pull, build, job, compare, meta)
             something(get(compare, :blocks, nothing), missing),
             settings === nothing ? missing : something(get(settings, :n_tasks, nothing), missing),
             String(compare.verdict), Int(compare.n_improvements), Int(compare.n_regressions),
-            JSON3.write(something(get(compare, :suite, nothing), Dict())), JSON3.write(flagged),
+            JSON3.write(suite), JSON3.write(flagged),
             # A new job's counts are fetched by refresh_pr_counts!
             missing)
 end

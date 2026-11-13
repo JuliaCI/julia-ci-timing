@@ -75,7 +75,9 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
   "tasks":  ["Package/Task", ...],
   "builds": [ { "build", "job_id", "commit", "date", "version", "state",
                 "tasks":  { "Package/Task": [precompile, load, run, warm, ...] },
-                "failed": { "Package/Task": "error" } }, ... ]
+                "startup": [startup, startup_repl],
+                "failed": { "Package/Task": "error" } }, ... ],
+  "startup_metrics": ["startup", "startup_repl"]
 }
 ```
 
@@ -88,15 +90,25 @@ invalidated (from an untimed run that logs them; null for jobs before
 the driver did). Then `load_stdlibs`, the cold load in a copy of the
 task's project with every stdlib added and imported first, and
 `precompile_stdlibs`, that copy's precompile after the task's own, and
-`run_stdlibs`, the cold run after that load (null
+`run_stdlibs`, the cold run after that load, and `startup_load`, from
+spawning the cold run's process to the end of its load (null
 for jobs before the driver measured them; the site has no summary panel or
-builds-table column for them (the Open PRs table has the load and run): the stdlibs-first load and run are drawn as a dotted
+builds-table column for them (the Open PRs table has the load and run, and startup+load): the stdlibs-first load and run are drawn as a dotted
 twin of load and run with "Show stdlibs first" (`tl=1`), and the precompile
-by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
+and startup+load by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`
 has the recompiled statements and the top causes of the invalidations.
+A build's `startup` is julia's own startup, which the job times once before the tasks
+(JuliaCI/julia-buildkite#777, `ttfx/startup.json`, kept in `ttfx_startup`): seconds from
+spawning `julia -e ''` to its exit, and an interactive julia to its first prompt, each the
+lowest over blocks of the block's median run, in the order of `startup_metrics`. Jobs before
+2026-11-12 have none. The TTFX tab draws them in its Startup view (`ts=startup`), as
+Startup and Interactive startup, and puts them first in its tables; the Overview's card has
+the first. A build that moves work from startup into the first package load shows in
+`load` but not in `startup_load`; the pull request comparison does not count such a load
+change, and on pull requests `suite` has `startup` and `startup_repl` too.
 `builds` is sorted by date. A build whose job failed
 before uploading has an empty `tasks`. `releases` is a second array of
 the same shape for the weekly `TTFX release` job, which measures the
@@ -114,7 +126,7 @@ schedule, which measures the nightly optimized build (PGO and ThinLTO) against
 the regular master build of the same commit, interleaved in the same job. Each
 entry adds `base`, the regular build's times per task (the time metrics only,
 from the job's `base` samples), so `tasks[t][i] / base[t][i]` is the paired
-effect of the optimizations. The site draws the optimized build as a separate
+effect of the optimizations, and `base_startup`, the regular build's startup. The site draws the optimized build as a separate
 series and shows the paired difference in its tooltip and details.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the

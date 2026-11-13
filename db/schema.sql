@@ -360,7 +360,20 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     load_stdlibs       REAL,                 -- load in a copy of the project with every stdlib added and loaded first
     precompile_stdlibs REAL,                 -- precompile of that copy, after the task's own
     run_stdlibs        REAL,                 -- run in that copy, after its load
+    startup_load       REAL,                 -- from spawning the cold process to the end of its load: startup plus load
     PRIMARY KEY (job_uuid, task)
+) WITHOUT ROWID;
+
+-- julia's own startup, timed before the tasks (startup.json): per arm, the minimum
+-- over blocks of each block's median over many runs.
+CREATE TABLE IF NOT EXISTS ttfx_startup (
+    job_uuid     TEXT NOT NULL REFERENCES ttfx_jobs (job_uuid),
+    arm          TEXT NOT NULL,
+    startup      REAL,                       -- seconds from spawning `julia --startup-file=no -e ''` to its exit
+    startup_repl REAL,                       -- seconds from spawning an interactive julia to its first `julia> ` prompt
+    runs         INTEGER NOT NULL,           -- timed `-e ''` runs over the blocks
+    error        TEXT,                       -- the first failure, of either
+    PRIMARY KEY (job_uuid, arm)
 ) WITHOUT ROWID;
 
 -- The causes behind invalidated: the top five of each kind per task and phase,
@@ -434,6 +447,7 @@ CREATE TABLE IF NOT EXISTS ttfx_samples (
     precompile_stdlibs_s REAL,
     load_stdlibs_s       TEXT,
     run_stdlibs_s        TEXT,
+    preload_s            TEXT,               -- per repeat, from spawning the process to the script's first marker
     PRIMARY KEY (job_uuid, seq)
 ) WITHOUT ROWID;
 
@@ -464,7 +478,7 @@ CREATE TABLE IF NOT EXISTS ttfx_prs (
     verdict          TEXT NOT NULL,              -- improvement, regression or same, as the job judged it
     n_improvements   INTEGER NOT NULL,
     n_regressions    INTEGER NOT NULL,
-    suite            TEXT NOT NULL,              -- JSON: metric => {geomeans (head/base per block), verdict, n_tasks}
+    suite            TEXT NOT NULL,              -- JSON: metric => {geomeans (head/base per block), verdict, n_tasks}; startup and startup_repl are the julia/startup row's, with base and head seconds per block
     tasks            TEXT NOT NULL,              -- JSON: the tasks with an improvement or regression, and their notes
     change_seq       INTEGER NOT NULL,
     ci_commit        TEXT,                       -- the head the CI columns were looked up for
@@ -479,7 +493,8 @@ CREATE TABLE IF NOT EXISTS raw_ttfx (
     job_uuid    TEXT PRIMARY KEY REFERENCES ttfx_jobs (job_uuid),
     fetched_at  TEXT NOT NULL,
     results_zst BLOB,
-    meta_zst    BLOB
+    meta_zst    BLOB,
+    startup_zst BLOB
 );
 
 -- ----------------------------------------------------------------- sizes --
