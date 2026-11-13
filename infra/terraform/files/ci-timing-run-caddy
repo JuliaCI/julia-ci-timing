@@ -4,9 +4,16 @@ set -eu
 # Built before the old container goes, so the site stays up during a build
 image=$(/usr/local/bin/ci-timing-build-caddy)
 docker rm -f ci-timing-caddy >/dev/null 2>&1 || true
+# Caddy's memory grew by 200-400 MB a day until a restart (1.3 GB by
+# 2026-11-13). The Go memory limit makes it collect garbage harder near the
+# cap. If it still reaches the cap it is killed, and the unit restarts it in
+# seconds, rather than taking the memory the API and the ingest need.
 exec docker run --name ci-timing-caddy \
   --network host \
   --log-opt max-size=50m --log-opt max-file=3 \
+  --memory 512m \
+  --env GOMEMLIMIT=400MiB \
+  --cgroup-parent ci-timing.slice \
   --volume /etc/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
   --volume "${CI_TIMING_CADDY_DATA_DIR}":/data \
   --volume "${CI_TIMING_CADDY_CONFIG_DIR}":/config \

@@ -53,6 +53,12 @@ if [ -z "$new" ]; then
   # the last one started is replaced
   new="${old##* }"; old="${old% *}"
 fi
+# Two servers and an ingest together took more memory than the host has
+# (2026-11-13), so the new server warms up while no ingest runs: the deploy
+# holds the ingest's lock until the switch. It waits at most 5 minutes for a
+# running ingest, then goes ahead anyway.
+exec 8>/var/lock/ci-timing-ingest.lock
+flock -w 300 8 || echo "an ingest still runs after 5 minutes; deploying beside it" >&2
 # restart rather than start: the unit may be running the old image already
 systemctl restart "ci-timing-api@$new.service"
 api_ok=0
@@ -80,6 +86,8 @@ else
   systemctl restart ci-timing-datasette.service
   echo "back on $previous_ref" >&2
 fi
+# Only one server runs now, so ingests may start again
+exec 8>&-
 
 # The ingest takes minutes and its outcome is on /healthz; the deploy
 # returns as soon as the API has switched. A start request while a run is

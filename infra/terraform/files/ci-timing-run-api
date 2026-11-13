@@ -28,6 +28,7 @@ exec docker run --name "ci-timing-api-$port" \
   --publish "127.0.0.1:${port}:${port}" \
   --log-opt max-size=50m --log-opt max-file=3 \
   --memory 2g \
+  --cgroup-parent ci-timing.slice \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --security-opt no-new-privileges:true \

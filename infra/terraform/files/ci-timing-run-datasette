@@ -19,6 +19,7 @@ exec docker run --name ci-timing-datasette \
   --publish "127.0.0.1:${CI_TIMING_DATASETTE_PORT}:${CI_TIMING_DATASETTE_PORT}" \
   --log-opt max-size=50m --log-opt max-file=3 \
   --memory 1g \
+  --cgroup-parent ci-timing.slice \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \

@@ -1,0 +1,12 @@
+[Unit]
+Description=The site's containers: Caddy, Datasette, the API servers and the ingest
+
+# Each container has its own memory cap, but together the caps are more than
+# the host has: during a deploy two API servers run beside an ingest. Out of
+# memory with no swap, the host kept evicting and re-reading program code
+# instead of killing anything, and locked up until a reboot (2026-10-24,
+# 11-06, 11-13). With every container in this slice, the kernel kills the
+# largest one once they fill it, and leaves the rest of the host (SSM,
+# journald, Docker) the room to keep running.
+[Slice]
+MemoryMax=3200M

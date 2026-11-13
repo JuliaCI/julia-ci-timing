@@ -474,6 +474,7 @@ locals {
     "/etc/systemd/system/ci-timing-archive.timer"          = "0644"
     "/etc/systemd/system/ci-timing-memlog.service"         = "0644"
     "/etc/systemd/system/ci-timing-memlog.timer"           = "0644"
+    "/etc/systemd/system/ci-timing.slice"                  = "0644"
     "/etc/systemd/journald.conf.d/ci-timing-journald.conf" = "0644"
   }
   user_data_files = merge(

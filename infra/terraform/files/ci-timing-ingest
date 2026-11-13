@@ -32,6 +32,7 @@ docker rm -f "$container" >/dev/null 2>&1 || true
 # rather than locking up the host. A full run's processes use about 520 MB.
 docker run --rm --name "$container" --init \
   --memory 1200m \
+  --cgroup-parent ci-timing.slice \
   --user "${CI_TIMING_RUNTIME_UID}:${CI_TIMING_RUNTIME_GID}" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \

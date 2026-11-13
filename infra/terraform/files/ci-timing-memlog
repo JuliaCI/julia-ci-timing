@@ -3,10 +3,15 @@
 # that after a lock-up the previous boot's journal shows what filled the host.
 # Reads the cgroups directly, as docker stats takes seconds and starts more work.
 line="available=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo)MB"
+# The containers share a slice whose total is capped; this is what counts against it
+slice="$(cat /sys/fs/cgroup/ci-timing.slice/memory.current 2>/dev/null)"
+[ -n "$slice" ] && line="$line slice=$((slice / 1048576))MB"
 containers="$(docker ps --no-trunc --format '{{.ID}} {{.Names}}')"
 while read -r id name; do
   [ -n "$id" ] || continue
-  anon="$(awk '/^anon /{print int($2/1048576)}' "/sys/fs/cgroup/system.slice/docker-$id.scope/memory.stat" 2>/dev/null)"
+  # In the slice, or in Docker's default one for a container started before it
+  anon="$(cat /sys/fs/cgroup/ci-timing.slice/docker-$id.scope/memory.stat /sys/fs/cgroup/system.slice/docker-$id.scope/memory.stat 2>/dev/null |
+    awk '/^anon /{print int($2/1048576); exit}')"
   line="$line $name=${anon:-?}MB"
 done <<EOF
 $containers
