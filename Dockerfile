@@ -6,7 +6,7 @@
 # Only whitespace and syntax: the pages' onclick attributes call the scripts'
 # top-level functions by name, so no name is shortened. Run on the build
 # machine's own platform, since the output is the same for every one.
-FROM --platform=$BUILDPLATFORM node:24-slim AS scripts
+FROM --platform=$BUILDPLATFORM node:25-slim AS scripts
 RUN npm install --global esbuild@0.28.2
 COPY assets/*.js /src/
 RUN cd /src && for f in *.js; do \
