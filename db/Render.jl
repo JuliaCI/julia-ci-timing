@@ -664,23 +664,27 @@ const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gc
                       "precompile_cycles", "load_cycles", "run_cycles", "recompiled", "recompile_s"]
 const TTFX_RESULT_METRICS = 18
 # Measured once per job rather than per task (ttfx_startup), in each build's `startup`
-const TTFX_STARTUP_METRICS = ["startup", "startup_repl"]
+# The two times, in seconds, then the whole process's instructions and cycles of each
+const TTFX_STARTUP_METRICS = ["startup", "startup_repl", "startup_instructions", "startup_repl_instructions",
+                              "startup_cycles", "startup_repl_cycles"]
+const TTFX_STARTUP_COLS = join(TTFX_STARTUP_METRICS, ", ")
+startup_values(r) = Any[js(getproperty(r, Symbol(m))) for m in TTFX_STARTUP_METRICS]
 
-# Each job's startup times per arm, as [startup, startup_repl]; `where` limits the jobs
+# Each job's startup values per arm, in the order of TTFX_STARTUP_METRICS; `where` limits the jobs
 function ttfx_startup_values(db, where="", params=())
     out = Dict{String,Dict{String,Any}}()
-    for r in rows(db, "SELECT job_uuid, arm, startup, startup_repl FROM ttfx_startup$where", params)
+    for r in rows(db, "SELECT job_uuid, arm, $TTFX_STARTUP_COLS FROM ttfx_startup$where", params)
         r.startup === missing && r.startup_repl === missing && continue
-        get!(out, String(r.job_uuid), Dict{String,Any}())[String(r.arm)] = Any[js(r.startup), js(r.startup_repl)]
+        get!(out, String(r.job_uuid), Dict{String,Any}())[String(r.arm)] = startup_values(r)
     end
     return out
 end
 
-# One job's [startup, startup_repl] for the arm it reports, nothing when it has none
+# One job's startup values for the arm it reports, nothing when it has none
 function ttfx_job_startup(db, uuid)
-    r = rows(db, "SELECT s.startup, s.startup_repl FROM ttfx_startup s JOIN ttfx_jobs j ON j.job_uuid = s.job_uuid " *
+    r = rows(db, "SELECT $(join("s." .* TTFX_STARTUP_METRICS, ", ")) FROM ttfx_startup s JOIN ttfx_jobs j ON j.job_uuid = s.job_uuid " *
                  "WHERE s.job_uuid = ? AND s.arm = coalesce(j.selected_arm, 'head')", (uuid,))
-    return isempty(r) ? nothing : Any[js(r[1].startup), js(r[1].startup_repl)]
+    return isempty(r) ? nothing : startup_values(r[1])
 end
 
 function ttfx(db; since="")

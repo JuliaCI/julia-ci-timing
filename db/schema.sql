@@ -382,6 +382,13 @@ CREATE TABLE IF NOT EXISTS ttfx_startup (
     startup_repl REAL,                       -- seconds from spawning an interactive julia to its first `julia> ` prompt
     runs         INTEGER NOT NULL,           -- timed `-e ''` runs over the blocks
     error        TEXT,                       -- the first failure, of either
+    -- The whole process's retired instructions and CPU cycles, reduced like the times:
+    -- of one more `julia -e ''` per timed run, start to exit, and of the REPL runs up
+    -- to their prompt. NULL for jobs before the driver read them.
+    startup_instructions      INTEGER,
+    startup_repl_instructions INTEGER,
+    startup_cycles            INTEGER,
+    startup_repl_cycles       INTEGER,
     PRIMARY KEY (job_uuid, arm)
 ) WITHOUT ROWID;
 

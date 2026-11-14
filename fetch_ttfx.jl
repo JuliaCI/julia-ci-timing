@@ -35,6 +35,7 @@
 # precompile together, and `load_counters` and `run_counters`, those of the task script's
 # own thread over each phase of one more untimed run. They become the
 # `*_instructions` and `*_cycles` metrics, the minimum over blocks like the times.
+# startup.json has the whole process's counts of the startup runs, kept in ttfx_startup.
 # It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
@@ -151,7 +152,9 @@ end
 
 # startup.json records, per arm: the minimum over blocks of each block's median of the
 # `julia -e ''` runs and of the REPL runs, and the first error. A metric no block measured
-# is nothing; a REPL that never prompted leaves `error_repl` but not `status`.
+# is nothing; a REPL that never prompted leaves `error_repl` but not `status`. The same
+# for the whole process's instructions and cycles, of the jobs that read them: of one
+# more `julia -e ''` per timed run, and of each REPL run up to its prompt.
 function summarize_startup(records)
     out = Dict{String,Any}()
     median(x) = (s = sort(x); n = length(s); isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
@@ -160,9 +163,12 @@ function summarize_startup(records)
         ok = [r for r in recs if get(r, :status, "") == "ok"]
         block_medians(key) = [median(Float64.(r[key])) for r in ok if !isempty(get(r, key, []))]
         best(key) = (v = block_medians(key); isempty(v) ? nothing : round(minimum(v); digits=4))
+        count(key) = (v = block_medians(key); isempty(v) ? nothing : round(Int, minimum(v)))
         errs = [get(r, key, nothing) for key in (:error, :error_repl) for r in recs]
         k = findfirst(!isnothing, errs)
         out[arm] = (; startup=best(:startup_times), startup_repl=best(:startup_repl_times),
+                    startup_instructions=count(:startup_instructions), startup_repl_instructions=count(:startup_repl_instructions),
+                    startup_cycles=count(:startup_cycles), startup_repl_cycles=count(:startup_repl_cycles),
                     runs=sum(length(get(r, :startup_times, [])) for r in ok; init=0),
                     error=k === nothing ? nothing : first(String(errs[k]), 300))
     end
@@ -379,7 +385,9 @@ function write_row!(db, r, seq, stmts)
     if r["_startup"] !== nothing
         for (arm, s) in summarize_startup(r["_startup"])
             DBInterface.execute(stmts.startup, (uuid, arm, something(s.startup, missing), something(s.startup_repl, missing), s.runs,
-                                                something(s.error, missing)))
+                                                something(s.error, missing), something(s.startup_instructions, missing),
+                                                something(s.startup_repl_instructions, missing), something(s.startup_cycles, missing),
+                                                something(s.startup_repl_cycles, missing)))
         end
     end
     # The artifacts expire on Buildkite; keep what was parsed
@@ -401,7 +409,8 @@ function write_rows!(db, rows)
                                          "load_stdlibs_s, run_stdlibs_s, preload_s, precompile_instructions, precompile_cycles, " *
                                          "load_instructions, load_cycles, run_instructions, run_cycles, error_counters) " *
                                          "VALUES ($(join(fill("?", 27), ", ")))"),
-        startup = DBInterface.prepare(db, "INSERT INTO ttfx_startup (job_uuid, arm, startup, startup_repl, runs, error) VALUES (?, ?, ?, ?, ?, ?)"),
+        startup = DBInterface.prepare(db, "INSERT INTO ttfx_startup (job_uuid, arm, startup, startup_repl, runs, error, startup_instructions, " *
+                                          "startup_repl_instructions, startup_cycles, startup_repl_cycles) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
         raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst, startup_zst) VALUES (?, ?, ?, ?, ?)"))
     for r in rows
         write_row!(db, r, seq, stmts)

@@ -75,9 +75,9 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
   "tasks":  ["Package/Task", ...],
   "builds": [ { "build", "job_id", "commit", "date", "version", "state",
                 "tasks":  { "Package/Task": [precompile, load, run, warm, ...] },
-                "startup": [startup, startup_repl],
+                "startup": [startup, startup_repl, ...],
                 "failed": { "Package/Task": "error" } }, ... ],
-  "startup_metrics": ["startup", "startup_repl"]
+  "startup_metrics": ["startup", "startup_repl", ...]
 }
 ```
 
@@ -105,8 +105,8 @@ and run's are those of the task script's own thread in one more untimed cold run
 Instructions follow the work done rather than how long the machine took, so they repeat
 far more closely than seconds do: prefer them for telling whether a commit changed
 anything. The TTFX tab's Time / Instructions / Cycles control (`tu=instructions`) shows
-precompile, load and run in them, everywhere, and the Commit page gives each phase's
-instruction change. Then from the job's trace logs (`trace-compile.tar.gz`)
+precompile, load, run and the two startups in them, everywhere, and the Commit page gives
+the instruction change of each. Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`
@@ -114,7 +114,11 @@ has the recompiled statements and the top causes of the invalidations.
 A build's `startup` is julia's own startup, which the job times once before the tasks
 (JuliaCI/julia-buildkite#777, `ttfx/startup.json`, kept in `ttfx_startup`): seconds from
 spawning `julia -e ''` to its exit, and an interactive julia to its first prompt, each the
-lowest over blocks of the block's median run, in the order of `startup_metrics`. Jobs before
+lowest over blocks of the block's median run, in the order of `startup_metrics`. After the
+two times come `startup_instructions`, `startup_repl_instructions` and the two `_cycles`:
+the whole process's retired instructions and CPU cycles, reduced the same way, of one more
+untimed `julia -e ''` per timed run and of each REPL run up to its prompt (null for jobs
+whose driver does not read the counters). Jobs before
 2026-11-12 have none. The TTFX tab draws them in its Startup view (`ts=startup`), as
 Startup and Interactive startup, and puts them first in its tables; the Overview's card has
 the first. A build that moves work from startup into the first package load shows in

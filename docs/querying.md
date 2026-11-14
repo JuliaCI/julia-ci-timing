@@ -101,7 +101,8 @@ only the files that changed. `AGENTS.md` describes their shapes.
   from the CPU's counters, for the precompile over all its processes and for load and run
   over the script's thread in an untimed run, null for jobs that did not read them:
   instructions repeat far more closely than seconds), `ttfx_startup` (julia's own startup, timed once per job
-  and arm before the tasks: `julia -e ''` and to the REPL's first prompt), `ttfx_invalidation_causes` (the top
+  and arm before the tasks: `julia -e ''` and to the REPL's first prompt, with the whole
+  process's instructions and cycles of each for jobs that read them), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
   methods compiled again because an invalidation dropped their code),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX

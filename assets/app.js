@@ -7419,7 +7419,7 @@ const TABS = {
       tg: "ttfx GC-off twins toggle (retired; read as tc=off)",
       tl: "ttfx stdlibs-first twin toggle",
       tc: "ttfx GC mode: every value from the repeats with the GC off",
-      tu: "ttfx measure: precompile, load and run in instructions or cycles",
+      tu: "ttfx measure: precompile, load, run and startup in instructions or cycles",
       tk: "ttfx selected tasks",
       tq: "ttfx task filter",
       tx: "ttfx excluded tasks (when most are selected)",
@@ -12145,7 +12145,7 @@ let ttfxShowZero = false;
 // everywhere: the lines, tables and details. The stdlibs-first twins are
 // then not drawn, since those were measured with the GC on.
 let ttfxGcOff = false;
-// What precompile, load and run are shown in: "time", or one of TTFX_MEASURES,
+// What precompile, load, run and the startups are shown in: "time", or one of TTFX_MEASURES,
 // which the job's hardware counters read for the same phases. Like the GC
 // mode it applies everywhere: the lines, tables and details. The metrics
 // without counters stay in seconds, and no twins are drawn of one shown so.
@@ -12181,8 +12181,8 @@ const TTFX_ANNOTATION_HINT =
 const TTFX_METRICS = {
   // julia's own startup, timed once per job before the tasks rather than per
   // task: `julia -e ''` to its exit, and an interactive julia to its first prompt
-  startup: { label: "Startup", short: "startup", job: 0 },
-  startup_repl: { label: "Interactive startup", short: "interactive startup", job: 1 },
+  startup: { label: "Startup", short: "startup", job: 0, counters: { instructions: 2, cycles: 4 } },
+  startup_repl: { label: "Interactive startup", short: "interactive startup", job: 1, counters: { instructions: 3, cycles: 5 } },
   precompile: { label: "Precompile", index: 0, counters: { instructions: 12, cycles: 15 } },
   load: { label: "Load (cold)", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
   run: { label: "Run (cold)", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
@@ -12208,7 +12208,8 @@ const TTFX_METRICS = {
 // What the job's hardware counters read, which follows the work done rather
 // than how long the machine took over it: for precompile over every process
 // of it together, for load and run over the task script's own thread in one
-// more untimed run. Instructions repeat far more closely than times do.
+// more untimed run, for startup over the whole process. Instructions repeat
+// far more closely than times do.
 const TTFX_MEASURES = {
   instructions: { label: "Instructions", short: "instructions" },
   cycles: { label: "Cycles", short: "cycles" },
@@ -12945,9 +12946,12 @@ function ttfxTasksNote(metric, n) {
   return ttfxIsJob(metric) ? "" : ` (${n} tasks)`;
 }
 
-// A job metric's value in `startup`, a build's or an optimized build's `base_startup`
+// A job metric's value in `startup`, a build's or an optimized build's
+// `base_startup`: the seconds, or the counter it is shown in
 function ttfxJobValue(startup, metric) {
-  const x = startup && startup[TTFX_METRICS[metric].job];
+  const m = TTFX_METRICS[metric];
+  const measure = ttfxMeasureOf(metric);
+  const x = startup && startup[measure === "time" ? m.job : m.counters[measure]];
   return x > 0 ? x : null;
 }
 
@@ -13266,9 +13270,9 @@ function ttfxNormalizedFor(metric = ttfxMetric) {
 }
 
 function formatTtfxValue(v, metric = ttfxMetric) {
+  if (ttfxMeasureOf(metric) !== "time") return formatTtfxCounter(v);
   // Startup is a fraction of a second, where a change of a few ms matters
   if (ttfxIsJob(metric)) return v == null ? "—" : v < 1 ? `${(v * 1000).toFixed(v < 0.1 ? 1 : 0)} ms` : formatTtfxSeconds(v);
-  if (ttfxMeasureOf(metric) !== "time") return formatTtfxCounter(v);
   if (!ttfxIsCount(metric)) return formatTtfxSeconds(v);
   return v == null ? "—" : Math.round(v).toLocaleString("en-US");
 }
@@ -13413,8 +13417,10 @@ function updateTtfxTwinsHave() {
     if (has) ttfxTwinsHave.add(twin);
     else ttfxTwinsHave.delete(twin);
   }
-  const counters = Object.values(TTFX_METRICS).flatMap((m) => Object.values(m.counters || {}));
-  ttfxHasCounters = (ttfxData.builds || []).some((b) => Object.values(b.tasks || {}).some((v) => counters.some((i) => v[i] != null)));
+  // A task's values, or for a job metric the build's `startup`
+  const counters = (job) => Object.values(TTFX_METRICS).filter((m) => (m.job != null) === job).flatMap((m) => Object.values(m.counters || {}));
+  const has = (v, indices) => !!v && indices.some((i) => v[i] != null);
+  ttfxHasCounters = (ttfxData.builds || []).some((b) => has(b.startup, counters(true)) || Object.values(b.tasks || {}).some((v) => has(v, counters(false))));
   updateTtfxMeasureControl();
   updateTtfxGcButtons();
 }
@@ -19266,9 +19272,14 @@ function commitTtfxHtml(data) {
   const s = t.startup;
   if (s)
     s.metrics.forEach((m, i) => {
+      // After the two times come their instructions, shown when the job read them, and cycles, which are not
+      const counter = m.endsWith("_instructions");
+      if (m.endsWith("_cycles") || (counter && s.now[i] == null)) return;
+      const fmt = (v) => (counter ? formatTtfxCounter(v) : formatTtfxValue(v, m));
+      const label = counter ? `${ttfxShortName(m.slice(0, -13))}, instructions` : ttfxShortName(m);
       const pct = commitPct(s.now[i], s.previous?.[i]);
-      const title = `${formatTtfxValue(s.now[i], m)}${s.previous?.[i] ? ` against ${formatTtfxValue(s.previous[i], m)}` : ""}`;
-      figures.push(`<div class="commit-figure" title="${escapeHtml(title)}"><span class="commit-figure-label">${escapeHtml(ttfxShortName(m))}</span>${commitPctHtml(pct, 2)}</div>`);
+      const title = `${fmt(s.now[i])}${s.previous?.[i] ? ` against ${fmt(s.previous[i])}` : ""}`;
+      figures.push(`<div class="commit-figure" title="${escapeHtml(title)}"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`);
     });
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";

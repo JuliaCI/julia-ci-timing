@@ -181,7 +181,11 @@
             "startup": "seconds from spawning julia --startup-file=no -e '' to its exit",
             "startup_repl": "seconds from spawning an interactive julia on a pseudo-terminal to its first julia> prompt",
             "runs": "timed -e '' runs over the blocks",
-            "error": "the first failure of either"
+            "error": "the first failure of either",
+            "startup_instructions": "retired instructions of the whole process of one more, untimed, julia -e '' per timed run, from its start to its exit: the lowest block median; null for jobs whose driver did not read the CPU's counters",
+            "startup_repl_instructions": "retired instructions of the interactive julia's whole process up to its first prompt, the lowest block median",
+            "startup_cycles": "CPU cycles of the same julia -e '' runs",
+            "startup_repl_cycles": "CPU cycles of the interactive julia up to its first prompt"
           }
         },
         "ttfx_invalidation_causes": {
