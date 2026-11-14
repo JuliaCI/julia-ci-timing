@@ -166,7 +166,13 @@
             "load_stdlibs": "load on the first run in a copy of the task's project with every stdlib added and imported before the task's packages, so they load beside many methods from outside their own dependencies; null before the driver measured it",
             "precompile_stdlibs": "Pkg.precompile() of that copy right after the task's own: mostly the extensions the stdlibs trigger; not compared between builds",
             "run_stdlibs": "run of the task script in that copy, after its stdlibs-first load; null before the job recorded it",
-            "startup_load": "from spawning the first run's process to the end of its load phase: julia's startup plus the load, so work moved between the two cancels out; null before 2026-11-12"
+            "startup_load": "from spawning the first run's process to the end of its load phase: julia's startup plus the load, so work moved between the two cancels out; null before 2026-11-12",
+            "precompile_instructions": "retired instructions of every process of the precompile together (the process that runs Pkg.precompile(), its workers and their linkers), the minimum over blocks; they follow the work done, not how it was scheduled; null for jobs whose driver did not read the CPU's counters",
+            "load_instructions": "retired instructions of the task script's own thread over its load phase, in one more untimed cold run; null for jobs that did not read the counters",
+            "run_instructions": "the same over its run phase",
+            "precompile_cycles": "CPU cycles of every process of the precompile together",
+            "load_cycles": "CPU cycles of the task script's thread over its load phase, in the untimed counter run",
+            "run_cycles": "the same over its run phase"
           }
         },
         "ttfx_startup": {
@@ -175,7 +181,11 @@
             "startup": "seconds from spawning julia --startup-file=no -e '' to its exit",
             "startup_repl": "seconds from spawning an interactive julia on a pseudo-terminal to its first julia> prompt",
             "runs": "timed -e '' runs over the blocks",
-            "error": "the first failure of either"
+            "error": "the first failure of either",
+            "startup_instructions": "retired instructions of the whole process of one more, untimed, julia -e '' per timed run, from its start to its exit: the lowest block median; null for jobs whose driver did not read the CPU's counters",
+            "startup_repl_instructions": "retired instructions of the interactive julia's whole process up to its first prompt, the lowest block median",
+            "startup_cycles": "CPU cycles of the same julia -e '' runs",
+            "startup_repl_cycles": "CPU cycles of the interactive julia up to its first prompt"
           }
         },
         "ttfx_invalidation_causes": {
@@ -207,7 +217,12 @@
           "description": "The Julia builds (arms) a TTFX job compared, with their commits."
         },
         "ttfx_samples": {
-          "description": "Every record of a TTFX job's results file, in order, so other statistics than the minimum can be recomputed."
+          "description": "Every record of a TTFX job's results file, in order, so other statistics than the minimum can be recomputed.",
+          "columns": {
+            "precompile_instructions": "retired instructions of every process of this record's precompile together; precompile_cycles their CPU cycles",
+            "load_instructions": "retired instructions of the task script's thread over the load phase of this record's untimed counter run; load_cycles, run_instructions and run_cycles likewise",
+            "error_counters": "why the counter run has no values"
+          }
         },
         "ttfx_prs": {
           "description": "The latest finished TTFX comparison of every open julia pull request that has one: the head against the master build of the merge-base, as the julia-pr TTFX job judged it. Current state only; a closed pull request's row is deleted.",
