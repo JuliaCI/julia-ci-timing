@@ -96,7 +96,11 @@ only the files that changed. `AGENTS.md` describes their shapes.
   the MethodInstances the task script invalidated; `load_stdlibs` is the load with every
   stdlib added to the project and loaded first, `precompile_stdlibs` that project's added
   precompile and `run_stdlibs` the run after that load; `startup_load` runs from spawning the
-  process to the end of its load), `ttfx_startup` (julia's own startup, timed once per job
+  process to the end of its load; `precompile_instructions`, `load_instructions`,
+  `run_instructions` and the same three `_cycles` are retired instructions and CPU cycles
+  from the CPU's counters, for the precompile over all its processes and for load and run
+  over the script's thread in an untimed run, null for jobs that did not read them:
+  instructions repeat far more closely than seconds), `ttfx_startup` (julia's own startup, timed once per job
   and arm before the tasks: `julia -e ''` and to the REPL's first prompt), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
   methods compiled again because an invalidation dropped their code),

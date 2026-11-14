@@ -29,6 +29,12 @@
 # minimum over blocks of the block medians. Their results.json records add
 # `preload_times`, from spawning the task's process to its first marker, which with the
 # load gives the `startup_load` metric.
+# Jobs whose driver reads the hardware counters (JuliaCI/julia-buildkite#794) record
+# retired instructions and CPU cycles too, which follow the work done rather than how
+# long the machine took over it: `precompile_counters`, those of every process of the
+# precompile together, and `load_counters` and `run_counters`, those of the task script's
+# own thread over each phase of one more untimed run. They become the
+# `*_instructions` and `*_cycles` metrics, the minimum over blocks like the times.
 # It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
 
 using HTTP
@@ -54,7 +60,9 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are
 # fetched again in case the job already recorded it, the rest are padded.
 const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                 "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load")
+                 "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load",
+                 "precompile_instructions", "load_instructions", "run_instructions",
+                 "precompile_cycles", "load_cycles", "run_cycles")
 const REFETCH_BUILDS = 30
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
@@ -121,6 +129,11 @@ function summarize_records(records, arm)
         # From spawning the process to the end of its cold load, as the job judges it
         startup_load = nanmin([Float64(gcoff(r, :preload_times)[1]) + Float64(r.load_times[1]) for r in ok
                                if !isempty(gcoff(r, :preload_times)) && !isempty(r.load_times)])
+        # Retired instructions and CPU cycles, from the jobs whose driver reads them: of
+        # every process of the precompile, and of the script's own thread over each
+        # phase of the untimed counter run (`error_counters` when that failed)
+        counter(key, field) = nanmin([Int(c[field]) for c in (get(r, key, nothing) for r in ok)
+                                      if c !== nothing && get(c, field, nothing) !== nothing])
         round3(x) = x === nothing ? nothing : round(x; digits=3)
         k = findfirst(r -> get(r, :invalidations, nothing) !== nothing, ok)
         inv = k === nothing ? nothing : record_invalidations(ok[k])
@@ -128,7 +141,10 @@ function summarize_records(records, arm)
         tasks[name] = Any[round3(precompile), round3(load), round3(run), round3(warm),
                           round3(load_gcoff), round3(run_gcoff), round3(warm_gcoff),
                           inv === nothing ? nothing : inv.invalidated,
-                          round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs), round3(startup_load)]
+                          round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs), round3(startup_load),
+                          counter(:precompile_counters, :instructions), counter(:load_counters, :instructions),
+                          counter(:run_counters, :instructions), counter(:precompile_counters, :cycles),
+                          counter(:load_counters, :cycles), counter(:run_counters, :cycles)]
     end
     return tasks, failed, invalidations
 end
@@ -303,6 +319,14 @@ at(x) = x === nothing ? missing : Store.iso(Store.parse_upstream(String(x)))
 str_or_missing(x) = x === nothing ? missing : String(x)
 jsonstr(x) = x === nothing ? missing : JSON3.write(x)
 
+# One count of a record's `precompile_counters`, `load_counters` or `run_counters`
+function record_counter(rec, key, field)
+    c = get(rec, key, nothing)
+    c === nothing && return missing
+    v = get(c, field, nothing)
+    return v === nothing ? missing : Int(v)
+end
+
 const JOB_COLS = ["pipeline", "build", "triplet", "kind", "state", "build_created_at", "commit_sha", "version", "message", "agent", "cpu",
                   "snippets", "blocks", "n_tasks", "n_metrics", "selected_arm", "started_at", "finished_at", "web_url", "has_samples"]
 
@@ -346,7 +370,10 @@ function write_row!(db, r, seq, stmts)
                 str_or_missing(get(rec, :error_stdlibs, nothing)),
                 get(rec, :precompile_time_stdlibs, nothing) === nothing ? missing : Float64(rec.precompile_time_stdlibs),
                 jsonstr(get(rec, :load_times_stdlibs, nothing)), jsonstr(get(rec, :run_times_stdlibs, nothing)),
-                jsonstr(get(rec, :preload_times, nothing))))
+                jsonstr(get(rec, :preload_times, nothing)),
+                (record_counter(rec, key, field) for key in (:precompile_counters, :load_counters, :run_counters)
+                                                 for field in (:instructions, :cycles))...,
+                str_or_missing(get(rec, :error_counters, nothing))))
         end
     end
     if r["_startup"] !== nothing
@@ -371,7 +398,9 @@ function write_rows!(db, rows)
         arm = DBInterface.prepare(db, "INSERT INTO ttfx_arms (job_uuid, arm, commit_sha, version) VALUES (?, ?, ?, ?)"),
         sample = DBInterface.prepare(db, "INSERT INTO ttfx_samples (job_uuid, seq, task, arm, block, status, error, error_gcoff, precompile_s, " *
                                          "load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s, error_stdlibs, precompile_stdlibs_s, " *
-                                         "load_stdlibs_s, run_stdlibs_s, preload_s) VALUES ($(join(fill("?", 20), ", ")))"),
+                                         "load_stdlibs_s, run_stdlibs_s, preload_s, precompile_instructions, precompile_cycles, " *
+                                         "load_instructions, load_cycles, run_instructions, run_cycles, error_counters) " *
+                                         "VALUES ($(join(fill("?", 27), ", ")))"),
         startup = DBInterface.prepare(db, "INSERT INTO ttfx_startup (job_uuid, arm, startup, startup_repl, runs, error) VALUES (?, ?, ?, ?, ?, ?)"),
         raw = DBInterface.prepare(db, "INSERT OR REPLACE INTO raw_ttfx (job_uuid, fetched_at, results_zst, meta_zst, startup_zst) VALUES (?, ?, ?, ?, ?)"))
     for r in rows

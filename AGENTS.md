@@ -95,7 +95,18 @@ spawning the cold run's process to the end of its load (null
 for jobs before the driver measured them; the site has no summary panel or
 builds-table column for them (the Open PRs table has the load and run, and startup+load): the stdlibs-first load and run are drawn as a dotted
 twin of load and run with "Show stdlibs first" (`tl=1`), and the precompile
-and startup+load by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
+and startup+load by the per-task chart when picked). Then `precompile_instructions`,
+`load_instructions`, `run_instructions` and the same three `_cycles`: retired instructions
+and CPU cycles, read from the CPU's counters by jobs whose driver does (`TTFX_COUNTERS`
+in julia-buildkite's `utilities/ttfx/`; null before, and on anything but macOS), the minimum
+over blocks like the times. The precompile's are those of every process of it together
+(its workers run several at a time, so its seconds also depend on scheduling); the load's
+and run's are those of the task script's own thread in one more untimed cold run.
+Instructions follow the work done rather than how long the machine took, so they repeat
+far more closely than seconds do: prefer them for telling whether a commit changed
+anything. The TTFX tab's Time / Instructions / Cycles control (`tu=instructions`) shows
+precompile, load and run in them, everywhere, and the Commit page gives each phase's
+instruction change. Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`

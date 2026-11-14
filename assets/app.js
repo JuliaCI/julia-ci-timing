@@ -7419,6 +7419,7 @@ const TABS = {
       tg: "ttfx GC-off twins toggle (retired; read as tc=off)",
       tl: "ttfx stdlibs-first twin toggle",
       tc: "ttfx GC mode: every value from the repeats with the GC off",
+      tu: "ttfx measure: precompile, load and run in instructions or cycles",
       tk: "ttfx selected tasks",
       tq: "ttfx task filter",
       tx: "ttfx excluded tasks (when most are selected)",
@@ -12144,6 +12145,13 @@ let ttfxShowZero = false;
 // everywhere: the lines, tables and details. The stdlibs-first twins are
 // then not drawn, since those were measured with the GC on.
 let ttfxGcOff = false;
+// What precompile, load and run are shown in: "time", or one of TTFX_MEASURES,
+// which the job's hardware counters read for the same phases. Like the GC
+// mode it applies everywhere: the lines, tables and details. The metrics
+// without counters stay in seconds, and no twins are drawn of one shown so.
+let ttfxMeasure = "time";
+// Whether any build has counter values
+let ttfxHasCounters = false;
 // The twin kinds the data has values for, and those drawn
 const ttfxTwinsHave = new Set();
 const ttfxTwinsDrawn = new Set();
@@ -12169,14 +12177,15 @@ const TTFX_ANNOTATION_HINT =
 // held by a stand-in task, so it has a summary panel but no per-task lines or
 // twins.
 // `short` names a metric in running text.
+// `counters`: the value index of the same phase in each of TTFX_MEASURES.
 const TTFX_METRICS = {
   // julia's own startup, timed once per job before the tasks rather than per
   // task: `julia -e ''` to its exit, and an interactive julia to its first prompt
   startup: { label: "Startup", short: "startup", job: 0 },
   startup_repl: { label: "Interactive startup", short: "interactive startup", job: 1 },
-  precompile: { label: "Precompile", index: 0 },
-  load: { label: "Load (cold)", index: 1, gcoffIndex: 4, stdlibsIndex: 8 },
-  run: { label: "Run (cold)", index: 2, gcoffIndex: 5, stdlibsIndex: 10 },
+  precompile: { label: "Precompile", index: 0, counters: { instructions: 12, cycles: 15 } },
+  load: { label: "Load (cold)", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
+  run: { label: "Run (cold)", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
   warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
   // From spawning the cold process to the end of its load, so a build that moves
   // work between startup and the first package load shows here as no change
@@ -12191,10 +12200,18 @@ const TTFX_METRICS = {
   precompile_stdlibs: { label: "Stdlibs precompile (added)", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
   // Marked "# recompile" in the task's trace log: compiled again because an
   // invalidation had dropped the code compiled before
-  recompiled: { label: "Recompiled methods", index: 12, count: true },
+  recompiled: { label: "Recompiled methods", index: 18, count: true },
   // MethodInstances the task script's load and run invalidated, by method
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", index: 7, count: true },
+};
+// What the job's hardware counters read, which follows the work done rather
+// than how long the machine took over it: for precompile over every process
+// of it together, for load and run over the task script's own thread in one
+// more untimed run. Instructions repeat far more closely than times do.
+const TTFX_MEASURES = {
+  instructions: { label: "Instructions", short: "instructions" },
+  cycles: { label: "Cycles", short: "cycles" },
 };
 const TTFX_SUITE_LABEL = "Nightly";
 // The twins of a time metric, each from the metric's value index `index`: the
@@ -12214,6 +12231,9 @@ const TTFX_LEGEND_TASKS_MAX = 10;
 // +-10% of the midpoint in seconds mode, +-10 points in % mode
 const TTFX_MIN_Y_SPAN_REL = 0.2;
 const TTFX_MIN_Y_SPAN_PCT = 20;
+// A tenth of that floor for a metric shown in instructions or cycles, which
+// repeat closely enough for a 1% step to be worth the panel's height
+const TTFX_MIN_Y_SPAN_COUNTER = 0.1;
 // Room around the data, as a share of the span; above it, at least the
 // band the note labels need
 const TTFX_Y_PAD = 0.05;
@@ -12261,6 +12281,10 @@ function ttfxBuildSuiteRows(b, builds, series, tasks, task) {
 const TTFX_OUTLIER_MIN_PCT = 10;
 const TTFX_OUTLIER_MIN_S = 0.05;
 const TTFX_OUTLIER_MIN_COUNT = 10;
+// The same for a metric shown in instructions or cycles, which repeat far more
+// closely than the seconds: in % and in the counter's own count
+const TTFX_OUTLIER_MIN_PCT_COUNTER = 2;
+const TTFX_OUTLIER_MIN_COUNTER = 1e7;
 const TTFX_OUTLIER_ROWS = 10;
 
 // The selected tasks whose change from their last run before `b` in `series`
@@ -12291,6 +12315,10 @@ function ttfxBuildOutliers(b, series, tasks, suiteRows) {
       }
       if (ttfxIsCount(key)) {
         if (Math.abs(v - prev) >= TTFX_OUTLIER_MIN_COUNT) counts.push({ ...row, score: Math.abs(v - prev) });
+      } else if (ttfxMeasureOf(key) !== "time") {
+        // A counter repeats closely, so a smaller change stands out
+        if (prev > 0 && Math.abs(v / prev - 1) * 100 >= TTFX_OUTLIER_MIN_PCT_COUNTER && Math.abs(v - prev) >= TTFX_OUTLIER_MIN_COUNTER)
+          times.push({ ...row, score: Math.abs(Math.log(v / prev) - suiteLog[key]) });
       } else if (prev > 0 && Math.abs(v / prev - 1) * 100 >= TTFX_OUTLIER_MIN_PCT && Math.abs(v - prev) >= TTFX_OUTLIER_MIN_S) {
         times.push({ ...row, score: Math.abs(Math.log(v / prev) - suiteLog[key]) });
       }
@@ -12360,7 +12388,9 @@ function showTtfxBuildPopup(b, task) {
   const outliers = ttfxBuildOutliers(b, series, tasks, suiteRows);
   html += '<div class="ttfx-popup-section" title="Selected tasks whose change from their previous run departs most from the suite\'s">Tasks that moved most</div>';
   if (!outliers.length) {
-    html += `<div class="ttfx-popup-muted">None moved ${TTFX_OUTLIER_MIN_PCT}% and ${TTFX_OUTLIER_MIN_S}s, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
+    html += `<div class="ttfx-popup-muted">None moved ${TTFX_OUTLIER_MIN_PCT}% and ${TTFX_OUTLIER_MIN_S}s${
+      ttfxMeasure === "time" ? "" : `, ${TTFX_OUTLIER_MIN_PCT_COUNTER}% in ${TTFX_MEASURES[ttfxMeasure].short}`
+    }, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
   } else {
     const offs = outliers.some((o) => o.off != null || o.offPrev != null);
     html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th>';
@@ -12874,11 +12904,32 @@ function ttfxBuildTime(b) {
 
 // The value index of `metric`, or of its `twin` (a TTFX_TWINS key); null
 // when the metric has no such twin. With the GC off, a metric's own index is
-// that of its GC-off repeats when it has them.
+// that of its GC-off repeats when it has them; shown in a counter, that of
+// the counter's values.
 function ttfxIndex(metric, twin = null) {
   const m = TTFX_METRICS[metric];
   if (twin) return m[TTFX_TWINS[twin].index] ?? null;
+  const measure = ttfxMeasureOf(metric);
+  if (measure !== "time") return m.counters[measure];
   return (ttfxGcOff && m.gcoffIndex != null ? m.gcoffIndex : m.index) ?? null;
+}
+
+// `fn` with every metric in seconds, whatever the measure picked: for a sum
+// of metrics, or a count of the tasks a series has
+function ttfxInTime(fn) {
+  const measure = ttfxMeasure;
+  ttfxMeasure = "time";
+  try {
+    return fn();
+  } finally {
+    ttfxMeasure = measure;
+  }
+}
+
+// What `metric` is shown in: the counter picked when the job reads counters
+// for it, else "time"
+function ttfxMeasureOf(metric = ttfxMetric) {
+  return ttfxMeasure !== "time" && TTFX_METRICS[metric]?.counters ? ttfxMeasure : "time";
 }
 
 // The task that holds a job metric's value: the compare script's name for it
@@ -12917,10 +12968,14 @@ function ttfxValue(b, task, metric = ttfxMetric, twin = null) {
 
 // The builds each side of an annotated job used to measure its step
 const TTFX_JUMP_WINDOW = 5;
-// Value indices the steps are measured for: every time metric and twin
+// Value indices the steps are measured for: every time metric, twin and counter
 const TTFX_TIME_SLOTS =
   1 +
-  Math.max(...Object.values(TTFX_METRICS).filter((m) => !m.count && m.index != null).flatMap((m) => [m.index, ...Object.values(TTFX_TWINS).map((t) => m[t.index] ?? -1)]));
+  Math.max(
+    ...Object.values(TTFX_METRICS)
+      .filter((m) => !m.count && m.index != null)
+      .flatMap((m) => [m.index, ...Object.values(TTFX_TWINS).map((t) => m[t.index] ?? -1), ...Object.values(m.counters || {})]),
+  );
 
 // For every build, per task, the factor per value index that removes the
 // steps at the annotated jobs after it. The latest values stay as measured
@@ -13004,6 +13059,8 @@ function ttfxMetricLabel(metric = ttfxMetric) {
 // The label of the values the charts and tables show for `metric`, which
 // says so when they come from the repeats with the GC off
 function ttfxShownLabel(metric = ttfxMetric) {
+  const measure = ttfxMeasureOf(metric);
+  if (measure !== "time") return `${ttfxMetricLabel(metric)}, ${TTFX_MEASURES[measure].short}`;
   return ttfxMetricLabel(metric) + (ttfxGcOff && TTFX_METRICS[metric].gcoffIndex != null ? ", GC off" : "");
 }
 
@@ -13012,9 +13069,10 @@ function ttfxShortName(metric) {
   return TTFX_METRICS[metric]?.short || metric;
 }
 
-// Whether `metric` has a `twin` in the data; none with the GC off
+// Whether `metric` has a `twin` in the data; none with the GC off, or of a
+// metric shown in a counter, as the twins are times
 function ttfxShowsTwin(twin, metric = ttfxMetric) {
-  return !ttfxGcOff && ttfxTwinsHave.has(twin) && ttfxIndex(metric, twin) != null;
+  return !ttfxGcOff && ttfxMeasureOf(metric) === "time" && ttfxTwinsHave.has(twin) && ttfxIndex(metric, twin) != null;
 }
 
 function ttfxDrawsTwin(twin, metric = ttfxMetric) {
@@ -13210,6 +13268,7 @@ function ttfxNormalizedFor(metric = ttfxMetric) {
 function formatTtfxValue(v, metric = ttfxMetric) {
   // Startup is a fraction of a second, where a change of a few ms matters
   if (ttfxIsJob(metric)) return v == null ? "—" : v < 1 ? `${(v * 1000).toFixed(v < 0.1 ? 1 : 0)} ms` : formatTtfxSeconds(v);
+  if (ttfxMeasureOf(metric) !== "time") return formatTtfxCounter(v);
   if (!ttfxIsCount(metric)) return formatTtfxSeconds(v);
   return v == null ? "—" : Math.round(v).toLocaleString("en-US");
 }
@@ -13274,10 +13333,19 @@ function ttfxSuiteNoise(builds, common, metric) {
   return Math.exp(median(logs.slice(-20))) * spread;
 }
 
-function formatTtfxNoise(s) {
+function formatTtfxNoise(s, metric) {
+  if (ttfxMeasureOf(metric) !== "time") return formatTtfxCounter(s);
   if (s >= 1) return s.toFixed(2) + " s";
   const ms = s * 1000;
   return (ms >= 10 ? ms.toFixed(0) : ms.toFixed(1)) + " ms";
+}
+
+// A count of instructions or cycles, to four digits: they repeat closely
+// enough for the fourth to mean something
+function formatTtfxCounter(v) {
+  if (v == null) return "—";
+  for (const [unit, size] of [["T", 1e12], ["G", 1e9], ["M", 1e6], ["k", 1e3]]) if (v >= size) return `${(v / size).toPrecision(4)} ${unit}`;
+  return String(Math.round(v));
 }
 
 function formatTtfxSeconds(s) {
@@ -13345,12 +13413,16 @@ function updateTtfxTwinsHave() {
     if (has) ttfxTwinsHave.add(twin);
     else ttfxTwinsHave.delete(twin);
   }
+  const counters = Object.values(TTFX_METRICS).flatMap((m) => Object.values(m.counters || {}));
+  ttfxHasCounters = (ttfxData.builds || []).some((b) => Object.values(b.tasks || {}).some((v) => counters.some((i) => v[i] != null)));
+  updateTtfxMeasureControl();
   updateTtfxGcButtons();
 }
 
-// The twins' buttons are hidden with the GC off, as the twins are not drawn
+// The twins' buttons are hidden with the GC off or a counter shown, as the twins are not drawn
 function updateTtfxGcButtons() {
-  for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.button) document.getElementById(t.button).hidden = !ttfxTwinsHave.has(twin) || ttfxGcOff;
+  for (const [twin, t] of Object.entries(TTFX_TWINS))
+    if (t.button) document.getElementById(t.button).hidden = !ttfxTwinsHave.has(twin) || ttfxGcOff || ttfxMeasure !== "time";
   const btn = document.getElementById("ttfx-btn-gcoff");
   btn.hidden = !ttfxTwinsHave.has("gcoff");
   btn.classList.toggle("btn-primary", ttfxGcOff);
@@ -13414,11 +13486,37 @@ function toggleTtfxShowZero() {
 
 function toggleTtfxNormalized() {
   ttfxNormalized = !ttfxNormalized;
-  document.getElementById("ttfx-btn-normalize").textContent = ttfxNormalized
-    ? "Show seconds"
-    : "Show %";
+  updateTtfxNormalizeButton();
   updateTtfxChart();
   updateTtfxURL();
+}
+
+// The button names what it switches to
+function updateTtfxNormalizeButton() {
+  document.getElementById("ttfx-btn-normalize").textContent = !ttfxNormalized ? "Show %" : ttfxMeasure === "time" ? "Show seconds" : "Show values";
+}
+
+// Switching what precompile, load and run are shown in redraws everything;
+// the axes are fitted anew, since the values are of another size
+function setTtfxMeasure(measure) {
+  ttfxMeasure = TTFX_MEASURES[measure] ? measure : "time";
+  updateTtfxMeasureControl();
+  updateTtfxGcButtons();
+  updateTtfxNormalizeButton();
+  populateTtfxTaskList();
+  updateTtfxChart();
+  updateTtfxTable();
+  updateTtfxURL();
+}
+
+// The control is shown once a build has counter values; a counter picked by
+// the link stays picked, and shows nothing until then
+function updateTtfxMeasureControl() {
+  const select = document.getElementById("ttfx-measure");
+  select.hidden = !ttfxHasCounters && ttfxMeasure === "time";
+  select.value = ttfxMeasure;
+  // The phone's summary of the toolbar names it
+  updatePhoneChips();
 }
 
 function setTtfxTableView(view) {
@@ -13487,6 +13585,7 @@ function updateTtfxURL() {
     setParam(url, "th", "1", !ttfxHideJumps);
     setParam(url, "tz", "1", !ttfxShowZero);
     setParam(url, "tc", "off", !ttfxGcOff);
+    setParam(url, "tu", ttfxMeasure, ttfxMeasure === "time");
     url.searchParams.delete("tg");
     for (const [twin, t] of Object.entries(TTFX_TWINS)) if (t.param) setParam(url, t.param, "1", !ttfxTwinsDrawn.has(twin));
     setParam(url, "tv", ttfxTableView, ttfxTableView === "prs");
@@ -13524,7 +13623,6 @@ function applyTtfxURLParams() {
   ttfxTimeRangeDays = readTimeRangeParam(params, "tt", "ttfx-time-range") ?? ttfxTimeRangeDays;
   if (params.get("tn") === "1") {
     ttfxNormalized = true;
-    document.getElementById("ttfx-btn-normalize").textContent = "Show seconds";
   }
   if (params.get("th") === "1") {
     ttfxHideJumps = true;
@@ -13537,6 +13635,8 @@ function applyTtfxURLParams() {
   // Its button is styled once the data says whether it has the repeats.
   // `tg=1` drew the GC-off values as twins before they replaced the lines.
   ttfxGcOff = params.get("tc") === "off" || params.get("tg") === "1";
+  ttfxMeasure = TTFX_MEASURES[params.get("tu")] ? params.get("tu") : "time";
+  updateTtfxNormalizeButton();
   for (const [twin, t] of Object.entries(TTFX_TWINS)) {
     if (!t.param || params.get(t.param) !== "1") continue;
     ttfxTwinsDrawn.add(twin);
@@ -13658,10 +13758,10 @@ function populateTtfxTaskList() {
   // in all: precompiling, then loading and running it warm
   const summary = ttfxDrawsPanels();
   const metricLabel = summary ? `precompile + warm load and run${ttfxGcOff ? ", GC off" : ""}` : ttfxShownLabel().toLowerCase();
+  // A sum of seconds, whatever precompile is shown in
   const valueOf = (t) => {
     if (!summary) return ttfxValue(latest, t);
-    const p = ttfxValue(latest, t, "precompile");
-    const w = ttfxValue(latest, t, "warm");
+    const [p, w] = ttfxInTime(() => [ttfxValue(latest, t, "precompile"), ttfxValue(latest, t, "warm")]);
     return p == null || w == null ? null : p + w;
   };
 
@@ -13672,7 +13772,7 @@ function populateTtfxTaskList() {
     const selected = ttfxSelectedTasks.has(t);
     const failedMsg = latest && latest.failed && latest.failed[t];
     const v = latest ? valueOf(t) : null;
-    const fmt = (x) => (summary ? formatTtfxValue(x, "precompile") : formatTtfxValue(x));
+    const fmt = (x) => (summary ? formatTtfxSeconds(x) : formatTtfxValue(x));
     const latestLabel = failedMsg ? "failed" : v == null ? "" : fmt(v);
     const title = failedMsg
       ? `${t}: fails on the latest build: ${failedMsg}`
@@ -13768,6 +13868,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
   const { isDark, text: textColor, grid: gridColor } = chartTheme();
   const normalized = ttfxNormalizedFor(metric);
   const count = ttfxIsCount(metric);
+  const counter = ttfxMeasureOf(metric) !== "time";
   const fmt = normalized ? formatSignedPct : (v) => formatTtfxValue(v, metric);
   return {
     ...baseChartOptions(),
@@ -13947,7 +14048,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
         grid: { color: gridColor },
         // A count starts at 0, so a step from 0 to a few methods reads as one
         beginAtZero: count || ttfxShowZero,
-        afterDataLimits: (axis) => ttfxFitYAxis(axis, count || (ttfxShowZero && !normalized)),
+        afterDataLimits: (axis) => ttfxFitYAxis(axis, count || (ttfxShowZero && !normalized), counter ? TTFX_MIN_Y_SPAN_COUNTER : 1),
         // End at the padded limits rather than rounding out to a whole tick,
         // which could leave half the panel empty. Chart.js then starts the
         // ticks at the limit, so they are put back on multiples of its step.
@@ -13957,13 +14058,13 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
         ticks: {
           color: textColor,
           precision: count ? 0 : undefined,
-          callback: (v) => (normalized ? formatSignedPct(v) : count ? formatTtfxValue(v, metric) : parseFloat(v.toFixed(4)) + "s"),
+          callback: (v) => (normalized ? formatSignedPct(v) : count || counter ? formatTtfxValue(v, metric) : parseFloat(v.toFixed(4)) + "s"),
         },
         title: {
           display: true,
           text: normalized
             ? `${metricLabel}, change from first build in range (%)`
-            : count ? metricLabel : `${metricLabel} (seconds)`,
+            : count || counter ? metricLabel : `${metricLabel} (seconds)`,
           color: textColor,
         },
       },
@@ -14056,13 +14157,13 @@ function ttfxRoundTicks(axis) {
   axis.ticks = ticks;
 }
 
-function ttfxFitYAxis(axis, fromZero) {
+function ttfxFitYAxis(axis, fromZero, floorScale = 1) {
   if (axis.options.min != null || axis.options.max != null) return;
   if (!isFinite(axis.min) || !isFinite(axis.max)) return;
   // A count, or any value with "Show zero", starts at 0 and keeps its own span
   if (!fromZero) {
     const mid = (axis.min + axis.max) / 2;
-    const minSpan = ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL;
+    const minSpan = (ttfxNormalized ? TTFX_MIN_Y_SPAN_PCT : Math.abs(mid) * TTFX_MIN_Y_SPAN_REL) * floorScale;
     if (axis.max - axis.min < minSpan) {
       axis.min = mid - minSpan / 2;
       axis.max = mid + minSpan / 2;
@@ -14439,7 +14540,7 @@ function renderTtfxSummaryLegend() {
       const off = ttfxSummaryHidden.has(key);
       const icon = ttfxLegendIcon(null, sample);
       // Counted on precompile, which a failed task does not have; a twin on load, as precompile has none
-      long += "\n" + ttfxSeriesTasksText(ref, twin ? "load" : "precompile", twin);
+      long += "\n" + ttfxInTime(() => ttfxSeriesTasksText(ref, twin ? "load" : "precompile", twin));
       return `<button type="button" class="ttfx-legend-item${off ? " off" : ""}" aria-pressed="${!off}" title="${escapeHtml(long)}" onclick="toggleTtfxSummarySeries('${key}')"><img src="${icon.src}" width="${TTFX_LEGEND_ICON_W}" height="${TTFX_LEGEND_ICON_H}" alt="">${escapeHtml(text)}</button>`;
     })
     .join("");
@@ -14499,7 +14600,7 @@ function updateTtfxSummaryCharts() {
       title: `${label} `,
       titleTail: !common.length
         ? "None recorded in this range"
-        : `${ttfxIsJob(metric) ? "Median run, lowest block" : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}`}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise)}`}`,
+        : `${ttfxIsJob(metric) ? "Median run, lowest block" : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}`}${noise == null ? "" : `, typical intra-run noise ${formatTtfxNoise(noise, metric)}`}`,
       legendDisplay: false,
       onZoomChange,
       builds,
@@ -15373,6 +15474,8 @@ function showTtfxPrPoints(p) {
   for (const [metric, chart] of Object.entries(ttfxSummaryCharts)) {
     const suite = chart.data.datasets.find((d) => d._common && d._twinOf == null);
     if (!suite || !suite.data.length) continue;
+    // The job compares times alone, so a panel shown in a counter has no point
+    if (ttfxMeasureOf(metric) !== "time") continue;
     const layerRatios = (key) =>
       layers.map((q) => {
         const r = ttfxPrChainedSuite(q)[key];
@@ -17556,18 +17659,22 @@ function overviewCICard() {
   });
 }
 
-// The TTFX tab's "Hide annotated jumps" rescales its values and its GC mode
-// can pick the GC-off repeats; the Overview shows them as measured, GC on
+// The TTFX tab's "Hide annotated jumps" rescales its values, its GC mode can
+// pick the GC-off repeats and its measure the counters; the Overview shows
+// the times as measured, GC on
 function overviewTtfxUnscaled(fn) {
   const hide = ttfxHideJumps;
   const gcOff = ttfxGcOff;
+  const measure = ttfxMeasure;
   ttfxHideJumps = false;
   ttfxGcOff = false;
+  ttfxMeasure = "time";
   try {
     return fn();
   } finally {
     ttfxHideJumps = hide;
     ttfxGcOff = gcOff;
+    ttfxMeasure = measure;
   }
 }
 
@@ -19138,8 +19245,9 @@ function commitTtfxHtml(data) {
   const t = data.ttfx;
   if (!t) return commitCard("TTFX", '<p class="commit-line text-muted">No TTFX job recorded for this commit.</p>');
   const metrics = t.metrics;
-  // The GC-off values follow the metrics in each task's arrays, for the overall changes only
-  const all = [...metrics, ...(t.gcoff_metrics || [])];
+  // The GC-off values and the instructions follow the metrics in each task's arrays,
+  // for the overall changes only
+  const all = [...metrics, ...(t.gcoff_metrics || []), ...(t.counter_metrics || [])];
   const tasks = t.tasks.map((x) => ({
     ...x,
     pcts: all.map((_, i) => commitPct(x.now?.[i], x.previous?.[i])),
@@ -19147,7 +19255,11 @@ function commitTtfxHtml(data) {
   // Geometric mean of the ratios over the tasks with both, per metric
   const figures = all.map((m, i) => {
     const pct = geomeanPct(tasks.map((x) => x.pcts[i]).filter((p) => p != null));
-    const label = m.endsWith("_gcoff") ? `${ttfxShortName(m.slice(0, -6))}, GC off` : ttfxShortName(m);
+    const label = m.endsWith("_gcoff")
+      ? `${ttfxShortName(m.slice(0, -6))}, GC off`
+      : m.endsWith("_instructions")
+        ? `${ttfxShortName(m.slice(0, -13))}, instructions`
+        : ttfxShortName(m);
     return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`;
   });
   // julia's own startup, once per job
@@ -23050,7 +23162,7 @@ function updatePhoneShell(tab) {
 function phoneToolbarSummary(toolbar) {
   const parts = [];
   for (const el of toolbar.children) {
-    if (el.classList.contains("view-hidden") || el.style.display === "none") continue;
+    if (el.classList.contains("view-hidden") || el.style.display === "none" || el.hidden) continue;
     if (el.matches("select")) parts.push(el.selectedOptions[0]?.textContent);
     else if (el.matches(".bench-table-view-toggle")) parts.push(el.querySelector(".btn-primary")?.textContent);
     else if (el.matches(".checkbox-dropdown")) parts.push(el.querySelector(".checkbox-dropdown-btn")?.textContent.replace(/[▾▼]/g, ""));

@@ -659,8 +659,10 @@ end
 # The first TTFX_RESULT_METRICS come from the job's results (ttfx_results, as many as
 # the job's n_metrics), the rest from its trace logs (ttfx_traces)
 const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
-                      "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load", "recompiled", "recompile_s"]
-const TTFX_RESULT_METRICS = 12
+                      "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load",
+                      "precompile_instructions", "load_instructions", "run_instructions",
+                      "precompile_cycles", "load_cycles", "run_cycles", "recompiled", "recompile_s"]
+const TTFX_RESULT_METRICS = 18
 # Measured once per job rather than per task (ttfx_startup), in each build's `startup`
 const TTFX_STARTUP_METRICS = ["startup", "startup_repl"]
 
@@ -1075,7 +1077,11 @@ function commit_ttfx(db, prefix, sha)
     gcoff = filter(["load_gcoff", "run_gcoff", "warm_gcoff"]) do m
         !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
     end
-    results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in [metrics; gcoff]]
+    # So are the instructions of each phase, when the job read the counters
+    counters = filter(["precompile_instructions", "load_instructions", "run_instructions"]) do m
+        !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
+    end
+    results(uuid) = Dict(String(r.task) => Any[js(getproperty(r, Symbol(m))) for m in [metrics; gcoff; counters]]
                          for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (uuid,)))
     failures(uuid) = Dict(String(r.task) => String(r.error) for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ?", (uuid,)))
     now_ = results(String(j.job_uuid))
@@ -1089,7 +1095,7 @@ function commit_ttfx(db, prefix, sha)
                                  "failed" => get(failed, task, nothing), "failed_before" => haskey(failed_before, task)))
     end
     return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
-                       "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff,
+                       "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff, "counter_metrics" => counters,
                        "previous" => isempty(prev) ? nothing : OrderedDict("build" => Int(prev[1].build), "commit" => first(String(prev[1].commit_sha), 8)),
                        "counts" => isempty(prev) ? nothing : ttfx_job_counts(db, String(j.job_uuid), String(prev[1].job_uuid)),
                        "startup" => startup_now === nothing ? nothing :
