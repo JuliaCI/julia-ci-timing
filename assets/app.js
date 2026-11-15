@@ -12394,7 +12394,9 @@ function showTtfxBuildPopup(b, task) {
     }, or ${TTFX_OUTLIER_MIN_COUNT} in a count.</div>`;
   } else {
     const offs = outliers.some((o) => o.off != null || o.offPrev != null);
-    html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th>';
+    // A label that says what the metric is shown in needs a wider column
+    const wide = outliers.some((o) => ttfxShownLabel(o.key) !== ttfxMetricLabel(o.key));
+    html += `<table class="ttfx-popup-table ttfx-compile-table${wide ? " ttfx-outliers-wide" : ""}"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th>`;
     if (offs) html += '<th class="num" title="The change in the same task and phase from the repeats with the GC off">GC off</th>';
     html += "</tr></thead><tbody>";
     for (const o of outliers) {
