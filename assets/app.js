@@ -393,6 +393,9 @@ const NO_CHANGE_PCT = {
   passRate: 1,
   // A coverage share, in percentage points: a day's merges move it by a few hundredths
   coverage: 0.1,
+  // A TTFX suite's instructions, head against base in one block: they follow the
+  // work done, so they repeat within a few tenths of a percent
+  instructions: 0.5,
 };
 // A size change counts as none below this when the size before is unknown
 const NO_CHANGE_BYTES = 1024 * 1024;
@@ -14972,6 +14975,12 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
     if (!on) continue;
     lines.push(`| ${ttfxMetricLabel(m)} | ${cell(on)} | ${cell(p.suite[m + "_gcoff"])} |${chained ? ` ${chained[m] ? blocks(chained[m]) : "—"} |` : ""}`);
   }
+  const instructions = TTFX_PR_INSTRUCTIONS.filter(([k]) => p.suite[k] && p.suite[k].geomeans.length);
+  if (instructions.length)
+    lines.push(
+      "",
+      `Retired instructions, per block (not judged): ${instructions.map(([k, label]) => `${label.toLowerCase()} ${p.suite[k].geomeans.map(ttfxInstructionsPct).join(", ")}`).join("; ")}.`,
+    );
   const counts = p.counts && TTFX_COUNT_KINDS.filter(([k]) => p.counts[k]);
   if (counts && counts.length) {
     lines.push("");
@@ -15129,6 +15138,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
   }
   html += "</tbody></table>";
   html += '<div class="ttfx-popup-muted ttfx-popup-hint">One value per ABBA block. Muted: the same with the GC off.</div>';
+  html += ttfxPrInstructionsHtml(p, chained);
   html += ttfxCountsHtml(p.counts, { head: "Head", base: "Base", hint: "From the job's untimed trace run, once per arm, so exact counts." });
 
   const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
@@ -15262,7 +15272,9 @@ let ttfxPrsSort = { col: "rank", asc: true };
 // then the cold ones again with the GC off and with every stdlib loaded first,
 // which only count as detail. Warm is one total, as the job only judges that.
 // Last come the counts from the job's untimed trace run, as head less base:
-// exact numbers, so they have no blocks and no verdict.
+// exact numbers, so they have no blocks and no verdict. The `instructions` ones
+// are the retired instructions of the same phases, which the job reports and
+// does not judge; they are shown once a pull request's job has them.
 const TTFX_PR_COLUMNS = [
   { key: "startup", label: "Startup", group: "Startup" },
   { key: "startup_repl", label: "Interactive", group: "Startup" },
@@ -15271,6 +15283,10 @@ const TTFX_PR_COLUMNS = [
   { key: "load", label: "Load", group: "Cold" },
   { key: "run", label: "Run", group: "Cold" },
   { key: "warm", label: "Load+run", group: "Warm" },
+  { key: "startup_instructions", label: "Startup", group: "Instructions", instructions: true },
+  { key: "precompile_instructions", label: "Precompile", group: "Instructions", instructions: true },
+  { key: "load_instructions", label: "Load", group: "Instructions", instructions: true },
+  { key: "run_instructions", label: "Run", group: "Instructions", instructions: true },
   { key: "load_gcoff", label: "Load", group: "Cold, GC off" },
   { key: "run_gcoff", label: "Run", group: "Cold, GC off" },
   { key: "load_stdlibs", label: "Load", group: "Cold, stdlibs first" },
@@ -15278,6 +15294,55 @@ const TTFX_PR_COLUMNS = [
   { key: "invalidated", label: "Invalidations", group: "Compiler, head − base", count: true },
   { key: "recompiled", label: "Recompiled", group: "Compiler, head − base", count: true },
 ];
+
+// The columns shown: the instructions' only when a pull request has them
+let ttfxPrColumns = TTFX_PR_COLUMNS;
+function updateTtfxPrColumns() {
+  const prs = (ttfxPrs && ttfxPrs.prs) || [];
+  ttfxPrColumns = TTFX_PR_COLUMNS.filter((c) => !c.instructions || prs.some((p) => p.suite[c.key]));
+}
+
+// An instruction ratio to two decimals: they repeat closely enough for the second
+const ttfxInstructionsPct = (g) => formatSignedPct((g - 1) * 100, { digits: 2 });
+
+// The class of an instruction change: the job does not judge it, so it is
+// coloured when every block moved the same way by more than the measure's noise
+function ttfxInstructionsClass(x) {
+  const tol = NO_CHANGE_PCT.instructions / 100;
+  return upWorseClass(x.geomeans.every((g) => g > 1 + tol) ? 1 : x.geomeans.every((g) => g < 1 - tol) ? -1 : 0);
+}
+
+// The instruction entries of a pull request's suite, in the columns' order with
+// the interactive startup after the startup: [key, label]
+const TTFX_PR_INSTRUCTIONS = [
+  ["startup_instructions", "Startup"],
+  ["startup_repl_instructions", "Interactive startup"],
+  ["precompile_instructions", "Precompile"],
+  ["load_instructions", "Load (cold)"],
+  ["run_instructions", "Run (cold)"],
+];
+
+// The popup's table of them: per block, and for a stacked pull request the
+// estimate of the whole stack against master
+function ttfxPrInstructionsHtml(p, chained) {
+  const rows = TTFX_PR_INSTRUCTIONS.filter(([k]) => p.suite[k] && p.suite[k].geomeans.length);
+  if (!rows.length) return "";
+  const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxInstructionsPct).join(", ") : "—");
+  let html = `<table class="ttfx-popup-table"><thead><tr><th>Instructions</th><th class="num">${p.stack ? "this PR" : "vs master"}</th>`;
+  if (chained) html += '<th class="num">stack vs master (est.)</th>';
+  html += "</tr></thead><tbody>";
+  for (const [k, label] of rows) {
+    const x = p.suite[k];
+    html += `<tr><th title="${x.n_tasks > 1 ? `Over ${x.n_tasks} tasks` : TTFX_JOB_NOTE}">${label}</th><td class="num ${ttfxInstructionsClass(x)}">${blocks(x)}</td>`;
+    if (chained) html += `<td class="num">${blocks(chained[k])}</td>`;
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  return (
+    html +
+    `<div class="ttfx-popup-muted ttfx-popup-hint">Retired instructions, head against base, one value per ABBA block: the suite geomean, and for startup the whole process. They follow the work done rather than how long the machine took, so they repeat far more closely than the times. The job does not judge them; coloured when every block moved more than ${NO_CHANGE_PCT.instructions}% the same way.</div>`
+  );
+}
 
 // A count column's head less base, null when the job has no count for it
 function ttfxPrCountDiff(p, key) {
@@ -15299,15 +15364,15 @@ function ttfxPrCountCell(p, key, cls) {
   return `<td class="num ${color}${cls}" title="${escapeHtml(title)}">${d > 0 ? "+" : ""}${n(d)}</td>`;
 }
 // The first column of each group, which draws a rule down its left edge
-const ttfxPrGroupStart = (i) => i === 0 || TTFX_PR_COLUMNS[i].group !== TTFX_PR_COLUMNS[i - 1].group;
+const ttfxPrGroupStart = (i) => i === 0 || ttfxPrColumns[i].group !== ttfxPrColumns[i - 1].group;
 
 // The header row above the column names that spans each group
 function ttfxPrGroupRow(before, after) {
   let html = `<tr class="ttfx-prs-groups"><th colspan="${before}"></th>`;
-  for (let i = 0; i < TTFX_PR_COLUMNS.length; ) {
-    const g = TTFX_PR_COLUMNS[i].group;
+  for (let i = 0; i < ttfxPrColumns.length; ) {
+    const g = ttfxPrColumns[i].group;
     let n = 1;
-    while (i + n < TTFX_PR_COLUMNS.length && TTFX_PR_COLUMNS[i + n].group === g) n++;
+    while (i + n < ttfxPrColumns.length && ttfxPrColumns[i + n].group === g) n++;
     html += `<th colspan="${n}" class="ttfx-prs-group-start"><span${g ? ' class="ttfx-prs-group"' : ""}>${escapeHtml(g)}</span></th>`;
     i += n;
   }
@@ -15319,6 +15384,8 @@ function ttfxPrColumnTitle(c) {
     return "MethodInstances the task scripts invalidated, by method definitions or as package-image code rejected on load, summed over the tasks: head less base. From the job's untimed trace run, so an exact count with no blocks; the totals and the tasks that changed most are in the tooltip.";
   if (c.key === "recompiled")
     return "Methods compiled again because an invalidation had dropped their code, from the task scripts' trace logs, summed over the tasks: head less base. The totals and the tasks that changed most are in the tooltip.";
+  if (c.instructions)
+    return `Retired instructions of ${c.key === "startup_instructions" ? "julia's startup (the whole process, julia -e '')" : `the ${c.label.toLowerCase()} phase, the suite geometric mean over every task`}, head against base, averaged over the ABBA blocks; each block is in the tooltip. They follow the work done rather than how long the machine took, so they repeat far more closely than the times. The job does not judge them: coloured when every block moved more than ${NO_CHANGE_PCT.instructions}% the same way. Not in the score.`;
   if (ttfxIsJob(c.key))
     return `${ttfxMetricLabel(c.key)}, head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust. Not in the score.`;
   if (c.key === "startup_load")
@@ -15331,6 +15398,7 @@ function ttfxPrColumnTitle(c) {
 }
 
 function renderTtfxPrsTable() {
+  updateTtfxPrColumns();
   if (PHONE_WIDTH.matches) return renderTtfxPrsList();
   const thead = document.getElementById("ttfx-stats-thead");
   const tbody = document.getElementById("ttfx-stats-tbody");
@@ -15346,7 +15414,7 @@ function renderTtfxPrsTable() {
         "num",
         "Weighted geometric mean of the metric changes: a third each for precompile (once per install), cold load and run (the first session) and warm (every later session), taking the block nearer no change. Rows are ranked by it.",
       ],
-      ...TTFX_PR_COLUMNS.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
+      ...ttfxPrColumns.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
       ["tasks", "Tasks", "num ttfx-prs-group-start", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
       ["date", "Measured", "col-secondary"],
       [null, ""],
@@ -15357,7 +15425,7 @@ function renderTtfxPrsTable() {
     ttfxPrsSort = nextSort(ttfxPrsSort, col, (c) => c === "rank" || c === "author");
     renderTtfxPrsTable();
   });
-  const cols = 7 + TTFX_PR_COLUMNS.length;
+  const cols = 7 + ttfxPrColumns.length;
   if (!ttfxPrs) {
     tbody.innerHTML = `<tr><td colspan="${cols}" class="loading">Loading...</td></tr>`;
     loadTtfxPrs().then(() => ttfxTableView === "prs" && renderTtfxPrsTable());
@@ -15383,7 +15451,7 @@ function renderTtfxPrsTable() {
       tasks: p.tasks.filter((t) => t.regressions.length).length - p.tasks.filter((t) => t.improvements.length).length,
       date: p.date,
     };
-    for (const c of TTFX_PR_COLUMNS) r[c.key] = c.count ? ttfxPrCountDiff(p, c.key) : blocksMean(p.suite[c.key]);
+    for (const c of ttfxPrColumns) r[c.key] = c.count ? ttfxPrCountDiff(p, c.key) : blocksMean(p.suite[c.key]);
     return r;
   });
   sortRows(rows, ttfxPrsSort, "rank");
@@ -15412,7 +15480,7 @@ function renderTtfxPrsTable() {
     html += `<td class="col-secondary">${escapeHtml(p.author)}</td>`;
     const scoreTitle = p.stack ? ` title="${escapeHtml(ttfxPrStackTitle(p))}"` : "";
     html += `<td class="num"${ttfxScoreStyle(p.score == null ? null : (p.score - 1) * 100)}${scoreTitle}><b>${p.score == null ? "—" : ttfxRatioPct(p.score)}</b>${p.stack ? "*" : ""}</td>`;
-    TTFX_PR_COLUMNS.forEach((c, i) => {
+    ttfxPrColumns.forEach((c, i) => {
       const x = p.suite[c.key];
       const start = ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : "";
       if (c.count) {
@@ -15421,6 +15489,11 @@ function renderTtfxPrsTable() {
       }
       if (!x || !x.geomeans.length) {
         html += `<td class="num${start}">–</td>`;
+        return;
+      }
+      if (c.instructions) {
+        const title = `Blocks: ${x.geomeans.map(ttfxInstructionsPct).join(", ")} (not judged)${x.n_tasks > 1 ? `, ${x.n_tasks} tasks` : ""}`;
+        html += `<td class="num ${ttfxInstructionsClass(x)}${start}" title="${escapeHtml(title)}">${ttfxInstructionsPct(blocksMean(x))}</td>`;
         return;
       }
       const title = `Blocks: ${x.geomeans.map(ttfxRatioPct).join(", ")} (${ttfxSuiteNote(x) || x.verdict})${ttfxIsJob(c.key) ? "" : `, ${x.n_tasks} tasks`}`;

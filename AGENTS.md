@@ -150,7 +150,12 @@ paths it watches, comparing the head with the master build of the merge-base
 and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
 comparison of each open pull request, in `ttfx_prs` (no history: a closed
 pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
-tab's "Open PRs" table. `compare.json` has no invalidation or recompile counts, so
+tab's "Open PRs" table. A job whose driver reads the CPU's counters also reports the
+instruction changes, which it never judges: `suite` has `precompile_instructions`,
+`load_instructions`, `run_instructions`, `startup_instructions` and
+`startup_repl_instructions`, head against base per block, with verdict `same`. The
+table's Instructions columns show them once a pull request has them, coloured when every
+block moved more than 0.5% the same way. `compare.json` has no invalidation or recompile counts, so
 each job's `results.json` and trace logs are fetched too, once, into `ttfx_prs.counts`:
 the head and base totals and the tasks that changed most. It lists the open pull requests from GitHub
 anonymously, at most every two hours, out of the 60 requests an hour GitHub

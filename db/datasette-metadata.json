@@ -233,7 +233,7 @@
             "verdict": "improvement, regression or same",
             "n_improvements": "robust improvements, per task and metric plus suite metrics",
             "n_regressions": "robust regressions, counted the same way",
-            "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count; startup and startup_repl are julia's own startup, measured once per job, with base and head seconds per block",
+            "suite": "JSON: per metric, the geometric mean over tasks of head/base per block, the verdict and the task count; startup and startup_repl are julia's own startup, measured once per job, with base and head seconds per block; the keys ending in _instructions are the retired instructions of the same phases, head against base, which the job reports and does not judge",
             "tasks": "JSON: the tasks with a robust improvement or regression, their ratios and notes",
             "ci_commit": "the pull request head the CI columns were looked up for",
             "ci_build": "the newest julia-pr build of ci_commit, NULL when it has none",
