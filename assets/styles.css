@@ -3724,6 +3724,10 @@ th.sorted .sort-indicator {
 .ttfx-compile-table .ttfx-outlier-metric {
   white-space: nowrap;
 }
+/* "Load (cold), instructions" */
+.ttfx-compile-table.ttfx-outliers-wide th:nth-child(2) {
+  width: 164px;
+}
 .ttfx-compile-table .ttfx-compile-gone .ttfx-compile-stmt {
   color: var(--color-fg-muted);
   text-decoration: line-through;

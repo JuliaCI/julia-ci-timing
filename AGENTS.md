@@ -75,9 +75,9 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
   "tasks":  ["Package/Task", ...],
   "builds": [ { "build", "job_id", "commit", "date", "version", "state",
                 "tasks":  { "Package/Task": [precompile, load, run, warm, ...] },
-                "startup": [startup, startup_repl],
+                "startup": [startup, startup_repl, ...],
                 "failed": { "Package/Task": "error" } }, ... ],
-  "startup_metrics": ["startup", "startup_repl"]
+  "startup_metrics": ["startup", "startup_repl", ...]
 }
 ```
 
@@ -95,7 +95,18 @@ spawning the cold run's process to the end of its load (null
 for jobs before the driver measured them; the site has no summary panel or
 builds-table column for them (the Open PRs table has the load and run, and startup+load): the stdlibs-first load and run are drawn as a dotted
 twin of load and run with "Show stdlibs first" (`tl=1`), and the precompile
-and startup+load by the per-task chart when picked). Then from the job's trace logs (`trace-compile.tar.gz`)
+and startup+load by the per-task chart when picked). Then `precompile_instructions`,
+`load_instructions`, `run_instructions` and the same three `_cycles`: retired instructions
+and CPU cycles, read from the CPU's counters by jobs whose driver does (`TTFX_COUNTERS`
+in julia-buildkite's `utilities/ttfx/`; null before, and on anything but macOS), the minimum
+over blocks like the times. The precompile's are those of every process of it together
+(its workers run several at a time, so its seconds also depend on scheduling); the load's
+and run's are those of the task script's own thread in one more untimed cold run.
+Instructions follow the work done rather than how long the machine took, so they repeat
+far more closely than seconds do: prefer them for telling whether a commit changed
+anything. The TTFX tab's Time / Instructions / Cycles control (`tu=instructions`) shows
+precompile, load, run and the two startups in them, everywhere, and the Commit page gives
+the instruction change of each. Then from the job's trace logs (`trace-compile.tar.gz`)
 `recompiled`, the methods compiled again because an invalidation had
 dropped their code, with their compile seconds `recompile_s`; a job
 without trace logs has the array end before them. `api/ttfx/job/<job_id>`
@@ -103,7 +114,11 @@ has the recompiled statements and the top causes of the invalidations.
 A build's `startup` is julia's own startup, which the job times once before the tasks
 (JuliaCI/julia-buildkite#777, `ttfx/startup.json`, kept in `ttfx_startup`): seconds from
 spawning `julia -e ''` to its exit, and an interactive julia to its first prompt, each the
-lowest over blocks of the block's median run, in the order of `startup_metrics`. Jobs before
+lowest over blocks of the block's median run, in the order of `startup_metrics`. After the
+two times come `startup_instructions`, `startup_repl_instructions` and the two `_cycles`:
+the whole process's retired instructions and CPU cycles, reduced the same way, of one more
+untimed `julia -e ''` per timed run and of each REPL run up to its prompt (null for jobs
+whose driver does not read the counters). Jobs before
 2026-11-12 have none. The TTFX tab draws them in its Startup view (`ts=startup`), as
 Startup and Interactive startup, and puts them first in its tables; the Overview's card has
 the first. A build that moves work from startup into the first package load shows in
@@ -135,7 +150,12 @@ paths it watches, comparing the head with the master build of the merge-base
 and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
 comparison of each open pull request, in `ttfx_prs` (no history: a closed
 pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
-tab's "Open PRs" table. `compare.json` has no invalidation or recompile counts, so
+tab's "Open PRs" table. A job whose driver reads the CPU's counters also reports the
+instruction changes, which it never judges: `suite` has `precompile_instructions`,
+`load_instructions`, `run_instructions`, `startup_instructions` and
+`startup_repl_instructions`, head against base per block, with verdict `same`. The
+table's Instructions columns show them once a pull request has them, coloured when every
+block moved more than 0.5% the same way. `compare.json` has no invalidation or recompile counts, so
 each job's `results.json` and trace logs are fetched too, once, into `ttfx_prs.counts`:
 the head and base totals and the tasks that changed most. It lists the open pull requests from GitHub
 anonymously, at most every two hours, out of the 60 requests an hour GitHub

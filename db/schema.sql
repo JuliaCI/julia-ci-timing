@@ -361,6 +361,15 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     precompile_stdlibs REAL,                 -- precompile of that copy, after the task's own
     run_stdlibs        REAL,                 -- run in that copy, after its load
     startup_load       REAL,                 -- from spawning the cold process to the end of its load: startup plus load
+    -- Retired instructions and CPU cycles, the minimum over blocks: of every process of
+    -- the precompile together, and of the task script's own thread over the load and run
+    -- phases of one more, untimed, cold run. NULL for jobs before the driver read them.
+    precompile_instructions INTEGER,
+    load_instructions       INTEGER,
+    run_instructions        INTEGER,
+    precompile_cycles       INTEGER,
+    load_cycles             INTEGER,
+    run_cycles              INTEGER,
     PRIMARY KEY (job_uuid, task)
 ) WITHOUT ROWID;
 
@@ -373,6 +382,13 @@ CREATE TABLE IF NOT EXISTS ttfx_startup (
     startup_repl REAL,                       -- seconds from spawning an interactive julia to its first `julia> ` prompt
     runs         INTEGER NOT NULL,           -- timed `-e ''` runs over the blocks
     error        TEXT,                       -- the first failure, of either
+    -- The whole process's retired instructions and CPU cycles, reduced like the times:
+    -- of one more `julia -e ''` per timed run, start to exit, and of the REPL runs up
+    -- to their prompt. NULL for jobs before the driver read them.
+    startup_instructions      INTEGER,
+    startup_repl_instructions INTEGER,
+    startup_cycles            INTEGER,
+    startup_repl_cycles       INTEGER,
     PRIMARY KEY (job_uuid, arm)
 ) WITHOUT ROWID;
 
@@ -448,6 +464,13 @@ CREATE TABLE IF NOT EXISTS ttfx_samples (
     load_stdlibs_s       TEXT,
     run_stdlibs_s        TEXT,
     preload_s            TEXT,               -- per repeat, from spawning the process to the script's first marker
+    precompile_instructions INTEGER,         -- of every process of the precompile (precompile_counters)
+    precompile_cycles       INTEGER,
+    load_instructions       INTEGER,         -- of the script's thread over the phase, in the untimed counter run
+    load_cycles             INTEGER,
+    run_instructions        INTEGER,
+    run_cycles              INTEGER,
+    error_counters          TEXT,            -- why the counter run has no values
     PRIMARY KEY (job_uuid, seq)
 ) WITHOUT ROWID;
 
