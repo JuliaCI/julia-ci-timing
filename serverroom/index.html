@@ -694,6 +694,8 @@
       const LED = {
         off: new THREE.MeshBasicMaterial({ color: 0x2b3a30 }),
         gone: new THREE.MeshBasicMaterial({ color: 0xff3b3b }),
+        // The rim around a Mac mini's lights, unlit so an idle slot shows on a shaded front too
+        rim: new THREE.MeshBasicMaterial({ color: 0x7d8896 }),
       };
 
       function canvasTexture(w, h, draw) {
@@ -939,19 +941,29 @@
       const MINI = miniSize("intel");
       // Which model a host is, by name: the jonagold runners are M6 minis
       const miniModel = (name) => (name && name.startsWith("jonagold") ? "m6" : "intel");
-      function makeMini(state, led, name = null) {
+      // One machine per host, with a status light per slot: `states` has the
+      // slots' states and `leds` the materials a running slot's light cycles through
+      function makeMini(states, leds, name = null) {
         const size = miniSize(miniModel(name));
         const g = new THREE.Group();
-        const body = new THREE.Mesh(GEO.box, state === "on" ? MAT.mini : MAT.miniOff);
+        const body = new THREE.Mesh(GEO.box, states.includes("on") ? MAT.mini : MAT.miniOff);
         body.scale.set(size.w, size.h, size.w);
         body.position.y = size.h / 2;
         body.castShadow = true;
         g.add(body);
-        // The status light, near the front's right-hand corner
-        const l = new THREE.Mesh(GEO.box, state === "on" ? led : LED[state]);
-        l.scale.set(0.03, 0.012, 0.01);
-        l.position.set(size.w * 0.35, size.h / 2, size.w / 2 + 0.002);
-        g.add(l);
+        // The status lights, from the front's right-hand corner inwards
+        const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / states.length - 0.012));
+        states.forEach((s, k) => {
+          const x = size.w * 0.35 + 0.015 - lw / 2 - k * (lw + 0.012);
+          const rim = new THREE.Mesh(GEO.box, LED.rim);
+          rim.scale.set(lw + 0.0025, 0.0145, 0.01);
+          rim.position.set(x, size.h / 2, size.w / 2 + 0.0005);
+          g.add(rim);
+          const l = new THREE.Mesh(GEO.box, s === "on" ? leds[k % leds.length] : LED[s]);
+          l.scale.set(lw, 0.012, 0.01);
+          l.position.set(x, size.h / 2, size.w / 2 + 0.002);
+          g.add(l);
+        });
         if (name) {
           const tag = nameTag(name);
           tag.position.set(0, size.h + 0.0005, 0.02);
@@ -1356,12 +1368,12 @@
         const tops = [];
         // The Intel cluster's Mac minis live on a fridge; every other Mac is on a table
         const onFridge = (h) => c.fridge && h.name.startsWith("macmini");
-        const fridgeUnits = c.mac ? hostUnits(c.hosts.filter(onFridge)) : [];
-        const fridgeStates = fridgeUnits.map((u) => u.s);
-        if (fridgeStates.length) {
+        const fridgeHosts = c.mac ? c.hosts.filter(onFridge) : [];
+        // Its lights start `i` along the row's four, so neighbours blink out of step
+        const ledsFrom = (i) => row.leds.map((_, k) => row.leds[(i + k) % row.leds.length]);
+        if (fridgeHosts.length) {
           // A double-door fridge, the minis stacked on top in wobbly piles of three
-          const states = fridgeStates;
-          const piles = Math.ceil(states.length / 3);
+          const piles = Math.ceil(fridgeHosts.length / 3);
           const fw = Math.max(0.9, piles * 0.4 + 0.15);
           const fh = 1.8;
           const fridge = new THREE.Group();
@@ -1407,8 +1419,8 @@
           mit.position.set(-fw / 2 + 0.24, 0.98, 0.38);
           mit.rotation.z = 0.12;
           fridge.add(mit);
-          fridgeUnits.forEach(({ s, h }, i) => {
-            const m = makeMini(s, row.leds[i % 4], h.name);
+          fridgeHosts.forEach((h, i) => {
+            const m = makeMini(h.states, ledsFrom(i), h.name);
             const pile = Math.floor(i / 3);
             m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * (MINI.h + 0.005), 0);
             m.rotation.y = Math.sin(i * 2.3) * 0.25;
@@ -1418,7 +1430,7 @@
           row.units.add(fridge);
           width = fw + 0.3;
           height = fh + 0.25;
-          tops.push({ x: fw / 2, y: height, w: fw, kind: "fridge", n: states.length });
+          tops.push({ x: fw / 2, y: height, w: fw, kind: "fridge", n: fridgeHosts.length });
         }
         if (c.desktop) {
           // Desktop towers under a table, a little apart, nothing on top but a
@@ -1481,15 +1493,15 @@
           tops.push({ x: tw / 2, y: 0.95, w: tw, kind: "nuc", n: units.length });
         } else if (c.mac) {
           // Two rows of minis per table, eight to a table
-          const units = hostUnits(c.hosts.filter((h) => !onFridge(h)));
+          const units = c.hosts.filter((h) => !onFridge(h));
           const perTable = 8;
           for (let t = 0; t * perTable < units.length; t++) {
             const chunk = units.slice(t * perTable, (t + 1) * perTable);
             const tw = Math.ceil(chunk.length / 2) * 0.45 + 0.3;
             const table = makeTable(tw);
             const column = (i) => -tw / 2 + 0.38 + Math.floor(i / 2) * 0.45;
-            chunk.forEach(({ s, h }, i) => {
-              const m = makeMini(s, row.leds[i % 4], h.name);
+            chunk.forEach((h, i) => {
+              const m = makeMini(h.states, ledsFrom(i), h.name);
               m.position.set(column(i), 0.83, i % 2 ? 0.22 : -0.22);
               table.add(m);
             });
@@ -1539,7 +1551,7 @@
         row.group.add(row.units);
         row.width = width;
         row.tops = tops;
-        if ((c.mac && !fridgeStates.length) || c.nuc || c.desktop) height = 1.2;
+        if ((c.mac && !fridgeHosts.length) || c.nuc || c.desktop) height = 1.2;
 
         // One sign, a panel per queue with the first on top; its bottom edge
         // sits where a single panel's would, and the rest stack above it
@@ -3159,7 +3171,7 @@
           const age = mins < 1 ? "just now" : mins < 60 ? `${mins} min ago` : `${(mins / 60).toFixed(1)} h ago`;
           document.getElementById("sub").innerHTML =
             `SNAPSHOT <b>${age}</b> · SLOTS <b>${total("busy")}/${total("cap")}</b> · QUEUED <b>${total("waiting")}</b> · BLOCKED <b>${total("blocked")}</b><br>` +
-            `Every unit is a real job slot. <a href="../?tab=ci-workers">Workers tab</a>`;
+            `Every light is a real job slot. <a href="../?tab=ci-workers">Workers tab</a>`;
           renderList(data);
           if (!renderer) return;
           // The signs and the art are drawn on canvases, which need the fonts first
