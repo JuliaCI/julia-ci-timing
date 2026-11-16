@@ -214,7 +214,7 @@ agent's job asked the scheduler for, from the agent's `sched_*` tags. A Mac runs
 a job without them alone (JuliaCI/sandboxed-buildkite-agent, "Job sizes"): only
 steps that declare a size share one, so a macOS agent of the per-job queues with
 a null `sched` has the whole host, whatever the host's slots. The server room
-draws such a host's lights as one bar. Month files older
+draws such a host with a single light. Month files older
 than a year are not rendered.
 
 The `build`, `test` and `launch` queues (the Julia cluster) and the Secure

@@ -979,7 +979,8 @@
       const miniModel = (name) => (name && name.startsWith("jonagold") ? "m6" : "intel");
       // One machine per host, with a status light per slot: `states` has the
       // slots' states and `leds` the materials a running slot's light cycles through.
-      // A job with the `whole` machine lights one bar across every slot's place.
+      // A job with the `whole` machine has no slot left free beside it, so that
+      // machine shows a single light, as one with a single slot does.
       function makeMini(states, leds, name = null, whole = false) {
         const size = miniSize(miniModel(name));
         const g = new THREE.Group();
@@ -989,20 +990,19 @@
         body.castShadow = true;
         g.add(body);
         // The status lights, from the front's right-hand corner inwards
-        const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / states.length - 0.012));
-        const pitch = lw + 0.012;
-        const lights = whole ? [{ s: "on", k: (states.length - 1) / 2, w: lw + (states.length - 1) * pitch }] : states.map((s, k) => ({ s, k, w: lw }));
-        for (const { s, k, w } of lights) {
-          const x = size.w * 0.35 + 0.015 - lw / 2 - k * pitch;
+        const shown = whole ? ["on"] : states;
+        const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / shown.length - 0.012));
+        shown.forEach((s, k) => {
+          const x = size.w * 0.35 + 0.015 - lw / 2 - k * (lw + 0.012);
           const rim = new THREE.Mesh(GEO.box, LED.rim);
-          rim.scale.set(w + 0.0025, 0.0145, 0.01);
+          rim.scale.set(lw + 0.0025, 0.0145, 0.01);
           rim.position.set(x, size.h / 2, size.w / 2 + 0.0005);
           g.add(rim);
-          const l = new THREE.Mesh(GEO.box, s === "on" ? leds[Math.floor(k) % leds.length] : LED[s]);
-          l.scale.set(w, 0.012, 0.01);
+          const l = new THREE.Mesh(GEO.box, s === "on" ? leds[k % leds.length] : LED[s]);
+          l.scale.set(lw, 0.012, 0.01);
           l.position.set(x, size.h / 2, size.w / 2 + 0.002);
           g.add(l);
-        }
+        });
         if (name) {
           const tag = nameTag(name);
           tag.position.set(0, size.h + 0.0005, 0.02);
