@@ -216,9 +216,31 @@
         top: 16px;
         right: 16px;
         width: 300px;
-        max-height: calc(100vh - 32px);
-        overflow: auto;
         padding: 8px;
+      }
+      #list {
+        max-height: calc(100vh - 84px);
+        overflow: auto;
+      }
+      /* Folds the list away; its dot per cluster still says how the room is doing */
+      summary {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      summary .dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        margin-left: 5px;
+      }
+      details[open] summary .dot {
+        display: none;
       }
       aside h2 {
         font-family: var(--mono);
@@ -326,6 +348,8 @@
           left: 8px;
           right: 8px;
           width: auto;
+        }
+        #list {
           max-height: 32vh;
         }
         #tip {
@@ -345,7 +369,12 @@
         <button type="button" class="toggle" id="walk" aria-pressed="false">WALK: OFF</button>
       </div>
     </header>
-    <aside class="panel" id="list" aria-label="Clusters"></aside>
+    <aside class="panel" aria-label="Clusters">
+      <details open>
+        <summary>Clusters</summary>
+        <div id="list"></div>
+      </details>
+    </aside>
     <div class="panel" id="walk-help" hidden>
       <b>WASD</b> or arrows to walk · <b>Shift</b> to run · <b>click</b> to look with the mouse · <b>Esc</b> to stop
     </div>
@@ -2654,8 +2683,12 @@
       });
 
       // -------------------------------------------------------------- panel
+      // The list starts folded on a phone, where it would cover a third of the room
+      if (window.matchMedia("(max-width: 700px)").matches) document.querySelector("aside details").open = false;
       function renderList(data) {
         const list = document.getElementById("list");
+        document.querySelector("summary").innerHTML =
+          "Clusters" + [...data.ci, ...data.other].map((c) => `<span class="dot" style="color:${MOODS[c.mood].color}"></span>`).join("");
         const item = (c, i) =>
           `<button type="button" data-i="${i}" title="${MOODS[c.mood].tag}: ${esc(c.caption)}">` +
           `<span class="dot" style="color:${MOODS[c.mood].color}"></span>${esc(c.title)}` +
