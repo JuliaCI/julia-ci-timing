@@ -204,11 +204,17 @@ last year, keys sorted:
 { "generated_at": "...",
   "agents": { "<agent name>": { "hostname", "queue", "os", "arch", "version",
                                 "state", "connected_at", "first_seen", "last_seen",
+                                "sched": { "cpus", "cpus_limit", "mem_gib", "mem_limit_gib" } | null,
                                 "job": { "name", "pipeline", "build", "started_at" } | null } } }
 ```
 
 `state` is the API's connection state at the last listing and `job` is
-only set for agents connected in the latest snapshot. Month files older
+only set for agents connected in the latest snapshot. `sched` is the size the
+agent's job asked the scheduler for, from the agent's `sched_*` tags. A Mac runs
+a job without them alone (JuliaCI/sandboxed-buildkite-agent, "Job sizes"): only
+steps that declare a size share one, so a macOS agent of the per-job queues with
+a null `sched` has the whole host, whatever the host's slots. The server room
+draws such a host's lights as one bar. Month files older
 than a year are not rendered.
 
 The `build`, `test` and `launch` queues (the Julia cluster) and the Secure

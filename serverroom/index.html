@@ -512,25 +512,32 @@
       }
 
       // Every cluster with one state per slot: "on" runs a job, "off" is idle,
-      // "gone" is an agent missing from the latest snapshot
+      // "gone" is an agent missing from the latest snapshot. A Mac runs a job
+      // whose step declared no size alone (the agent's `sched` is null): that
+      // host is `whole`, every slot of it on for the one job.
       function buildClusters(latest, backlog) {
         const agents = latest.agents || {};
         const latestMs = Date.parse(latest.generated_at);
         const runningOn = new Map();
+        const wholeHosts = new Set();
         for (const a of Object.values(agents)) {
           if (a.state !== "connected" || !PER_JOB_QUEUES.has(a.queue) || !a.hostname) continue;
           runningOn.set(a.hostname, (runningOn.get(a.hostname) || 0) + 1);
+          // An API from before it had `sched` says nothing either way
+          if (a.os === "macos" && a.sched === null) wholeHosts.add(a.hostname);
         }
         const uniq = (xs) => [...new Set(xs.filter(Boolean))];
         const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
         const hostSlots = backlog.host_slots || {};
         const clusters = [];
         for (const g of machineGroups(backlog)) {
+          const mac = g.pools.every((p) => p.os === "macos");
           const hosts = [...g.hosts]
             .map((h) => {
               const busy = runningOn.get(h) || 0;
               const cap = Math.max(hostSlots[h] || 0, busy, 1);
-              return { name: shortHost(h), states: Array.from({ length: cap }, (_, i) => (i < busy ? "on" : "off")) };
+              const whole = mac && wholeHosts.has(h);
+              return { name: shortHost(h), whole, states: Array.from({ length: cap }, (_, i) => (whole || i < busy ? "on" : "off")) };
             })
             .sort(byName);
           const os = uniq(g.pools.map((p) => OS_NAMES[p.os] || p.os)).join(", ");
@@ -539,7 +546,7 @@
             kind: "ci",
             title: `${os} ${arch}`.trim(),
             queues: uniq(g.pools.map((p) => p.queue)).sort().join(" + "),
-            mac: g.pools.every((p) => p.os === "macos"),
+            mac,
             // Its Mac minis live on top of the fridge
             fridge: g.pools.every((p) => p.os === "macos" && p.arch === "x86_64"),
             hosts,
@@ -971,8 +978,9 @@
       // Which model a host is, by name: the jonagold runners are M6 minis
       const miniModel = (name) => (name && name.startsWith("jonagold") ? "m6" : "intel");
       // One machine per host, with a status light per slot: `states` has the
-      // slots' states and `leds` the materials a running slot's light cycles through
-      function makeMini(states, leds, name = null) {
+      // slots' states and `leds` the materials a running slot's light cycles through.
+      // A job with the `whole` machine lights one bar across every slot's place.
+      function makeMini(states, leds, name = null, whole = false) {
         const size = miniSize(miniModel(name));
         const g = new THREE.Group();
         const body = new THREE.Mesh(GEO.box, states.includes("on") ? MAT.mini : MAT.miniOff);
@@ -982,17 +990,19 @@
         g.add(body);
         // The status lights, from the front's right-hand corner inwards
         const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / states.length - 0.012));
-        states.forEach((s, k) => {
-          const x = size.w * 0.35 + 0.015 - lw / 2 - k * (lw + 0.012);
+        const pitch = lw + 0.012;
+        const lights = whole ? [{ s: "on", k: (states.length - 1) / 2, w: lw + (states.length - 1) * pitch }] : states.map((s, k) => ({ s, k, w: lw }));
+        for (const { s, k, w } of lights) {
+          const x = size.w * 0.35 + 0.015 - lw / 2 - k * pitch;
           const rim = new THREE.Mesh(GEO.box, LED.rim);
-          rim.scale.set(lw + 0.0025, 0.0145, 0.01);
+          rim.scale.set(w + 0.0025, 0.0145, 0.01);
           rim.position.set(x, size.h / 2, size.w / 2 + 0.0005);
           g.add(rim);
-          const l = new THREE.Mesh(GEO.box, s === "on" ? leds[k % leds.length] : LED[s]);
-          l.scale.set(lw, 0.012, 0.01);
+          const l = new THREE.Mesh(GEO.box, s === "on" ? leds[Math.floor(k) % leds.length] : LED[s]);
+          l.scale.set(w, 0.012, 0.01);
           l.position.set(x, size.h / 2, size.w / 2 + 0.002);
           g.add(l);
-        });
+        }
         if (name) {
           const tag = nameTag(name);
           tag.position.set(0, size.h + 0.0005, 0.02);
@@ -1449,7 +1459,7 @@
           mit.rotation.z = 0.12;
           fridge.add(mit);
           fridgeHosts.forEach((h, i) => {
-            const m = makeMini(h.states, ledsFrom(i), h.name);
+            const m = makeMini(h.states, ledsFrom(i), h.name, h.whole);
             const pile = Math.floor(i / 3);
             m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * (MINI.h + 0.005), 0);
             m.rotation.y = Math.sin(i * 2.3) * 0.25;
@@ -1530,7 +1540,7 @@
             const table = makeTable(tw);
             const column = (i) => -tw / 2 + 0.38 + Math.floor(i / 2) * 0.45;
             chunk.forEach((h, i) => {
-              const m = makeMini(h.states, ledsFrom(i), h.name);
+              const m = makeMini(h.states, ledsFrom(i), h.name, h.whole);
               m.position.set(column(i), 0.83, i % 2 ? 0.22 : -0.22);
               table.add(m);
             });
@@ -2222,7 +2232,8 @@
         let best = null;
         for (const c of data.ci)
           for (const h of c.hosts) {
-            const n = h.states.filter((x) => x === "on").length;
+            // A job with the whole machine is one job, whatever the slots
+            const n = h.whole ? 1 : h.states.filter((x) => x === "on").length;
             if (!best || n > best.n) best = { name: h.name, n };
           }
 
@@ -2614,7 +2625,7 @@
         return lines.map(esc).join("<br>");
       }
       function tipHtml(c) {
-        const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
+        const hosts = c.hosts.slice(0, 10).map((h) => (h.whole && h.states.length > 1 ? `${esc(h.name)} whole machine` : `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`));
         if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
         // A shared machine: each queue's status and counts, under the worst one's
         const data = c.parts

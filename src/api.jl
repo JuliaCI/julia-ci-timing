@@ -369,7 +369,7 @@ const ROUTES = [
           "The 50 most requested packages over the window.",
           (db, _, p) -> Render.download_top(db; days=days_param(p, 7), client=client_param(p))),
     Route("agents/latest", ["queue" => "only this queue's agents, whichever cluster they are in (the server room asks for yggdrasil this way)"],
-          "Every Buildkite agent of the Julia and Secure clusters seen in the last year: host, queue, OS, state, first and last seen, and its job if it has one now.",
+          "Every Buildkite agent of the Julia and Secure clusters seen in the last year: host, queue, OS, state, first and last seen, its job if it has one now, and sched, the size its job asked the scheduler for (cpus, cpus_limit, mem_gib, mem_limit_gib, from the agent's sched_* tags; null without them, which on a macOS host of the build and test queues means the job has the whole host to itself).",
           (db, _, p) -> Render.agents_latest(db; queue=get(p, "queue", ""))),
     Route("agents/snapshots", [SINCE],
           "The connected agents of the Julia and Secure clusters at every ingest, as a list of snapshots.",
