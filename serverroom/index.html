@@ -2625,7 +2625,7 @@
         return lines.map(esc).join("<br>");
       }
       function tipHtml(c) {
-        const hosts = c.hosts.slice(0, 10).map((h) => (h.whole && h.states.length > 1 ? `${esc(h.name)} whole machine` : `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`));
+        const hosts = c.hosts.slice(0, 10).map((h) => (h.whole ? `${esc(h.name)} 1/1` : `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`));
         if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
         // A shared machine: each queue's status and counts, under the worst one's
         const data = c.parts
