@@ -18613,6 +18613,30 @@ function overviewCardClick(e) {
   switchTab(el.dataset.tab);
 }
 
+// Lays a grid's cards out as a masonry: each card keeps its own height and
+// spans as many short rows as that takes, so the next card fills in below it
+// rather than below the tallest card of the row
+const MASONRY_ROW = 2;
+function masonry(grid) {
+  grid.classList.add("masonry");
+  const fit = (el) => {
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+    el.style.gridRowEnd = `span ${Math.max(1, Math.ceil((el.offsetHeight + gap) / MASONRY_ROW))}`;
+  };
+  const observer = new ResizeObserver((entries) => {
+    for (const e of entries) fit(e.target);
+  });
+  for (const el of grid.children) observer.observe(el);
+  new MutationObserver((records) => {
+    for (const r of records) {
+      for (const el of r.removedNodes) if (el.nodeType === 1) observer.unobserve(el);
+      for (const el of r.addedNodes) if (el.nodeType === 1) observer.observe(el);
+    }
+  }).observe(grid, { childList: true });
+}
+masonry(document.getElementById("overview-grid"));
+masonry(document.getElementById("commit-body"));
+
 // Draws every card, or with `changed` only the cards that read one of those
 // sources
 function drawOverview(changed = null) {

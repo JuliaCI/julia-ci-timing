@@ -4175,6 +4175,14 @@ a.ttfx-pr-copy {
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
   gap: 12px;
 }
+/* The script sets each card's row span from its height; the column gap
+   stands in for the row gap */
+.overview-grid.masonry,
+#commit-body.masonry {
+  grid-auto-rows: 2px;
+  row-gap: 0;
+  align-items: start;
+}
 .overview-card {
   border: 1px solid var(--color-border-default);
   border-radius: 6px;
