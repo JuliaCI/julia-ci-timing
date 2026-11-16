@@ -139,6 +139,10 @@ function measure(root)
         p = joinpath("share", "julia", d)
         m["share.$d"] = sumwhere(k -> startswith(k, p * "/"), files)
     end
+    # The HTML manual, which only the builds julia-publish ships include
+    manual = joinpath("share", "doc", "julia", "html") * "/"
+    m["share.doc"] = sumwhere(k -> startswith(k, manual), files)
+    m["share.doc.files"] = count(k -> startswith(k, manual), keys(files))
 
     # runtime and sysimage
     libjulia = joinpath("lib", "julia")

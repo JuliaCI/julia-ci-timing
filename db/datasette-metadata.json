@@ -331,7 +331,7 @@
           }
         },
         "size_metrics": {
-          "description": "Size measurements of a size_builds row, in bytes (files and pkgimg.count are counts): total, dir.* and share.* per directory, sysimg (sys.so) and libjulia-internal, libjulia-codegen, libLLVM, libjulia with their .text, .rodata, .data, .dwarf, .symtab, .dynsym and other section bytes (sysimg.image_data: the image's data blob), libs.other (the other bundled libraries) and its DWARF, pkgimg.ji, pkgimg.so and pkgimg.so.dwarf (the stdlib pkgimages), tarball (ci and release only).",
+          "description": "Size measurements of a size_builds row, in bytes (files, pkgimg.count and share.doc.files are counts): total, dir.* and share.* per directory (share.doc: the HTML manual, which julia-pr builds leave out), sysimg (sys.so) and libjulia-internal, libjulia-codegen, libLLVM, libjulia with their .text, .rodata, .data, .dwarf, .symtab, .dynsym and other section bytes (sysimg.image_data: the image's data blob), libs.other (the other bundled libraries) and its DWARF, pkgimg.ji, pkgimg.so and pkgimg.so.dwarf (the stdlib pkgimages), tarball (ci and release only).",
           "columns": {}
         },
         "size_files": {

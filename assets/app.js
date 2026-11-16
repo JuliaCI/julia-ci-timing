@@ -16657,6 +16657,7 @@ function sizesPrDetailsHtml(p, { allStats = true } = {}) {
   }
   if (!p.base) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBaseText(p))}.</div>`;
   if (p.build_change) html += `<div class="ttfx-popup-note">${escapeHtml(sizesPrBuildChangeText(p))}</div>`;
+  if (p.manual) html += `<div class="ttfx-popup-muted ttfx-popup-hint">Both sides are counted without the HTML manual, which pull request builds leave out (${formatBytes(p.manual)} at the merge-base).</div>`;
   return html;
 }
 

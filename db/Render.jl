@@ -1683,6 +1683,54 @@ function size_own_before(values, base_values, below_values, below_base_values)
     return out
 end
 
+# Pull request builds leave out the HTML manual (JuliaCI/julia-buildkite#751) and
+# master builds keep it, so a pull request is compared without it on both sides
+const SIZE_MANUAL = "share/doc/julia/html/"
+const SIZE_MANUAL_METRICS = ["share.doc", "share.doc.files"]
+const SIZE_MANUAL_PARTS = ["total" => "share.doc", "dir.share" => "share.doc", "files" => "share.doc.files"]
+
+# The manual's metrics in each measurement of `ids`, or nothing where they are not known:
+# a measurement older than those metrics that has the manual
+function size_manuals(db, ids)
+    ids = unique(ids)
+    found = Dict{Int,Dict{String,Int}}()
+    isempty(ids) && return Dict{Int,Any}()
+    for r in rows(db, "SELECT size_build_id AS id, metric, value FROM size_metrics WHERE size_build_id IN (SELECT value FROM json_each(?)) " *
+                      "AND metric IN (SELECT value FROM json_each(?))", (JSON3.write(ids), JSON3.write(SIZE_MANUAL_METRICS)))
+        get!(found, Int(r.id), Dict{String,Int}())[String(r.metric)] = Int(r.value)
+    end
+    with_manual = Set(Int(r.id) for r in rows(db, "SELECT DISTINCT size_build_id AS id FROM size_files " *
+                                                  "WHERE size_build_id IN (SELECT value FROM json_each(?)) AND path GLOB ?",
+                                              (JSON3.write(ids), SIZE_MANUAL * "*")))
+    none = Dict(m => 0 for m in SIZE_MANUAL_METRICS)
+    return Dict{Int,Any}(id => haskey(found, id) ? found[id] : id in with_manual ? nothing : none for id in ids)
+end
+
+function size_net_of_manual(values, manual)
+    out = copy(values)
+    for (m, part) in SIZE_MANUAL_PARTS
+        haskey(out, m) && (out[m] -= get(manual, part, 0))
+    end
+    return out
+end
+
+# A size_diff of measurement `id` against `before` without the manual, when both are known
+function size_diff_net_of_manual!(d, manuals, id, before)
+    mh, mb = get(manuals, id, nothing), get(manuals, before, nothing)
+    (mh === nothing || mb === nothing) && return false
+    for (m, part) in SIZE_MANUAL_PARTS
+        v = get(d["metrics"], m, nothing)
+        v === nothing && continue
+        d["metrics"][m] = [v[1] - mh[part], v[2] === nothing ? nothing : v[2] - mb[part]]
+    end
+    foreach(m -> delete!(d["metrics"], m), SIZE_MANUAL_METRICS)
+    filter!(f -> !startswith(f["path"], SIZE_MANUAL), d["files"])
+    return true
+end
+
+# The merge-base's manual that the comparison leaves out, in bytes, or nothing
+size_manual_left_out(manuals, base_id) = (m = manuals[base_id]; m["share.doc"] > 0 ? m["share.doc"] : nothing)
+
 function size_pr_stack(r, heads, measured)
     base_ref = String(r.base_ref)
     (isempty(base_ref) || base_ref == "master") && return nothing, nothing
@@ -1717,16 +1765,22 @@ function size_prs(db)
     heads = size_open_heads(db)
     measured = Dict(Int(r.pr_number) => r for r in prs)
     markers = size_build_change_markers(db)
+    manuals = size_manuals(db, ids)
     out = Any[]
     for r in prs
         e = size_pr_info(r)
         e["build_change"] = size_pr_build_change(r, markers)
-        e["values"] = get(values, Int(r.head_id), Dict{String,Int}())
-        e["base_values"] = r.base_id === missing ? nothing : get(values, Int(r.base_id), Dict{String,Int}())
         e["stack"], below = size_pr_stack(r, heads, measured)
-        e["below_values"] = below === nothing || below.base_id === missing ? nothing :
-            size_own_before(e["values"], e["base_values"], get(values, Int(below.head_id), Dict{String,Int}()),
-                            get(values, Int(below.base_id), Dict{String,Int}()))
+        below = below === nothing || below.base_id === missing ? nothing : below
+        compared = Int[id for id in (r.head_id, r.base_id) if id !== missing]
+        below === nothing || append!(compared, (Int(below.head_id), Int(below.base_id)))
+        net = r.base_id !== missing && all(id -> manuals[id] !== nothing, compared)
+        vals(id) = (v = get(values, Int(id), Dict{String,Int}()); net ? size_net_of_manual(v, manuals[Int(id)]) : v)
+        e["manual"] = net ? size_manual_left_out(manuals, Int(r.base_id)) : nothing
+        e["values"] = vals(r.head_id)
+        e["base_values"] = r.base_id === missing ? nothing : vals(r.base_id)
+        e["below_values"] = below === nothing ? nothing :
+            size_own_before(e["values"], e["base_values"], vals(below.head_id), vals(below.base_id))
         push!(out, e)
     end
     return OrderedDict("generated_at" => generated_at(db, "sizes"), "triplet" => SIZE_TRIPLET, "metrics" => SIZE_PR_METRICS, "prs" => out)
@@ -1741,21 +1795,35 @@ function size_pr(db, number)
     isempty(r) && return nothing
     e = size_pr_info(r[1])
     e["build_change"] = size_pr_build_change(r[1], size_build_change_markers(db))
-    merge!(e, size_diff(db, Int(r[1].head_id), r[1].base_id === missing ? 0 : Int(r[1].base_id)))
+    head_id, base_id = Int(r[1].head_id), r[1].base_id === missing ? 0 : Int(r[1].base_id)
+    d = size_diff(db, head_id, base_id)
     heads = size_open_heads(db)
     below_n = get(heads, String(r[1].base_ref), nothing)
     below_rows = below_n === nothing ? [] : rows(db, SIZE_PR_QUERY * " WHERE p.pr_number = ?2", (SIZE_TRIPLET, below_n))
     e["stack"], below = size_pr_stack(r[1], heads, Dict(Int(b.pr_number) => b for b in below_rows))
+    below = below === nothing || below.base_id === missing ? nothing : below
+    compared = base_id == 0 ? [head_id] : [head_id, base_id]
+    below === nothing || append!(compared, (Int(below.head_id), Int(below.base_id)))
+    manuals = size_manuals(db, compared)
+    net = base_id != 0 && all(id -> manuals[id] !== nothing, compared)
+    net && size_diff_net_of_manual!(d, manuals, head_id, base_id)
+    e["manual"] = net ? size_manual_left_out(manuals, base_id) : nothing
+    merge!(e, d)
     e["below_metrics"] = nothing
     e["below_files"] = nothing
-    if below !== nothing && below.base_id !== missing && r[1].base_id !== missing
-        b = size_diff(db, Int(below.head_id), Int(below.base_id))["metrics"]
+    if below !== nothing && base_id != 0
+        bd = size_diff(db, Int(below.head_id), Int(below.base_id))
+        net && size_diff_net_of_manual!(bd, manuals, Int(below.head_id), Int(below.base_id))
+        b = bd["metrics"]
         pick(i, d) = Dict(m => v[i] for (m, v) in d if v[i] !== nothing)
         before = size_own_before(pick(1, e["metrics"]), pick(2, e["metrics"]), pick(1, b), pick(2, b))
         e["below_metrics"] = OrderedDict(m => [v[1], get(before, m, nothing)] for (m, v) in e["metrics"])
         # Files compare directly only from the same master commit; otherwise master's own
         # changes between the merge-bases would show up as theirs
-        r[1].merge_base == below.merge_base && (e["below_files"] = size_diff(db, Int(r[1].head_id), Int(below.head_id))["files"])
+        if r[1].merge_base == below.merge_base
+            e["below_files"] = size_diff(db, head_id, Int(below.head_id))["files"]
+            net && filter!(f -> !startswith(f["path"], SIZE_MANUAL), e["below_files"])
+        end
     end
     return e
 end

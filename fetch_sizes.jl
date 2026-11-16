@@ -440,6 +440,44 @@ function rebase_prs!(db, bucket; deadline)
     end
 end
 
+# The heads and merge-bases of the open pull requests measured before the manual was,
+# measured again, so that they compare without it (see db/Render.jl)
+function remeasure_for_manual!(db, bucket; deadline)
+    no_manual = "NOT EXISTS (SELECT 1 FROM size_metrics m WHERE m.size_build_id = s.id AND m.metric = 'share.doc')"
+    heads = query(db, "SELECT p.pr_number, p.build, s.commit_sha, s.merged_at, s.message FROM size_prs p JOIN size_builds s " *
+                      "ON s.source = 'pr' AND s.triplet = ? AND s.commit_sha = p.head_commit WHERE $no_manual ORDER BY p.build DESC", (TRIPLET,))
+    bases = query(db, "SELECT DISTINCT s.commit_sha FROM size_prs p JOIN size_builds s " *
+                      "ON s.source = 'ci' AND s.triplet = ? AND s.commit_sha = p.base_commit WHERE $no_manual", (TRIPLET,))
+    isempty(heads) && isempty(bases) && return
+    @info "Pull request measurements without the manual's size" heads=length(heads) bases=length(bases)
+    for r in bases
+        now(UTC) > deadline && return
+        try
+            measure_master_commit!(db, String(r.commit_sha), bucket)
+        catch e
+            @error "Measuring the merge-base again failed" commit=r.commit_sha exception=(e, catch_backtrace())
+        end
+    end
+    for r in heads
+        now(UTC) > deadline && return
+        try
+            b = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds/$(r.build)")
+            job = b === nothing ? nothing : build_job(b)
+            url = job === nothing ? nothing : job_tarball_url(PR_PIPELINE, Int(r.build), job.id)
+            url === nothing && continue
+            version, metrics, files = measure_tarball(artifact_download(url))
+            delete!(metrics, "tarball")
+            row = (merged_at=String(r.merged_at), version, build=Int(r.build), message=String(coalesce(r.message, "")), measured_at=iso_now())
+            transaction(db) do
+                write_measurement!(db, "pr", TRIPLET, String(r.commit_sha), row, metrics, files; seq=next_seq!(db))
+            end
+            @info "Measured the pull request again" pr=r.pr_number build=r.build
+        catch e
+            @error "Measuring the pull request again failed" pr=r.pr_number exception=(e, catch_backtrace())
+        end
+    end
+end
+
 function measure_prs!(db, bucket; deadline)
     pulls = open_prs!(db)
     known = Dict(Int(r.pr_number) => Int(r.build) for r in query(db, "SELECT pr_number, build FROM size_prs"))
@@ -464,6 +502,7 @@ function measure_prs!(db, bucket; deadline)
         end
     end
     rebase_prs!(db, bucket; deadline)
+    remeasure_for_manual!(db, bucket; deadline)
     prune_prs!(db)
     return n
 end
