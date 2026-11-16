@@ -1650,6 +1650,40 @@ th.sorted .sort-indicator {
 .tab-group .tab-btn:last-child {
   border-right: none;
 }
+.toolbar .updated {
+  white-space: nowrap;
+}
+/* The title, the tabs and the controls fit on one row only on wide windows.
+   Narrower, the tabs get a row of their own under the title and controls,
+   rather than wrapping into a ragged block between them. */
+@media (min-width: 769px) and (min-height: 501px) and (max-width: 1700px) {
+  .toolbar {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+  /* A line break, so the tabs never sit at the end of the first row */
+  .toolbar::after {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+  }
+  .toolbar .tab-nav {
+    order: 2;
+    margin: 6px 0 0;
+  }
+  .toolbar #theme-toggle {
+    margin-left: auto;
+  }
+  .toolbar .updated {
+    margin-left: 0;
+  }
+}
+@media (min-width: 769px) and (min-height: 501px) and (max-width: 1000px) {
+  .toolbar .tab-btn {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+}
 .coverage-row-active > td {
   background: var(--color-accent-subtle);
 }
