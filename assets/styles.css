@@ -3739,6 +3739,9 @@ th.sorted .sort-indicator {
   overflow-wrap: anywhere;
 }
 .ttfx-stats-caption {
+  /* Stays in view while a table wider than the panel scrolls sideways */
+  position: sticky;
+  left: 0;
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.5;
