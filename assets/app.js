@@ -13173,7 +13173,7 @@ function ttfxSeriesTasksText(ref, metric, twin = null) {
   const tasks = ttfxSelectedList();
   const runs = ref ? getTtfxFilteredRefs(ref) : getTtfxFilteredBuilds();
   const n = ttfxCommonTasks(runs, tasks, metric, twin).length;
-  return `${n} of ${tasks.length} selected tasks measured in every run in range`;
+  return `${n} of ${tasks.length} selected tasks measured in every run in range, but for a failed run or two`;
 }
 
 function ttfxShownRefs() {
@@ -13294,19 +13294,57 @@ function ttfxChange(v, prev, metric = ttfxMetric) {
   return { text: formatSigned(d), cls: ttfxCountClass(d, prev) };
 }
 
-// The selected tasks with a value for `metric` in every build of the range
-// that measured anything at all: the suite line's composition must not move
-// over time. Per metric, since a task's run can round to 0 while its
-// precompile is fine.
+// A task that failed in a build or two between builds that measured it stays
+// in the suite, and the suite skips those builds instead. A package release
+// that is broken for an hour should not drop its tasks from every chart.
+const TTFX_MAX_MISS_RUN = 2;
+const TTFX_MAX_MISS_SHARE = 0.1;
+
+// Whether a task's misses in one series' runs (in time order) are few and
+// short, each with a run on both sides that measured it
+function ttfxMissesTolerated(has) {
+  if (!has[0] || !has[has.length - 1]) return false;
+  let missed = 0;
+  let run = 0;
+  for (const h of has) {
+    run = h ? 0 : run + 1;
+    if (run > TTFX_MAX_MISS_RUN) return false;
+    if (!h) missed++;
+  }
+  return missed <= TTFX_MAX_MISS_SHARE * has.length;
+}
+
+// The selected tasks with a value for `metric` in every run (in time order) of
+// one series in range that measured anything at all, but for misses short
+// enough to tolerate: the suite line's composition must not move over time, so
+// the runs that missed one of them have no suite value. Per metric, since a
+// task's run can round to 0 while its precompile is fine.
 function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, twin = null) {
+  return ttfxSeriesCommon(builds, tasks, metric, twin) || [];
+}
+
+// As above, but null when no run measured any of the tasks
+function ttfxSeriesCommon(builds, tasks, metric, twin) {
   // A job metric does not depend on which tasks are selected
   if (ttfxIsJob(metric)) tasks = [TTFX_STARTUP_TASK];
   // The builds that measured any of `tasks`: a task added to the job later
   // (Ferrite in October 2026) then has a line of its own from when it starts,
   // instead of none because the builds before it measured other tasks
   const measured = builds.filter((b) => b.tasks && tasks.some((t) => ttfxValue(b, t, metric, twin) != null));
-  if (!measured.length) return [];
-  return tasks.filter((t) => measured.every((b) => ttfxValue(b, t, metric, twin) != null));
+  if (!measured.length) return null;
+  return tasks.filter((t) => ttfxMissesTolerated(measured.map((b) => ttfxValue(b, t, metric, twin) != null)));
+}
+
+// The tasks common to several series, each judged on its own runs so a miss
+// is weighed against that series' neighbouring runs; a series that measured
+// none of the tasks has no say
+function ttfxCommonTasksOf(seriesList, tasks, metric = ttfxMetric, twin = null) {
+  let out = null;
+  for (const runs of seriesList) {
+    const common = ttfxSeriesCommon(runs, tasks, metric, twin);
+    if (common) out = out ? out.filter((t) => common.includes(t)) : common;
+  }
+  return out || [];
 }
 
 // The tasks the suite lines of `metric` average: those measured by every run
@@ -13316,11 +13354,11 @@ function ttfxCommonTasks(builds, tasks, metric = ttfxMetric, twin = null) {
 // runs that have the twin's values, for the twin), so the gap between them
 // compares the same tasks too.
 function ttfxSuiteTasks(builds, tasks, metric = ttfxMetric) {
-  const runs = builds.concat(...ttfxShownRefs().map(getTtfxFilteredRefs));
-  let out = ttfxCommonTasks(runs, tasks, metric);
+  const series = [builds, ...ttfxShownRefs().map(getTtfxFilteredRefs)];
+  let out = ttfxCommonTasksOf(series, tasks, metric);
   for (const twin of Object.keys(TTFX_TWINS)) {
     if (!ttfxShowsTwin(twin, metric)) continue;
-    const other = new Set(ttfxCommonTasks(runs, tasks, metric, twin));
+    const other = new Set(ttfxCommonTasksOf(series, tasks, metric, twin));
     const both = out.filter((t) => other.has(t));
     if (both.length) out = both;
   }
@@ -14729,7 +14767,7 @@ function renderTtfxBuildsTable() {
         "num",
         ttfxIsJob(key)
           ? TTFX_JOB_NOTE
-          : `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
+          : `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range (a build where one of them failed has no value)${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
       ]),
       ["message", "Message", "col-secondary"],
     ],
