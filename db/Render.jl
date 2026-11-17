@@ -2384,7 +2384,7 @@ const QUEUED_STATES = ("scheduled", "reserved", "assigned", "accepted", "limited
 # The pipelines whose jobs pool_jobs records
 const POOL_PIPELINES = ("julia-pr", "julia-ci")
 # How long a snapshot's count of other pipelines' jobs stands; agents are fetched
-# every 10 minutes, and this covers a missed run or two
+# every 5 minutes, and this covers a full run that holds the others up
 const SNAPSHOT_HOLD = Minute(45)
 
 """
@@ -2479,25 +2479,25 @@ the jobs' Buildkite priority under `by_priority`, keyed by the number as a
 string, highest first. `waiting_jobs` lists the pool's jobs waiting now in the
 order an agent takes them (highest priority, then longest waiting), each with
 its build, name, priority, and the build's pull request and branch. `now` has the
-pool at the latest agents ingest, which the samples round down to 10 minutes, with
+pool at the latest agents ingest, which the samples round down to 5 minutes, with
 `blocked`, the jobs of unfinished builds still waiting for another job to finish,
 and under `benchmarks` the same counts of the TTFX and Runtime benchmarks jobs.
 """
 # The start of a window over pool_jobs from `since`: no earlier than the
-# oldest job kept, on a 10-minute multiple, so the Workers charts share it
+# oldest job kept, on a 5-minute multiple, so the Workers charts share it
 function pool_jobs_start(db, since, now_t)
     first_r = rows(db, "SELECT MIN(runnable_at) AS t FROM pool_jobs")[1].t
     start = isempty(since) ? DateTime(0) : DateTime(since[1:min(end, 19)], length(since) <= 10 ? dateformat"yyyy-mm-dd" : dateformat"yyyy-mm-ddTHH:MM:SS")
-    start = max(start, first_r === missing ? now_t - Day(7) : floor(DateTime(String(first_r), Store.ISO_SECONDS), Minute(10)))
+    start = max(start, first_r === missing ? now_t - Day(7) : floor(DateTime(String(first_r), Store.ISO_SECONDS), Minute(5)))
     return min(start, now_t)
 end
 
 function pool_backlog(db; since="")
-    now_t = floor(now(UTC), Minute(10))
+    now_t = floor(now(UTC), Minute(5))
     start = pool_jobs_start(db, since, now_t)
     span = Dates.value(now_t - start) ÷ 1000
-    # At most about 1000 samples, on 10-minute multiples
-    step = max(600, cld(span, 1000 * 600) * 600)
+    # At most about 1000 samples, on 5-minute multiples
+    step = max(300, cld(span, 1000 * 300) * 300)
     n = span ÷ step + 1
     t0 = datetime2unix(start)
     secs(x) = datetime2unix(DateTime(String(x), Store.ISO_SECONDS))
@@ -2518,7 +2518,7 @@ function pool_backlog(db; since="")
     end
     for r in rows(db, "SELECT pipeline, name, queue, os, arch, priority, state, runnable_at, started_at, finished_at FROM pool_jobs " *
                       "WHERE runnable_at < ? AND (finished_at IS NULL OR finished_at >= ?)",
-                  (Store.iso(now_t + Minute(10)), Store.iso(start)))
+                  (Store.iso(now_t + Minute(5)), Store.iso(start)))
         p = acc(String(r.queue), String(r.os), String(r.arch), String(r.pipeline), Int(r.priority))
         a = secs(r.runnable_at)
         if r.finished_at === missing && (r.started_at !== missing || String(r.state) in QUEUED_STATES)
@@ -2682,7 +2682,7 @@ end
 # canceled when any job was, failed otherwise. A build with a job still
 # waiting or running is left out. Columns per pipeline, oldest build first.
 function build_hours(db; since="")
-    start_t = pool_jobs_start(db, since, floor(now(UTC), Minute(10)))
+    start_t = pool_jobs_start(db, since, floor(now(UTC), Minute(5)))
     start = Store.iso(start_t)
     # No build runs for two days, so its jobs are all after this
     early = Store.iso(start_t - Day(2))

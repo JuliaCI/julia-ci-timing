@@ -27,7 +27,7 @@ One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
 - Ten fetchers write a SQLite database every half hour, and the CI timing,
-  agent and GitHub ones every 10 minutes (`db/schema.sql`):
+  agent and GitHub ones every 5 minutes (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
     receiving builds in July 2026)

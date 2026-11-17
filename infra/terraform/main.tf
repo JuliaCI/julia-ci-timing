@@ -4,7 +4,7 @@
 # backups, ECR for the ingest image, Session Manager as the only operator
 # path. The differences: the site is static files Caddy serves from the host,
 # the ingest is a systemd timer running the image every half hour (the fast
-# changing sources every 10 minutes), a deploy
+# changing sources every 5 minutes), a deploy
 # pulls a new image and restarts (no instance replacement), and the data
 # lives on its own EBS volume that outlives the instance.
 #
