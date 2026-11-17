@@ -15115,12 +15115,18 @@ function allStatsButton(ref, { pr = false } = {}) {
   return `<a class="btn btn-primary" href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="closeTtfxBuildPopup();lookupCommit('${r}');return false" title="Everything recorded for this ${what} on the Commit page">All ${pr ? "PR" : "commit"} stats</a>`;
 }
 
-// The detail metrics a pull request's job compared, shown after the scored ones
+// A metric's share of a pull request's score as text, from the weights the API sent
+function ttfxScoreNote(m, weights = ttfxPrs && ttfxPrs.score_weights) {
+  const w = (weights && weights[m]) || 0;
+  return w ? `${Math.round(w * 1000) / 10}% of the score` : "not in the score";
+}
+
+// The detail metrics a pull request's job compared, shown after the per-task ones
 function ttfxPrDetailMetrics(p) {
   return Object.keys(TTFX_METRICS).filter((m) => (ttfxIsDetail(m) || ttfxIsJob(m)) && p.suite && p.suite[m]);
 }
 
-function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
+function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && ttfxPrs.score_weights } = {}) {
   const details = ttfxPrDetailMetrics(p);
   const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxRatioPct).join(", ") : "—");
   const muted = (x) => (x ? ` <span class="ttfx-popup-muted" title="GC off">${blocks(x)}</span>` : "");
@@ -15167,7 +15173,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true } = {}) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(ttfxSuiteVerdict(on), off && off.verdict);
-    const note = details.includes(m) ? "; not in the score" : "";
+    const note = `; ${ttfxScoreNote(m, weights)}`;
     html += `<tr><th title="${ttfxIsJob(m) ? TTFX_JOB_NOTE : `Over ${on ? on.n_tasks : 0} tasks`}${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
     html += `<td class="${ttfxVerdictClass(v)}">${ttfxSuiteNote(on) || v}</td>`;
@@ -15425,14 +15431,14 @@ function ttfxPrColumnTitle(c) {
   if (c.instructions)
     return `Retired instructions of ${c.key === "startup_instructions" ? "julia's startup (the whole process, julia -e '')" : `the ${c.label.toLowerCase()} phase, the suite geometric mean over every task`}, head against base, averaged over the ABBA blocks; each block is in the tooltip. They follow the work done rather than how long the machine took, so they repeat far more closely than the times. The job does not judge them: coloured when every block moved more than ${NO_CHANGE_PCT.instructions}% the same way. Not in the score.`;
   if (ttfxIsJob(c.key))
-    return `${ttfxMetricLabel(c.key)}, head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust. Not in the score.`;
+    return `${ttfxMetricLabel(c.key)}, head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust; ${ttfxScoreNote(c.key)}.`;
   if (c.key === "startup_load")
     return "Startup+load (cold): from starting the cold run's julia process to the end of its load. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. A load change it does not share was work moved between startup and load, which the job does not count. Not in the score.";
   const base = c.key.replace(/_gcoff$/, "");
   const what = c.key.endsWith("_gcoff")
     ? `${ttfxMetricLabel(base)} with the GC off, from the first of the GC-off repeats`
-    : ttfxMetricLabel(c.key) + (ttfxIsDetail(c.key) ? ", the first run in a copy of the task's project with every stdlib loaded first; not in the score" : "");
-  return `${what}. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. Coloured when the job judged the change robust.`;
+    : ttfxMetricLabel(c.key) + (ttfxIsDetail(c.key) ? ", the first run in a copy of the task's project with every stdlib loaded first" : "");
+  return `${what}. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. Coloured when the job judged the change robust; ${ttfxScoreNote(c.key)}.`;
 }
 
 function renderTtfxPrsTable() {
@@ -15450,7 +15456,7 @@ function renderTtfxPrsTable() {
         "score",
         "Score",
         "num",
-        "Weighted geometric mean of the metric changes: a third each for precompile (once per install), cold load and run (the first session) and warm (every later session), taking the block nearer no change. Rows are ranked by it.",
+        "Weighted geometric mean of the metric changes: a quarter each for precompile (once per install), cold load and run (the first session) and warm (every later session), then an eighth each for julia's startup (to exit and to the prompt) and for the cold load and run with every stdlib loaded first, taking the block nearer no change. A job without a metric is scored on the rest. Rows are ranked by it.",
       ],
       ...ttfxPrColumns.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
       ["tasks", "Tasks", "num ttfx-prs-group-start", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
@@ -19102,7 +19108,7 @@ function commitPrHtml(d, gh) {
   </section>`;
   const t = d.ttfx;
   const ttfx = t
-    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false })}${ttfxPrReleasesHtml(t)}</div>`, {
+    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false, weights: t.score_weights })}${ttfxPrReleasesHtml(t)}</div>`, {
         links: overviewTabLink("ci-ttfx", "TTFX tab"),
       })
     : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>');
