@@ -820,12 +820,17 @@ end
 
 # Open pull requests by how their latest TTFX comparison looks, best first.
 # The score is a weighted geometric mean of the per-metric ratios (head/base, below 1
-# is faster), with a third each for what a user pays: precompile once per install,
-# cold load and run in the first session, and warm load+run in every later one.
+# is faster), weighted by what a user pays: a quarter each for precompile once per
+# install, cold load and run in the first session, and warm load+run in every later
+# one, then an eighth each for julia's own startup (to exit and to the REPL prompt)
+# and for the cold load and run with every stdlib loaded first.
 # Fixed weights rather than seconds on master, which would leave the score almost
-# only precompile, and a geomean to match the suite geomeans it combines.
-const TTFX_PR_WEIGHTS = ["precompile" => 1/3, "load" => 1/6, "run" => 1/6, "warm" => 1/3]
-const TTFX_PR_METRICS = first.(TTFX_PR_WEIGHTS)
+# only precompile, and a geomean to match the suite geomeans it combines. A job that
+# did not measure a metric is scored on the others.
+const TTFX_PR_WEIGHTS = ["precompile" => 1/4, "load" => 1/8, "run" => 1/8, "warm" => 1/4,
+                         "startup" => 1/16, "startup_repl" => 1/16, "load_stdlibs" => 1/16, "run_stdlibs" => 1/16]
+# The per-task metrics compared on every job
+const TTFX_PR_METRICS = ["precompile", "load", "run", "warm"]
 
 # A metric's ratio is the block nearest no change, and no change when the blocks
 # disagree on the direction, so one noisy block moves the score neither way.
@@ -916,7 +921,8 @@ function ttfx_prs(db)
             "counts" => coalesce(get(r, :counts, missing), nothing) === nothing ? nothing : JSON3.read(String(r.counts))))
     end
     sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"]))
-    return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => "julia-pr", "metrics" => TTFX_PR_METRICS, "prs" => prs)
+    return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => "julia-pr", "metrics" => TTFX_PR_METRICS,
+                       "score_weights" => OrderedDict(TTFX_PR_WEIGHTS), "prs" => prs)
 end
 
 # --- commit lookup -------------------------------------------------------------
@@ -1263,7 +1269,7 @@ function commit_pr(db, n)
     ttfx_all = ttfx_prs(db)["prs"]
     ttfx = nothing
     i = findfirst(p -> p["pr"] == n, ttfx_all)
-    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "pr" => ttfx_all[i],
+    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "score_weights" => OrderedDict(TTFX_PR_WEIGHTS), "pr" => ttfx_all[i],
                                          "releases" => commit_pr_ttfx_releases(db, ttfx_all[i])))
     sizes = size_pr(db, string(n))
     sizes === nothing || (sizes["releases"] = size_release_series(db))
