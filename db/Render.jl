@@ -1093,10 +1093,18 @@ function commit_ttfx(db, prefix, sha)
     failed = failures(String(j.job_uuid))
     before = isempty(prev) ? Dict{String,Any}() : results(String(prev[1].job_uuid))
     failed_before = isempty(prev) ? Dict{String,String}() : failures(String(prev[1].job_uuid))
+    # The next job tells a lasting failure from a one-off, such as a broken
+    # package release that was yanked before the next build
+    next = isempty(failed) ? [] :
+           rows(db, "SELECT job_uuid FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at > ? AND commit_sha NOT GLOB ? AND EXISTS " *
+                    "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at LIMIT 1",
+                (j.build_created_at, commit_glob(prefix, sha)))
+    failed_after = isempty(next) ? nothing : failures(String(next[1].job_uuid))
     tasks = Any[]
     for task in sort!(unique([collect(keys(now_)); collect(keys(failed))]))
         push!(tasks, OrderedDict("task" => task, "now" => get(now_, task, nothing), "previous" => get(before, task, nothing),
-                                 "failed" => get(failed, task, nothing), "failed_before" => haskey(failed_before, task)))
+                                 "failed" => get(failed, task, nothing), "failed_before" => haskey(failed_before, task),
+                                 "failed_after" => failed_after === nothing || !haskey(failed, task) ? nothing : haskey(failed_after, task)))
     end
     return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
                        "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff, "counter_metrics" => counters,

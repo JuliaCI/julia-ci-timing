@@ -19422,7 +19422,14 @@ function commitTtfxHtml(data) {
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";
   if (failed.length) {
-    const names = failed.map((x) => `${escapeHtml(x.task)}${x.failed_before ? "" : ' <span class="commit-worse">new</span>'}`);
+    // A failure the next build no longer had was a glitch of that run, not news
+    const badge = (x) =>
+      x.failed_before
+        ? ""
+        : x.failed_after === false
+          ? ' <span class="text-muted" title="Passed again in the next build">one-off</span>'
+          : ' <span class="commit-worse">new</span>';
+    const names = failed.map((x) => `${escapeHtml(x.task)}${badge(x)}`);
     failedHtml = `<p class="commit-line"><span class="commit-worse">${failed.length} failed:</span> ${names.join(", ")}</p>`;
   }
   const worst = (x) => Math.max(...x.pcts.slice(0, metrics.length).map((p) => Math.abs(p ?? 0)));
