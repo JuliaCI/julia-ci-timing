@@ -3154,6 +3154,89 @@ th.sorted .sort-indicator {
 .ttfx-single[hidden] {
   display: none;
 }
+/* The TTFX tab's hidable panes and the tabs that bring them back */
+.ttfx-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.ttfx-pane-close {
+  border: none;
+  background: none;
+  color: var(--color-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.ttfx-pane-close:hover {
+  color: var(--color-fg-default);
+  background: var(--color-neutral-muted);
+}
+.ttfx-pane-tabs {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0 12px;
+  background: var(--color-canvas-subtle);
+}
+.ttfx-pane-tabs[hidden],
+.ttfx-pane-tab[hidden] {
+  display: none;
+}
+.ttfx-pane-tabs-top {
+  border-bottom: 1px solid var(--color-border-default);
+  align-items: flex-end;
+  padding-top: 4px;
+}
+.ttfx-pane-tabs-bottom {
+  border-top: 1px solid var(--color-border-default);
+  align-items: flex-start;
+  padding-bottom: 4px;
+}
+.ttfx-pane-tab {
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  background: var(--color-canvas-default);
+  border: 1px solid var(--color-border-default);
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.ttfx-pane-tab:hover {
+  color: var(--color-fg-default);
+  background: var(--color-neutral-muted);
+}
+.ttfx-pane-tabs-top .ttfx-pane-tab {
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  margin-bottom: -1px;
+}
+.ttfx-pane-tabs-bottom .ttfx-pane-tab {
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  margin-top: -1px;
+}
+.ttfx-pane-tab-side {
+  flex-shrink: 0;
+  writing-mode: vertical-rl;
+  padding: 12px 3px;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  align-self: flex-start;
+  margin-top: 8px;
+}
+#ttfx-view[data-hide-sidebar] #ttfx-task-list,
+#ttfx-view[data-hide-charts] #ttfx-metric-pills,
+#ttfx-view[data-hide-charts] .ttfx-chart-container,
+#ttfx-view[data-hide-table] #ttfx-stats {
+  display: none;
+}
+#ttfx-view[data-hide-charts] #ttfx-stats {
+  flex: 1;
+  max-height: none;
+}
 /* The Activity tab's six panels: the TTFX grid without its legend row,
    three columns of two where they fit */
 .activity-grid {
@@ -3878,6 +3961,15 @@ a.ttfx-pr-copy {
     max-height: 150px;
     border-right: none;
     border-bottom: 1px solid var(--color-border-default);
+  }
+  /* The panes stack here, so the tasks' tab hangs from the top edge */
+  .ttfx-pane-tab-side {
+    writing-mode: horizontal-tb;
+    padding: 3px 12px;
+    margin: -1px 0 0 12px;
+    border-left: 1px solid var(--color-border-default);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
   }
   /* The wrapper is absolutely positioned, so the container has to reserve
      the height: one chart, or four stacked panels */

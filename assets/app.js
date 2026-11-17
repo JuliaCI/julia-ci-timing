@@ -5562,11 +5562,106 @@ makeResizablePanel({
   targetId: "packages-top",
   storageKey: "packages-top-height",
 });
-makeResizablePanel({
-  handleId: "ttfx-resize-handle",
-  targetId: "ttfx-stats",
-  storageKey: "ttfx-stats-height",
-});
+// The TTFX tab's three panes. The sidebar hides with its header's button; the
+// splitter between the charts and the table hides either one when dragged
+// close to its edge. A hidden pane leaves a tab that brings it back. Each
+// viewer's choice is remembered.
+const TTFX_PANES_KEY = "ttfx-panes";
+const TTFX_TABLE_DEFAULT = 280;
+// How close to an edge the splitter hides the pane there, in pixels
+const TTFX_HIDE_TABLE_BELOW = 40;
+const TTFX_HIDE_CHARTS_BELOW = 80;
+const ttfxPanes = { sidebar: true, charts: true, table: true, height: TTFX_TABLE_DEFAULT };
+
+function applyTtfxPanes() {
+  const view = document.getElementById("ttfx-view");
+  const stats = document.getElementById("ttfx-stats");
+  if (!view || !stats) return;
+  for (const pane of ["sidebar", "charts", "table"]) {
+    view.toggleAttribute(`data-hide-${pane}`, !ttfxPanes[pane]);
+    document.getElementById(`ttfx-tab-${pane}`).hidden = ttfxPanes[pane];
+  }
+  stats.style.height = ttfxPanes.charts ? ttfxPanes.height + "px" : "";
+}
+
+function saveTtfxPanes() {
+  try {
+    localStorage.setItem(TTFX_PANES_KEY, JSON.stringify(ttfxPanes));
+  } catch (e) {}
+}
+
+function setTtfxPane(pane, open) {
+  ttfxPanes[pane] = open;
+  // The charts and the table are never hidden together
+  if (!open && pane === "charts") ttfxPanes.table = true;
+  if (!open && pane === "table") ttfxPanes.charts = true;
+  // A table that had grown to fill the area would leave no room for the charts
+  if (open && pane === "charts") ttfxPanes.height = Math.min(ttfxPanes.height, ttfxTableRoom() - TTFX_HIDE_CHARTS_BELOW);
+  if (ttfxPanes.height < 50) ttfxPanes.height = TTFX_TABLE_DEFAULT;
+  applyTtfxPanes();
+  saveTtfxPanes();
+}
+
+// The height the table can take: the chart area less the metric pills and the splitter
+function ttfxTableRoom() {
+  const area = document.getElementById("ttfx-chart-area");
+  const pills = document.getElementById("ttfx-metric-pills");
+  const handle = document.getElementById("ttfx-resize-handle");
+  return area.clientHeight - (ttfxPanes.charts ? pills.offsetHeight : 0) - handle.offsetHeight;
+}
+
+(function makeTtfxPanes() {
+  const handle = document.getElementById("ttfx-resize-handle");
+  const stats = document.getElementById("ttfx-stats");
+  if (!handle || !stats) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(TTFX_PANES_KEY));
+    if (saved && typeof saved === "object") {
+      for (const k of ["sidebar", "charts", "table"]) if (typeof saved[k] === "boolean") ttfxPanes[k] = saved[k];
+      if (saved.height >= 50) ttfxPanes.height = saved.height;
+    } else {
+      // The table height saved before the panes could hide
+      const h = parseInt(localStorage.getItem("ttfx-stats-height"), 10);
+      if (h >= 50) ttfxPanes.height = h;
+    }
+  } catch (e) {}
+  if (!ttfxPanes.charts && !ttfxPanes.table) ttfxPanes.charts = true;
+  applyTtfxPanes();
+
+  let startY = 0;
+  let startHeight = 0;
+  let heightBefore = 0;
+  let room = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    startY = e.clientY;
+    startHeight = ttfxPanes.table ? stats.offsetHeight : 0;
+    heightBefore = ttfxPanes.height;
+    room = ttfxTableRoom();
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    const h = startHeight + startY - e.clientY;
+    ttfxPanes.table = h >= TTFX_HIDE_TABLE_BELOW;
+    ttfxPanes.charts = room - h >= TTFX_HIDE_CHARTS_BELOW;
+    if (ttfxPanes.table && ttfxPanes.charts) ttfxPanes.height = Math.max(50, h);
+    applyTtfxPanes();
+  });
+  function end(e) {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    handle.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    // A drag that hid a pane keeps the height from before it, for the tab to restore
+    if (!ttfxPanes.table || !ttfxPanes.charts) ttfxPanes.height = heightBefore;
+    saveTtfxPanes();
+  }
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+})();
 makeResizablePanel({
   handleId: "sizes-resize-handle",
   targetId: "sizes-stats",

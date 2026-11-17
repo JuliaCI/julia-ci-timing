@@ -1361,12 +1361,21 @@
         >
       </div>
       <div class="ttfx-content">
+        <button class="ttfx-pane-tab ttfx-pane-tab-side" id="ttfx-tab-sidebar" type="button" hidden onclick="setTtfxPane('sidebar', true)" title="Show the tasks">
+          Tasks
+        </button>
         <div class="ttfx-sidebar" id="ttfx-task-list">
-          <div class="group-header" id="ttfx-task-header">Tasks</div>
+          <div class="group-header ttfx-pane-header">
+            <span id="ttfx-task-header">Tasks</span>
+            <button class="ttfx-pane-close" type="button" onclick="setTtfxPane('sidebar', false)" title="Hide the tasks" aria-label="Hide the tasks">‹</button>
+          </div>
           <input class="sidebar-filter" id="ttfx-task-filter" type="search" placeholder="Filter tasks" oninput="setTtfxTaskFilter(this.value)" aria-label="Filter tasks" />
           <div id="ttfx-task-items"><div class="loading">Loading...</div></div>
         </div>
-        <div class="ttfx-chart-area">
+        <div class="ttfx-chart-area" id="ttfx-chart-area">
+          <div class="ttfx-pane-tabs ttfx-pane-tabs-top" id="ttfx-tab-charts" hidden>
+            <button class="ttfx-pane-tab" type="button" onclick="setTtfxPane('charts', true)" title="Show the charts">▾ Charts</button>
+          </div>
           <div class="m-pills" id="ttfx-metric-pills" role="group" aria-label="Metric"></div>
           <div class="ttfx-chart-container">
             <div class="ttfx-chart-wrapper">
@@ -1392,8 +1401,12 @@
             id="ttfx-resize-handle"
             role="separator"
             aria-orientation="horizontal"
-            aria-label="Resize TTFX table"
+            aria-label="Resize TTFX table; drag to an edge to hide the charts or the table"
+            title="Drag to resize; drag to an edge to hide the charts or the table"
           ></div>
+          <div class="ttfx-pane-tabs ttfx-pane-tabs-bottom" id="ttfx-tab-table" hidden>
+            <button class="ttfx-pane-tab" type="button" onclick="setTtfxPane('table', true)" title="Show the table">▴ Table</button>
+          </div>
           <div class="ttfx-stats" id="ttfx-stats" style="height: 280px">
             <div class="ttfx-stats-caption" id="ttfx-stats-caption"></div>
             <table>
