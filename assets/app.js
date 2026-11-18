@@ -1387,13 +1387,13 @@ async function renderAgentsSection() {
     '<table class="agents-table"><thead>',
     sortableHeaderRow(
       [
-        ["name", "Agent"],
-        ["host", "Host", "col-secondary"],
-        ["queue", "Queue", "col-secondary"],
-        ["os", "OS / arch", "col-secondary"],
-        ["status", "Status"],
-        ["job", "Current job"],
-        ["since", "Since", "col-secondary"],
+        ["name", "Agent", "", "The Buildkite agent's name"],
+        ["host", "Host", "col-secondary", "The machine the agent runs on"],
+        ["queue", "Queue", "col-secondary", "The Buildkite queue it takes jobs from"],
+        ["os", "OS / arch", "col-secondary", "The agent's operating system and CPU architecture"],
+        ["status", "Status", "", "Running a job or idle; quiet when it has had no job for 3 days or sat idle while its pool's jobs waited; missing or lost when seen recently but no longer connected"],
+        ["job", "Current job", "", "The job the agent is running now"],
+        ["since", "Since", "col-secondary", "How long ago the agent connected"],
       ],
       agentsSort,
     ),
@@ -2283,7 +2283,7 @@ function renderBalanceCharts(d) {
       return (
         `<section class="balance-card"><div class="balance-chart"><canvas id="balance-chart-${k}"></canvas></div>` +
         `<div class="balance-stats"><div class="balance-title" title="${escapeHtml([...g.hosts].sort().join(", "))}">${escapeHtml(balanceGroupLabel(g))}</div>` +
-        `<table><thead><tr><th>Pool</th><th>Slots</th><th title="Mean share of the slots running jobs">Busy</th><th title="Share of the time with jobs waiting for an agent">Queue</th><th title="Share of the time with a quarter or more of the slots idle and no job waiting">Idle</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></section>`
+        `<table><thead><tr><th title="A group of agents that take the same jobs">Pool</th><th title="Jobs the pool's agents can run at once">Slots</th><th title="Mean share of the slots running jobs">Busy</th><th title="Share of the time with jobs waiting for an agent">Queue</th><th title="Share of the time with a quarter or more of the slots idle and no job waiting">Idle</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></section>`
       );
     })
     .join("");
@@ -2473,8 +2473,8 @@ function renderWorkerPresence({ charts = true } = {}) {
     "<thead>",
     sortableHeaderRow(
       [
-        ["name", "Host"],
-        ["runs", "Runs"],
+        ["name", "Host", "", "The machine that ran the jobs"],
+        ["runs", "Runs", "", "Jobs it ran over the range"],
         [null, `<div class="workers-month-row" style="width:${stripWidth}px">${months}</div>`, "workers-cells-cell"],
       ],
       workersHostsSort,
@@ -5900,8 +5900,8 @@ function updateStatsTableHeader() {
 
   thead.innerHTML = sortableHeaderRow(
     [
-      ["job", "Job/Report"],
-      [null, "Hosts"],
+      ["job", "Job/Report", "", "The CI job, or the report it belongs to"],
+      [null, "Hosts", "", "The machines that ran the job over the range"],
       ["passRate", "Pass Rate", "num", "Pass rate over the selected range, every state"],
       [
         "trend",
@@ -5909,11 +5909,11 @@ function updateStatsTableHeader() {
         "",
         "Linear trend over the selected range, fitted to one point per build (the median of its passed runs). Starred when p < 0.05 and R² > 10%; indicative only, since CI runs are not independent samples.",
       ],
-      ["median", "Median", "num"],
-      ["min", "Min", "num"],
-      ["max", "Max", "num"],
-      ["std", "σ", "num"],
-      ["n", "n", "num"],
+      ["median", "Median", "num", "Median job duration over the range, of the runs in the selected states"],
+      ["min", "Min", "num", "Shortest job duration over the range"],
+      ["max", "Max", "num", "Longest job duration over the range"],
+      ["std", "σ", "num", "Standard deviation of the job durations over the range"],
+      ["n", "n", "num", "Runs over the range"],
     ],
     { col: statsTableSortColumn, asc: statsTableSortAsc },
   );
@@ -9118,10 +9118,10 @@ function renderBenchVerdictsTable() {
   const tbody = document.getElementById("bench-stats-tbody");
   thead.innerHTML = sortableHeaderRow(
     [
-      ["date", "Date"],
-      ["group", "Group"],
-      ["name", "Benchmark"],
-      ["verdict", "Verdict"],
+      ["date", "Date", "", "The date of the Nanosoldier report"],
+      ["group", "Group", "", "The BaseBenchmarks group"],
+      ["name", "Benchmark", "", "The benchmark within its group"],
+      ["verdict", "Verdict", "", "Nanosoldier's call: an improvement or a regression beyond its tolerance"],
       ["time_ratio", "Time ratio", "bench-time-header", "Time against the baseline report; the tolerance is Nanosoldier's threshold"],
       ["memory_ratio", "Memory ratio", "bench-time-header", "Memory against the baseline report"],
     ],
@@ -9265,13 +9265,13 @@ function renderBenchRunsTable() {
 
   thead.innerHTML = sortableHeaderRow(
     [
-      ["date", "Date"],
-      ["commit", "Commit"],
+      ["date", "Date", "", "The date of the Nanosoldier report"],
+      ["commit", "Commit", "", "The master commit it benchmarked"],
       [null, "Report", "", "Nanosoldier benchmark report"],
       [null, "Comparison", "", "Compare this commit against its baseline on perf.julialang.org"],
-      ["geomeanMin", "Geomean (min)", "num bench-time-header"],
+      ["geomeanMin", "Geomean (min)", "num bench-time-header", "Geometric mean over the selected groups' benchmarks of each one's minimum time"],
       ["deltaMin", "Δ", "bench-delta-header", "Min geomean change vs previous run in selected range"],
-      ["geomeanMean", "Geomean (mean)", "num bench-time-header"],
+      ["geomeanMean", "Geomean (mean)", "num bench-time-header", "Geometric mean over the selected groups' benchmarks of each one's mean time"],
       ["deltaMean", "Δ", "bench-delta-header", "Mean geomean change vs previous run in selected range"],
       ["improved", "Improved", "", "Improvements reported by Nanosoldier"],
       ["regressed", "Regressed", "", "Regressions reported by Nanosoldier"],
@@ -9533,9 +9533,9 @@ async function renderBenchNoisyTable() {
 
   thead.innerHTML = sortableHeaderRow(
     [
-      ["group", "Group"],
-      ["name", "Benchmark"],
-      ["latest", "Latest", "num bench-time-header"],
+      ["group", "Group", "", "The BaseBenchmarks group"],
+      ["name", "Benchmark", "", "The benchmark within its group"],
+      ["latest", "Latest", "num bench-time-header", "The benchmark's value in the latest report"],
       ["noise", "Noise", "bench-noise-header", "Median |Δ%| between consecutive runs in selected range"],
       ["samples", "Samples", "", "Number of consecutive run pairs used"],
       [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
@@ -9673,13 +9673,13 @@ function renderBenchGroupsTable() {
 
   thead.innerHTML = sortableHeaderRow(
     [
-      ["group", "Group"],
-      ["latest", "Latest", "num bench-time-header"],
-      ["avg", "Average", "num bench-time-header"],
-      ["min", "Min", "num bench-time-header"],
-      ["max", "Max", "num bench-time-header"],
+      ["group", "Group", "", "The BaseBenchmarks group"],
+      ["latest", "Latest", "num bench-time-header", "The group's geometric mean in the latest report"],
+      ["avg", "Average", "num bench-time-header", "Mean of the group's geometric mean over the range"],
+      ["min", "Min", "num bench-time-header", "Lowest geometric mean over the range"],
+      ["max", "Max", "num bench-time-header", "Highest geometric mean over the range"],
       ["trendAbs", "Trend", "bench-trend-header", "Percent change from first to last value in the selected range; sorted by magnitude"],
-      ["count", "Benchmarks"],
+      ["count", "Benchmarks", "", "Benchmarks in the group"],
       [null, "Noise", "bench-noise-header", "Median |Δ%| between consecutive runs (per-benchmark, expand to see)"],
       [null, "Notes", "bench-notes-header", "Methodology changes affecting this benchmark"],
     ],
@@ -10274,11 +10274,11 @@ function renderPackagesTop() {
     <table class="m-desktop-only">
       <thead>${sortableHeaderRow(
         [
-          ["rank", "#", "num"],
+          ["rank", "#", "num", "Place by all requests"],
           ["label", "Package"],
-          ["user", "User", "num"],
-          ["ci", "CI", "num"],
-          ["all", "All", "num"],
+          ["user", "User", "num", "Requests from clients outside CI"],
+          ["ci", "CI", "num", "Requests from clients that report running in CI"],
+          ["all", "All", "num", "Every successful request for the package"],
         ],
         packagesTopSort,
       )}</thead>
@@ -11144,12 +11144,12 @@ function renderPkgevalPackage() {
     <table>
       <thead>${sortableHeaderRow(
         [
-          ["date", "Date"],
-          ["julia", "Julia", "col-secondary"],
-          ["version", "Version"],
-          ["status", "Status"],
-          ["reason", "Reason"],
-          ["duration_s", "Duration", "num"],
+          ["date", "Date", "", "The date of the daily PkgEval report"],
+          ["julia", "Julia", "col-secondary", "The Julia build it tested against"],
+          ["version", "Version", "", "The package version tested"],
+          ["status", "Status", "", "Whether the package's tests passed, failed, crashed or were skipped"],
+          ["reason", "Reason", "", "Why it failed, as PkgEval classified it"],
+          ["duration_s", "Duration", "num", "How long the package's test run took"],
           [null, "Log", "", "The package's log on PkgEval farm reports"],
         ],
         pkgevalPackageSort,
@@ -11256,13 +11256,13 @@ function renderPkgevalPopular() {
     <table class="m-desktop-only">
       <thead>${sortableHeaderRow(
         [
-          ["rank", "Rank", "num"],
+          ["rank", "Rank", "num", "Place among every package by user downloads over 30 days"],
           ["name", "Package"],
-          ["version", "Version", "col-secondary"],
-          ["status", "Status"],
+          ["version", "Version", "col-secondary", "The package version tested"],
+          ["status", "Status", "", "The package's state on this report"],
           ["days", "Days failing", "num", "Days from the first failing report after the last pass to this report"],
-          ["reason", "Reason"],
-          ["user", "Downloads", "num"],
+          ["reason", "Reason", "", "Why it failed, as PkgEval classified it"],
+          ["user", "Downloads", "num", "User downloads over 30 days"],
         ],
         pkgevalPopularSort,
       )}</thead>
@@ -11409,12 +11409,12 @@ function renderPkgevalFailuresList() {
     <table class="m-desktop-only">
       <thead>${sortableHeaderRow(
         [
-          ["rank", "Rank", "num"],
+          ["rank", "Rank", "num", "Place among every package by user downloads over 30 days"],
           ["name", "Package"],
-          ["version", "Version", "col-secondary"],
-          ["reason", "Reason"],
+          ["version", "Version", "col-secondary", "The package version tested"],
+          ["reason", "Reason", "", "Why it failed, as PkgEval classified it"],
           ["days", "Days failing", "num", "Days from the first failing report after the last pass to this report"],
-          ["user", "Downloads", "num"],
+          ["user", "Downloads", "num", "User downloads over 30 days"],
         ],
         pkgevalFailuresSort,
       )}</thead>
@@ -11509,7 +11509,7 @@ function renderPkgevalSignatures() {
     <div class="pkgeval-panel-head">${pkgevalPanelSwitch()}<h3>Common failure signatures on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.date)}</a> <span class="updated">· ${d.clusters.length.toLocaleString("en-US")} groups, ${grouped.toLocaleString("en-US")} packages</span></h3></div>
     <p class="package-panel-help">Packages that failed or crashed, grouped by the first meaningful error line of their log when two or more share it. Install paths, addresses and line numbers in dependencies are ignored when comparing lines, so one error in a shared dependency groups across its versions; failed tests keep their own file and line. Each group shows the first line seen. ${d.lines.toLocaleString("en-US")} of the ${d.hard.toLocaleString("en-US")} failures had an error line.${seenHelp} Click a row to list its packages, linked to their logs.</p>
     <table>
-      <thead><tr><th class="num">Packages</th><th>Error line</th><th class="num" title="Reports before this one with a group of the same line">Seen</th></tr></thead>
+      <thead><tr><th class="num" title="Packages that failed with this error line">Packages</th><th title="The first meaningful error line their logs share, ignoring install paths, addresses and line numbers">Error line</th><th class="num" title="Reports before this one with a group of the same line">Seen</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   panel.querySelectorAll("tr[data-rank]").forEach((tr) => {
@@ -12194,13 +12194,13 @@ function renderPkgevalChangesList() {
     <table class="m-desktop-only">
       <thead>${sortableHeaderRow(
         [
-          ["date", "Report"],
+          ["date", "Report", "", "The daily report where the package's state changed"],
           ["name", "Package"],
-          ["reason", "Change"],
+          ["reason", "Change", "", "The state before and after"],
           [null, "Now", "", "The package's state on the newest report it was tested on"],
           ["flips", "Flips", "num", flipsTitle],
           ["rank", "Rank", "num", "Place among every package by user downloads over 30 days"],
-          ["user", "Downloads", "num"],
+          ["user", "Downloads", "num", "User downloads over 30 days"],
           [null, "Commits", "", "The Julia commits between the report before and this one"],
         ],
         pkgevalChangesSort,
@@ -12279,29 +12279,29 @@ const TTFX_ANNOTATION_HINT =
 const TTFX_METRICS = {
   // julia's own startup, timed once per job before the tasks rather than per
   // task: `julia -e ''` to its exit, and an interactive julia to its first prompt
-  startup: { label: "Startup", short: "startup", job: 0, counters: { instructions: 2, cycles: 4 } },
-  startup_repl: { label: "Interactive startup", short: "interactive startup", job: 1, counters: { instructions: 3, cycles: 5 } },
-  precompile: { label: "Precompile", index: 0, counters: { instructions: 12, cycles: 15 } },
-  load: { label: "Load (cold)", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
-  run: { label: "Run (cold)", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
-  warm: { label: "Load+run (warm)", index: 3, gcoffIndex: 6 },
+  startup: { label: "Startup", help: "Time from launching julia -e '' to its exit", short: "startup", job: 0, counters: { instructions: 2, cycles: 4 } },
+  startup_repl: { label: "Interactive startup", help: "Time from launching an interactive julia to its first prompt", short: "interactive startup", job: 1, counters: { instructions: 3, cycles: 5 } },
+  precompile: { label: "Precompile", help: "Time to precompile the task's packages from an empty cache", index: 0, counters: { instructions: 12, cycles: 15 } },
+  load: { label: "Load (cold)", help: "Time to load the task's packages in a fresh julia process, with the JIT object cache cleared", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
+  run: { label: "Run (cold)", help: "Time to run the task's code the first time, right after that cold load", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
+  warm: { label: "Load+run (warm)", help: "Load and run together in a later fresh process, which reuses the caches the cold run filled", index: 3, gcoffIndex: 6 },
   // From spawning the cold process to the end of its load, so a build that moves
   // work between startup and the first package load shows here as no change
-  startup_load: { label: "Startup+load (cold)", short: "startup+load", index: 11, detail: true },
+  startup_load: { label: "Startup+load (cold)", help: "From launching the cold run's julia process to the end of its load", short: "startup+load", index: 11, detail: true },
   // The load in a copy of the task's project with every stdlib added and
   // imported first, so its packages load beside many methods from outside
   // their own dependencies, as in a session with several unrelated packages
-  load_stdlibs: { label: "Load (stdlibs first)", short: "load, stdlibs first", index: 8, detail: true },
-  run_stdlibs: { label: "Run (stdlibs first)", short: "run, stdlibs first", index: 10, detail: true },
+  load_stdlibs: { label: "Load (stdlibs first)", help: "The cold load in a copy of the task's project that loads every stdlib first, as in a session with many packages loaded", short: "load, stdlibs first", index: 8, detail: true },
+  run_stdlibs: { label: "Run (stdlibs first)", help: "The cold run in the copy of the project that loads every stdlib first", short: "run, stdlibs first", index: 10, detail: true },
   // Precompiling that copy right after the task's own: mostly the extensions
   // the stdlibs trigger. A large one means adding them changed the resolve.
-  precompile_stdlibs: { label: "Stdlibs precompile (added)", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
+  precompile_stdlibs: { label: "Stdlibs precompile (added)", help: "Time to precompile that stdlibs-first copy after the task's own precompile: mostly the extensions the stdlibs trigger", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
   // Marked "# recompile" in the task's trace log: compiled again because an
   // invalidation had dropped the code compiled before
-  recompiled: { label: "Recompiled methods", index: 18, count: true },
+  recompiled: { label: "Recompiled methods", help: "Methods compiled again because an invalidation had dropped their compiled code", index: 18, count: true },
   // MethodInstances the task script's load and run invalidated, by method
   // definitions or as package-image code rejected on load
-  invalidated: { label: "Invalidations", index: 7, count: true },
+  invalidated: { label: "Invalidations", help: "MethodInstances invalidated while loading and running the task, by new method definitions or as cached code rejected on load", index: 7, count: true },
 };
 // What the job's hardware counters read, which follows the work done rather
 // than how long the machine took over it: for precompile over every process
@@ -12465,15 +12465,15 @@ function showTtfxBuildPopup(b, task) {
   html += "<th class=\"num\" title=\"Geometric mean over the selected tasks; for a count, their total\">Suite</th><th class=\"num\">vs previous</th>";
   const paired = !!b.base;
   if (paired) html += '<th class="num" title="Against the regular build of the same commit, measured interleaved with it in the same job">vs regular</th>';
-  if (task) html += '<th class="num">Clicked task</th>';
-  if (task && paired) html += '<th class="num">vs regular</th>';
+  if (task) html += '<th class="num" title="The value of the task you clicked">Clicked task</th>';
+  if (task && paired) html += '<th class="num" title="The clicked task against the regular build of the same commit">vs regular</th>';
   html += "</tr></thead><tbody>";
   const offHtml = (v) => (v != null ? ` <span class="ttfx-popup-muted" title="GC off">${formatTtfxSeconds(v)}</span>` : "");
   const pairedCell = (p) => (p ? `<td class="num ${ttfxPctClass((p.ratio - 1) * 100)}" title="${p.n} tasks">${formatTtfxRatio(p.ratio)}</td>` : '<td class="num"></td>');
   const suiteRows = ttfxBuildSuiteRows(b, builds, series, tasks, task);
   for (const r of suiteRows) {
     const over = ttfxIsJob(r.key) ? TTFX_JOB_NOTE : `${ttfxIsCount(r.key) ? "Total" : "Geometric mean"} over ${r.n} tasks`;
-    html += `<tr><th title="${over}">${escapeHtml(ttfxShownLabel(r.key))}</th>`;
+    html += `<tr><th title="${escapeHtml(`${ttfxMetricHelp(r.key)}. ${over}`)}">${escapeHtml(ttfxShownLabel(r.key))}</th>`;
     html += `<td class="num">${formatTtfxValue(r.g, r.key)}${offHtml(r.off)}</td>`;
     html += `<td class="num ${r.change.cls}">${r.change.text}</td>`;
     if (paired) html += pairedCell(r.paired);
@@ -12494,7 +12494,7 @@ function showTtfxBuildPopup(b, task) {
     const offs = outliers.some((o) => o.off != null || o.offPrev != null);
     // A label that says what the metric is shown in needs a wider column
     const wide = outliers.some((o) => ttfxShownLabel(o.key) !== ttfxMetricLabel(o.key));
-    html += `<table class="ttfx-popup-table ttfx-compile-table${wide ? " ttfx-outliers-wide" : ""}"><thead><tr><th>Task</th><th>Metric</th><th class="num">Previous</th><th class="num">This</th><th class="num">Change</th>`;
+    html += `<table class="ttfx-popup-table ttfx-compile-table${wide ? " ttfx-outliers-wide" : ""}"><thead><tr><th>Task</th><th>Metric</th><th class="num" title="The previous build's value">Previous</th><th class="num" title="This build's value">This</th><th class="num">Change</th>`;
     if (offs) html += '<th class="num" title="The change in the same task and phase from the repeats with the GC off">GC off</th>';
     html += "</tr></thead><tbody>";
     for (const o of outliers) {
@@ -12648,7 +12648,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
     rows.sort((p, q) => Math.abs(q.delta) - Math.abs(p.delta) || q.x.tasks.length - p.x.tasks.length || q.x.ms - p.x.ms);
     if (!rows.length) html += '<div class="ttfx-popup-muted">None.</div>';
     else {
-      html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>Method</th><th class="num">Tasks</th><th class="num">ms</th>';
+      html += '<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th title="The method compiled again after an invalidation">Method</th><th class="num" title="Tasks that compiled it again">Tasks</th><th class="num" title="Compile time summed over those tasks">ms</th>';
       if (was) html += '<th class="num" title="Tasks compiling it again, against the run before">vs previous</th>';
       html += "</tr></thead><tbody>";
       for (const r of rows.slice(0, TTFX_POPUP_ROWS)) {
@@ -12696,7 +12696,7 @@ async function renderTtfxCompileDetails(b, prev, task) {
             m.set(c.cause, x);
           }
       if (!m.size) continue;
-      html += `<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>${title}</th><th class="num">Tasks</th><th class="num" title="MethodInstances invalidated">Count</th></tr></thead><tbody>`;
+      html += `<table class="ttfx-popup-table ttfx-compile-table"><thead><tr><th>${title}</th><th class="num" title="Tasks with these invalidations">Tasks</th><th class="num" title="MethodInstances invalidated">Count</th></tr></thead><tbody>`;
       md.push("", `| ${title} | tasks | count |`, "|---|---|---|");
       for (const [cause, x] of [...m].sort((p, q) => q[1].n - p[1].n).slice(0, TTFX_POPUP_ROWS / 2)) {
         html += `<tr><td class="ttfx-compile-stmt" title="${escapeHtml(cause)}">${escapeHtml(cause)}</td><td class="num" title="${tasksTitle([...x.tasks])}">${x.tasks.size}</td><td class="num">${x.n.toLocaleString("en-US")}</td></tr>`;
@@ -13158,6 +13158,11 @@ function ttfxAnnotationCovers(a, version) {
 
 function ttfxMetricLabel(metric = ttfxMetric) {
   return TTFX_METRICS[metric].label;
+}
+
+// What a metric measures, in a sentence for a tooltip
+function ttfxMetricHelp(metric) {
+  return TTFX_METRICS[metric]?.help || TTFX_METRICS[metric]?.label || metric;
 }
 
 // The label of the values the charts and tables show for `metric`, which
@@ -14632,7 +14637,7 @@ function updateTtfxMetricPills() {
   el.innerHTML = Object.keys(TTFX_METRICS)
     // The startup view's pills pick its panels; the other views' every other metric
     .filter((m) => !ttfxIsDetail(m) && ttfxIsJob(m) === (ttfxMode === "startup"))
-    .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')">${TTFX_PILL_LABELS[m]}</button>`)
+    .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')" title="${escapeHtml(ttfxMetricHelp(m))}">${TTFX_PILL_LABELS[m]}</button>`)
     .join("");
   document.getElementById("ttfx-summary-grid").dataset.metric = ttfxMetric;
 }
@@ -14860,9 +14865,10 @@ function renderTtfxBuildsTable() {
         key,
         ttfxShownLabel(key),
         "num",
-        ttfxIsJob(key)
+        `${ttfxMetricHelp(key)}. ` +
+        (ttfxIsJob(key)
           ? TTFX_JOB_NOTE
-          : `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range (a build where one of them failed has no value)${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`,
+          : `${ttfxIsCount(key) ? "Total" : "Geometric mean"} over the ${common[key].length} selected tasks with a ${ttfxShownLabel(key).toLowerCase()} value in every build of the range (a build where one of them failed has no value)${ttfxShowsTwin("gcoff", key) ? "; after it, muted, the same from the repeats with the GC off" : ""}`),
       ]),
       ["message", "Message", "col-secondary"],
     ],
@@ -15050,13 +15056,13 @@ function ttfxCountsHtml(counts, { head, base, hint }) {
   for (const [k, label] of kinds) {
     const c = counts[k];
     const d = c.head - c.base;
-    html += `<tr><th title="Summed over the ${c.n_tasks} tasks both have">${label}</th><td class="num">${ttfxCount(c.head)}</td><td class="num">${ttfxCount(c.base)}</td><td class="num ${ttfxCountClass(d, c.base)}">${ttfxCountChange(d)}</td></tr>`;
+    html += `<tr><th title="${escapeHtml(ttfxMetricHelp(k))}. Summed over the ${c.n_tasks} tasks both have">${label}</th><td class="num">${ttfxCount(c.head)}</td><td class="num">${ttfxCount(c.base)}</td><td class="num ${ttfxCountClass(d, c.base)}">${ttfxCountChange(d)}</td></tr>`;
   }
   html += "</tbody></table>";
   const tasks = counts.tasks || [];
   if (tasks.length) {
     html += `<table class="ttfx-popup-table"><thead><tr><th>Task whose counts changed most</th>`;
-    html += kinds.map(([, label]) => `<th class="num">${label}</th>`).join("");
+    html += kinds.map(([k, label]) => `<th class="num" title="${escapeHtml(ttfxMetricHelp(k))}">${label}</th>`).join("");
     html += "</tr></thead><tbody>";
     for (const t of tasks) {
       html += `<tr><th>${escapeHtml(t.name)}</th>`;
@@ -15261,15 +15267,15 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && t
   }
 
   html += '<table class="ttfx-popup-table"><thead><tr><th></th>';
-  html += `<th class="num">vs ${parent}</th><th>Verdict</th>`;
-  if (chained) html += '<th class="num">Stack vs master (est.)</th>';
+  html += `<th class="num" title="Head against base, the suite geomean per ABBA block">vs ${parent}</th><th title="The job's call: a regression or improvement needs every block to agree beyond the threshold">Verdict</th>`;
+  if (chained) html += '<th class="num" title="This pull request and the ones below it together against master, estimated by multiplying their changes">Stack vs master (est.)</th>';
   html += "</tr></thead><tbody>";
   for (const m of [...metrics, ...details]) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(ttfxSuiteVerdict(on), off && off.verdict);
     const note = `; ${ttfxScoreNote(m, weights)}`;
-    html += `<tr><th title="${ttfxIsJob(m) ? TTFX_JOB_NOTE : `Over ${on ? on.n_tasks : 0} tasks`}${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    html += `<tr><th title="${escapeHtml(ttfxMetricHelp(m))}. ${ttfxIsJob(m) ? TTFX_JOB_NOTE : `Over ${on ? on.n_tasks : 0} tasks`}${note}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += `<td class="num ${ttfxVerdictClass(v)}">${blocks(on)}${muted(off)}</td>`;
     html += `<td class="${ttfxVerdictClass(v)}">${ttfxSuiteNote(on) || v}</td>`;
     if (chained) html += `<td class="num">${blocks(chained[m])}${muted(chained[m + "_gcoff"])}</td>`;
@@ -15285,7 +15291,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && t
   metrics = [...metrics, ...details.filter((m) => changed.some((t) => t.metrics[m]))];
   if (changed.length) {
     html += `<table class="ttfx-popup-table"><thead><tr><th>Task with a robust change</th>`;
-    html += metrics.map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+    html += metrics.map((m) => `<th class="num" title="${escapeHtml(ttfxMetricHelp(m))}">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
     html += "</tr></thead><tbody>";
     for (const t of changed) {
       html += `<tr><th>${escapeHtml(t.name)}</th>`;
@@ -15434,6 +15440,16 @@ const TTFX_PR_COLUMNS = [
   { key: "recompiled", label: "Recompiled", group: "Compiler, head − base", count: true },
 ];
 
+const TTFX_PR_GROUP_HELP = {
+  Startup: "julia's own startup, timed once per job before the tasks",
+  Cold: "The first load and run in a fresh process, with the JIT object cache cleared",
+  Warm: "Load and run in a later fresh process, which reuses the caches the cold run filled",
+  Instructions: "Retired instructions of each phase: they follow the work done, so they repeat far more closely than times",
+  "Cold, GC off": "The cold load and run from the repeats with the garbage collector disabled",
+  "Cold, stdlibs first": "The cold load and run in a copy of the task's project that loads every stdlib first",
+  "Compiler, head − base": "Counts from the job's untimed trace run: the head's count less the base's",
+};
+
 // The columns shown: the instructions' only when a pull request has them
 let ttfxPrColumns = TTFX_PR_COLUMNS;
 function updateTtfxPrColumns() {
@@ -15468,7 +15484,7 @@ function ttfxPrInstructionsHtml(p, chained) {
   if (!rows.length) return "";
   const blocks = (x) => (x && x.geomeans.length ? x.geomeans.map(ttfxInstructionsPct).join(", ") : "—");
   let html = `<table class="ttfx-popup-table"><thead><tr><th>Instructions</th><th class="num">${p.stack ? "this PR" : "vs master"}</th>`;
-  if (chained) html += '<th class="num">stack vs master (est.)</th>';
+  if (chained) html += '<th class="num" title="This pull request and the ones below it together against master, estimated by multiplying their changes">stack vs master (est.)</th>';
   html += "</tr></thead><tbody>";
   for (const [k, label] of rows) {
     const x = p.suite[k];
@@ -15512,7 +15528,8 @@ function ttfxPrGroupRow(before, after) {
     const g = ttfxPrColumns[i].group;
     let n = 1;
     while (i + n < ttfxPrColumns.length && ttfxPrColumns[i + n].group === g) n++;
-    html += `<th colspan="${n}" class="ttfx-prs-group-start"><span${g ? ' class="ttfx-prs-group"' : ""}>${escapeHtml(g)}</span></th>`;
+    const help = TTFX_PR_GROUP_HELP[g];
+    html += `<th colspan="${n}" class="ttfx-prs-group-start"${help ? ` title="${escapeHtml(help)}"` : ""}><span${g ? ' class="ttfx-prs-group"' : ""}>${escapeHtml(g)}</span></th>`;
     i += n;
   }
   return html + `<th colspan="${after}" class="ttfx-prs-group-start"></th></tr>`;
@@ -15526,13 +15543,13 @@ function ttfxPrColumnTitle(c) {
   if (c.instructions)
     return `Retired instructions of ${c.key === "startup_instructions" ? "julia's startup (the whole process, julia -e '')" : `the ${c.label.toLowerCase()} phase, the suite geometric mean over every task`}, head against base, averaged over the ABBA blocks; each block is in the tooltip. They follow the work done rather than how long the machine took, so they repeat far more closely than the times. The job does not judge them: coloured when every block moved more than ${NO_CHANGE_PCT.instructions}% the same way. Not in the score.`;
   if (ttfxIsJob(c.key))
-    return `${ttfxMetricLabel(c.key)}, head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust; ${ttfxScoreNote(c.key)}.`;
+    return `${ttfxMetricHelp(c.key)}. Head against base. ${TTFX_JOB_NOTE}; each block is in the tooltip. Coloured when the job judged the change robust; ${ttfxScoreNote(c.key)}.`;
   if (c.key === "startup_load")
     return "Startup+load (cold): from starting the cold run's julia process to the end of its load. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. A load change it does not share was work moved between startup and load, which the job does not count. Not in the score.";
   const base = c.key.replace(/_gcoff$/, "");
   const what = c.key.endsWith("_gcoff")
     ? `${ttfxMetricLabel(base)} with the GC off, from the first of the GC-off repeats`
-    : ttfxMetricLabel(c.key) + (ttfxIsDetail(c.key) ? ", the first run in a copy of the task's project with every stdlib loaded first" : "");
+    : ttfxMetricHelp(c.key);
   return `${what}. Suite geometric mean of head against base over every task, averaged over the ABBA blocks; each block is in the tooltip. Coloured when the job judged the change robust; ${ttfxScoreNote(c.key)}.`;
 }
 
@@ -15544,9 +15561,9 @@ function renderTtfxPrsTable() {
   thead.parentElement.classList.add("ttfx-prs-table");
   thead.innerHTML = ttfxPrGroupRow(4, 3) + sortableHeaderRow(
     [
-      ["rank", "#", "num"],
-      ["pr", "Pull request"],
-      ["author", "Author", "col-secondary"],
+      ["rank", "#", "num", "Place by score"],
+      ["pr", "Pull request", "", "The open pull request, with a TTFX comparison from its CI"],
+      ["author", "Author", "col-secondary", "Who opened the pull request"],
       [
         "score",
         "Score",
@@ -15555,7 +15572,7 @@ function renderTtfxPrsTable() {
       ],
       ...ttfxPrColumns.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
       ["tasks", "Tasks", "num ttfx-prs-group-start", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
-      ["date", "Measured", "col-secondary"],
+      ["date", "Measured", "col-secondary", "When the pull request's TTFX job ran"],
       [null, ""],
     ],
     ttfxPrsSort,
@@ -15853,11 +15870,16 @@ function renderTtfxTasksTable() {
     ["n", "Builds", "num col-secondary"],
   ];
   const title = (key) =>
-    key === "change"
-      ? `Latest vs first build in range${ttfxIsCount() ? ", as the difference" : ""}`
-      : key === "gcoff"
-        ? `${metricLabel} from the repeats with the GC off, on the latest build that has them`
-        : key === "task" ? "" : `${metricLabel} over the builds in range`;
+    ({
+      task: "The TTFX snippet: a package and a script that uses it",
+      latest: `${ttfxMetricHelp(ttfxMetric)}, on the latest build in range`,
+      gcoff: `${metricLabel} from the repeats with the GC off, on the latest build that has them`,
+      median: `Median ${metricLabel.toLowerCase()} over the builds in range`,
+      min: `Lowest ${metricLabel.toLowerCase()} over the builds in range`,
+      max: `Highest ${metricLabel.toLowerCase()} over the builds in range`,
+      change: `Latest vs first build in range${ttfxIsCount() ? ", as the difference" : ""}`,
+      n: "Builds in range with a value for the task",
+    })[key];
   // Sorted by GC off, then switched to precompile, which has no such column
   if (!cols.some(([k]) => k === ttfxTaskSort.col)) ttfxTaskSort.col = "latest";
   thead.innerHTML = sortableHeaderRow(
@@ -15943,6 +15965,23 @@ const SIZES_METRICS = {
   "libs.other": "Other bundled libraries",
   "share.stdlib": "Stdlib sources",
 };
+// What each metric counts, for tooltips; sizes are of the linux-x86_64 distribution
+const SIZES_HELP = {
+  total: "Every file of the unpacked distribution",
+  tarball: "The compressed .tar.gz download itself",
+  sysimg: "The system image, lib/julia/sys.so: Base and the stdlibs built into it",
+  "sysimg.text": "The system image's machine code (its .text section)",
+  "sysimg.image_data": "The system image's serialized Julia objects: types, methods and other data",
+  "sysimg.dwarf": "The system image's DWARF debug info",
+  "pkgimg.ji": "The .ji files of the stdlibs precompiled as package images, under share/julia/compiled",
+  "pkgimg.so": "The native code of the stdlibs precompiled as package images, under share/julia/compiled",
+  "libjulia-codegen": "The code generator library, which compiles Julia code to machine code through LLVM",
+  "libjulia-internal": "The Julia runtime library",
+  libLLVM: "The bundled LLVM library",
+  "libs.other": "Every other library in lib/julia: the bundled JLL binaries such as OpenBLAS",
+  "share.stdlib": "The stdlibs' source files, under share/julia/stdlib",
+};
+const sizesMetricHelp = (m) => SIZES_HELP[m] || sizesMetricLabel(m);
 const SIZES_DEFAULT_METRICS = ["total", "sysimg", "pkgimg.ji", "pkgimg.so"];
 
 let sizesData = null;
@@ -16125,8 +16164,8 @@ function populateSizesMetricList() {
   for (const m of metrics) {
     const latest = sizesLatest(m);
     const title = latest
-      ? `${sizesMetricLabel(m)}: ${formatSizeValue(latest.value)} on ${sizesData.commits[latest.i].slice(0, 10)}`
-      : `${sizesMetricLabel(m)}: not measured`;
+      ? `${sizesMetricHelp(m)}. ${formatSizeValue(latest.value)} on ${sizesData.commits[latest.i].slice(0, 10)}`
+      : `${sizesMetricHelp(m)}. Not measured`;
     html += `<div class="group-item ${sizesSelected.has(m) ? "selected" : ""}" data-metric="${escapeHtml(m)}" title="${escapeHtml(title)}">`;
     html += `<span class="color-dot" style="background: ${sizesColors[m] || "#888"}"></span>`;
     html += `<span class="task-name">${escapeHtml(sizesMetricLabel(m))}</span>`;
@@ -16620,7 +16659,7 @@ function renderSizesPrsTable() {
       ["number", "PR"],
       ["title", "Title"],
       ["author", "Author", "col-secondary"],
-      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), `num${m === rank ? "" : " col-secondary"}`]),
+      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), `num${m === rank ? "" : " col-secondary"}`, `${sizesMetricHelp(m)}: the change against the merge-base`]),
       ["base", "Merge-base", "col-secondary", "The pull request's merge-base with master, which it is compared with"],
       ["build", "Build", "col-secondary"],
     ],
@@ -16843,7 +16882,7 @@ function sizesMetricsTableHtml(metrics, label, more = null, moreLabel = "") {
   for (const m of Object.keys(SIZES_METRICS)) {
     const v = metrics[m];
     if (!v || v[0] == null) continue;
-    html += `<tr><th>${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatSizeValue(v[0])}</td>${cell(v)}`;
+    html += `<tr><th title="${escapeHtml(sizesMetricHelp(m))}">${escapeHtml(sizesMetricLabel(m))}</th><td class="num">${formatSizeValue(v[0])}</td>${cell(v)}`;
     if (more) html += cell(more[m]);
     html += "</tr>";
   }
@@ -16911,7 +16950,7 @@ function renderSizesCommitsTable() {
       ["date", "Date"],
       ["commit", "Commit"],
       ["version", "Version", "col-secondary"],
-      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), "num"]),
+      ...metrics.map((m) => [m, escapeHtml(sizesMetricLabel(m)), "num", `${sizesMetricHelp(m)}: the change against the previous measured commit`]),
       ["message", "Message", "col-secondary"],
     ],
     sizesCommitsSort,
@@ -17019,7 +17058,7 @@ function showSizesCommitPopup(i, metric) {
     const delta = p == null ? null : vals[i] - vals[p];
     const cls = upWorseClass(sizeChangeSign(delta, vals[p]));
     const pct = delta ? formatSizePct(delta, vals[p]) : "";
-    html += `<tr${m === metric ? ' class="highlight"' : ""}><th>${escapeHtml(sizesMetricLabel(m))}</th>`;
+    html += `<tr${m === metric ? ' class="highlight"' : ""}><th title="${escapeHtml(sizesMetricHelp(m))}">${escapeHtml(sizesMetricLabel(m))}</th>`;
     html += `<td class="num">${formatSizeValue(vals[i])}</td><td class="num ${cls}">${formatSizeDelta(delta)}${pct}</td></tr>`;
   }
   html += "</tbody></table>";
@@ -17099,6 +17138,11 @@ const OVERVIEW_AGENTS_STALE_MS = OVERVIEW_DAY_MS;
 const OVERVIEW_DOWNLOADS_TOP_MINORS = 4;
 // Client types of the version shares table, as keys of the version rollup
 const OVERVIEW_DOWNLOADS_KINDS = [["user", "User"], ["ci", "CI"], ["all", "All"]];
+const OVERVIEW_DOWNLOADS_KIND_HELP = {
+  user: "Each Julia version's share of the requests from clients outside CI",
+  ci: "Each Julia version's share of the requests from clients that report running in CI",
+  all: "Each Julia version's share of every request",
+};
 const OVERVIEW_LIST_LIMIT = 6;
 const OVERVIEW_SPARK_DAYS = 30;
 // The benchmark card's bars, and the reports it asks for
@@ -17363,7 +17407,7 @@ function overviewLegendHtml({ items, caption }) {
     } else if (hasDelta) {
       deltaHtml = '<span class="overview-legend-delta"></span>';
     }
-    return `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(s.value)}</span>${deltaHtml}</li>`;
+    return `<li><span class="overview-legend-label"${s.help ? ` title="${escapeHtml(s.help)}"` : ""}><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span><span class="overview-legend-value">${escapeHtml(s.value)}</span>${deltaHtml}</li>`;
   });
   return `<div class="overview-line-legend"><ul class="overview-legend overview-legend-lines${hasDelta ? " overview-legend-with-delta" : ""}">${li.join("")}</ul>${caption ? `<span class="overview-figure-label">${caption}</span>` : ""}</div>`;
 }
@@ -17384,7 +17428,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
   if (description) parts.push(`<p class="overview-card-desc">${description}</p>`);
   const top = headline != null || donut || legend || (figures && figures.length);
   if (top) parts.push('<div class="overview-card-top">');
-  const figureHtml = (headline, delta, headlineLabel) => {
+  const figureHtml = (headline, delta, headlineLabel, help) => {
     parts.push('<div class="overview-headline-figure">');
     parts.push(`<span class="overview-figure">${headline}</span>`);
     if (delta) {
@@ -17392,13 +17436,13 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
         `<span class="overview-delta overview-delta-${delta.tone}" title="${escapeHtml(delta.detail || delta.vs)}"><span class="overview-delta-value"><span aria-hidden="true">${delta.arrow}</span> ${escapeHtml(delta.text)}</span> <span class="overview-delta-vs">${escapeHtml(delta.vs)}</span></span>`,
       );
     }
-    if (headlineLabel) parts.push(`<span class="overview-figure-label">${headlineLabel}</span>`);
+    if (headlineLabel) parts.push(`<span class="overview-figure-label"${help ? ` title="${escapeHtml(help)}"` : ""}>${headlineLabel}</span>`);
     parts.push("</div>");
   };
   if (headline != null) figureHtml(headline, delta, headlineLabel);
   if (figures && figures.length) {
     parts.push('<div class="overview-figures">');
-    for (const f of figures) figureHtml(f.headline, f.delta, f.label);
+    for (const f of figures) figureHtml(f.headline, f.delta, f.label, f.help);
     parts.push("</div>");
   }
   if (donut) {
@@ -17416,7 +17460,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
     parts.push(`<ul class="overview-legend${hasDelta ? " overview-legend-with-delta" : ""}"${gridStyle}>`);
     if (cols) {
       parts.push(
-        `<li class="overview-legend-head"><span></span>${cols.map((c) => `<span class="overview-legend-value">${escapeHtml(c)}</span>`).join("")}${hasDelta ? "<span></span>" : ""}</li>`,
+        `<li class="overview-legend-head"><span></span>${cols.map((c) => overviewColumnHtml(c, "overview-legend-value")).join("")}${hasDelta ? "<span></span>" : ""}</li>`,
       );
     }
     donut.segments.forEach((s, i) => {
@@ -17432,7 +17476,7 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
         ? s.values.map((v) => `<span class="overview-legend-value">${escapeHtml(donut.format(v))}</span>`).join("")
         : `<span class="overview-legend-value">${escapeHtml(donut.format(s.value))}${pct}</span>`;
       parts.push(
-        `<li><span class="overview-legend-label"><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>${valueHtml}${deltaHtml}</li>`,
+        `<li><span class="overview-legend-label"${s.help ? ` title="${escapeHtml(s.help)}"` : ""}><span class="overview-legend-dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>${valueHtml}${deltaHtml}</li>`,
       );
     });
     parts.push("</ul></div>");
@@ -17460,9 +17504,9 @@ function overviewCard({ tab, title, status, description, headline, headlineLabel
           return `<dt class="overview-rows-heading">${html}</dt>`;
         }
         if (row.table) return `<div class="overview-compare">${rowsHtml(row.table)}</div>`;
-        const [label, value, labelClass] = row;
+        const [label, value, labelClass, help] = row;
         if (value == null || value === "") return "";
-        return `<dt${labelClass ? ` class="${labelClass}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`;
+        return `<dt${labelClass ? ` class="${labelClass}"` : ""}${help ? ` title="${escapeHtml(help)}"` : ""}>${escapeHtml(label)}</dt><dd>${value}</dd>`;
       })
       .join("");
   parts.push('<dl class="overview-rows">');
@@ -17614,10 +17658,10 @@ function overviewPkgevalCard(src) {
     rows: [
       ["Latest report", overviewReportRow(overviewExtLink(pkgevalReportUrl(last.date_path || last.date), last.date), last.date, cadence)],
       ["Julia", version],
-      ["Change over a week", change],
-      ["Popular packages", overviewPkgevalPopular()],
-      ["Newly broken", overviewPkgevalNewlyBroken()],
-      ["Why packages fail", overviewPkgevalReasons()],
+      ["Change over a week", change, "", "The latest report's package counts against the report a week before"],
+      ["Popular packages", overviewPkgevalPopular(), "", "How the most downloaded packages fare on the latest report"],
+      ["Newly broken", overviewPkgevalNewlyBroken(), "", "Packages that passed on the report before and fail on the latest"],
+      ["Why packages fail", overviewPkgevalReasons(), "", "The failure reasons PkgEval gave on the latest report, the commonest first"],
       overviewUpdatedRow(src.generated_at),
     ],
   });
@@ -17839,7 +17883,7 @@ function overviewCICard() {
     .filter(([name]) => overviewRunTime(data.jobs[name].recent[0]) >= activeSince)
     .map(([name, b]) => ({ name: overviewJobLabel(name), since: b.date }));
   if (broken.length) {
-    rows.push(["Broken jobs", overviewList(broken.map((b) => `${b.name} since ${b.since.slice(0, 10)}`))]);
+    rows.push(["Broken jobs", overviewList(broken.map((b) => `${b.name} since ${b.since.slice(0, 10)}`)), "", "Jobs that failed on most of their recent master runs after passing steadily, with the date they broke"]);
   }
   const flaky = Object.entries(jobPassRates)
     .filter(([, p]) => p.total >= PASS_RATE_MIN_RUNS && p.rate < PASS_RATE_THRESHOLD)
@@ -17930,6 +17974,7 @@ function overviewTtfxCard(src, prs) {
     const what = ttfxIsJob(m) ? `${ttfxMetricLabel(m)}, the median run` : `${TTFX_PILL_LABELS[m]} geomean over ${common.length} snippets`;
     return {
       label: TTFX_PILL_LABELS[m],
+      help: ttfxMetricHelp(m),
       color: colorOf(m),
       format: (v) => formatTtfxValue(v, m),
       n: common.length,
@@ -17965,7 +18010,7 @@ function overviewTtfxCard(src, prs) {
     }
     return Math.exp(acc / tasks.length);
   };
-  const figure = (metrics, label, what) => {
+  const figure = (metrics, label, what, help) => {
     const tasks = metrics.reduce((ts, m) => ts.filter((t) => ttfxCommonTasks(sparkBuilds, src.tasks || [], m).includes(t)), src.tasks || []);
     const now = sumGeomean(latest, tasks, metrics);
     if (now == null) return null;
@@ -17973,6 +18018,7 @@ function overviewTtfxCard(src, prs) {
     return {
       headline: formatTtfxSeconds(now),
       label: `${label}<br>${what}`,
+      help,
       delta: before
         ? overviewDelta({
             value: (100 * (now - before)) / before,
@@ -17986,14 +18032,14 @@ function overviewTtfxCard(src, prs) {
     };
   };
   const figures = [
-    figure(["precompile", "load", "run"], "First session", "precompile + load + run"),
-    figure(["warm"], "Following sessions", "load + run"),
+    figure(["precompile", "load", "run"], "First session", "precompile + load + run", "What a new user waits for the first time: precompiling the packages, then the cold load and run, summed per snippet; the geomean over the snippets"),
+    figure(["warm"], "Following sessions", "load + run", "What every later session waits for: the warm load and run in a fresh process, with the packages already precompiled; the geomean over the snippets"),
   ].filter(Boolean);
   const shown = lines.filter((l) => l.now != null);
   const weekDays = weekAgo ? Math.round((latestMs - ttfxBuildTime(weekAgo)) / OVERVIEW_DAY_MS) : null;
   const legend = shown.length
     ? {
-        items: shown.map((l) => ({ label: l.label, color: l.color, value: l.format(l.now), delta: l.delta })),
+        items: shown.map((l) => ({ label: l.label, help: l.help, color: l.color, value: l.format(l.now), delta: l.delta })),
         caption: `startup (julia -e ''), then each metric's geomean, in the latest build${weekAgo ? `; change vs build ${weekDays} d earlier` : ""}`,
       }
     : null;
@@ -18023,8 +18069,8 @@ function overviewTtfxCard(src, prs) {
     spark,
     rows: [
       ...overviewTtfxCompare(src, latest),
-      ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : ""],
-      ["Most promising PRs", overviewTtfxPrs(prs)],
+      ["Newly failing", newlyFailing.length ? overviewList(newlyFailing) : "", "", "Snippets that fail on the latest build and passed on the one before"],
+      ["Most promising PRs", overviewTtfxPrs(prs), "", "Open pull requests with the best TTFX score: their TTFX job's weighted geomean of the metric changes"],
       ["Builds in last 7 days", String(lastWeek.length)],
       overviewUpdatedRow(src.generated_at),
     ],
@@ -18087,7 +18133,7 @@ function overviewTtfxCompare(src, latest) {
   ];
   groups.push(["Nightly", against(latest), overviewTtfxBuildLink(latest)]);
   if (opt) groups.push(["Nightly Optimized (PGO and ThinLTO)", [["vs Nightly", overviewTtfxPaired(src, opt)], ...against(opt)], overviewTtfxBuildLink(opt)]);
-  return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => TTFX_PILL_LABELS[m]), groups, NO_CHANGE_PCT.geomean);
+  return overviewCompareRows(OVERVIEW_TTFX_METRICS.map((m) => [TTFX_PILL_LABELS[m], ttfxMetricHelp(m)]), groups, NO_CHANGE_PCT.geomean);
 }
 
 // A cell's text, and for a phone a shorter one when it has its own: numbers of
@@ -18097,6 +18143,12 @@ function overviewCompareText(c) {
   const short = c.text.replace(/\d+\.\d+/g, (x) => (Number(x) >= 10 ? String(Math.round(Number(x))) : x));
   if (short === c.text) return escapeHtml(c.text);
   return `<span class="overview-compare-full">${escapeHtml(c.text)}</span><span class="overview-compare-short">${escapeHtml(short)}</span>`;
+}
+
+// A column heading of a card's table: a label, or [label, help] for its tooltip
+function overviewColumnHtml(c, cls = "") {
+  const [label, help] = Array.isArray(c) ? c : [c, ""];
+  return `<span${cls ? ` class="${cls}"` : ""}${help ? ` title="${escapeHtml(help)}"` : ""}>${escapeHtml(label)}</span>`;
 }
 
 // Card rows laying out comparisons as a table: a header row of `columns`, then
@@ -18110,7 +18162,7 @@ function overviewCompareRows(columns, groups, tol) {
   if (!shown.length) return [];
   const cellsHtml = (cells) =>
     `<span class="overview-compare-cells" style="grid-template-columns: repeat(${columns.length}, minmax(0, 1fr))">${cells.join("")}</span>`;
-  const rows = [["", cellsHtml(columns.map((c) => `<span>${escapeHtml(c)}</span>`))]];
+  const rows = [["", cellsHtml(columns.map((c) => overviewColumnHtml(c)))]];
   for (const [name, comps, link] of shown) {
     rows.push({ heading: name, link });
     for (const [label, cells] of comps) {
@@ -18216,7 +18268,7 @@ function overviewSizesCard(src, prs) {
       ["Latest commit", `${commitShaLink(sha)} (${overviewAgo(src.merged_at[i])}) ${escapeHtml(src.versions[i] || "")}, ${ci ? `the tarball of julia-ci build #${src.builds[i]}` : "a manyjulias build"}`],
       ["Tarball", formatSizeValue(at("tarball"))],
       ["Files", at("files") != null ? at("files").toLocaleString("en-US") : ""],
-      ["Biggest open PRs", overviewSizesPrs(prs)],
+      ["Biggest open PRs", overviewSizesPrs(prs), "", "Open pull requests that grow the unpacked distribution the most"],
       ["Commits in last 7 days", String(lastWeek.length)],
       overviewUpdatedRow(src.generated_at),
     ],
@@ -18246,7 +18298,7 @@ function overviewSizesCompare(src, at) {
         return { pct, text: `${formatSizeDelta(d)} (${formatSignedPct(pct)})`, title: `${formatBytes(a)} against ${formatBytes(b)}` };
       }),
     ];
-  return overviewCompareRows(["Total", "Tarball"], [["Nightly", [against(src.release), against(overviewSizesLts(src), " (LTS)")]]], NO_CHANGE_PCT.size);
+  return overviewCompareRows([["Total", SIZES_HELP.total], ["Tarball", SIZES_HELP.tarball]], [["Nightly", [against(src.release), against(overviewSizesLts(src), " (LTS)")]]], NO_CHANGE_PCT.size);
 }
 
 // The five open pull requests that change the total most, with the change
@@ -18362,7 +18414,7 @@ function overviewPackagesCard(src) {
     donut = overviewDonut(segments, {
       format: (v) => (v == null ? "" : `${(100 * v).toFixed(0)}%`),
       showPct: false,
-      columns: OVERVIEW_DOWNLOADS_KINDS.map(([, label]) => label),
+      columns: OVERVIEW_DOWNLOADS_KINDS.map(([k, label]) => [label, OVERVIEW_DOWNLOADS_KIND_HELP[k]]),
     });
     const movers = segments.filter((seg) => seg.delta).sort((a, b) => Math.abs(b.delta.value) - Math.abs(a.delta.value));
     if (movers.length && Math.abs(movers[0].delta.value) >= 0.05) {
@@ -18387,7 +18439,7 @@ function overviewPackagesCard(src) {
     donut,
     rows: [
       ["This week", weekText],
-      ["Biggest shift", biggestShift],
+      ["Biggest shift", biggestShift, "", "The Julia version whose share of requests changed most against the week before"],
       ["Latest day", `${escapeHtml(maxDate)} (${overviewAgo(maxDate)}), ${compactNumber(series[series.length - 1].all)} downloads`],
       ["Most requested", overviewTopPackages()],
       overviewUpdatedRow(src.generated_at),
@@ -18451,8 +18503,8 @@ function overviewAgentsCard(src, backlog) {
     rows: [
       ...(queue ? [["Connected agents", String(connected.size)], ...queue.rows] : []),
       ["Running jobs", String(running)],
-      ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : ""],
-      ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : ""],
+      ["Missing agents", missing.length ? overviewList(missing.map((r) => r.name)) : "", "", "Agents seen recently that are no longer connected to Buildkite"],
+      ["Quiet hosts", quiet.length ? overviewList(quiet.map((r) => `${r.name}, last job ${overviewAgo(new Date(r.lastSeenMs).toISOString())}`)) : "", "", "Connected hosts with no job for 3 days, or idle while their pool's jobs waited"],
       overviewUpdatedRow(src.generated_at, "Snapshot"),
     ],
   });
@@ -19238,7 +19290,7 @@ function ttfxReleasesHtml(metrics, against, base = null) {
   // Startup, once per job, after the task metrics when any run has it
   const startup = against.some((a) => a.startup) ? ["startup", "startup_repl"] : [];
   let html = '<table class="ttfx-popup-table"><thead><tr><th></th>';
-  html += [...metrics, ...startup].map((m) => `<th class="num">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+  html += [...metrics, ...startup].map((m) => `<th class="num" title="${escapeHtml(ttfxMetricHelp(m))}">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
   html += "</tr></thead><tbody>";
   const cell = (head, ratio, title) => {
     const main = pct(base ? head : ratio);
@@ -19333,10 +19385,10 @@ function commitPrStackHtml(st, n) {
     ? `<tr data-pin><td></td><td colspan="3" class="col-secondary"><code>${escapeHtml(st.missing)}</code>: no open pull request has this branch, so the layers below it are not known</td><td></td><td></td><td></td></tr>`
     : '<tr data-pin><td></td><td colspan="3" class="col-secondary"><code>master</code></td><td></td><td></td><td></td></tr>';
   const head = [
-    ["#", "num col-secondary"],
+    ["#", "num col-secondary", "Place in the stack, 1 the lowest"],
     ["PR"],
     ["Title"],
-    ["Branch", "col-secondary"],
+    ["Branch", "col-secondary", "The branch the pull request targets"],
     ["TTFX own", "num", "TTFX score against the layer below"],
     ["TTFX stack", "num", "Estimated TTFX score of the stack up to here against master"],
     ["Size own", "num", "Change of the total unpacked size against the layer below"],
@@ -19414,10 +19466,10 @@ function commitCIHtml(data) {
     parts.push(
       commitTable(
         [
-          ["Pipeline"],
+          ["Pipeline", "", "The Buildkite pipeline"],
           ["Build"],
-          ["Created", "col-secondary"],
-          ["State"],
+          ["Created", "col-secondary", "When the build was created"],
+          ["State", "", "How the build ended, or that it is still running"],
           ["Wall", "num", "First job started to last job finished"],
           ["vs previous", "num", "Against the previous build on the pipeline"],
           ["Queue (median)", "num col-secondary", "Median wait from runnable to started"],
@@ -19470,11 +19522,11 @@ function commitJobsHtml(j) {
   </tr>`;
   const head = [
     ["Job"],
-    ["State"],
-    ["Time", "num"],
+    ["State", "", "How the job ended"],
+    ["Time", "num", "How long the job ran"],
     ["Previous", "num col-secondary", "The same job on the build of the previous commit"],
-    ["Change", "num"],
-    ["Agent", "col-secondary"],
+    ["Change", "num", "Time against previous"],
+    ["Agent", "col-secondary", "The Buildkite agent that ran the job"],
   ];
   // Failures first, newly failing before those that were already failing,
   // then the biggest changes
@@ -19541,8 +19593,8 @@ function commitTtfxHtml(data) {
   const head = [
     ["Task"],
     ...metrics.flatMap((m) => [
-      [escapeHtml(ttfxShortName(m)), "num col-secondary"],
-      [`<span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(ttfxShortName(m))}</span>`, "num"],
+      [escapeHtml(ttfxShortName(m)), "num col-secondary", ttfxMetricHelp(m)],
+      [`<span class="col-secondary">Δ</span><span class="col-phone">${escapeHtml(ttfxShortName(m))}</span>`, "num", `${ttfxMetricLabel(m)} against the previous run`],
     ]),
   ];
   const notable = tasks
@@ -19607,7 +19659,13 @@ function commitBenchHtml(data) {
     <td class="num"${dataV(v.time_ratio)}>${v.time_ratio != null ? `${v.time_ratio.toFixed(2)}×` : "—"}</td>
     <td class="num col-secondary"${dataV(v.memory_ratio)}>${v.memory_ratio != null ? `${v.memory_ratio.toFixed(2)}×` : "—"}</td>
   </tr>`;
-  const head = [["Group", "col-secondary"], ["Benchmark"], ["Verdict"], ["Time", "num"], ["Memory", "num col-secondary"]];
+  const head = [
+    ["Group", "col-secondary", "The BaseBenchmarks group"],
+    ["Benchmark"],
+    ["Verdict", "", "Nanosoldier's call: an improvement or a regression beyond its tolerance"],
+    ["Time", "num", "Time against the baseline report"],
+    ["Memory", "num col-secondary", "Memory against the baseline report"],
+  ];
   const rows = b.verdicts.map(row);
   const verdicts = rows.length
     ? commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "largest changes")
@@ -19920,11 +19978,11 @@ function updateActivityTable() {
   const thead = document.getElementById("activity-stats-thead");
   thead.innerHTML = sortableHeaderRow(
     [
-      ["order", "Series"],
-      ["now", "Now", "num"],
-      ["before", `${w} days before`, "num col-secondary"],
-      ["yearAgo", "A year before", "num col-secondary"],
-      ["change", "Change over the year", "num"],
+      ["order", "Series", "", "The JuliaLang/julia GitHub activity measured"],
+      ["now", "Now", "num", `The latest value: a count, or for a rate the daily mean over the last ${w} days`],
+      ["before", `${w} days before`, "num col-secondary", `The same ${w} days earlier`],
+      ["yearAgo", "A year before", "num col-secondary", "The same a year earlier"],
+      ["change", "Change over the year", "num", "Now against a year before"],
     ],
     activitySort,
   );
@@ -20670,7 +20728,7 @@ function updateCoverageTable() {
   const thead = document.getElementById("coverage-stats-thead");
   thead.innerHTML = sortableHeaderRow(
     [
-      ["path", dirs ? "Directory" : "File"],
+      ["path", dirs ? "Directory" : "File", "", dirs ? "A directory of the julia source tree, with every file under it" : "A file of the julia source tree"],
       ["pct", "Run", "num", "Lines run, as a share of the lines Codecov counts as code"],
       ["missed", "Never run", "num", "Lines of code the tests never run"],
       ["lines", "Lines", "num col-secondary", "Lines Codecov counts as code"],
@@ -20741,8 +20799,8 @@ function renderCoverageCommitsTable() {
   const thead = document.getElementById("coverage-stats-thead");
   thead.innerHTML = sortableHeaderRow(
     [
-      ["date", "Date"],
-      ["commit", "Commit"],
+      ["date", "Date", "", "When Codecov measured the report"],
+      ["commit", "Commit", "", "The master commit Codecov's report is of"],
       ["pct", "Run", "num", "Lines run, as a share of the lines Codecov counts as code"],
       ["change", "Change", "num", "Against the report before, in percentage points"],
       ["missed", "Never run", "num", "Lines of code the tests never run"],
@@ -21374,13 +21432,13 @@ function updateSysimageTable() {
   const platforms = sysimagePlatforms();
   const thead = document.getElementById("sysimage-stats-thead");
   thead.innerHTML =
-    `<tr><th>Stage</th>` +
+    `<tr><th title="A stage of building the system image in the CI build job; hover one for what it covers">Stage</th>` +
     platforms
       .map((pl) => {
         const sel = pl === sysimagePlatform ? " sysimage-selected" : "";
         const m = sysimageMachineFor(pl);
         const machine = m === "all" ? "all machines" : m;
-        return `<th class="num${sel}" colspan="2"><button class="btn-link" data-platform="${escapeHtml(pl)}" title="Show ${escapeHtml(pl)}">${escapeHtml(pl)}</button><div class="col-secondary" title="The machines this column's jobs ran on">${escapeHtml(machine)}</div></th>`;
+        return `<th class="num${sel}" colspan="2" title="The stage's median time over the last builds of the range, and its change against the first ones"><button class="btn-link" data-platform="${escapeHtml(pl)}" title="Show ${escapeHtml(pl)}">${escapeHtml(pl)}</button><div class="col-secondary" title="The machines this column's jobs ran on">${escapeHtml(machine)}</div></th>`;
       })
       .join("") +
     `</tr>`;
@@ -22620,8 +22678,8 @@ function renderRuntimeChangesTable() {
     `Instruction counts are exact, so each is the code or the work changing; the judged change is measured the same way. Benchmarks judged on wall time are left out. Click a row to chart it.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
     [
-      ["date", "Commit"],
-      ["name", "Benchmark"],
+      ["date", "Commit", "", "The master commit where the step starts"],
+      ["name", "Benchmark", "", "The runtime benchmark that stepped"],
       ["instr", "Instructions", "num", `Change in retired instructions per call: the median of the ${RUNTIME_STEP_WINDOW} builds from this commit on against the ${RUNTIME_STEP_WINDOW} before`],
       ["value", "Judged", "num", "Change in the judged metric (cycles for most), measured the same way"],
     ],
@@ -22678,8 +22736,8 @@ function updateRuntimeTable() {
     `Coloured beyond the tolerance compare.jl judges by (cycles ${RUNTIME_TOLERANCE.cycles}%, time ${RUNTIME_TOLERANCE.time}%; instructions ${RUNTIME_INSTR_PCT}%); ▲▼ flags the ${RUNTIME_MOVERS} that moved most. Click a row to chart it${pr ? "" : "; Show in an open pull request's row adds its changes here"}.</span></span></div>`;
   thead.innerHTML = sortableHeaderRow(
     [
-      ["name", "Benchmark"],
-      ["category", "Category", "col-secondary"],
+      ["name", "Benchmark", "", "The runtime benchmark"],
+      ["category", "Category", "col-secondary", "The part of Julia it exercises"],
       ["latest", "Latest", "num col-secondary", "The judged metric: the fastest block's cycles of the calling thread, or its wall time for the benchmarks whose work leaves that thread"],
       ["perop", "Per op", "num col-secondary", "Wall time per work item: the fastest call divided by the items it processes"],
       ["ref", `vs ${runtimeIsBackfill(refBuild) ? refBuild.commit.slice(0, 7) : `#${refBuild.build}`}`, `num${pr ? " col-secondary" : ""}`, "Change from the reference build: the first in the range, or the one picked in a build's details"],
@@ -22919,7 +22977,7 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
   );
   if (p.outdated) html += `<div class="ttfx-popup-note">${escapeHtml(runtimePrOutdatedText(p))}</div>`;
 
-  html += '<table class="ttfx-popup-table"><thead><tr><th>Category</th><th class="num">Geomean</th><th class="num">Per block</th><th>Verdict</th></tr></thead><tbody>';
+  html += '<table class="ttfx-popup-table"><thead><tr><th title="The part of Julia the benchmarks exercise; the number is how many">Category</th><th class="num" title="Geometric mean of the ratios of its benchmarks, head against base">Geomean</th><th class="num" title="The same geomean in each ABBA block">Per block</th><th title="A regression or improvement when every block agrees beyond 1.5%">Verdict</th></tr></thead><tbody>';
   for (const c of p.categories || []) {
     html += `<tr><th>${escapeHtml(c.category)} <span class="ttfx-popup-muted">${c.n}</span></th><td class="num ${runtimeVerdictClass(c.verdict)}">${runtimeRatioPct(c.geomean)}</td>`;
     html += `<td class="num">${(c.per_block || []).map(runtimeRatioPct).join(", ")}</td><td class="${runtimeVerdictClass(c.verdict)}">${escapeHtml(c.verdict)}</td></tr>`;
@@ -22929,7 +22987,7 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
 
   if (p.notable?.length) {
     html += '<div class="ttfx-popup-section">Benchmarks with a robust or instruction change, and the furthest from no change</div>';
-    html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">Change</th><th class="num">Per block</th><th class="num">Instructions</th><th class="num">Head time</th><th class="num">Allocs</th></tr></thead><tbody>';
+    html += '<table class="ttfx-popup-table"><thead><tr><th></th><th class="num" title="Head against base">Change</th><th class="num" title="The change in each ABBA block">Per block</th><th class="num" title="Change in retired instructions per call">Instructions</th><th class="num" title="Time per call on the head">Head time</th><th class="num" title="Allocations per call, head against base">Allocs</th></tr></thead><tbody>';
     for (const x of p.notable) {
       const instr = x.instr_ratio == null ? "—" : runtimeRatioPct(x.instr_ratio);
       const allocs = runtimeAllocsCell(x.allocs_base, x.allocs_head);
@@ -23029,16 +23087,16 @@ function renderRuntimePrsTable() {
     "Geomean is over every benchmark, then per category (%); negative is faster, colour and bold a robust change. Hover a row to project it onto the charts.</span></span></div>";
   thead.innerHTML = sortableHeaderRow(
     [
-      ["rank", "#", "num"],
-      ["pr", "Pull request"],
-      ["author", "Author", "col-secondary runtime-wide"],
+      ["rank", "#", "num", "Place by geomean, the best first"],
+      ["pr", "Pull request", "", "The open pull request, with a runtime comparison from its CI"],
+      ["author", "Author", "col-secondary runtime-wide", "Who opened the pull request"],
       ["geomean", "Geomean", "num", "The geometric mean of every benchmark's ratio, head against base; rows are ranked by it"],
       ...cats.map((c, i) => [`cat:${c}`, escapeHtml(RUNTIME_CATEGORY_ABBR[c] || c.slice(0, 4)), `num runtime-cat-col${i === 0 ? " ttfx-prs-group-start" : ""} col-secondary`, `${c}: the geometric mean of its benchmarks' ratios, coloured when every block agrees beyond 1.5%`]),
       ["changed", "Reg. / Imp.", "num ttfx-prs-group-start", "Benchmarks with a robust regression / improvement. Sorts on regressions less improvements."],
       ["instr", "Instr.", "num col-secondary", "Benchmarks retiring a different number of instructions in every block: the code or the work changed"],
       ["errors", "Failed", "num col-secondary", "Benchmarks that failed on either arm"],
       ["worst", "Worst", "col-secondary", "The benchmark with the largest ratio"],
-      ["date", "Measured", "col-secondary runtime-wide"],
+      ["date", "Measured", "col-secondary runtime-wide", "When the pull request's comparison job ran"],
       [null, ""],
     ],
     runtimePrsSort,
@@ -23318,7 +23376,13 @@ function commitRuntimeHtml(data) {
     <td class="num"${dataV(x.ipct)}>${commitPctHtml(x.ipct, RUNTIME_INSTR_PCT)}</td>
     <td class="num col-secondary"${dataV(x.allocs)}>${x.allocs == null ? "—" : x.allocs.toLocaleString("en-US")}${x.allocs_previous != null && x.allocs !== x.allocs_previous ? ` (was ${x.allocs_previous.toLocaleString("en-US")})` : ""}</td>
   </tr>`;
-  const head = [["Benchmark"], ["Value", "num col-secondary"], ["Δ", "num"], ["Instr. Δ", "num"], ["Allocs", "num col-secondary"]];
+  const head = [
+    ["Benchmark"],
+    ["Value", "num col-secondary", "The judged metric on this commit's build"],
+    ["Δ", "num", "The judged metric against the previous master job with results"],
+    ["Instr. Δ", "num", "Retired instructions per call against the same job"],
+    ["Allocs", "num col-secondary", "Allocations per call"],
+  ];
   const ok = rows.filter((x) => x.status === "ok");
   const notable = ok.filter((x) => worst(x) >= 1).sort((a, b) => worst(b) - worst(a)).slice(0, COMMIT_SHOWN_ROWS);
   const prev = r.previous;
@@ -23699,13 +23763,13 @@ function prCardMetricsTable(p) {
 
   const blocks = Math.max(...Object.values(p.suite).map((s) => s.geomeans.length), 0);
   let html = "<table><thead><tr><th></th>";
-  for (let i = 1; i <= blocks; i++) html += `<th>Block ${i}</th>`;
-  html += "<th>GC off</th></tr></thead><tbody>";
+  for (let i = 1; i <= blocks; i++) html += `<th title="Head against base in ABBA block ${i}">Block ${i}</th>`;
+  html += '<th title="Head against base in the repeats with the GC off">GC off</th></tr></thead><tbody>';
   for (const m of p.metrics || ["precompile", "load", "run", "warm"]) {
     const on = p.suite[m];
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];
-    html += `<tr><th>${escapeHtml(ttfxMetricLabel(m))}</th>`;
+    html += `<tr><th title="${escapeHtml(ttfxMetricHelp(m))}">${escapeHtml(ttfxMetricLabel(m))}</th>`;
     html += on.geomeans.map((g) => `<td class="${cls(ttfxSuiteVerdict(on))}">${ttfxRatioPct(g)}</td>`).join("");
     html += `<td class="${off ? cls(off.verdict) : ""}">${off ? off.geomeans.map(ttfxRatioPct).join(", ") : "—"}</td></tr>`;
   }
