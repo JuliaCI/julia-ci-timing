@@ -410,6 +410,9 @@
       // and the worst of their moods for the row's lights and effects
       const SHARED_MACHINES = { upload: "cuda" };
       const YGGDRASIL_QUEUE = "yggdrasil";
+      // The GPU cluster's queue for the packages that need a Mac's GPU, whose per-job
+      // agents run on the same aarch64 Macs as the build and test queues' do: a Mac on one of its jobs has none of theirs
+      const METAL_QUEUE = "metal";
       // A queue's own caption, shown in place of the room's commentary on its mood
       const QUEUE_CAPTIONS = { rocm: "Probably overloaded." };
       // Worst last, for picking a shared row's mood
@@ -512,12 +515,17 @@
       }
 
       // Every cluster with one state per slot: "on" runs a job, "off" is idle,
-      // "gone" is an agent missing from the latest snapshot
+      // "gone" is an agent missing from the latest snapshot. A Mac running a
+      // job of the metal queue instead has every slot "metal": taken, but not by
+      // a job of these queues, so it counts as neither busy nor towards the mood.
       function buildClusters(latest, backlog) {
         const agents = latest.agents || {};
         const latestMs = Date.parse(latest.generated_at);
         const runningOn = new Map();
+        // The pipeline of the metal queue's job on each host
+        const metalHosts = new Map();
         for (const a of Object.values(agents)) {
+          if (a.state === "connected" && a.queue === METAL_QUEUE && a.hostname) metalHosts.set(a.hostname, a.job?.pipeline || "");
           if (a.state !== "connected" || !PER_JOB_QUEUES.has(a.queue) || !a.hostname) continue;
           runningOn.set(a.hostname, (runningOn.get(a.hostname) || 0) + 1);
         }
@@ -526,11 +534,14 @@
         const hostSlots = backlog.host_slots || {};
         const clusters = [];
         for (const g of machineGroups(backlog)) {
+          const mac = g.pools.every((p) => p.os === "macos");
           const hosts = [...g.hosts]
             .map((h) => {
               const busy = runningOn.get(h) || 0;
               const cap = Math.max(hostSlots[h] || 0, busy, 1);
-              return { name: shortHost(h), states: Array.from({ length: cap }, (_, i) => (i < busy ? "on" : "off")) };
+              // One job per machine, so a Mac with a job of its own queues is not on a metal one
+              const metal = mac && !busy && metalHosts.has(h);
+              return { name: shortHost(h), metal, metalJob: metal ? metalHosts.get(h) || `${METAL_QUEUE} queue` : null, states: Array.from({ length: cap }, (_, i) => (metal ? "metal" : i < busy ? "on" : "off")) };
             })
             .sort(byName);
           const os = uniq(g.pools.map((p) => OS_NAMES[p.os] || p.os)).join(", ");
@@ -539,7 +550,7 @@
             kind: "ci",
             title: `${os} ${arch}`.trim(),
             queues: uniq(g.pools.map((p) => p.queue)).sort().join(" + "),
-            mac: g.pools.every((p) => p.os === "macos"),
+            mac,
             // Its Mac minis live on top of the fridge
             fridge: g.pools.every((p) => p.os === "macos" && p.arch === "x86_64"),
             hosts,
@@ -554,7 +565,8 @@
         const byQueue = new Map();
         for (const [name, a] of Object.entries(agents)) {
           const q = a.queue || "(no queue)";
-          if (PER_JOB_QUEUES.has(q)) continue;
+          // The metal queue's agents show on the Macs they run on, not as a queue of their own
+          if (PER_JOB_QUEUES.has(q) || q === METAL_QUEUE) continue;
           const on = a.state === "connected";
           if (!on && !(latestMs - Date.parse(a.last_seen || "") < GONE_MS)) continue;
           if (!byQueue.has(q)) byQueue.set(q, { hosts: new Map(), os: new Set() });
@@ -584,6 +596,7 @@
           const all = c.hosts.flatMap((h) => h.states);
           c.busy = all.filter((s) => s === "on").length;
           c.gone = all.filter((s) => s === "gone").length;
+          c.metal = c.hosts.filter((h) => h.metal).length;
           c.cap = all.length;
           c.mood = mood(c.busy, c.cap, c.waiting);
           if (c.kind === "other" && c.mood === "busy") c.mood = "full";
@@ -971,18 +984,36 @@
       // Which model a host is, by name: the jonagold runners are M6 minis
       const miniModel = (name) => (name && name.startsWith("jonagold") ? "m6" : "intel");
       // One machine per host, with a status light per slot: `states` has the
-      // slots' states and `leds` the materials a running slot's light cycles through
-      function makeMini(states, leds, name = null) {
+      // slots' states and `leds` the materials a running slot's light cycles through.
+      // A machine on a `metal` job shows a single running light, for its one
+      // job, with the JuliaGPU logo stuck on its lid.
+      let gpuSticker = null;
+      // juliagpu.png is 1554 x 1071, and the plane has to keep that shape
+      const GPU_STICKER_ASPECT = 1071 / 1554;
+      // `width` across, as wide as the image
+      function makeGpuSticker(width) {
+        if (!gpuSticker) {
+          // The page is also served at /serverroom, without the slash, so a bare relative path would miss
+          const tex = new THREE.TextureLoader().load("../serverroom/juliagpu.png");
+          tex.colorSpace = THREE.SRGBColorSpace;
+          gpuSticker = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+        }
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(width, width * GPU_STICKER_ASPECT), gpuSticker);
+        m.rotation.set(-Math.PI / 2, 0, 0.18);
+        return m;
+      }
+      function makeMini(states, leds, name = null, metal = false) {
         const size = miniSize(miniModel(name));
         const g = new THREE.Group();
-        const body = new THREE.Mesh(GEO.box, states.includes("on") ? MAT.mini : MAT.miniOff);
+        const body = new THREE.Mesh(GEO.box, metal || states.includes("on") ? MAT.mini : MAT.miniOff);
         body.scale.set(size.w, size.h, size.w);
         body.position.y = size.h / 2;
         body.castShadow = true;
         g.add(body);
         // The status lights, from the front's right-hand corner inwards
-        const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / states.length - 0.012));
-        states.forEach((s, k) => {
+        const shown = metal ? ["on"] : states;
+        const lw = Math.max(0.004, Math.min(0.03, (size.w * 0.7) / shown.length - 0.012));
+        shown.forEach((s, k) => {
           const x = size.w * 0.35 + 0.015 - lw / 2 - k * (lw + 0.012);
           const rim = new THREE.Mesh(GEO.box, LED.rim);
           rim.scale.set(lw + 0.0025, 0.0145, 0.01);
@@ -997,6 +1028,13 @@
           const tag = nameTag(name);
           tag.position.set(0, size.h + 0.0005, 0.02);
           g.add(tag);
+        }
+        if (metal) {
+          // In the lid's back corner, over the name tag's edge where the lid is small
+          const side = Math.min(0.12, size.w * 0.45);
+          const sticker = makeGpuSticker(side);
+          sticker.position.set(-size.w / 2 + side / 2 + 0.012, size.h + 0.002, -size.w / 2 + side / 2 - 0.01);
+          g.add(sticker);
         }
         return g;
       }
@@ -1449,7 +1487,7 @@
           mit.rotation.z = 0.12;
           fridge.add(mit);
           fridgeHosts.forEach((h, i) => {
-            const m = makeMini(h.states, ledsFrom(i), h.name);
+            const m = makeMini(h.states, ledsFrom(i), h.name, h.metal);
             const pile = Math.floor(i / 3);
             m.position.set(-fw / 2 + 0.27 + pile * 0.4, fh + (i % 3) * (MINI.h + 0.005), 0);
             m.rotation.y = Math.sin(i * 2.3) * 0.25;
@@ -1530,7 +1568,7 @@
             const table = makeTable(tw);
             const column = (i) => -tw / 2 + 0.38 + Math.floor(i / 2) * 0.45;
             chunk.forEach((h, i) => {
-              const m = makeMini(h.states, ledsFrom(i), h.name);
+              const m = makeMini(h.states, ledsFrom(i), h.name, h.metal);
               m.position.set(column(i), 0.83, i % 2 ? 0.22 : -0.22);
               table.add(m);
             });
@@ -1833,6 +1871,8 @@
           text(ctx, "TODO", 0.06 * w, 1.4 * s, 1.1 * s, "#2b5bd7", "bold");
           const items = ["fix flaky tests (again)", "@test_broken → @test", "TTFX ↓↓↓", "buy more Macs??", "do NOT unplug the fridge"];
           items.forEach((t, i) => text(ctx, `• ${t}`, 0.06 * w, (2.8 + i * 1.3) * s, 0.75 * s, i === 4 ? "#cb3c33" : "#2b2a33"));
+          // Done: a green tick after the Macs
+          text(ctx, "✓", 0.06 * w + ctx.measureText(`• ${items[3]}`).width + 0.3 * s, (2.8 + 3 * 1.3) * s, 0.9 * s, "#389826", "bold");
           // A doodle of the queue, going up and to the right
           ctx.strokeStyle = "#389826";
           ctx.lineWidth = 5;
@@ -2611,10 +2651,11 @@
           for (const q of c.prio) lines.push(`· ${q.waiting} ${priorityName(q.pr)} priority, the longest for ${hours(q.oldest)}`);
         if (c.blocked) lines.push(`${c.blocked} more blocked on dependencies`);
         if (c.gone) lines.push(`${c.gone} agents missing`);
+        if (c.metal) lines.push(`${c.metal} running ${METAL_QUEUE} queue jobs`);
         return lines.map(esc).join("<br>");
       }
       function tipHtml(c) {
-        const hosts = c.hosts.slice(0, 10).map((h) => `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`);
+        const hosts = c.hosts.slice(0, 10).map((h) => (h.metal ? `${esc(h.name)} ${esc(h.metalJob)}` : `${esc(h.name)} ${h.states.filter((s) => s === "on").length}/${h.states.length}`));
         if (c.hosts.length > 10) hosts.push(`and ${c.hosts.length - 10} more`);
         // A shared machine: each queue's status and counts, under the worst one's
         const data = c.parts
@@ -3191,13 +3232,14 @@
         // A whole day, so the API answers from its cache
         const since = new Date().toISOString().slice(0, 10);
         try {
-          const [latest, backlog, neighbours] = await Promise.all([
+          const [latest, backlog, neighbours, metal] = await Promise.all([
             fetch("../api/agents/latest").then((r) => r.json()),
             fetch(`../api/agents/backlog?since=${since}`).then((r) => r.json()),
             // Not one of the clusters the Workers tab covers, so it has to be asked for
-            fetch("../api/agents/latest?queue=yggdrasil").then((r) => r.json()),
+            fetch(`../api/agents/latest?queue=${YGGDRASIL_QUEUE}`).then((r) => r.json()),
+            fetch(`../api/agents/latest?queue=${METAL_QUEUE}`).then((r) => r.json()),
           ]);
-          Object.assign(latest.agents, neighbours.agents);
+          Object.assign(latest.agents, neighbours.agents, metal.agents);
           const data = buildClusters(latest, backlog);
           const total = (k) => data.ci.reduce((s, c) => s + c[k], 0);
           const mins = Math.round((Date.now() - data.latestMs) / 60000);
