@@ -12281,13 +12281,13 @@ const TTFX_METRICS = {
   // task: `julia -e ''` to its exit, and an interactive julia to its first prompt
   startup: { label: "Startup", help: "Time from launching julia -e '' to its exit", short: "startup", job: 0, counters: { instructions: 2, cycles: 4 } },
   startup_repl: { label: "Interactive startup", help: "Time from launching an interactive julia to its first prompt", short: "interactive startup", job: 1, counters: { instructions: 3, cycles: 5 } },
+  // From spawning the cold process to the end of its load, so a build that moves
+  // work between startup and the first package load shows here as no change
+  startup_load: { label: "Startup+load (cold)", help: "From launching the cold run's julia process to the end of its load", short: "startup+load", index: 11, detail: true },
   precompile: { label: "Precompile", help: "Time to precompile the task's packages from an empty cache", index: 0, counters: { instructions: 12, cycles: 15 } },
   load: { label: "Load (cold)", help: "Time to load the task's packages in a fresh julia process, with the JIT object cache cleared", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
   run: { label: "Run (cold)", help: "Time to run the task's code the first time, right after that cold load", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
   warm: { label: "Load+run (warm)", help: "Load and run together in a later fresh process, which reuses the caches the cold run filled", index: 3, gcoffIndex: 6 },
-  // From spawning the cold process to the end of its load, so a build that moves
-  // work between startup and the first package load shows here as no change
-  startup_load: { label: "Startup+load (cold)", help: "From launching the cold run's julia process to the end of its load", short: "startup+load", index: 11, detail: true },
   // The load in a copy of the task's project with every stdlib added and
   // imported first, so its packages load beside many methods from outside
   // their own dependencies, as in a session with several unrelated packages
@@ -13158,6 +13158,17 @@ function ttfxAnnotationCovers(a, version) {
 
 function ttfxMetricLabel(metric = ttfxMetric) {
   return TTFX_METRICS[metric].label;
+}
+
+// Metric keys in the site's order, startup first: a variant such as "load_gcoff"
+// or "load_instructions" sorts with its metric
+function ttfxOrder(keys) {
+  const order = Object.keys(TTFX_METRICS);
+  const rank = (k) => {
+    const i = order.indexOf(k.replace(/_(gcoff|instructions|cycles)$/, ""));
+    return i < 0 ? order.length : i;
+  };
+  return [...keys].sort((a, b) => rank(a) - rank(b));
 }
 
 // What a metric measures, in a sentence for a tooltip
@@ -15084,7 +15095,7 @@ function ttfxCountsHtml(counts, { head, base, hint }) {
 // A markdown summary of a pull request's TTFX comparison to paste on GitHub. For a
 // stacked one it adds the estimate of the whole stack against master.
 function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
-  metrics = [...metrics, ...ttfxPrDetailMetrics(p)];
+  metrics = ttfxOrder([...metrics, ...ttfxPrDetailMetrics(p)]);
   const blocks = (x) => x.geomeans.map(ttfxRatioPct).join(", ");
   const st = p.stack;
   const parent = st ? (st.parents.length ? `#${st.parents[0]}` : `\`${st.base_ref}\``) : "master";
@@ -15192,14 +15203,58 @@ document.addEventListener(
 // overlay: its links, what the job compared and when, the suite geomeans of
 // every metric (and the stack's estimate against master), then the tasks
 // with a robust change
+// The concepts behind the TTFX tab, each in a line or two; the job's README has the detail
+function ttfxMethodHtml(readme) {
+  const snippets = extLink("https://github.com/tecosaur/Julia-TTFX-Snippets", "Julia-TTFX-Snippets");
+  const section = (title, body) => `<section><h4>${title}</h4>${body}</section>`;
+  const list = (items) => `<dl>${items.map(([term, text]) => `<dt>${term}</dt><dd>${text}</dd>`).join("")}</dl>`;
+  const phase = (m) => [escapeHtml(ttfxMetricLabel(m)), `${escapeHtml(ttfxMetricHelp(m))}.`];
+  return (
+    '<div class="ttfx-method">' +
+    `<p>TTFX is the Time To First X, where X is a plot, a result and so on: the wait before Julia does what you asked.</p>` +
+    `<p>Each run resolves the package versions you would have got at that time, so a new release of a dependency can change the results too. The charts annotate the jumps it causes.</p>` +
+    section(
+      "Tasks",
+      `<p>A task is a snippet from ${snippets}: a package environment and a script that does something typical with it. ` +
+        "A macOS aarch64 CI job runs every task on each master build, each phase in a fresh julia process.</p>",
+    ) +
+    section("Phases", list(["startup", "startup_repl", "startup_load", "precompile", "load", "run", "warm"].map(phase))) +
+    section(
+      "Variants and counts",
+      list([
+        ["GC off", "The cold load and run repeated with the garbage collector disabled. A change that only shows with the GC on was GC pauses."],
+        ["Stdlibs first", "The cold load and run in a copy of the project that loads every stdlib first, as a session with many packages loaded would."],
+        ["Invalidations, recompiled", "Counts from one untimed traced run: compiled code thrown away by new methods, and the methods compiled again because of it."],
+        ["Instructions, cycles", "Hardware counters of each phase. They follow the work done, not how busy the machine was, so they repeat far more closely than times."],
+      ]),
+    ) +
+    section(
+      "Summaries",
+      list([
+        ["Suite", "The geometric mean over the selected tasks that have a value across the range, so every point of a line covers the same tasks. A task missing from one or two isolated builds still counts."],
+        ["Reference lines", "The latest release, the LTS and the next release's nightly, measured weekly; and the optimized (PGO and ThinLTO) master build, measured daily against the regular one."],
+      ]),
+    ) +
+    section(
+      "Pull requests",
+      list([
+        ["Comparison", "A pull request touching the compiler or loading is measured against its merge-base in the same job. The two alternate in ABBA blocks, so drift hits both alike."],
+        ["Robust", "A change where every block agrees beyond the metric's threshold and an absolute floor."],
+        ["Score", "A weighted geometric mean of the suite changes: precompile and warm count most, then cold load and run, then startup and the stdlibs-first load and run."],
+      ]),
+    ) +
+    `<p class="ttfx-method-more">${extLink(readme, "The TTFX job's README")} has the full detail.</p>` +
+    "</div>"
+  );
+}
+
 function showTtfxMethodPopup() {
   // From the phone's options sheet, which would cover the popup
   document.querySelector(".m-sheet-done")?.click();
   const readme = "https://github.com/JuliaCI/julia-buildkite/blob/main/utilities/ttfx/README.md";
   openDetailPopup({
     title: "TTFX method",
-    html: `<p>The goal is to measure real-world TTFX: the Time To First X, where X is a plot, a result and so on. Each run resolves the package versions you would have got at that time. So a new release of a dependency can change the results too, and the charts annotate the jumps it causes.</p>
-      <p>${extLink(readme, "How the TTFX job measures each task")}</p>`,
+    html: ttfxMethodHtml(readme),
     key: "ttfx-method",
   });
 }
@@ -15270,7 +15325,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && t
   html += `<th class="num" title="Head against base, the suite geomean per ABBA block">vs ${parent}</th><th title="The job's call: a regression or improvement needs every block to agree beyond the threshold">Verdict</th>`;
   if (chained) html += '<th class="num" title="This pull request and the ones below it together against master, estimated by multiplying their changes">Stack vs master (est.)</th>';
   html += "</tr></thead><tbody>";
-  for (const m of [...metrics, ...details]) {
+  for (const m of ttfxOrder([...metrics, ...details])) {
     const on = p.suite[m];
     const off = p.suite[m + "_gcoff"];
     const v = ttfxVerdict(ttfxSuiteVerdict(on), off && off.verdict);
@@ -15288,7 +15343,7 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && t
 
   const changed = p.tasks.filter((t) => t.improvements.length || t.regressions.length);
   // A detail metric gets a column when a task changed in it
-  metrics = [...metrics, ...details.filter((m) => changed.some((t) => t.metrics[m]))];
+  metrics = ttfxOrder([...metrics, ...details.filter((m) => changed.some((t) => t.metrics[m]))]);
   if (changed.length) {
     html += `<table class="ttfx-popup-table"><thead><tr><th>Task with a robust change</th>`;
     html += metrics.map((m) => `<th class="num" title="${escapeHtml(ttfxMetricHelp(m))}">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
@@ -19287,10 +19342,12 @@ function prReleaseLabel(version, kind, lts) {
 function ttfxReleasesHtml(metrics, against, base = null) {
   if (!against || !against.length) return "";
   const pct = (g) => (g == null ? null : (g - 1) * 100);
-  // Startup, once per job, after the task metrics when any run has it
+  // Startup, once per job, before the task metrics when any run has it
   const startup = against.some((a) => a.startup) ? ["startup", "startup_repl"] : [];
-  let html = '<table class="ttfx-popup-table"><thead><tr><th></th>';
-  html += [...metrics, ...startup].map((m) => `<th class="num" title="${escapeHtml(ttfxMetricHelp(m))}">${escapeHtml(ttfxMetricLabel(m))}</th>`).join("");
+  // Short headings keep the table inside a card; the full name is in the tooltip
+  const short = (m) => TTFX_PILL_LABELS[m] || ttfxShortName(m).replace(/^./, (c) => c.toUpperCase()).replace(", stdlibs first", ", stdlibs");
+  let html = '<div class="ttfx-table-scroll"><table class="ttfx-popup-table ttfx-releases-table"><thead><tr><th></th>';
+  html += [...startup, ...metrics].map((m) => `<th class="num" title="${escapeHtml(`${ttfxMetricLabel(m)}: ${ttfxMetricHelp(m)}`)}">${escapeHtml(short(m))}</th>`).join("");
   html += "</tr></thead><tbody>";
   const cell = (head, ratio, title) => {
     const main = pct(base ? head : ratio);
@@ -19302,11 +19359,11 @@ function ttfxReleasesHtml(metrics, against, base = null) {
     const label = prReleaseLabel(a.version, a.kind, a.kind === "lts");
     const title = `Run of ${formatUtc(a.date)}, build #${a.build}`;
     html += `<tr><th title="${escapeHtml(title)}">${a.url ? extLink(a.url, label) : label}</th>`;
-    metrics.forEach((_, i) => (html += cell(a.head?.[i], a.ratio[i], `Geomean over ${a.n_tasks[i]} tasks`)));
     startup.forEach((_, i) => (html += cell(a.startup_head?.[i], a.startup?.[i], "The median run of each job")));
+    metrics.forEach((_, i) => (html += cell(a.head?.[i], a.ratio[i], `Geomean over ${a.n_tasks[i]} tasks`)));
     html += "</tr>";
   }
-  html += "</tbody></table>";
+  html += "</tbody></table></div>";
   if (base) {
     const job = base.url ? extLink(base.url, `#${base.build}`) : `#${base.build}`;
     html += `<div class="ttfx-popup-muted ttfx-popup-hint">Against the latest run of each release series on the same machines. Muted: the merge-base's master job ${job}. The head is estimated: the merge-base's figure times the head's change against it.</div>`;
@@ -19559,8 +19616,9 @@ function commitTtfxHtml(data) {
         : ttfxShortName(m);
     return `<div class="commit-figure"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`;
   });
-  // julia's own startup, once per job
+  // julia's own startup, once per job, goes first
   const s = t.startup;
+  const startupFigures = [];
   if (s)
     s.metrics.forEach((m, i) => {
       // After the two times come their instructions, shown when the job read them, and cycles, which are not
@@ -19570,7 +19628,7 @@ function commitTtfxHtml(data) {
       const label = counter ? `${ttfxShortName(m.slice(0, -13))}, instructions` : ttfxShortName(m);
       const pct = commitPct(s.now[i], s.previous?.[i]);
       const title = `${fmt(s.now[i])}${s.previous?.[i] ? ` against ${fmt(s.previous[i])}` : ""}`;
-      figures.push(`<div class="commit-figure" title="${escapeHtml(title)}"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`);
+      startupFigures.push(`<div class="commit-figure" title="${escapeHtml(title)}"><span class="commit-figure-label">${escapeHtml(label)}</span>${commitPctHtml(pct, 2)}</div>`);
     });
   const failed = tasks.filter((x) => x.failed);
   let failedHtml = "";
@@ -19608,7 +19666,7 @@ function commitTtfxHtml(data) {
   const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
   return commitCard(
     "TTFX",
-    `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}` +
+    `${intro}<div class="commit-figures">${[...startupFigures, ...figures].join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}` +
       (t.previous ? `<div class="popup-info">${ttfxCountsHtml(t.counts, { head: "This commit", base: "Previous", hint: "From each job's untimed trace run, so exact counts, summed over the tasks both jobs have." })}</div>` : "") +
       ttfxReleasesHtml(metrics, t.releases),
     { links },
@@ -23765,7 +23823,7 @@ function prCardMetricsTable(p) {
   let html = "<table><thead><tr><th></th>";
   for (let i = 1; i <= blocks; i++) html += `<th title="Head against base in ABBA block ${i}">Block ${i}</th>`;
   html += '<th title="Head against base in the repeats with the GC off">GC off</th></tr></thead><tbody>';
-  for (const m of p.metrics || ["precompile", "load", "run", "warm"]) {
+  for (const m of ttfxOrder(new Set([...(p.metrics || ["precompile", "load", "run", "warm"]), "startup", "startup_repl"]))) {
     const on = p.suite[m];
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];

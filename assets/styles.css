@@ -3826,6 +3826,57 @@ th.sorted .sort-indicator {
   margin-top: 12px;
   font-weight: 600;
 }
+.ttfx-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.ttfx-releases-table tbody th {
+  white-space: nowrap;
+}
+.ttfx-method {
+  max-width: 640px;
+  line-height: 1.45;
+}
+.ttfx-method p {
+  margin: 0 0 8px;
+}
+.ttfx-method section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-muted);
+}
+.ttfx-method h4 {
+  margin: 0 0 6px;
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.ttfx-method dl {
+  display: grid;
+  grid-template-columns: 12em 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+.ttfx-method dt {
+  font-weight: 600;
+}
+.ttfx-method dd {
+  margin: 0;
+}
+.ttfx-method .ttfx-method-more {
+  margin: 14px 0 0;
+}
+@media (max-width: 700px) {
+  .ttfx-method dl {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .ttfx-method dd {
+    margin-bottom: 6px;
+  }
+}
 .ttfx-compile-table {
   table-layout: fixed;
 }
