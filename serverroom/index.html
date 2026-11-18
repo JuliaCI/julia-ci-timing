@@ -3195,7 +3195,7 @@
             fetch("../api/agents/latest").then((r) => r.json()),
             fetch(`../api/agents/backlog?since=${since}`).then((r) => r.json()),
             // Not one of the clusters the Workers tab covers, so it has to be asked for
-            fetch("../api/agents/latest?queue=yggdrasil").then((r) => r.json()),
+            fetch(`../api/agents/latest?queue=${YGGDRASIL_QUEUE}`).then((r) => r.json()),
           ]);
           Object.assign(latest.agents, neighbours.agents);
           const data = buildClusters(latest, backlog);
