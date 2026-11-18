@@ -1871,6 +1871,8 @@
           text(ctx, "TODO", 0.06 * w, 1.4 * s, 1.1 * s, "#2b5bd7", "bold");
           const items = ["fix flaky tests (again)", "@test_broken → @test", "TTFX ↓↓↓", "buy more Macs??", "do NOT unplug the fridge"];
           items.forEach((t, i) => text(ctx, `• ${t}`, 0.06 * w, (2.8 + i * 1.3) * s, 0.75 * s, i === 4 ? "#cb3c33" : "#2b2a33"));
+          // Done: a green tick after the Macs
+          text(ctx, "✓", 0.06 * w + ctx.measureText(`• ${items[3]}`).width + 0.3 * s, (2.8 + 3 * 1.3) * s, 0.9 * s, "#389826", "bold");
           // A doodle of the queue, going up and to the right
           ctx.strokeStyle = "#389826";
           ctx.lineWidth = 5;
