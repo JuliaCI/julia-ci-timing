@@ -2356,6 +2356,29 @@ end
 # now the window is applied here, relative to the latest snapshot.
 agents_cutoff(gen) = Store.iso(DateTime(gen, Store.ISO_SECONDS) - Month(AGENT_RETAIN_MONTHS))
 
+# The size an agent's job asked the scheduler for, from the agent's `sched_*` tags
+# (JuliaCI/sandboxed-buildkite-agent starts each per-job agent with its job's): cpus,
+# cpus_limit, mem_gib and mem_limit_gib as it set them, or nothing for an agent with
+# none. On macOS a job without them has the whole host to itself. Tags are whatever
+# an agent was started with, so anything unexpected in them counts as no size.
+function agent_sched(meta_data)
+    meta_data isa AbstractString || return nothing
+    tags = try
+        JSON3.read(meta_data)
+    catch
+        return nothing
+    end
+    tags isa AbstractVector || return nothing
+    sched = OrderedDict{String,Any}()
+    for tag in tags
+        tag isa AbstractString || continue
+        m = match(r"^sched_(\w+)=(\d+)$", tag)
+        n = m === nothing ? nothing : tryparse(Int, m.captures[2])
+        n === nothing || (sched[m.captures[1]] = n)
+    end
+    return isempty(sched) ? nothing : sched
+end
+
 "The latest details of the worker agents, or with `queue` of that queue's agents, whichever cluster they are in."
 function agents_latest(db; queue="")
     gen = agents_generated_at(db)
@@ -2366,7 +2389,7 @@ function agents_latest(db; queue="")
         records[String(a.name)] = OrderedDict{String,Any}(
             "hostname" => String(a.hostname), "queue" => String(a.queue), "os" => String(a.os), "arch" => String(a.arch),
             "version" => String(a.version), "state" => String(a.state), "connected_at" => jstr(a.connected_at),
-            "first_seen" => jstr(a.first_seen), "last_seen" => jstr(a.last_seen),
+            "first_seen" => jstr(a.first_seen), "last_seen" => jstr(a.last_seen), "sched" => agent_sched(a.meta_data),
             "job" => a.job_json === missing ? nothing : job_record(JSON3.read(String(a.job_json))))
     end
     return OrderedDict{String,Any}("generated_at" => gen, "agents" => records)
