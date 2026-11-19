@@ -135,6 +135,8 @@ the API with `since` is smaller. `analysis/fetch_data.jl` in the repository down
   quarter each, cold load and run an eighth each, and a sixteenth each for julia's startup,
   its interactive startup and the cold load and run with every stdlib loaded first; a job
   without one of them is scored on the rest). `api/ttfx/prs` lists them as `score_weights`.
+  A metric counts as no change when its blocks disagree on the direction, or when its
+  GC-off repeat (`load_gcoff`, `load_stdlibs_gcoff`, ...) does not move the same way.
 - A commit is identified by its full SHA where known; many older builds only have the
   8-character prefix (`builds.commit_prefix`).
 - Benchmark and PkgEval reports run daily, not per commit; a commit's results

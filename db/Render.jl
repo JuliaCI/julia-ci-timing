@@ -840,12 +840,23 @@ function ttfx_pr_ratio(geomeans)
     return 1.0
 end
 
+# A metric with a GC-off repeat (load, run, warm and their stdlibs-first twins) counts
+# as no change when the repeat does not move the same way: a change that is gone with
+# the GC disabled is most likely a collection landing in one arm's run, as on #65002,
+# whose stdlibs-first load was 21% faster with the GC on and 1% slower with it off.
+function ttfx_pr_metric_ratio(suite, m)
+    r = ttfx_pr_ratio(suite[m].geomeans)
+    off = get(suite, string(m, "_gcoff"), nothing)
+    (off === nothing || isempty(off.geomeans)) && return r
+    return sign(log(ttfx_pr_ratio(off.geomeans))) == sign(log(r)) ? r : 1.0
+end
+
 function ttfx_pr_score(suite)
     total = logratio = 0.0
     for (m, w) in TTFX_PR_WEIGHTS
         (haskey(suite, m) && !isempty(suite[m].geomeans)) || continue
         total += w
-        logratio += w * log(ttfx_pr_ratio(suite[m].geomeans))
+        logratio += w * log(ttfx_pr_metric_ratio(suite, m))
     end
     return total > 0 ? exp(logratio / total) : nothing
 end
