@@ -11,6 +11,9 @@
 # task; db/export.jl renders data/ttfx_summary.json.gz from them. The
 # job repeats each task script with the GC disabled as well; those give the load, run
 # and warm metrics a `_gcoff` counterpart (nothing for jobs from before it did).
+# `warm` is the best total (load and run) of the repeats after the cold one, each a
+# fresh process that loads the packages again; `warm_run` is the best run alone of
+# those repeats, which the load does not dilute.
 # A weekly job measures the newest stable release on the same tasks and machines, as a
 # reference; its rows have kind 'release' and the release's version and commit. A second
 # weekly job does the same for the newest patch release of the LTS series (kind 'lts'),
@@ -63,7 +66,7 @@ const FINISHED_STATES = ("passed", "failed", "timed_out")
 const METRICS = ("precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
                  "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load",
                  "precompile_instructions", "load_instructions", "run_instructions",
-                 "precompile_cycles", "load_cycles", "run_cycles")
+                 "precompile_cycles", "load_cycles", "run_cycles", "warm_run", "warm_run_gcoff")
 const REFETCH_BUILDS = 30
 
 # A record's `invalidations` (block 1, from the job's untimed invalidation run): the
@@ -91,7 +94,7 @@ end
 
 # results.json records for one arm, reduced to the minimum over blocks of each metric.
 # Cold numbers are the first repeat; "warm" is the best of the later repeats' totals,
-# matching ttfx_compare.jl in julia-buildkite. A task that never produced a sample is
+# matching ttfx_compare.jl in julia-buildkite, and "warm_run" the best of their runs. A task that never produced a sample is
 # listed under `failed` with its first error instead. `invalidations` holds, per task,
 # record_invalidations of the record that has them.
 function summarize_records(records, arm)
@@ -116,12 +119,14 @@ function summarize_records(records, arm)
         load = nanmin([Float64(r.load_times[1]) for r in ok if !isempty(r.load_times)])
         run = nanmin([Float64(r.run_times[1]) for r in ok if !isempty(r.run_times)])
         warm = nanmin([minimum(Float64.(r.total_times[2:end])) for r in ok if length(r.total_times) >= 2])
+        warm_run = nanmin([minimum(Float64.(r.run_times[2:end])) for r in ok if length(r.run_times) >= 2])
         # The GC-off repeats are optional per record: absent before the driver made
         # them, empty when they failed (`error_gcoff`), which leaves `status` alone
         gcoff(r, key) = get(r, key, Any[])
         load_gcoff = nanmin([Float64(gcoff(r, :load_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :load_times_gcoff))])
         run_gcoff = nanmin([Float64(gcoff(r, :run_times_gcoff)[1]) for r in ok if !isempty(gcoff(r, :run_times_gcoff))])
         warm_gcoff = nanmin([minimum(Float64.(gcoff(r, :total_times_gcoff)[2:end])) for r in ok if length(gcoff(r, :total_times_gcoff)) >= 2])
+        warm_run_gcoff = nanmin([minimum(Float64.(gcoff(r, :run_times_gcoff)[2:end])) for r in ok if length(gcoff(r, :run_times_gcoff)) >= 2])
         # So is the run in a copy of the project with every stdlib added and loaded
         # first (`error_stdlibs`), and the precompile of that copy after the task's own
         load_stdlibs = nanmin([Float64(gcoff(r, :load_times_stdlibs)[1]) for r in ok if !isempty(gcoff(r, :load_times_stdlibs))])
@@ -145,7 +150,8 @@ function summarize_records(records, arm)
                           round3(load_stdlibs), round3(precompile_stdlibs), round3(run_stdlibs), round3(startup_load),
                           counter(:precompile_counters, :instructions), counter(:load_counters, :instructions),
                           counter(:run_counters, :instructions), counter(:precompile_counters, :cycles),
-                          counter(:load_counters, :cycles), counter(:run_counters, :cycles)]
+                          counter(:load_counters, :cycles), counter(:run_counters, :cycles),
+                          round3(warm_run), round3(warm_run_gcoff)]
     end
     return tasks, failed, invalidations
 end
@@ -778,39 +784,137 @@ function pr_counts(results, traces)
     return out
 end
 
-# Fill in the counts of the rows not looked at yet, newest job first. A row whose
-# artifact listing or download fails is left for the next run.
+# A job whose driver predates the warm run (`warm_run` in julia-buildkite's
+# ttfx_metrics.jl) compares the warm load+run only. Its results.json has the run of
+# every repeat, so the suite's `warm_run` and `warm_run_gcoff` are computed from that
+# as ttfx_compare.jl does: a task counts when both arms measured it in every block,
+# each block's geomean over those tasks is the block's change, and the verdict is the
+# suite threshold's. `derived` marks them; the tasks get no warm run verdicts.
+const PR_WARM_RUN_SUITE_THRESHOLD = 0.03
+function pr_warm_run_suite(results, nblocks)
+    later(t) = length(t) >= 2 ? minimum(Float64.(t[2:end])) : nothing
+    byarm = Dict{Tuple{String,String},Vector{Any}}()
+    for r in results
+        arm = String(get(r, :arm, ""))
+        arm in ("head", "base") || continue
+        push!(get!(byarm, (String(r.package) * "/" * String(r.task), arm), Any[]), r)
+    end
+    tasks = unique(first(k) for k in keys(byarm))
+    out = Dict{String,Any}()
+    for (key, field) in (("warm_run", :run_times), ("warm_run_gcoff", :run_times_gcoff))
+        ratios = Vector{Float64}[]
+        for task in tasks
+            b = sort(get(byarm, (task, "base"), Any[]); by=r -> r.block)
+            h = sort(get(byarm, (task, "head"), Any[]); by=r -> r.block)
+            (length(b) == nblocks && length(h) == nblocks) || continue
+            all(r -> get(r, :status, "") == "ok", vcat(b, h)) || continue
+            bv = [later(get(r, field, Any[])) for r in b]; hv = [later(get(r, field, Any[])) for r in h]
+            any(isnothing, bv) || any(isnothing, hv) || push!(ratios, Float64.(hv) ./ Float64.(bv))
+        end
+        isempty(ratios) && continue
+        gs = [exp(sum(log(r[k]) for r in ratios) / length(ratios)) for k in 1:nblocks]
+        t = PR_WARM_RUN_SUITE_THRESHOLD
+        verdict = all(>(1 + t), gs) ? "regression" : all(<(1 - t), gs) ? "improvement" : "same"
+        out[key] = Dict("geomeans" => gs, "verdict" => verdict, "n_tasks" => length(ratios), "derived" => true)
+    end
+    return out
+end
+
+# `suite` with the warm run computed from the job's results.json when its comparison
+# lacks it; as it was when the results are unreadable
+function with_warm_run(suite, results, blocks)
+    (results === nothing || haskey(suite, "warm_run")) && return suite
+    try
+        nblocks = blocks === missing ? maximum(Int(x.block) for x in results; init=1) : Int(blocks)
+        return merge(suite, pr_warm_run_suite(results, nblocks))
+    catch e
+        @warn "Could not compute the warm run from results.json" exception=e
+        return suite
+    end
+end
+pr_suite(r) = Dict{String,Any}(String(k) => v for (k, v) in pairs(JSON3.read(String(r.suite))))
+
+# A finished artifact of a julia-pr job, downloaded: nothing when the job has none,
+# missing when the download failed; the function itself is nothing when the listing failed
+function pr_job_artifacts(build, uuid)
+    artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds/$build/jobs/$uuid/artifacts")
+    artifacts === nothing && return nothing
+    return function (path)
+        i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
+        i === nothing && return nothing
+        body = download_artifact(String(artifacts[i].download_url))
+        return body === nothing ? missing : body
+    end
+end
+
+# The rows whose counts were fetched before the warm run existed get it from their
+# results.json, once each: the jobs looked at are kept in meta, so one whose artifacts
+# expired is not asked for again
+const PR_WARM_RUN_TRIED_KEY = "ttfx:pr_warm_run_tried"
+
+function backfill_pr_warm_run!(db; limit=PR_COUNTS_PER_RUN)
+    t = query(db, "SELECT value FROM meta WHERE key = ?", (PR_WARM_RUN_TRIED_KEY,))
+    tried = Set{String}(isempty(t) ? String[] : String.(JSON3.read(String(t[1].value))))
+    todo = [r for r in query(db, "SELECT pr_number, build, job_uuid, blocks, suite FROM ttfx_prs WHERE counts IS NOT NULL AND " *
+                                 "NOT EXISTS (SELECT 1 FROM json_each(suite) WHERE key = 'warm_run') ORDER BY build DESC")
+            if !(String(r.job_uuid) in tried)]
+    done = Any[]
+    for r in first(todo, limit)
+        uuid = String(r.job_uuid)
+        artifact = pr_job_artifacts(r.build, uuid)
+        artifact === nothing && continue
+        results = artifact("ttfx/results.json")
+        results === missing && continue
+        suite = with_warm_run(pr_suite(r), results === nothing ? nothing : JSON3.read(results), r.blocks)
+        push!(done, (JSON3.write(suite), Int(r.pr_number), uuid))
+        push!(tried, uuid)
+    end
+    isempty(done) && return 0
+    # Only the jobs still listed, so the list does not grow with closed pull requests
+    current = Set(String(r.job_uuid) for r in query(db, "SELECT job_uuid FROM ttfx_prs"))
+    transaction(db) do
+        seq = next_seq!(db)
+        stmt = DBInterface.prepare(db, "UPDATE ttfx_prs SET suite = ?, change_seq = ? WHERE pr_number = ? AND job_uuid = ?")
+        for (suite, pr, uuid) in done
+            DBInterface.execute(stmt, (suite, seq, pr, uuid))
+        end
+        Store.setmeta!(db, PR_WARM_RUN_TRIED_KEY, JSON3.write(sort!(collect(intersect(tried, current)))))
+    end
+    @info "Pull request warm run from results.json" rows=length(done) left=length(todo) - length(done)
+    return length(done)
+end
+
+# Fill in the counts of the rows not looked at yet, newest job first, and the warm run
+# of a job whose comparison lacks it. A row whose artifact listing or download fails is
+# left for the next run.
 function refresh_pr_counts!(db; limit=PR_COUNTS_PER_RUN)
-    todo = query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs WHERE counts IS NULL ORDER BY build DESC LIMIT ?", (limit,))
+    todo = query(db, "SELECT pr_number, build, job_uuid, blocks, suite FROM ttfx_prs WHERE counts IS NULL ORDER BY build DESC LIMIT ?", (limit,))
     isempty(todo) && return 0
     done = Any[]
     for r in todo
         uuid = String(r.job_uuid)
-        artifacts = buildkite_get("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds/$(r.build)/jobs/$uuid/artifacts")
-        artifacts === nothing && continue
-        function artifact(path)
-            i = findfirst(a -> String(get(a, :path, "")) == path && String(get(a, :state, "")) == "finished", artifacts)
-            i === nothing && return nothing
-            body = download_artifact(String(artifacts[i].download_url))
-            return body === nothing ? missing : body
-        end
+        artifact = pr_job_artifacts(r.build, uuid)
+        artifact === nothing && continue
         results = artifact("ttfx/results.json")
         traces = artifact(TRACE_ARTIFACT)
         (results === missing || traces === missing) && continue
+        suite = pr_suite(r)
         counts = try
-            pr_counts(results === nothing ? nothing : JSON3.read(results), traces)
+            parsed = results === nothing ? nothing : JSON3.read(results)
+            suite = with_warm_run(suite, parsed, r.blocks)
+            pr_counts(parsed, traces)
         catch e
             @warn "Unreadable artifacts; the counts are left empty" pr=r.pr_number build=r.build exception=e
             Dict{String,Any}()
         end
-        push!(done, (JSON3.write(counts), Int(r.pr_number), uuid))
+        push!(done, (JSON3.write(counts), JSON3.write(suite), Int(r.pr_number), uuid))
     end
     isempty(done) && return 0
     transaction(db) do
         seq = next_seq!(db)
-        stmt = DBInterface.prepare(db, "UPDATE ttfx_prs SET counts = ?, change_seq = ? WHERE pr_number = ? AND job_uuid = ?")
-        for (counts, pr, uuid) in done
-            DBInterface.execute(stmt, (counts, seq, pr, uuid))
+        stmt = DBInterface.prepare(db, "UPDATE ttfx_prs SET counts = ?, suite = ?, change_seq = ? WHERE pr_number = ? AND job_uuid = ?")
+        for (counts, suite, pr, uuid) in done
+            DBInterface.execute(stmt, (counts, suite, seq, pr, uuid))
         end
     end
     @info "Pull request invalidation and recompile counts" rows=length(done)
@@ -891,6 +995,7 @@ function run!(db)
                                                     "WHERE job_uuid IN (SELECT value FROM json_each(?))",
                                                 (length(METRICS), seq, JSON3.write(expired)))
         write_rows!(db, new_rows)
+        backfill_warm_run!(db, seq)
     end
     # A trace that cannot be fetched is looked at again next run
     try
@@ -910,8 +1015,45 @@ function run!(db)
     catch e
         @error "Updating the pull request counts failed" exception=(e, catch_backtrace())
     end
+    try
+        backfill_pr_warm_run!(db)
+    catch e
+        @error "Filling in the pull requests' warm run failed" exception=(e, catch_backtrace())
+    end
     return length(new_rows)
 end
+
+# `warm_run` and `warm_run_gcoff` came after most jobs were recorded. Their samples
+# (ttfx_samples, the arm the job reports) have the run of every repeat, so the rows
+# that lack them are computed from those, once, as summarize_records does.
+const WARM_RUN_BACKFILL_KEY = "ttfx_warm_run_backfilled"
+
+function backfill_warm_run!(db, seq)
+    isempty(query(db, "SELECT 1 FROM meta WHERE key = ?", (WARM_RUN_BACKFILL_KEY,))) || return 0
+    best = Dict{Tuple{String,String},Vector{Union{Nothing,Float64}}}()
+    later(x) = (a = x === missing ? Float64[] : Float64.(JSON3.read(String(x))); length(a) >= 2 ? minimum(a[2:end]) : nothing)
+    lower(a, b) = a === nothing ? b : b === nothing ? a : min(a, b)
+    for r in query(db, "SELECT s.job_uuid, s.task, s.run_s, s.run_gcoff_s FROM ttfx_samples s JOIN ttfx_jobs j ON j.job_uuid = s.job_uuid " *
+                       "WHERE s.status = 'ok' AND s.arm = coalesce(j.selected_arm, 'head')")
+        v = get!(best, (String(r.job_uuid), String(r.task)), Union{Nothing,Float64}[nothing, nothing])
+        v[1] = lower(v[1], later(r.run_s))
+        v[2] = lower(v[2], later(r.run_gcoff_s))
+    end
+    stmt = DBInterface.prepare(db, "UPDATE ttfx_results SET warm_run = ?, warm_run_gcoff = ? " *
+                                   "WHERE job_uuid = ? AND task = ? AND warm_run IS NULL AND warm_run_gcoff IS NULL")
+    jobs = Set{String}()
+    for ((uuid, task), (w, g)) in best
+        w === nothing && g === nothing && continue
+        DBInterface.execute(stmt, (something(round3(w), missing), something(round3(g), missing), uuid, task))
+        push!(jobs, uuid)
+    end
+    isempty(jobs) || DBInterface.execute(db, "UPDATE ttfx_jobs SET change_seq = ? WHERE job_uuid IN (SELECT value FROM json_each(?))",
+                                         (seq, JSON3.write(collect(jobs))))
+    Store.setmeta!(db, WARM_RUN_BACKFILL_KEY, Store.iso_now())
+    @info "Backfilled the warm run from the samples" jobs=length(jobs)
+    return length(jobs)
+end
+round3(x) = x === nothing ? nothing : round(x; digits=3)
 
 if abspath(PROGRAM_FILE) == (@__FILE__)
     exit(main())

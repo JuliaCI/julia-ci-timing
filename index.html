@@ -1264,11 +1264,12 @@
           id="ttfx-metric"
           onchange="setTtfxMetric(this.value)"
           aria-label="Metric"
-          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Load+run (warm): best total of the later runs. Startup+load (cold): from starting the cold run's julia process to the end of its load, so work a build moves between startup and the first package load cancels out. The Startup view times julia itself, once per job before the tasks: julia -e '' to its exit, and an interactive julia to its first julia&gt; prompt. Thin lines without markers: load, run and warm from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost. Dotted lines without markers (Show stdlibs first): load and run in a copy of the task's project with every stdlib added and imported first, so its packages load beside many methods from outside their own dependencies. Stdlibs precompile (added): precompiling that copy after the task's own, mostly the extensions the stdlibs trigger. Recompiled methods: methods the task's trace log shows compiled again because an invalidation dropped their code, summed over the tasks. Invalidations: MethodInstances whose code the task script's load and run invalidated, summed over the tasks."
+          title="Precompile: Pkg.precompile() of the task's packages from a cleared cache. Load and run (cold): the task script's first run after precompiling. Run (warm): the best run of the later repeats, each a fresh process that loads the packages again; the load is left out, as the cold load measures it. Load+run (warm): the best total of those repeats, load included. Startup+load (cold): from starting the cold run's julia process to the end of its load, so work a build moves between startup and the first package load cancels out. The Startup view times julia itself, once per job before the tasks: julia -e '' to its exit, and an interactive julia to its first julia&gt; prompt. Thin lines without markers: load, run and the warm ones from repeats of the task script with the GC disabled (one forced collection between the load and run phases, excluded from both); the gap to the marked line is what the GC cost. Dotted lines without markers (Show stdlibs first): load and run in a copy of the task's project with every stdlib added and imported first, so its packages load beside many methods from outside their own dependencies. Stdlibs precompile (added): precompiling that copy after the task's own, mostly the extensions the stdlibs trigger. Recompiled methods: methods the task's trace log shows compiled again because an invalidation dropped their code, summed over the tasks. Invalidations: MethodInstances whose code the task script's load and run invalidated, summed over the tasks."
         >
           <option value="precompile" selected>Precompile</option>
           <option value="load">Load (cold)</option>
           <option value="run">Run (cold)</option>
+          <option value="warm_run">Run (warm)</option>
           <option value="warm">Load+run (warm)</option>
           <option value="startup_load">Startup+load (cold)</option>
           <option value="precompile_stdlibs">Stdlibs precompile (added)</option>
@@ -1315,7 +1316,7 @@
           class="btn"
           id="ttfx-btn-gcoff"
           onclick="toggleTtfxGcOff()"
-          title="Show load, run and warm from the repeats with the GC off in place of the GC-on values, everywhere: the lines, tables and details. Precompile and the counts have no such repeats and stay as they are."
+          title="Show load, run and the warm ones from the repeats with the GC off in place of the GC-on values, everywhere: the lines, tables and details. Precompile and the counts have no such repeats and stay as they are."
         >
           Show GC off
         </button>
@@ -1387,7 +1388,7 @@
                 <div class="ttfx-panel" data-metric="precompile"><canvas id="ttfx-chart-precompile"></canvas></div>
                 <div class="ttfx-panel" data-metric="load"><canvas id="ttfx-chart-load"></canvas></div>
                 <div class="ttfx-panel" data-metric="run"><canvas id="ttfx-chart-run"></canvas></div>
-                <div class="ttfx-panel" data-metric="warm"><canvas id="ttfx-chart-warm"></canvas></div>
+                <div class="ttfx-panel" data-metric="warm_run"><canvas id="ttfx-chart-warm_run"></canvas></div>
                 <div class="ttfx-panel" data-metric="startup"><canvas id="ttfx-chart-startup"></canvas></div>
                 <div class="ttfx-panel" data-metric="startup_repl"><canvas id="ttfx-chart-startup_repl"></canvas></div>
               </div>

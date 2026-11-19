@@ -5315,7 +5315,7 @@ a.ttfx-pr-copy {
   .ttfx-summary-grid[data-metric="precompile"] > .ttfx-panel[data-metric="precompile"],
   .ttfx-summary-grid[data-metric="load"] > .ttfx-panel[data-metric="load"],
   .ttfx-summary-grid[data-metric="run"] > .ttfx-panel[data-metric="run"],
-  .ttfx-summary-grid[data-metric="warm"] > .ttfx-panel[data-metric="warm"],
+  .ttfx-summary-grid[data-metric="warm_run"] > .ttfx-panel[data-metric="warm_run"],
   .ttfx-summary-grid[data-metric="startup"] > .ttfx-panel[data-metric="startup"],
   .ttfx-summary-grid[data-metric="startup_repl"] > .ttfx-panel[data-metric="startup_repl"] {
     display: block;

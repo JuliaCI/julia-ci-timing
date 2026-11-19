@@ -131,7 +131,7 @@ the API with `since` is smaller. `analysis/fetch_data.jl` in the repository down
   times nanoseconds, memory and sizes bytes. TTFX times are seconds, the minimum over the
   job's ABBA blocks.
 - A ratio below 1, or a negative percentage, is faster or smaller. A TTFX pull request's
-  score is a weighted geometric mean of its ratios against master (precompile and warm a
+  score is a weighted geometric mean of its ratios against master (precompile and the warm run a
   quarter each, cold load and run an eighth each, and a sixteenth each for julia's startup,
   its interactive startup and the cold load and run with every stdlib loaded first; a job
   without one of them is scored on the rest). `api/ttfx/prs` lists them as `score_weights`.
