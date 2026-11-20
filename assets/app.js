@@ -12287,7 +12287,13 @@ const TTFX_METRICS = {
   precompile: { label: "Precompile", help: "Time to precompile the task's packages from an empty cache", index: 0, counters: { instructions: 12, cycles: 15 } },
   load: { label: "Load (cold)", help: "Time to load the task's packages in a fresh julia process, with the JIT object cache cleared", index: 1, gcoffIndex: 4, stdlibsIndex: 8, counters: { instructions: 13, cycles: 16 } },
   run: { label: "Run (cold)", help: "Time to run the task's code the first time, right after that cold load", index: 2, gcoffIndex: 5, stdlibsIndex: 10, counters: { instructions: 14, cycles: 17 } },
-  warm: { label: "Load+run (warm)", help: "Load and run together in a later fresh process, which reuses the caches the cold run filled", index: 3, gcoffIndex: 6 },
+  // A later repeat is a fresh process too, so it loads the packages again; the
+  // warm run leaves that load out, which the cold load already measures
+  warm_run: { label: "Run (warm)", help: "Time to run the task's code in a later fresh process, after its load, reusing the caches the cold run filled", short: "warm run", index: 18, gcoffIndex: 19 },
+  // The load and run of those later repeats together: what each later session
+  // waits for, but mostly a second load measurement for most tasks. A detail on
+  // master builds, and in pull request comparisons, where the score counts the warm run.
+  warm: { label: "Load+run (warm)", help: "Load and run together in a later fresh process, which reuses the caches the cold run filled", short: "warm load+run", index: 3, gcoffIndex: 6, detail: true, outliers: false },
   // The load in a copy of the task's project with every stdlib added and
   // imported first, so its packages load beside many methods from outside
   // their own dependencies, as in a session with several unrelated packages
@@ -12298,7 +12304,7 @@ const TTFX_METRICS = {
   precompile_stdlibs: { label: "Stdlibs precompile (added)", help: "Time to precompile that stdlibs-first copy after the task's own precompile: mostly the extensions the stdlibs trigger", short: "stdlibs precompile", index: 9, detail: true, outliers: false },
   // Marked "# recompile" in the task's trace log: compiled again because an
   // invalidation had dropped the code compiled before
-  recompiled: { label: "Recompiled methods", help: "Methods compiled again because an invalidation had dropped their compiled code", index: 18, count: true },
+  recompiled: { label: "Recompiled methods", help: "Methods compiled again because an invalidation had dropped their compiled code", index: 20, count: true },
   // MethodInstances the task script's load and run invalidated, by method
   // definitions or as package-image code rejected on load
   invalidated: { label: "Invalidations", help: "MethodInstances invalidated while loading and running the task, by new method definitions or as cached code rejected on load", index: 7, count: true },
@@ -14638,7 +14644,8 @@ const TTFX_PILL_LABELS = {
   precompile: "Precompile",
   load: "Load",
   run: "Run",
-  warm: "Warm",
+  warm_run: "Warm",
+  warm: "Warm load+run",
   recompiled: "Recompiled",
   invalidated: "Invalidated",
 };
@@ -15218,7 +15225,7 @@ function ttfxMethodHtml(readme) {
       `<p>A task is a snippet from ${snippets}: a package environment and a script that does something typical with it. ` +
         "A macOS aarch64 CI job runs every task on each master build, each phase in a fresh julia process.</p>",
     ) +
-    section("Phases", list(["startup", "startup_repl", "startup_load", "precompile", "load", "run", "warm"].map(phase))) +
+    section("Phases", list(["startup", "startup_repl", "startup_load", "precompile", "load", "run", "warm_run", "warm"].map(phase))) +
     section(
       "Variants and counts",
       list([
@@ -15240,7 +15247,7 @@ function ttfxMethodHtml(readme) {
       list([
         ["Comparison", "A pull request touching the compiler or loading is measured against its merge-base in the same job. The two alternate in ABBA blocks, so drift hits both alike."],
         ["Robust", "A change where every block agrees beyond the metric's threshold and an absolute floor."],
-        ["Score", "A weighted geometric mean of the suite changes: precompile and warm count most, then cold load and run, then startup and the stdlibs-first load and run."],
+        ["Score", "A weighted geometric mean of the suite changes: precompile and the warm run count most, then cold load and run, then startup and the stdlibs-first load and run."],
       ]),
     ) +
     `<p class="ttfx-method-more">${extLink(readme, "The TTFX job's README")} has the full detail.</p>` +
@@ -15277,9 +15284,13 @@ function ttfxScoreNote(m, weights = ttfxPrs && ttfxPrs.score_weights) {
   return w ? `${Math.round(w * 1000) / 10}% of the score` : "not in the score";
 }
 
+// The metrics a pull request's job compares per task (its `metrics`)
+const TTFX_PR_TASK_METRICS = ["precompile", "load", "run", "warm_run"];
+
 // The detail metrics a pull request's job compared, shown after the per-task ones
 function ttfxPrDetailMetrics(p) {
-  return Object.keys(TTFX_METRICS).filter((m) => (ttfxIsDetail(m) || ttfxIsJob(m)) && p.suite && p.suite[m]);
+  const perTask = p.metrics || TTFX_PR_TASK_METRICS;
+  return Object.keys(TTFX_METRICS).filter((m) => (ttfxIsDetail(m) || ttfxIsJob(m)) && !perTask.includes(m) && p.suite && p.suite[m]);
 }
 
 function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && ttfxPrs.score_weights } = {}) {
@@ -15470,7 +15481,7 @@ let ttfxPrsSort = { col: "rank", asc: true };
 
 // The suite columns of the table under their group headers: the scored metrics,
 // then the cold ones again with the GC off and with every stdlib loaded first,
-// which only count as detail. Warm is one total, as the job only judges that.
+// which only count as detail. Warm is the run alone; its load+run is in the details.
 // Last come the counts from the job's untimed trace run, as head less base:
 // exact numbers, so they have no blocks and no verdict. The `instructions` ones
 // are the retired instructions of the same phases, which the job reports and
@@ -15482,7 +15493,7 @@ const TTFX_PR_COLUMNS = [
   { key: "precompile", label: "Precompile", group: "" },
   { key: "load", label: "Load", group: "Cold" },
   { key: "run", label: "Run", group: "Cold" },
-  { key: "warm", label: "Load+run", group: "Warm" },
+  { key: "warm_run", label: "Run", group: "Warm" },
   { key: "startup_instructions", label: "Startup", group: "Instructions", instructions: true },
   { key: "precompile_instructions", label: "Precompile", group: "Instructions", instructions: true },
   { key: "load_instructions", label: "Load", group: "Instructions", instructions: true },
@@ -15623,7 +15634,7 @@ function renderTtfxPrsTable() {
         "score",
         "Score",
         "num",
-        "Weighted geometric mean of the metric changes: a quarter each for precompile (once per install), cold load and run (the first session) and warm (every later session), then an eighth each for julia's startup (to exit and to the prompt) and for the cold load and run with every stdlib loaded first, taking the block nearer no change. A job without a metric is scored on the rest. Rows are ranked by it.",
+        "Weighted geometric mean of the metric changes: a quarter each for precompile (once per install) and the warm run (every later session, whose load is the cold load again), an eighth each for the cold load and run (the first session), then a sixteenth each for julia's startup (to exit and to the prompt) and for the cold load and run with every stdlib loaded first, taking the block nearer no change. A job without a metric is scored on the rest. Rows are ranked by it.",
       ],
       ...ttfxPrColumns.map((c, i) => [c.key, c.label, `num${ttfxPrGroupStart(i) ? " ttfx-prs-group-start" : ""}`, ttfxPrColumnTitle(c)]),
       ["tasks", "Tasks", "num ttfx-prs-group-start", "Tasks with a robust improvement / regression; the list is in the tooltip. Sorts on regressions less improvements."],
@@ -18099,7 +18110,7 @@ function overviewTtfxCard(src, prs) {
       }
     : null;
   const spark = overviewSparkLines(lines, {
-    label: "julia's startup, and the geomean per build of precompile, load, run and warm, each on its own scale",
+    label: "julia's startup, and the geomean per build of precompile, load, run and warm run, each on its own scale",
     format: formatTtfxSeconds,
     independent: true,
   });
@@ -18137,7 +18148,7 @@ function overviewTtfxCard(src, prs) {
 const overviewReleaseClass = (pct, tol) =>
   upWorseClass(changeSign(pct, tol), "overview-delta-bad", "overview-delta-good") || "overview-delta-neutral";
 
-const OVERVIEW_TTFX_METRICS = ["startup", "precompile", "load", "run", "warm"];
+const OVERVIEW_TTFX_METRICS = ["startup", "precompile", "load", "run", "warm_run"];
 
 // A run of master against the latest weekly run of a release series, per
 // time metric over the snippets both measured
@@ -23823,7 +23834,7 @@ function prCardMetricsTable(p) {
   let html = "<table><thead><tr><th></th>";
   for (let i = 1; i <= blocks; i++) html += `<th title="Head against base in ABBA block ${i}">Block ${i}</th>`;
   html += '<th title="Head against base in the repeats with the GC off">GC off</th></tr></thead><tbody>';
-  for (const m of ttfxOrder(new Set([...(p.metrics || ["precompile", "load", "run", "warm"]), "startup", "startup_repl"]))) {
+  for (const m of ttfxOrder(new Set([...(p.metrics || TTFX_PR_TASK_METRICS), "startup", "startup_repl"]))) {
     const on = p.suite[m];
     if (!on) continue;
     const off = p.suite[m + "_gcoff"];

@@ -661,8 +661,8 @@ end
 const TTFX_METRICS = ["precompile", "load", "run", "warm", "load_gcoff", "run_gcoff", "warm_gcoff", "invalidated",
                       "load_stdlibs", "precompile_stdlibs", "run_stdlibs", "startup_load",
                       "precompile_instructions", "load_instructions", "run_instructions",
-                      "precompile_cycles", "load_cycles", "run_cycles", "recompiled", "recompile_s"]
-const TTFX_RESULT_METRICS = 18
+                      "precompile_cycles", "load_cycles", "run_cycles", "warm_run", "warm_run_gcoff", "recompiled", "recompile_s"]
+const TTFX_RESULT_METRICS = 20
 # Measured once per job rather than per task (ttfx_startup), in each build's `startup`
 # The two times, in seconds, then the whole process's instructions and cycles of each
 const TTFX_STARTUP_METRICS = ["startup", "startup_repl", "startup_instructions", "startup_repl_instructions",
@@ -687,12 +687,18 @@ function ttfx_job_startup(db, uuid)
     return isempty(r) ? nothing : startup_values(r[1])
 end
 
+# The columns ttfx_results has. The API server opens the database read-only, so a column
+# added in a deploy only exists once the fetcher's next ingest has migrated it; until
+# then its values read as null.
+ttfx_result_columns(db) = Set(String(r.name) for r in rows(db, "PRAGMA table_info(ttfx_results)"))
+ttfx_result_select(db, metrics) = (have = ttfx_result_columns(db); join([m in have ? m : "NULL AS $m" for m in metrics], ", "))
+
 function ttfx(db; since="")
     where, params = where_clause("build_created_at", since, "")
     # The per-task tables are read for the window's jobs alone
     windowed = isempty(where) ? "" : " WHERE job_uuid IN (SELECT job_uuid FROM ttfx_jobs$where)"
     results = Dict{String,Dict{String,Any}}()
-    cols = join(TTFX_METRICS[1:TTFX_RESULT_METRICS], ", ")
+    cols = ttfx_result_select(db, TTFX_METRICS[1:TTFX_RESULT_METRICS])
     for r in rows(db, "SELECT job_uuid, task, $cols FROM ttfx_results" * windowed, params)
         vals = Any[js(getproperty(r, Symbol(m))) for m in TTFX_METRICS[1:TTFX_RESULT_METRICS]]
         get!(results, String(r.job_uuid), Dict{String,Any}())[String(r.task)] = vals
@@ -726,11 +732,18 @@ function ttfx(db; since="")
         nanmin(v) = isempty(v) ? nothing : round(minimum(v); digits=3)
         first_of(rs, col) = nanmin([a[1] for a in (arr(getproperty(r, col)) for r in rs) if !isempty(a)])
         warm_of(rs, col) = nanmin([minimum(a[2:end]) for a in (arr(getproperty(r, col)) for r in rs) if length(a) >= 2])
+        # In the order of TTFX_METRICS, with nothing for the metrics that are not times
+        slot = Dict(m => i for (i, m) in enumerate(TTFX_METRICS))
         for ((uuid, task), rs) in samples
-            get!(bases, uuid, Dict{String,Any}())[task] = Any[
-                nanmin([Float64(r.precompile_s) for r in rs if r.precompile_s !== missing]),
-                first_of(rs, :load_s), first_of(rs, :run_s), warm_of(rs, :total_s),
-                first_of(rs, :load_gcoff_s), first_of(rs, :run_gcoff_s), warm_of(rs, :total_gcoff_s)]
+            v = Vector{Any}(nothing, slot["warm_run_gcoff"])
+            for (m, x) in ("precompile" => nanmin([Float64(r.precompile_s) for r in rs if r.precompile_s !== missing]),
+                           "load" => first_of(rs, :load_s), "run" => first_of(rs, :run_s), "warm" => warm_of(rs, :total_s),
+                           "load_gcoff" => first_of(rs, :load_gcoff_s), "run_gcoff" => first_of(rs, :run_gcoff_s),
+                           "warm_gcoff" => warm_of(rs, :total_gcoff_s),
+                           "warm_run" => warm_of(rs, :run_s), "warm_run_gcoff" => warm_of(rs, :run_gcoff_s))
+                v[slot[m]] = x
+            end
+            get!(bases, uuid, Dict{String,Any}())[task] = v
         end
     end
     pipeline = "julia-ci"
@@ -821,16 +834,16 @@ end
 # Open pull requests by how their latest TTFX comparison looks, best first.
 # The score is a weighted geometric mean of the per-metric ratios (head/base, below 1
 # is faster), weighted by what a user pays: a quarter each for precompile once per
-# install, cold load and run in the first session, and warm load+run in every later
-# one, then an eighth each for julia's own startup (to exit and to the REPL prompt)
+# install, cold load and run in the first session, and the warm run in every later
+# one (its load is the cold load's again, so it is left out), then an eighth each for julia's own startup (to exit and to the REPL prompt)
 # and for the cold load and run with every stdlib loaded first.
 # Fixed weights rather than seconds on master, which would leave the score almost
 # only precompile, and a geomean to match the suite geomeans it combines. A job that
 # did not measure a metric is scored on the others.
-const TTFX_PR_WEIGHTS = ["precompile" => 1/4, "load" => 1/8, "run" => 1/8, "warm" => 1/4,
+const TTFX_PR_WEIGHTS = ["precompile" => 1/4, "load" => 1/8, "run" => 1/8, "warm_run" => 1/4,
                          "startup" => 1/16, "startup_repl" => 1/16, "load_stdlibs" => 1/16, "run_stdlibs" => 1/16]
 # The per-task metrics compared on every job
-const TTFX_PR_METRICS = ["precompile", "load", "run", "warm"]
+const TTFX_PR_METRICS = ["precompile", "load", "run", "warm_run"]
 
 # A metric's ratio is the block nearest no change, and no change when the blocks
 # disagree on the direction, so one noisy block moves the score neither way.
@@ -1089,14 +1102,15 @@ function commit_ttfx(db, prefix, sha)
     prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1",
                 (j.build_created_at, commit_glob(prefix, sha)))
+    have = ttfx_result_columns(db)
     # The load and run with every stdlib loaded first only when the job measured them
     stdlibs = filter(["load_stdlibs", "run_stdlibs"]) do m
         !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
     end
-    metrics = [TTFX_METRICS[1:4]; stdlibs]
+    metrics = [TTFX_METRICS[1:3]; "warm_run" in have ? "warm_run" : "warm"; stdlibs]
     # Only in the overall changes, so after the metrics the task rows show
-    gcoff = filter(["load_gcoff", "run_gcoff", "warm_gcoff"]) do m
-        !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
+    gcoff = filter(["load_gcoff", "run_gcoff", "warm_run_gcoff"]) do m
+        m in have && !isempty(rows(db, "SELECT 1 FROM ttfx_results WHERE job_uuid = ? AND $m IS NOT NULL LIMIT 1", (String(j.job_uuid),)))
     end
     # So are the instructions of each phase, when the job read the counters
     counters = filter(["precompile_instructions", "load_instructions", "run_instructions"]) do m
@@ -1316,7 +1330,7 @@ end
 # `pr_suite`, a pull request's suite geomeans against that commit, adds head: an
 # estimate of the pull request's head, the ratio times the mean of its blocks.
 function ttfx_release_ratios(db, uuid, metrics; pr_suite=nothing)
-    results(u) = Dict(String(r.task) => [js(getproperty(r, Symbol(m))) for m in metrics]
+    results(u) = Dict(String(r.task) => [js(get(r, Symbol(m), missing)) for m in metrics]
                       for r in rows(db, "SELECT * FROM ttfx_results WHERE job_uuid = ?", (u,)))
     now_ = results(uuid)
     now_startup = ttfx_job_startup(db, uuid)

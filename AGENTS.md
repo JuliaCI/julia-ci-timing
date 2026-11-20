@@ -84,7 +84,17 @@ master build (JuliaCI/julia-buildkite, `utilities/ttfx/`):
 Each task's array follows the file's `metrics` list. Times are seconds,
 the minimum over the job's ABBA blocks; `load` and `run` are the cold
 first run of the task script, `warm` the best total of the later runs,
-and the `_gcoff` ones the same from repeats with the GC disabled. Then
+and the `_gcoff` ones the same from repeats with the GC disabled. Each later
+run is a fresh process that loads the packages again, so `warm` is mostly a
+second load for most tasks; `warm_run` and `warm_run_gcoff`, at the end of the
+results (after `run_cycles`), are the best run phase alone of those runs. The
+site's Warm panel draws `warm_run`; `warm` is a detail there (the per-task
+chart's "Load+run (warm)"). Jobs recorded before `warm_run` existed had it
+computed from `ttfx_samples` (`backfill_warm_run!` in `fetch_ttfx.jl`, once).
+The pull request score counts `warm_run` in place of `warm`. A job whose driver
+did not compare it (before `warm_run` in julia-buildkite's `ttfx_metrics.jl`)
+gets its suite `warm_run` and `warm_run_gcoff` from its `results.json`, marked
+`derived` (`pr_warm_run_suite` in `fetch_ttfx.jl`), with no per-task verdicts. Then
 come counts: `invalidated`, the MethodInstances the task script
 invalidated (from an untimed run that logs them; null for jobs before
 the driver did). Then `load_stdlibs`, the cold load in a copy of the

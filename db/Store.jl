@@ -108,6 +108,8 @@ const COLUMN_MIGRATIONS = [
     ("ttfx_results", "precompile_cycles", "INTEGER"),
     ("ttfx_results", "load_cycles", "INTEGER"),
     ("ttfx_results", "run_cycles", "INTEGER"),
+    ("ttfx_results", "warm_run", "REAL"),
+    ("ttfx_results", "warm_run_gcoff", "REAL"),
     ("ttfx_samples", "precompile_instructions", "INTEGER"),
     ("ttfx_samples", "precompile_cycles", "INTEGER"),
     ("ttfx_samples", "load_instructions", "INTEGER"),

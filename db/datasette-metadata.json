@@ -156,7 +156,7 @@
             "precompile": "Pkg.precompile() from a cleared cache",
             "load": "the task script's load phase on its first run",
             "run": "its run phase on the first run",
-            "warm": "the best total of the later runs",
+            "warm": "the best total (load and run) of the later runs",
             "load_gcoff": "load, from repeats with the GC disabled",
             "run_gcoff": "run, with the GC disabled",
             "warm_gcoff": "warm, with the GC disabled",
@@ -172,7 +172,9 @@
             "run_instructions": "the same over its run phase",
             "precompile_cycles": "CPU cycles of every process of the precompile together",
             "load_cycles": "CPU cycles of the task script's thread over its load phase, in the untimed counter run",
-            "run_cycles": "the same over its run phase"
+            "run_cycles": "the same over its run phase",
+            "warm_run": "the best run phase of the later runs, each a fresh process that loads the packages again; warm without that load. Computed from ttfx_samples for jobs recorded before it was added",
+            "warm_run_gcoff": "warm_run, with the GC disabled"
           }
         },
         "ttfx_startup": {
@@ -473,7 +475,7 @@
         "ttfx_task_history": {
           "title": "TTFX of one task per master build over the last :days days",
           "description": "task is Package/Snippet as in ttfx_results.task, e.g. BaseDirs/Project-Path",
-          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
+          "sql": "SELECT j.build, substr(j.commit_sha, 1, 10) AS commit_sha, j.build_created_at, r.precompile, r.load, r.run, r.warm_run, r.warm, r.load_gcoff, r.run_gcoff, r.warm_run_gcoff, r.warm_gcoff\nFROM ttfx_results r JOIN ttfx_jobs j ON j.job_uuid = r.job_uuid\nWHERE r.task = :task AND j.kind = 'master' AND j.build_created_at >= date('now', '-' || :days || ' days')\nORDER BY j.build_created_at"
         },
         "ttfx_recompile_steps": {
           "title": "Builds where TTFX recompiles appeared or went away",

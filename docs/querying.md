@@ -100,7 +100,9 @@ only the files that changed. `AGENTS.md` describes their shapes.
   `run_instructions` and the same three `_cycles` are retired instructions and CPU cycles
   from the CPU's counters, for the precompile over all its processes and for load and run
   over the script's thread in an untimed run, null for jobs that did not read them:
-  instructions repeat far more closely than seconds), `ttfx_startup` (julia's own startup, timed once per job
+  instructions repeat far more closely than seconds; `warm` is the best load and run
+  together of the repeats after the cold one, each a fresh process, and `warm_run` and
+  `warm_run_gcoff` the best run alone of them, without the load), `ttfx_startup` (julia's own startup, timed once per job
   and arm before the tasks: `julia -e ''` and to the REPL's first prompt, with the whole
   process's instructions and cycles of each for jobs that read them), `ttfx_invalidation_causes` (the top
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the

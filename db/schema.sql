@@ -370,6 +370,10 @@ CREATE TABLE IF NOT EXISTS ttfx_results (
     precompile_cycles       INTEGER,
     load_cycles             INTEGER,
     run_cycles              INTEGER,
+    -- The run alone in the later repeats, which load the packages again in a fresh
+    -- process: the best run of repeats 2 and on, without the load that warm includes
+    warm_run       REAL,
+    warm_run_gcoff REAL,
     PRIMARY KEY (job_uuid, task)
 ) WITHOUT ROWID;
 
