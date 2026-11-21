@@ -77,7 +77,16 @@ end
 function export_pkgeval(db, out)
     payload = Render.pkgeval(db)
     write_gz_json(joinpath(out, "pkgeval_summary.json.gz"), payload)
-    @info "pkgeval" reports=length(payload["reports"])
+    states = Render.pkgeval_badge_states(db)
+    dir = joinpath(out, "badges", "pkgeval")
+    for (name, state) in states
+        svg = Render.badge_svg("PkgEval", state, Render.PKGEVAL_BADGES[state])
+        path = joinpath(dir, "$name.svg")
+        # Unchanged files are left alone, so a client's cached copy stays valid
+        (isfile(path) && read(path, String) == svg) || write_atomic(io -> write(io, svg), path)
+    end
+    remove_others(dir, Set("$name.svg" for name in keys(states)), r"\.svg$")
+    @info "pkgeval" reports=length(payload["reports"]) badges=length(states)
 end
 
 function export_ttfx(db, out)

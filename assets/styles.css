@@ -2890,6 +2890,15 @@ th.sorted .sort-indicator {
   color: var(--color-fg-muted);
   margin: 0 0 8px;
 }
+.pkgeval-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.pkgeval-badge[hidden] {
+  display: none;
+}
 /* A PkgEval failure reason, tinted by the kind of failure */
 .pe-pill {
   --pill: var(--color-fg-muted);

@@ -21,6 +21,13 @@ Short paths open a tab directly and forward any other query parameters:
 Each is a small redirect page under a directory of that name; the `?tab=` URLs
 they resolve to keep working as before.
 
+Packages can show their PkgEval state on Julia master (passing, failing, flaky or skipped)
+with a README badge. A package's page on the PkgEval tab shows it, with its markdown to copy:
+
+```markdown
+[![PkgEval](https://perf.julialang.org/badges/pkgeval/Example.svg)](https://perf.julialang.org/?tab=eco-pkgeval&pkg=Example)
+```
+
 ## How it works
 
 One EC2 host (`infra/terraform/`, see its README) runs everything from one

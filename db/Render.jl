@@ -642,6 +642,49 @@ function pkgeval_changes(db; days=30, sustain=2, client="user")
                        "client" => client, "reports" => out_reports, "changes" => out_changes)
 end
 
+# A flat shields.io-style badge with the Julia logo, for a README. Text widths are
+# estimated, at 11px Verdana.
+function badge_svg(label, message, color)
+    w(s) = 7 * length(s) + 10
+    lw, mw = w(label) + 17, w(message)
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="$(lw + mw)" height="20" role="img" aria-label="$label: $message">
+    <title>$label: $message</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+    <clipPath id="r"><rect width="$(lw + mw)" height="20" rx="3" fill="#fff"/></clipPath>
+    <g clip-path="url(#r)"><rect width="$lw" height="20" fill="#555"/><rect x="$lw" width="$mw" height="20" fill="$color"/><rect width="$(lw + mw)" height="20" fill="url(#s)"/></g>
+    <circle cx="12" cy="6.3" r="3.2" fill="#389826"/><circle cx="8.3" cy="12.7" r="3.2" fill="#cb3c33"/><circle cx="15.7" cy="12.7" r="3.2" fill="#9558b2"/>
+    <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="$((lw + 17) / 2)" y="14">$label</text><text x="$(lw + mw / 2)" y="14">$message</text></g></svg>
+    """
+end
+
+const PKGEVAL_BADGES = Dict("passing" => "#4c1", "failing" => "#e05d44", "flaky" => "#dfb317", "skipped" => "#9f9f9f")
+# The flips over the last PKGEVAL_FLAKY_REPORTS reports that make a package flaky, as on the site
+const PKGEVAL_FLAKY_FLIPS = 4
+
+# The badge state of every package on the newest daily report: flaky if it flipped
+# between passing and not often enough over the recent reports, else whether its newest
+# test passed. Skips are not tests, so a package only ever skipped is "skipped".
+function pkgeval_badge_states(db)
+    reports = [Int(r.id) for r in rows(db, "SELECT r.id FROM pkgeval_reports r WHERE r.kind = 'daily' AND r.date != '' AND EXISTS " *
+                                           "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT ?",
+                                       (PKGEVAL_FLAKY_REPORTS,))]
+    isempty(reports) && return Dict{String,String}()
+    order = Dict(id => i for (i, id) in enumerate(reverse(reports)))
+    obs = Dict{String,Vector{Tuple{Int,Bool}}}()
+    for r in rows(db, "SELECT p.name, x.report_id, x.status FROM pkgeval_results x JOIN packages p ON p.id = x.package_id " *
+                      "WHERE x.report_id IN (SELECT value FROM json_each(?)) " *
+                      "AND x.package_id IN (SELECT package_id FROM pkgeval_results WHERE report_id = ?)",
+                  (JSON3.write(reports), reports[1]))
+        o = get!(() -> Tuple{Int,Bool}[], obs, String(r.name))
+        String(r.status) == "skip" || push!(o, (order[Int(r.report_id)], String(r.status) == "ok"))
+    end
+    return Dict(name => begin
+        sort!(o; by=first)
+        flips = count(k -> o[k][2] != o[k-1][2], 2:length(o))
+        isempty(o) ? "skipped" : flips >= PKGEVAL_FLAKY_FLIPS ? "flaky" : o[end][2] ? "passing" : "failing"
+    end for (name, o) in obs)
+end
+
 function pkgeval(db)
     reports = Any[]
     for r in rows(db, "SELECT date, path, commit_sha, julia_version, total, ok, fail, crash, skip, kill " *

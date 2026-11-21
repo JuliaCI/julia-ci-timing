@@ -11083,6 +11083,10 @@ function stopPkgevalLogClicks(root) {
 // The package's changes, newest first until a header is clicked
 let pkgevalPackageSort = { col: "date", asc: false };
 
+const pkgevalBadgeUrl = (name) => `https://perf.julialang.org/badges/pkgeval/${encodeURIComponent(name)}.svg`;
+const pkgevalPackagePageUrl = (name) =>
+  `https://perf.julialang.org/?tab=eco-pkgeval&pkg=${encodeURIComponent(name)}`;
+
 function renderPkgevalPackage() {
   const panel = document.getElementById("pkgeval-package-view");
   if (!panel || !pkgevalPackageData) return;
@@ -11139,6 +11143,8 @@ function renderPkgevalPackage() {
     .join("");
   panel.innerHTML = `
     <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
+    <p class="pkgeval-badge" hidden><img alt="PkgEval badge for ${escapeHtml(name)}" src="badges/pkgeval/${encodeURIComponent(name)}.svg">
+      <button type="button" class="btn" title="Copy markdown for this badge, linking to this page, to paste in a README">Copy badge markdown</button></p>
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
     <p class="package-panel-help">Reports where the status, reason or version changed, newest first; click a row to open the report, or a cell of the strip to open that day's log where the PkgEval farm kept one.</p>
     <table>
@@ -11156,6 +11162,11 @@ function renderPkgevalPackage() {
       )}</thead>
       <tbody>${rows}</tbody>
     </table>`;
+  // Only packages on the newest daily have a badge, so the row shows once one loads
+  const badge = panel.querySelector(".pkgeval-badge");
+  badge.querySelector("img").onload = () => (badge.hidden = false);
+  badge.querySelector("button").onclick = (e) =>
+    copyToClipboard(e.currentTarget, `[![PkgEval](${pkgevalBadgeUrl(name)})](${pkgevalPackagePageUrl(name)})`);
   bindSortHeaders(panel.querySelector("thead"), (col) => {
     pkgevalPackageSort = nextSort(pkgevalPackageSort, col, (c) => ["status", "reason"].includes(c));
     renderPkgevalPackage();

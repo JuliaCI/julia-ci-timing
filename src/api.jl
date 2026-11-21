@@ -769,6 +769,8 @@ function handle(s::Server, req::HTTP.Request)
             return health(s)
         elseif s.data !== nothing && startswith(path, "/data/")
             return static(s.data, path[6:end]; allowed=nothing)   # the export directory holds only extracts
+        elseif s.data !== nothing && startswith(path, "/badges/")
+            return static(s.data, path; allowed=nothing)
         elseif s.site !== nothing
             return static(s.site, path)
         end
