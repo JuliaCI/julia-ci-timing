@@ -17,21 +17,24 @@
     <meta name="twitter:title" content="Julia Performance Tracking: Package" />
     <meta name="twitter:description" content="Everything recorded for one Julia package: PkgEval results and badge, downloads and rank, and TTFX tasks." />
     <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
-    <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
-    <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" />
     <meta name="robots" content="noindex" />
-    <!-- Shorthand for ../?tab=package. Any other query parameters and the
-         fragment are carried over, so /package?p=Example opens that package. -->
+    <!-- Shorthand for /?tab=package. Any other query parameters and the
+         fragment are carried over, so /package?p=Example opens that package,
+         and so does /package/Example, served this page too. -->
     <script>
       (function () {
         var p = new URLSearchParams(location.search);
         p.set("tab", "package");
-        location.replace("../?" + p.toString() + location.hash);
+        var m = location.pathname.match(/\/package\/([A-Za-z_][A-Za-z0-9_]*)\/?$/);
+        if (m && !p.has("p")) p.set("p", m[1]);
+        location.replace("/?" + p.toString() + location.hash);
       })();
     </script>
-    <meta http-equiv="refresh" content="0; url=../?tab=package" />
+    <meta http-equiv="refresh" content="0; url=/?tab=package" />
   </head>
   <body>
-    <a href="../?tab=package">Julia Performance Tracking: Package</a>
+    <a href="/?tab=package">Julia Performance Tracking: Package</a>
   </body>
 </html>

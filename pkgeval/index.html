@@ -17,21 +17,24 @@
     <meta name="twitter:title" content="Julia Performance Tracking: Ecosystem: PkgEval" />
     <meta name="twitter:description" content="PkgEval results for the Julia package ecosystem: passing, failing, crashing and skipped packages." />
     <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
-    <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
-    <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" />
     <meta name="robots" content="noindex" />
-    <!-- Shorthand for ../?tab=eco-pkgeval. Any other query parameters and the
-         fragment are carried over. -->
+    <!-- Shorthand for /?tab=eco-pkgeval. Any other query parameters and the
+         fragment are carried over, so /pkgeval?pkg=Example opens that package,
+         and so does /pkgeval/Example, served this page too. -->
     <script>
       (function () {
         var p = new URLSearchParams(location.search);
         p.set("tab", "eco-pkgeval");
-        location.replace("../?" + p.toString() + location.hash);
+        var m = location.pathname.match(/\/pkgeval\/([A-Za-z_][A-Za-z0-9_]*)\/?$/);
+        if (m && !p.has("pkg")) p.set("pkg", m[1]);
+        location.replace("/?" + p.toString() + location.hash);
       })();
     </script>
-    <meta http-equiv="refresh" content="0; url=../?tab=eco-pkgeval" />
+    <meta http-equiv="refresh" content="0; url=/?tab=eco-pkgeval" />
   </head>
   <body>
-    <a href="../?tab=eco-pkgeval">Julia Performance Tracking: Ecosystem: PkgEval</a>
+    <a href="/?tab=eco-pkgeval">Julia Performance Tracking: Ecosystem: PkgEval</a>
   </body>
 </html>

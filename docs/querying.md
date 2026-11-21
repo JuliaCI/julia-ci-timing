@@ -282,6 +282,6 @@ WHERE g.name = 'DataFrames' GROUP BY d.date ORDER BY d.date
 - Data is refreshed every half hour, CI timing, agents and GitHub every 5 minutes;
   `$B/healthz` says when each source last ran.
 - To share a result, link the site with the view in its URL: `$B/commit?c=<sha>`,
-  `$B/package?p=DataFrames`,
-  `$B/pkgeval?pkg=DataFrames`, `$B/downloads?edpkg=DataFrames`, `$B/timing?t=30`,
+  `$B/package/DataFrames`, `$B/pkgeval/DataFrames`,
+  `$B/downloads/DataFrames`, `$B/timing?t=30`,
   `$B/history?bt=90&bm=memory&bv=verdicts`.

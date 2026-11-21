@@ -126,6 +126,9 @@
     # /commit/<SHA or PR number> is the Commit page's shorthand
     @commitref path_regexp ^/commit/([0-9a-fA-F]{7,40}|[0-9]{1,6})/?$
     rewrite @commitref /commit/index.html
+    # /package/<Name>, /pkgeval/<Name> and /downloads/<Name> open that package
+    @pkgref path_regexp pkgref ^/(package|pkgeval|downloads)/[A-Za-z_][A-Za-z0-9_]*/?$
+    rewrite @pkgref /{re.pkgref.1}/index.html
     try_files {path} {path}/index.html
     file_server
   }

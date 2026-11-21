@@ -23509,7 +23509,7 @@ const PACKAGE_STRIP_REPORTS = 120;
 const PACKAGE_SOURCES = ["pkgeval", "packages", "ttfx"];
 
 const downloadsBadgeUrl = (name) => `https://perf.julialang.org/badges/downloads/${encodeURIComponent(name)}.svg`;
-const packagePageUrl = (name) => `https://perf.julialang.org/?tab=package&p=${encodeURIComponent(name)}`;
+const packagePageUrl = (name) => `https://perf.julialang.org/package/${encodeURIComponent(name)}`;
 
 function applyPackageURLParams() {
   packagePageName = (new URLSearchParams(window.location.search).get("p") || "").trim();

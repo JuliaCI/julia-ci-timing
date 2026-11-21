@@ -4,7 +4,7 @@ Dashboard for Julia language performance: daily Nanosoldier benchmark reports,
 [CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, runtime benchmarks, distribution size,
 sysimage build time, PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), the Package tab the same for one package
-(`/package?p=<Name>`), and the other tabs go deep.
+(`/package/<Name>`), and the other tabs go deep.
 
 **Live:** <https://perf.julialang.org/>
 
@@ -20,7 +20,9 @@ Short paths open a tab directly and forward any other query parameters:
 [/downloads](https://perf.julialang.org/downloads), [/pkgeval](https://perf.julialang.org/pkgeval),
 [/activity](https://perf.julialang.org/activity).
 Each is a small redirect page under a directory of that name; the `?tab=` URLs
-they resolve to keep working as before.
+they resolve to keep working as before. A few also take what they show in the path:
+`/commit/<SHA or PR number>`, and `/package/<Name>`, `/pkgeval/<Name>` and
+`/downloads/<Name>` for one package.
 
 Packages can show their PkgEval state on Julia master (passing, failing, flaky or skipped)
 with a README badge. A package's page on the PkgEval tab shows it, with its markdown to copy:
