@@ -33,7 +33,7 @@
     {{- $desc = printf "Everything recorded for the Julia package %s: its PkgEval results and README badges, its downloads and rank, and its TTFX tasks." $name -}}
   {{- else if eq $dir "pkgeval" -}}
     {{- $title = printf "%s on PkgEval" $name -}}
-    {{- $desc = printf "%s's PkgEval result on every daily run against Julia master: status, failure reason, error line and log." $name -}}
+    {{- $desc = printf "PkgEval results for %s on every daily run against Julia master: status, failure reason, error line and log." $name -}}
   {{- else -}}
     {{- $title = printf "%s downloads" $name -}}
     {{- $desc = printf "Package server requests for %s per day, from users and from CI." $name -}}
