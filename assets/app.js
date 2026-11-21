@@ -7387,6 +7387,7 @@ async function refreshData() {
     for (const source of changed) for (const key of OVERVIEW_SOURCE_KEYS[source] || []) overviewStale.add(key);
     for (const [url, { key }] of overviewBodies) if (overviewStale.has(key)) overviewBodies.delete(url);
     if (commitResult && (changed.length > 0 || timingMoved)) commitResult.stale = true;
+    if (packagePageResult && changed.some((s) => PACKAGE_SOURCES.includes(s))) packagePageResult.stale = true;
     if (sourceTimes.timing) checkStaleData(sourceTimes.timing);
     setUpdatedLabels();
     if (timingMoved) {
@@ -7398,6 +7399,7 @@ async function refreshData() {
     if (changed.length > 0 && activeTab === "overview") renderOverview();
     else if (changed.length > 0) renderTabStats(activeTab);
     if (commitResult?.stale && activeTab === "commit") renderCommitView();
+    if (packagePageResult?.stale && activeTab === "package") renderPackageView();
   } catch (err) {
     if (err.name !== "AbortError") console.warn("Data refresh failed:", err);
   }
@@ -7446,6 +7448,14 @@ const TABS = {
     keys: { c: "commit lookup ref" },
     applyURL: applyCommitURLParams,
     show: () => renderCommitView(),
+  },
+  package: {
+    url: "package",
+    path: "/package",
+    view: "package-view",
+    keys: { p: "package page name" },
+    applyURL: applyPackageURLParams,
+    show: () => renderPackageView(),
   },
   perf: {
     url: "bench-diff",
@@ -7903,6 +7913,7 @@ function dropOtherTabsParams(url, from, to) {
     perfURLParams = null;
   }
   if (to === "commit" && commitRef) url.searchParams.set("c", commitRef);
+  if (to === "package" && packagePageName) url.searchParams.set("p", packagePageName);
   dropOtherCIViewParams(url);
 }
 
@@ -7919,8 +7930,10 @@ function tabFromLocation() {
 window.addEventListener("popstate", () => {
   const tab = tabFromLocation() || "overview";
   applyCommitURLParams();
+  applyPackageURLParams();
   if (tab !== activeTab) switchTab(tab, { pushHistory: false });
   else if (tab === "commit") renderCommitView();
+  else if (tab === "package") renderPackageView();
 });
 
 // === Benchmarks State ===
@@ -10212,7 +10225,7 @@ function renderPackagesPackage(d) {
   // newest day of all downloads when that is known
   const latest = [packagesTop?.until, series[series.length - 1].date].filter(Boolean).sort().pop();
   const week = overviewDateWindow(series, latest, 7);
-  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", series)} requests (${sum("user", series)} user, ${sum("ci", series)} CI); last 7 days to ${latest} ${sum("all", week)} (${sum("user", week)} user, ${sum("ci", week)} CI).</p>`;
+  tableEl.innerHTML = `<p class="package-panel-help">${series[0].date} to ${series[series.length - 1].date}: ${sum("all", series)} requests (${sum("user", series)} user, ${sum("ci", series)} CI); last 7 days to ${latest} ${sum("all", week)} (${sum("user", week)} user, ${sum("ci", week)} CI). ${packagePageLink(d.name, "Package page")}</p>`;
 }
 
 // The most requested packages over the last week of data
@@ -11142,7 +11155,7 @@ function renderPkgevalPackage() {
     })
     .join("");
   panel.innerHTML = `
-    <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary}</span></h3>
+    <h3>${escapeHtml(name)} <span class="updated">${history.length} reports, ${history[0].date} to ${history[history.length - 1].date}: ${summary} · ${packagePageLink(name, "Package page")}</span></h3>
     <p class="pkgeval-badge" hidden><img alt="PkgEval badge for ${escapeHtml(name)}" src="badges/pkgeval/${encodeURIComponent(name)}.svg">
       <button type="button" class="btn" title="Copy markdown for this badge, linking to this page, to paste in a README">Copy badge markdown</button></p>
     <div class="pkgeval-strip" title="One cell per daily report, oldest first">${strip}</div>
@@ -23481,6 +23494,379 @@ function commitRuntimeHtml(data) {
   );
 }
 
+// === Package lookup (Package tab) ===
+// One package across every source, from api/package/<name>: its registry
+// entry, downloads and their rank, PkgEval history and README badge, and its
+// TTFX tasks. Names are case-sensitive, as in the registry.
+let packagePageName = ""; // the URL's p=
+let packagePageResult = null; // { name, data, stale } of the last lookup
+let packagePageTop = null; // the sidebar: the most downloaded packages
+let packagePageTopLoading = null;
+let packagePageChart = null;
+const PACKAGE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
+// The PkgEval strip shows this many of the newest reports
+const PACKAGE_STRIP_REPORTS = 120;
+const PACKAGE_SOURCES = ["pkgeval", "packages", "ttfx"];
+
+const packagePageUrl = (name) => `https://perf.julialang.org/?tab=package&p=${encodeURIComponent(name)}`;
+
+function applyPackageURLParams() {
+  packagePageName = (new URLSearchParams(window.location.search).get("p") || "").trim();
+}
+
+function submitPackageLookup(event) {
+  event.preventDefault();
+  lookupPackage(document.getElementById("package-name").value);
+}
+
+function suggestPackagePageNames(value) {
+  suggestPackageNames("downloads/packages", "package-name-list", value);
+}
+
+// Every lookup is its own history entry, so back returns to the last package
+function lookupPackage(value) {
+  packagePageName = (value || "").trim();
+  const url = new URL(window.location);
+  url.searchParams.set("tab", tabToURLValue("package"));
+  if (packagePageName) url.searchParams.set("p", packagePageName);
+  else url.searchParams.delete("p");
+  if (url.href !== window.location.href) history.pushState(null, "", url);
+  if (activeTab === "package") renderPackageView();
+  else switchTab("package", { pushHistory: false });
+}
+
+// A link to the Package page; a click on it does not reach the row it sits in
+function packagePageLink(name, text = escapeHtml(name)) {
+  return `<a href="?tab=${tabToURLValue("package")}&p=${encodeURIComponent(name)}" data-pkg="${escapeHtml(name)}" onclick="event.stopPropagation();lookupPackage(this.dataset.pkg);return false">${text}</a>`;
+}
+
+async function renderPackageView() {
+  const body = document.getElementById("package-body");
+  const input = document.getElementById("package-name");
+  if (document.activeElement !== input) input.value = packagePageName;
+  loadPackageTop();
+  const name = packagePageName;
+  if (!name) {
+    destroyPackageChart();
+    body.innerHTML = packageIntroHtml();
+    markPackageListSelection("");
+    return;
+  }
+  if (!PACKAGE_NAME_RE.test(name)) {
+    destroyPackageChart();
+    body.innerHTML = '<p class="commit-message">Enter a package name, such as DataFrames.</p>';
+    return;
+  }
+  // A stale result is still on screen, so it stays there while the new one loads
+  const refreshing = packagePageResult?.name === name && packagePageResult.stale;
+  if (packagePageResult?.name === name && !refreshing) {
+    drawPackage(packagePageResult.data);
+    return;
+  }
+  if (!refreshing) {
+    destroyPackageChart();
+    body.innerHTML = '<div class="loading">Looking up...</div>';
+  }
+  let data;
+  try {
+    data = await apiGet(`package/${encodeURIComponent(name)}`);
+  } catch (err) {
+    if (!refreshing && name === packagePageName && activeTab === "package") {
+      body.innerHTML = `<p class="commit-message">Lookup failed: ${escapeHtml(err.message)}</p>`;
+    }
+    return;
+  }
+  // A later lookup has taken over
+  if (name !== packagePageName) return;
+  packagePageResult = { name, data };
+  if (activeTab === "package") drawPackage(data);
+}
+
+// The sidebar: the most downloaded packages over the last 30 days
+async function loadPackageTop() {
+  const fresh = packagePageTop && Date.now() - packagePageTop.loadedAt < DATA_REFRESH_INTERVAL;
+  if (fresh || packagePageTopLoading) return;
+  packagePageTopLoading = apiGet("downloads/top", { days: 30, client: "user" })
+    .then((d) => {
+      packagePageTop = { ...d, loadedAt: Date.now() };
+      drawPackageList();
+    })
+    .catch((err) => console.error("Failed to load the top packages:", err))
+    .finally(() => {
+      packagePageTopLoading = null;
+    });
+}
+
+function drawPackageList() {
+  const el = document.getElementById("package-list");
+  if (!packagePageTop) return;
+  const scroll = el.scrollTop;
+  const items = packagePageTop.packages
+    .filter((p) => p.name)
+    .map((p, i) => {
+      const n = escapeHtml(p.name);
+      return `<a class="commit-item" data-pkg="${n}" href="?tab=${tabToURLValue("package")}&p=${encodeURIComponent(p.name)}" onclick="lookupPackage(this.dataset.pkg);return false">
+      <span class="commit-item-meta package-item-rank">${i + 1}</span>
+      <span class="commit-item-main">
+        <span class="commit-item-msg">${n}</span>
+        <span class="commit-item-meta">${p.user.toLocaleString("en-US")} user downloads</span>
+      </span>
+    </a>`;
+    });
+  el.innerHTML = `<div class="commit-list-day" title="Requests from users (not CI) over the 30 days to ${escapeHtml(packagePageTop.until || "")}">Most downloaded, 30 days</div>${items.join("")}`;
+  el.scrollTop = scroll;
+  markPackageListSelection(packagePageResult?.name === packagePageName ? packagePageName : "");
+}
+
+function markPackageListSelection(name) {
+  let selected = null;
+  document.querySelectorAll("#package-list .commit-item").forEach((a) => {
+    const on = !!name && a.dataset.pkg === name;
+    a.classList.toggle("selected", on);
+    if (on) {
+      a.setAttribute("aria-current", "true");
+      selected = a;
+    } else {
+      a.removeAttribute("aria-current");
+    }
+  });
+  selected?.scrollIntoView({ block: "nearest" });
+}
+
+function togglePackageList() {
+  const layout = document.getElementById("package-layout");
+  const open = layout.classList.toggle("commit-list-open");
+  const toggle = layout.querySelector(".commit-list-toggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.textContent = open ? "Hide most downloaded" : "Most downloaded";
+}
+
+function packageIntroHtml() {
+  return `<div class="commit-message">
+    <p>Look up a registered package by its name to see everything this site recorded for it:</p>
+    <ul>
+      <li>its General registry entry, and its downloads per day with its rank among all registered packages;</li>
+      <li>its PkgEval result on every daily report, with the error line and log where the PkgEval farm kept them, and its README badge;</li>
+      <li>its TTFX tasks on the latest master build against the latest release and LTS, and the invalidations its methods cause in the TTFX tasks.</li>
+    </ul>
+    <p>Names are case-sensitive, as in the registry; the box suggests names as you type.</p>
+  </div>`;
+}
+
+function destroyPackageChart() {
+  if (packagePageChart) {
+    packagePageChart.destroy();
+    packagePageChart = null;
+  }
+}
+
+function drawPackage(d) {
+  const body = document.getElementById("package-body");
+  markPackageListSelection(d.name);
+  destroyPackageChart();
+  const jobs = Object.values(d.ttfx.jobs);
+  const known = d.registry.length || d.pkgeval.history.length || d.downloads.series.length ||
+    jobs.some((j) => Object.keys(j.tasks).length || Object.keys(j.failed).length) || d.ttfx.invalidations_caused.length;
+  if (!known) {
+    body.innerHTML = `<p class="commit-message">Nothing is recorded for <code>${escapeHtml(d.name)}</code>. Names are case-sensitive.</p><p class="commit-message" id="package-similar"></p>`;
+    packageSimilarNames(d.name);
+    return;
+  }
+  body.innerHTML = [packageHeaderHtml(d), packagePkgevalHtml(d), packageDownloadsHtml(d), packageTtfxHtml(d)].join("");
+  body.querySelector(".package-copy-link")?.addEventListener("click", (e) => copyToClipboard(e.currentTarget, packagePageUrl(d.name)));
+  const badge = body.querySelector(".package-copy-badge");
+  if (badge) {
+    badge.onclick = (e) =>
+      copyToClipboard(e.currentTarget, `[![PkgEval](${pkgevalBadgeUrl(d.name)})](${pkgevalPackagePageUrl(d.name)})`);
+  }
+  stopPkgevalLogClicks(body);
+  drawPackageDownloadsChart(d);
+}
+
+// Names that differ only in case, or start with what was typed
+async function packageSimilarNames(name) {
+  let names = [];
+  try {
+    names = await apiGet("downloads/packages", { q: name });
+  } catch (err) {
+    console.error("Package suggestions failed:", err);
+  }
+  const el = document.getElementById("package-similar");
+  if (!el || name !== packagePageName) return;
+  if (names.length) el.innerHTML = `Registered packages starting with that: ${names.map((n) => packagePageLink(n)).join(", ")}.`;
+}
+
+function packageHeaderHtml(d) {
+  const meta = d.registry.map((r) =>
+    r.path
+      ? `General: ${overviewExtLink(`https://github.com/JuliaRegistries/General/tree/master/${r.path}`, r.path)} <code>${escapeHtml(r.uuid)}</code>`
+      : `<code>${escapeHtml(r.uuid)}</code>`,
+  );
+  if (!d.registry.length) meta.push("Not in the General registry");
+  // Only packages on the newest PkgEval daily have a badge
+  const badge = d.pkgeval.badge
+    ? `<img class="package-badge" alt="PkgEval: ${escapeHtml(d.pkgeval.badge)}" src="${pkgevalBadgeUrl(d.name)}" onerror="this.hidden=true">
+       <button type="button" class="btn package-copy-badge" title="Copy markdown for the PkgEval badge, to paste in a README">Copy badge markdown</button>`
+    : "";
+  return `<section class="commit-card commit-head">
+    <h2 class="commit-title">${escapeHtml(d.name)}</h2>
+    <div class="commit-meta">${meta.join(" · ")}</div>
+    <p class="package-actions">${badge}<button type="button" class="btn package-copy-link" title="Copy a link to this page">Copy link</button></p>
+  </section>`;
+}
+
+function packagePkgevalHtml(d) {
+  const history = d.pkgeval.history.filter((h) => h.date);
+  const links = `<a href="?tab=${tabToURLValue("pkgeval")}&pkg=${encodeURIComponent(d.name)}">Full history</a>`;
+  if (!history.length) {
+    return commitCard("PkgEval", '<p class="commit-line text-muted">No daily PkgEval report in the database tested this package.</p>');
+  }
+  const last = history[history.length - 1];
+  const strip = history.slice(-PACKAGE_STRIP_REPORTS);
+  const counts = {};
+  for (const h of strip) counts[h.status] = (counts[h.status] || 0) + 1;
+  const summary = PKGEVAL_STATUS_ORDER.filter((s) => counts[s])
+    .map((s) => `<span class="pe-${s}">${counts[s]} ${s}</span>`)
+    .join(", ");
+  const cells = strip
+    .map((h) => {
+      const title = `${h.date}: ${h.status}${h.reason ? " (" + h.reason + ")" : ""}${h.version ? ", v" + h.version : ""}${h.error ? "\n" + h.error : ""}`;
+      const cell = `class="st-${escapeHtml(h.status)}" title="${escapeHtml(title)}"`;
+      return h.log ? extLink(h.log, "", cell) : `<span ${cell}></span>`;
+    })
+    .join("");
+  // A run of reports without a pass, back to the last one that passed
+  let since = "";
+  if (last.status !== "ok" && last.status !== "skip") {
+    const i = history.findLastIndex((h) => h.status === "ok");
+    since = i < 0 ? ", and never passed on the reports here" : `, not passing since ${escapeHtml(history[i + 1].date)} (last passed ${escapeHtml(history[i].date)})`;
+  }
+  const version = last.version ? ` v${escapeHtml(last.version)}` : "";
+  const line = `<p class="commit-line">Latest daily, ${escapeHtml(last.date)} on Julia ${escapeHtml(last.julia || "")}:${version} ${pkgevalReasonPill(last.status === "ok" ? "" : last.reason, last.status)}${since}.${pkgevalLogLink(last.log)}</p>`;
+  return commitCard(
+    "PkgEval",
+    `${line}${pkgevalErrorLine(last.error)}
+    <p class="commit-line">The last ${strip.length} reports (${escapeHtml(strip[0].date)} to ${escapeHtml(last.date)}): ${summary}.</p>
+    <div class="pkgeval-strip" title="One cell per daily report, oldest first">${cells}</div>`,
+    { links },
+  );
+}
+
+function packageDownloadsHtml(d) {
+  const dl = d.downloads;
+  const links = `<a href="?tab=${tabToURLValue("packages")}&edpkg=${encodeURIComponent(d.name)}">Downloads tab</a>`;
+  if (!dl.series.length) {
+    return commitCard("Downloads", '<p class="commit-line text-muted">No package server requests recorded for this name.</p>', { links });
+  }
+  const r = dl.rank;
+  const rank = r
+    ? `<p class="commit-line">#${r.rank.toLocaleString("en-US")} of ${r.of.toLocaleString("en-US")} packages by user downloads over ${escapeHtml(r.since)} to ${escapeHtml(r.until)}: ${r.user.toLocaleString("en-US")} user, ${r.ci.toLocaleString("en-US")} CI.</p>`
+    : '<p class="commit-line text-muted">No requests in the last 30 days.</p>';
+  return commitCard("Downloads", `${rank}<div class="package-panel-chart package-page-chart"><canvas id="package-downloads-chart"></canvas></div>`, { links });
+}
+
+function drawPackageDownloadsChart(d) {
+  const canvas = document.getElementById("package-downloads-chart");
+  if (!canvas) return;
+  const series = d.downloads.series;
+  const { isDark, text: textColor, grid: gridColor } = chartTheme();
+  const colors = COMMITS_SERIES_COLORS[isDark ? "dark" : "light"];
+  const toPoints = (key) => series.map((s) => ({ x: Date.parse(s.date), y: s[key] }));
+  packagePageChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [
+        { label: "User", data: toPoints("user"), borderColor: colors.build, backgroundColor: colors.build, pointRadius: 0, borderWidth: 1.5, tension: 0.1 },
+        { label: "CI", data: toPoints("ci"), borderColor: colors.test, backgroundColor: colors.test, pointRadius: 0, borderWidth: 1.5, tension: 0.1 },
+      ],
+    },
+    options: {
+      ...baseChartOptions(),
+      interaction: { mode: "nearIndex", intersect: false },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true } },
+        title: { display: true, text: "Successful package requests per day", color: textColor },
+        tooltip: {
+          callbacks: {
+            title: (items) => (items.length ? overviewDateOnly(items[0].parsed.x) : ""),
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y.toLocaleString("en-US")}`,
+          },
+        },
+      },
+      scales: {
+        x: timeAxis({ textColor, gridColor, tooltipFormat: "yyyy-MM-dd" }),
+        y: { beginAtZero: true, ticks: { color: textColor }, grid: { color: gridColor } },
+      },
+    },
+  });
+}
+
+const PACKAGE_TTFX_LABELS = { master: "master", release: "release", lts: "LTS" };
+
+function packageTtfxHtml(d) {
+  const t = d.ttfx;
+  const master = t.jobs.master;
+  const tasks = [...new Set(Object.values(t.jobs).flatMap((j) => [...Object.keys(j.tasks), ...Object.keys(j.failed)]))].sort();
+  const ttfxTab = tabToURLValue("ci-ttfx");
+  const links = tasks.length ? `<a href="?tab=${ttfxTab}&tk=${encodeURIComponent(tasks.join(","))}">TTFX tab</a>` : "";
+  const parts = [];
+  if (!tasks.length) {
+    parts.push(`<p class="commit-line text-muted">No TTFX task for this package. The TTFX job runs the tasks of ${extLink("https://github.com/tecosaur/Julia-TTFX-Snippets", "Julia-TTFX-Snippets")}.</p>`);
+  } else {
+    const jobLine = (kind) => {
+      const j = t.jobs[kind];
+      if (!j) return "";
+      const build = j.url ? overviewExtLink(j.url, `#${j.build}`) : `#${j.build}`;
+      return `${PACKAGE_TTFX_LABELS[kind]} ${escapeHtml(j.version)} (${build}, ${timeHtml(j.date)})`;
+    };
+    parts.push(`<p class="commit-line">Latest jobs: ${["master", "release", "lts"].map(jobLine).filter(Boolean).join("; ")}. Seconds on master, and the change from the release.</p>`);
+    const idx = (m) => t.metrics.indexOf(m);
+    const value = (kind, task, m) => t.jobs[kind]?.tasks[task]?.[idx(m)] ?? null;
+    const cell = (task, m) => {
+      const now = value("master", task, m);
+      const title = ["release", "lts"]
+        .filter((k) => value(k, task, m) != null)
+        .map((k) => `${PACKAGE_TTFX_LABELS[k]}: ${commitSeconds(value(k, task, m))}`)
+        .join(", ");
+      const pct = commitPct(now, value("release", task, m));
+      return `<td class="num"${dataV(now)} title="${escapeHtml(title)}">${commitSeconds(now)}</td><td class="num"${dataV(pct)}>${commitPctHtml(pct)}</td>`;
+    };
+    const rows = tasks.map((task) => {
+      const label = `<a href="?tab=${ttfxTab}&tk=${encodeURIComponent(task)}">${escapeHtml(task.slice(d.name.length + 1))}</a>`;
+      const failed = master?.failed[task];
+      if (failed) return `<tr><td>${label}</td><td colspan="7" class="commit-worse" title="${escapeHtml(failed)}">failed on master</td></tr>`;
+      const inv = value("master", task, "invalidated");
+      return `<tr><td>${label}</td>${cell(task, "precompile")}${cell(task, "load")}${cell(task, "run")}<td class="num"${dataV(inv)}>${inv ?? '<span class="text-muted">—</span>'}</td></tr>`;
+    });
+    const head = [
+      ["Task"],
+      ["Precompile", "num", "Seconds to precompile the task's packages; hover for the release and LTS"],
+      ["", "num", "Change from the release"],
+      ["Load", "num", "Seconds of the cold load; hover for the release and LTS"],
+      ["", "num", "Change from the release"],
+      ["Run", "num", "Seconds of the cold first run; hover for the release and LTS"],
+      ["", "num", "Change from the release"],
+      ["Invalidated", "num", "MethodInstances the task script invalidated on master"],
+    ];
+    parts.push(commitTable(head, rows));
+  }
+  const caused = t.invalidations_caused;
+  if (caused.length) {
+    parts.push(`<p class="commit-line">Its methods invalidated code in these tasks on master${master ? ` (#${master.build})` : ""}:</p>`);
+    // The method goes under the task, so it keeps its room on a phone
+    const row = (x) => `<tr>
+      <td class="pe-error-cell"><a href="?tab=${ttfxTab}&tk=${encodeURIComponent(x.task)}">${escapeHtml(x.task)}</a>${pkgevalErrorLine(x.cause, true)}</td>
+      <td>${escapeHtml(x.phase)}</td>
+      <td title="${x.kind === "definition" ? "A new method definition invalidated the code" : "Package code it is the root of was dropped on load"}">${escapeHtml(x.kind)}</td>
+      <td class="num">${x.n.toLocaleString("en-US")}</td>
+    </tr>`;
+    const head = [["Task and method"], ["Phase"], ["Kind"], ["Invalidated", "num", "MethodInstances it invalidated"]];
+    const rows = caused.map(row);
+    parts.push(commitRowsWithMore(head, rows.slice(0, COMMIT_SHOWN_ROWS), rows, "invalidations"));
+  }
+  return commitCard("TTFX", parts.join(""), { links });
+}
+
 // === Phone shell ===
 // On a phone the page gets an app's frame: a bottom bar of the five
 // sections, the open section's pages as pills under the header, and each
@@ -23488,7 +23874,7 @@ function commitRuntimeHtml(data) {
 // Built on every screen; the stylesheet shows it only on narrow ones.
 const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
-  { key: "commit", label: "Commit", tabs: ["commit"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
+  { key: "commit", label: "Look up", tabs: ["commit", "package"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks", "ci-ttfx", "ci-runtime", "ci-sizes"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
   { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
@@ -23798,6 +24184,7 @@ function applyTheme() {
   if (selectedJobs.size > 0) updateChart();
   if (benchChart) updateBenchChart();
   if (packagesDownloadsChart) updatePackagesDownloadsChart();
+  if (packagePageChart && packagePageResult) drawPackage(packagePageResult.data);
   if (pkgevalChart) updatePkgevalChart();
   if (ttfxData) updateTtfxChart();
   if (sizesChart) updateSizesChart();

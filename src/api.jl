@@ -139,7 +139,8 @@ end
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
                            "ttfx" => ["ttfx"], "runtime" => ["runtime"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "coverage" => ["timing"], "downloads" => ["packages"], "agents" => ["agents"],
                            "github" => ["github"], "commits" => ["timing", "benchmarks", "pkgeval"],
-                           "commit" => ["timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "github"])
+                           "commit" => ["timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "github"],
+                           "package" => ["pkgeval", "packages", "ttfx"])
 const ROUTE_SOURCES_EXACT = Dict(String[] => String[], ["pkgeval", "popular"] => ["pkgeval", "packages"], ["pkgeval", "failures"] => ["pkgeval", "packages"],
                                  ["pkgeval", "changes"] => ["pkgeval", "packages"])
 
@@ -402,6 +403,12 @@ const ROUTES = [
               ref = lowercase(a[1])
               occursin(r"^(\d{1,6}|[0-9a-f]{7,40})$", ref) || throw(BadRequest("ref must be a PR number or a commit SHA of at least 7 characters"))
               Render.commit(db, ref)
+          end),
+    Route("package/<name>", [],
+          "Everything recorded for one package, by its registered name (case-sensitive): its General registry entries (registry: uuid and path; empty when it is not registered), its downloads (downloads: rank, its place among every registered package by user downloads over the last 30 days with those totals, and series, its requests per day, user and CI, over the last days days of data), its PkgEval results (pkgeval: badge, the README badge's state, and history, as pkgeval/package/<name>) and its TTFX tasks (ttfx: under jobs, the newest master, release and lts job with results, each with its tasks' values in the order of metrics and the tasks that failed, and invalidations_caused, the MethodInstances the package's own methods invalidated in any task of that master job, largest first).",
+          (db, a, _) -> begin
+              occursin(r"^[A-Za-z_][A-Za-z0-9_]{0,99}$", a[1]) || throw(BadRequest("name must be a package name"))
+              Render.package(db, a[1])
           end),
 ]
 
@@ -837,7 +844,7 @@ function other_targets(db)
     latest = Render.commit_list(db; limit=1)["commits"]
     groups = Render.bench_groups(db)
     return ["/api/timing/runs?since=$since&changed_since=1", "/api/benchmarks/verdicts?since=$since",
-            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/signatures", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example",
+            "/api/pkgeval/packages?q=A", "/api/pkgeval/failures?reason=precompile", "/api/pkgeval/changes", "/api/pkgeval/signatures", "/api/pkgeval/package/Example", "/api/downloads/packages?q=A", "/api/downloads/package/Example", "/api/package/Example",
             "/api/agents/snapshots?since=$since", "/api/agents/backlog?since=$since", "/api/agents/usage?days=7",
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",

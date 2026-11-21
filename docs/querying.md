@@ -21,6 +21,7 @@ The shapes are the site's own and can change.
 
 ```sh
 curl -s --compressed "$B/api/commit/95cbf209"            # one commit across every source
+curl -s --compressed "$B/api/package/DataFrames"         # one package across every source
 curl -s --compressed "$B/api/timing/builds?since=2026-09-01"
 curl -s --compressed "$B/api/pkgeval/package/DataFrames"
 ```
@@ -281,5 +282,6 @@ WHERE g.name = 'DataFrames' GROUP BY d.date ORDER BY d.date
 - Data is refreshed every half hour, CI timing, agents and GitHub every 5 minutes;
   `$B/healthz` says when each source last ran.
 - To share a result, link the site with the view in its URL: `$B/commit?c=<sha>`,
+  `$B/package?p=DataFrames`,
   `$B/pkgeval?pkg=DataFrames`, `$B/downloads?edpkg=DataFrames`, `$B/timing?t=30`,
   `$B/history?bt=90&bm=memory&bv=verdicts`.

@@ -664,7 +664,8 @@ const PKGEVAL_FLAKY_FLIPS = 4
 # The badge state of every package on the newest daily report: flaky if it flipped
 # between passing and not often enough over the recent reports, else whether its newest
 # test passed. Skips are not tests, so a package only ever skipped is "skipped".
-function pkgeval_badge_states(db)
+# With `name`, only that package's state.
+function pkgeval_badge_states(db; name=nothing)
     reports = [Int(r.id) for r in rows(db, "SELECT r.id FROM pkgeval_reports r WHERE r.kind = 'daily' AND r.date != '' AND EXISTS " *
                                            "(SELECT 1 FROM pkgeval_results x WHERE x.report_id = r.id) ORDER BY r.date DESC LIMIT ?",
                                        (PKGEVAL_FLAKY_REPORTS,))]
@@ -673,8 +674,9 @@ function pkgeval_badge_states(db)
     obs = Dict{String,Vector{Tuple{Int,Bool}}}()
     for r in rows(db, "SELECT p.name, x.report_id, x.status FROM pkgeval_results x JOIN packages p ON p.id = x.package_id " *
                       "WHERE x.report_id IN (SELECT value FROM json_each(?)) " *
-                      "AND x.package_id IN (SELECT package_id FROM pkgeval_results WHERE report_id = ?)",
-                  (JSON3.write(reports), reports[1]))
+                      "AND x.package_id IN (SELECT package_id FROM pkgeval_results WHERE report_id = ?)" *
+                      (name === nothing ? "" : " AND p.name = ?"),
+                  name === nothing ? (JSON3.write(reports), reports[1]) : (JSON3.write(reports), reports[1], name))
         o = get!(() -> Tuple{Int,Bool}[], obs, String(r.name))
         String(r.status) == "skip" || push!(o, (order[Int(r.report_id)], String(r.status) == "ok"))
     end
@@ -2392,6 +2394,79 @@ function download_top(db; days=7, limit=50, client="user")
                                   "FROM dl_packages d JOIN dl_package_uuids u ON u.id = d.package_id LEFT JOIN registry_packages g ON g.uuid = u.uuid " *
                                   "WHERE d.date >= ? AND d.date <= ? GROUP BY u.uuid ORDER BY $metric DESC LIMIT ?", (since, until, limit))]
     return OrderedDict("days" => days, "since" => since, "until" => until, "client" => client, "packages" => packages)
+end
+
+# --- package -----------------------------------------------------------------
+
+# The Package page draws a year of downloads and ranks by the last 30 days, as
+# the PkgEval tab does
+const PACKAGE_DOWNLOAD_DAYS = 365
+const PACKAGE_RANK_DAYS = 30
+const PACKAGE_TTFX_METRICS = ["precompile", "load", "run", "invalidated"]
+const PACKAGE_TTFX_KINDS = ["master", "release", "lts"]
+
+# One TTFX job of each kind that has results: its package's tasks and their
+# failures. A task is named Package/Task.
+function package_ttfx(db, name)
+    prefix = name * "/"
+    jobs = OrderedDict{String,Any}()
+    for kind in PACKAGE_TTFX_KINDS
+        j = rows(db, "SELECT j.job_uuid, j.build, j.commit_sha, j.version, j.build_created_at, j.web_url FROM ttfx_jobs j " *
+                     "WHERE j.kind = ? AND EXISTS (SELECT 1 FROM ttfx_results r WHERE r.job_uuid = j.job_uuid) " *
+                     "ORDER BY j.build_created_at DESC LIMIT 1", (kind,))
+        isempty(j) && continue
+        j = j[1]
+        tasks = OrderedDict{String,Any}()
+        for r in rows(db, "SELECT task, $(ttfx_result_select(db, PACKAGE_TTFX_METRICS)) FROM ttfx_results " *
+                          "WHERE job_uuid = ? AND substr(task, 1, ?) = ? ORDER BY task", (j.job_uuid, length(prefix), prefix))
+            tasks[String(r.task)] = Any[js(getproperty(r, Symbol(m))) for m in PACKAGE_TTFX_METRICS]
+        end
+        failed = OrderedDict(String(r.task) => String(r.error)
+                             for r in rows(db, "SELECT task, error FROM ttfx_failures WHERE job_uuid = ? AND substr(task, 1, ?) = ? ORDER BY task",
+                                           (j.job_uuid, length(prefix), prefix)))
+        jobs[kind] = OrderedDict("job_id" => String(j.job_uuid), "build" => Int(j.build), "commit" => String(j.commit_sha),
+                                 "version" => String(j.version), "date" => String(j.build_created_at), "url" => js(j.web_url),
+                                 "tasks" => tasks, "failed" => failed)
+    end
+    # What the package's own methods invalidated in any task of the latest master job;
+    # a cause reads "Module: signature"
+    caused = Any[]
+    if haskey(jobs, "master")
+        for r in rows(db, "SELECT task, phase, kind, cause, n FROM ttfx_invalidation_causes WHERE job_uuid = ? AND substr(cause, 1, ?) = ? " *
+                          "ORDER BY n DESC, task LIMIT 50", (jobs["master"]["job_id"], length(name) + 2, name * ": "))
+            push!(caused, OrderedDict("task" => String(r.task), "phase" => String(r.phase), "kind" => String(r.kind),
+                                      "cause" => String(r.cause)[length(name)+3:end], "n" => Int(r.n)))
+        end
+    end
+    return OrderedDict("metrics" => PACKAGE_TTFX_METRICS, "jobs" => jobs, "invalidations_caused" => caused)
+end
+
+# Everything recorded for one package, by its registered name
+function package(db, name)
+    reg = rows(db, "SELECT uuid, path FROM registry_packages WHERE name = ? ORDER BY uuid", (name,))
+    ranking = pkgeval_ranking(db, PACKAGE_RANK_DAYS, "user")
+    rank = nothing
+    if ranking !== nothing
+        i = findfirst(r -> String(r.name) == name, ranking.ranking)
+        if i !== nothing
+            r = ranking.ranking[i]
+            rank = OrderedDict("since" => ranking.since, "until" => ranking.until, "rank" => Int(r.rank), "of" => length(ranking.ranking),
+                               "all" => Int(r.total), "user" => Int(r.user), "ci" => Int(r.ci))
+        end
+    end
+    series = download_package(db, name)["series"]
+    if !isempty(series)
+        cutoff = Dates.format(Date(series[end]["date"]) - Day(PACKAGE_DOWNLOAD_DAYS - 1), dateformat"yyyy-mm-dd")
+        series = filter(s -> s["date"] >= cutoff, series)
+    end
+    history = pkgeval_package(db, name)["history"]
+    badge = isempty(history) ? nothing : get(pkgeval_badge_states(db; name), name, nothing)
+    return OrderedDict(
+        "name" => name,
+        "registry" => [OrderedDict("uuid" => String(r.uuid), "path" => js(r.path)) for r in reg],
+        "downloads" => OrderedDict("rank" => rank, "days" => PACKAGE_DOWNLOAD_DAYS, "series" => series),
+        "pkgeval" => OrderedDict("badge" => badge, "history" => history),
+        "ttfx" => package_ttfx(db, name))
 end
 
 # --- agents ------------------------------------------------------------------

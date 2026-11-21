@@ -138,6 +138,18 @@
         >
           Commit
         </button>
+        <button
+          class="tab-btn"
+          id="tab-package"
+          role="tab"
+          aria-selected="false"
+          aria-controls="package-view"
+          tabindex="-1"
+          onclick="switchTab('package')"
+          title="One package across every source: its PkgEval history and badge, downloads and rank, and TTFX tasks"
+        >
+          Package
+        </button>
         <div class="tab-group" role="presentation">
           <span class="tab-group-label" aria-hidden="true">Benchmarks</span>
           <div class="tab-group-buttons" role="presentation">
@@ -565,6 +577,50 @@
         </button>
         <nav class="commit-list" id="commit-list" aria-label="Master commits, newest first"></nav>
         <div class="overview-body" id="commit-body"></div>
+      </div>
+    </div>
+
+    <div
+      class="view-main view-hidden"
+      id="package-view"
+      role="tabpanel"
+      aria-labelledby="tab-package"
+      tabindex="0"
+    >
+      <div class="view-toolbar overview-toolbar">
+        <form class="package-search" onsubmit="submitPackageLookup(event)">
+          <label for="package-name">Package:</label>
+          <input
+            type="text"
+            id="package-name"
+            name="name"
+            placeholder="name, e.g. DataFrames"
+            list="package-name-list"
+            autocomplete="off"
+            spellcheck="false"
+            oninput="suggestPackagePageNames(this.value)"
+          />
+          <datalist id="package-name-list"></datalist>
+          <button class="btn" type="submit">Look up</button>
+        </form>
+        <span class="overview-note"
+          >A registered package: its PkgEval results on every daily report,
+          its downloads and rank, and its TTFX tasks on the latest master build
+          against the latest release.</span
+        >
+      </div>
+      <div class="commit-layout" id="package-layout">
+        <button
+          class="commit-list-toggle"
+          type="button"
+          onclick="togglePackageList()"
+          aria-controls="package-list"
+          aria-expanded="false"
+        >
+          Most downloaded
+        </button>
+        <nav class="commit-list" id="package-list" aria-label="The most downloaded packages"></nav>
+        <div class="overview-body" id="package-body"></div>
       </div>
     </div>
 
