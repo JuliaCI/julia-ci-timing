@@ -23679,8 +23679,18 @@ function drawPackage(d) {
     pkgeval: `[![PkgEval](${pkgevalBadgeUrl(d.name)})](${pkgevalPackagePageUrl(d.name)})`,
     downloads: `[![Downloads](${downloadsBadgeUrl(d.name)})](${packagePageUrl(d.name)})`,
   };
+  // A badge button holds only its image, so the copy is confirmed beside the row
+  const status = body.querySelector(".package-badges-status");
   body.querySelectorAll("[data-badge]").forEach((b) => {
-    b.onclick = (e) => copyToClipboard(e.currentTarget, markdown[b.dataset.badge]);
+    b.onclick = () => {
+      const kinds = b.dataset.badge === "all" ? [...body.querySelectorAll(".package-badge:not([hidden])")].map((x) => x.dataset.badge) : [b.dataset.badge];
+      navigator.clipboard.writeText(kinds.map((k) => markdown[k]).join(" ")).then(
+        () => (status.textContent = kinds.length > 1 ? "Copied both" : "Copied"),
+        () => (status.textContent = "Copy failed"),
+      );
+      clearTimeout(status.timer);
+      status.timer = setTimeout(() => (status.textContent = ""), 1500);
+    };
   });
   stopPkgevalLogClicks(body);
   drawPackageDownloadsChart(d);
@@ -23708,17 +23718,34 @@ function packageHeaderHtml(d) {
   if (!d.registry.length) meta.push("Not in the General registry");
   // Only packages on the newest PkgEval daily, or with requests in the last 30 days, have a badge
   const badge = (kind, url, what) =>
-    `<span class="package-badge-pair"><img alt="${escapeHtml(what)} badge" src="${url}" onerror="this.parentElement.hidden=true">
-     <button type="button" class="btn" data-badge="${kind}" title="Copy markdown for the ${escapeHtml(what)} badge, to paste in a README">Copy</button></span>`;
+    `<button type="button" class="package-badge" data-badge="${kind}" title="Copy the markdown of the ${escapeHtml(what)} badge"><img alt="${escapeHtml(what)} badge" src="${url}" onerror="hidePackageBadge(this)"></button>`;
   const badges = [
     d.pkgeval.badge ? badge("pkgeval", pkgevalBadgeUrl(d.name), "PkgEval") : "",
     d.downloads.rank ? badge("downloads", downloadsBadgeUrl(d.name), "downloads") : "",
-  ].join("");
+  ].filter(Boolean);
+  const row = badges.length
+    ? `<div class="package-badges"><span class="package-badges-label">README badges</span>${badges.join("")}
+       ${badges.length > 1 ? '<button type="button" class="btn" data-badge="all" title="Copy the markdown of every badge, on one line">Copy both</button>' : ""}
+       <span class="package-badges-status" aria-live="polite"></span></div>`
+    : "";
   return `<section class="commit-card commit-head">
-    <h2 class="commit-title">${escapeHtml(d.name)}</h2>
+    <div class="package-head">
+      <h2 class="commit-title">${escapeHtml(d.name)}</h2>
+      <button type="button" class="btn package-copy-link" title="Copy a link to this page">Copy link</button>
+    </div>
     <div class="commit-meta">${meta.join(" · ")}</div>
-    <p class="package-actions">${badges}<button type="button" class="btn package-copy-link" title="Copy a link to this page">Copy link</button></p>
+    ${row}
   </section>`;
+}
+
+// A badge the export has not written yet; "Copy both" needs two left, the row one
+function hidePackageBadge(img) {
+  img.parentElement.hidden = true;
+  const row = img.closest(".package-badges");
+  const left = row.querySelectorAll(".package-badge:not([hidden])").length;
+  const both = row.querySelector('[data-badge="all"]');
+  if (both) both.hidden = left < 2;
+  row.hidden = left === 0;
 }
 
 function packagePkgevalHtml(d) {
