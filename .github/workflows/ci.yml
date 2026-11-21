@@ -1,0 +1,97 @@
+name: CI
+
+# Checks that need no network access to the host or the data sources: the
+# API renders every route over the precompile fixture, the export runs, the
+# fetchers load, the site's scripts and pages hang together, and the host
+# scripts and Terraform are well formed. The deploy runs these first, so a
+# push to main that fails them does not deploy.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A newer push to a pull request replaces its older run; on main every run finishes
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  julia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The Julia the image is built on, so the tracked Manifest is the one it resolved
+      - name: Read the image's Julia version
+        id: version
+        run: echo "julia=$(sed -n 's/^FROM julia:\([0-9.]*\).*/\1/p' Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ steps.version.outputs.julia }}
+
+      - uses: julia-actions/cache@v2
+
+      - name: Instantiate
+        run: |
+          julia --project -e '
+            using Pkg
+            Pkg.is_manifest_current(dirname(Base.active_project())) || error("Manifest.toml is out of date with Project.toml: run Pkg.resolve()")
+            Pkg.instantiate()'
+
+      - name: Test
+        run: julia --project test/runtests.jl
+
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Check the pages and scripts
+        run: node tools/check-site.mjs
+
+      # The same minification the image does, so a script it cannot handle fails here
+      - name: Minify the scripts
+        run: |
+          esbuild=$(sed -n 's/.*npm install --global \(esbuild@[0-9.]*\).*/\1/p' Dockerfile)
+          for f in assets/*.js; do
+            npx --yes "$esbuild" "$f" --minify-whitespace --minify-syntax --charset=utf8 --log-level=warning --outfile="$RUNNER_TEMP/$(basename "$f")"
+          done
+
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The scripts the host runs and the image's entry point. An unused
+      # variable (SC2034) is allowed: changing one would need a hand apply
+      # on the host for no effect.
+      - name: Shell scripts
+        run: |
+          files=$(grep -lE '^#!.*\b(ba)?sh\b' infra/terraform/files/* infra/docker/*.sh)
+          for f in $files; do bash -n "$f"; done
+          shellcheck --severity=warning --exclude=SC2034 $files
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform
+        working-directory: infra/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
