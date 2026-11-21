@@ -87,6 +87,13 @@
       fail_duration 10s
     }
   }
+  # README badges the ingest renders. GitHub fetches a README's images on
+  # every view unless they may be cached, and they change at most daily.
+  handle_path /badges/* {
+    root * ${export_root}/badges
+    header Cache-Control "public, max-age=3600"
+    file_server
+  }
   # What the ingest renders: the files the site reads, health.json, the
   # database snapshot
   handle_path /data/* {
