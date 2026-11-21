@@ -29,6 +29,13 @@ with a README badge. A package's page on the PkgEval tab shows it, with its mark
 [![PkgEval](https://perf.julialang.org/badges/pkgeval/Example.svg)](https://perf.julialang.org/?tab=eco-pkgeval&pkg=Example)
 ```
 
+A second badge gives a package's user downloads over the last 30 days (package server
+requests from users, not CI). The Package page shows both, each with its markdown:
+
+```markdown
+[![Downloads](https://perf.julialang.org/badges/downloads/Example.svg)](https://perf.julialang.org/?tab=package&p=Example)
+```
+
 ## How it works
 
 One EC2 host (`infra/terraform/`, see its README) runs everything from one

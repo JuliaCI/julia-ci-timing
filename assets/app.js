@@ -23508,6 +23508,7 @@ const PACKAGE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 const PACKAGE_STRIP_REPORTS = 120;
 const PACKAGE_SOURCES = ["pkgeval", "packages", "ttfx"];
 
+const downloadsBadgeUrl = (name) => `https://perf.julialang.org/badges/downloads/${encodeURIComponent(name)}.svg`;
 const packagePageUrl = (name) => `https://perf.julialang.org/?tab=package&p=${encodeURIComponent(name)}`;
 
 function applyPackageURLParams() {
@@ -23674,11 +23675,13 @@ function drawPackage(d) {
   }
   body.innerHTML = [packageHeaderHtml(d), packagePkgevalHtml(d), packageDownloadsHtml(d), packageTtfxHtml(d)].join("");
   body.querySelector(".package-copy-link")?.addEventListener("click", (e) => copyToClipboard(e.currentTarget, packagePageUrl(d.name)));
-  const badge = body.querySelector(".package-copy-badge");
-  if (badge) {
-    badge.onclick = (e) =>
-      copyToClipboard(e.currentTarget, `[![PkgEval](${pkgevalBadgeUrl(d.name)})](${pkgevalPackagePageUrl(d.name)})`);
-  }
+  const markdown = {
+    pkgeval: `[![PkgEval](${pkgevalBadgeUrl(d.name)})](${pkgevalPackagePageUrl(d.name)})`,
+    downloads: `[![Downloads](${downloadsBadgeUrl(d.name)})](${packagePageUrl(d.name)})`,
+  };
+  body.querySelectorAll("[data-badge]").forEach((b) => {
+    b.onclick = (e) => copyToClipboard(e.currentTarget, markdown[b.dataset.badge]);
+  });
   stopPkgevalLogClicks(body);
   drawPackageDownloadsChart(d);
 }
@@ -23703,15 +23706,18 @@ function packageHeaderHtml(d) {
       : `<code>${escapeHtml(r.uuid)}</code>`,
   );
   if (!d.registry.length) meta.push("Not in the General registry");
-  // Only packages on the newest PkgEval daily have a badge
-  const badge = d.pkgeval.badge
-    ? `<img class="package-badge" alt="PkgEval: ${escapeHtml(d.pkgeval.badge)}" src="${pkgevalBadgeUrl(d.name)}" onerror="this.hidden=true">
-       <button type="button" class="btn package-copy-badge" title="Copy markdown for the PkgEval badge, to paste in a README">Copy badge markdown</button>`
-    : "";
+  // Only packages on the newest PkgEval daily, or with requests in the last 30 days, have a badge
+  const badge = (kind, url, what) =>
+    `<span class="package-badge-pair"><img alt="${escapeHtml(what)} badge" src="${url}" onerror="this.parentElement.hidden=true">
+     <button type="button" class="btn" data-badge="${kind}" title="Copy markdown for the ${escapeHtml(what)} badge, to paste in a README">Copy</button></span>`;
+  const badges = [
+    d.pkgeval.badge ? badge("pkgeval", pkgevalBadgeUrl(d.name), "PkgEval") : "",
+    d.downloads.rank ? badge("downloads", downloadsBadgeUrl(d.name), "downloads") : "",
+  ].join("");
   return `<section class="commit-card commit-head">
     <h2 class="commit-title">${escapeHtml(d.name)}</h2>
     <div class="commit-meta">${meta.join(" · ")}</div>
-    <p class="package-actions">${badge}<button type="button" class="btn package-copy-link" title="Copy a link to this page">Copy link</button></p>
+    <p class="package-actions">${badges}<button type="button" class="btn package-copy-link" title="Copy a link to this page">Copy link</button></p>
   </section>`;
 }
 

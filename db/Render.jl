@@ -2404,6 +2404,25 @@ const PACKAGE_DOWNLOAD_DAYS = 365
 const PACKAGE_RANK_DAYS = 30
 const PACKAGE_TTFX_METRICS = ["precompile", "load", "run", "invalidated"]
 const PACKAGE_TTFX_KINDS = ["master", "release", "lts"]
+const DOWNLOADS_BADGE_COLOR = "#007ec6"
+
+# A count as a badge writes it: 950, 9.5k, 95k, 1.2M
+function badge_count(n)
+    n < 1000 && return string(n)
+    for (unit, scale) in (("k", 1e3), ("M", 1e6))
+        x = n / scale
+        x < 9.95 && return replace(string(round(x; digits=1)), r"\.0$" => "") * unit
+        (x < 999.5 || unit == "M") && return string(round(Int, x), unit)
+    end
+end
+
+# Each registered package's user requests over the last PACKAGE_RANK_DAYS days of
+# data, the number its downloads badge shows; CI requests are left out
+function downloads_badge_counts(db)
+    r = pkgeval_ranking(db, PACKAGE_RANK_DAYS, "user")
+    r === nothing && return Dict{String,Int}()
+    return Dict(String(x.name) => Int(x.user) for x in r.ranking)
+end
 
 # One TTFX job of each kind that has results: its package's tasks and their
 # failures. A task is named Package/Task.
