@@ -6,7 +6,7 @@
 # Only whitespace and syntax: the pages' onclick attributes call the scripts'
 # top-level functions by name, so no name is shortened. Run on the build
 # machine's own platform, since the output is the same for every one.
-FROM --platform=$BUILDPLATFORM node:24-slim AS scripts
+FROM --platform=$BUILDPLATFORM node:26-slim AS scripts
 RUN npm install --global esbuild@0.28.2
 COPY assets/*.js /src/
 RUN cd /src && for f in *.js; do \
@@ -15,7 +15,7 @@ RUN cd /src && for f in *.js; do \
 
 # Pinned to the patch Manifest.toml was resolved with. Dependabot proposes
 # the bump; re-resolve the Manifest under the new version with it
-FROM julia:1.13.3
+FROM julia:1.13.4
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates python3 python3-venv \
