@@ -78,8 +78,11 @@ function export_pkgeval(db, out)
     payload = Render.pkgeval(db)
     write_gz_json(joinpath(out, "pkgeval_summary.json.gz"), payload)
     states = Render.pkgeval_badge_states(db)
-    write_badges(joinpath(out, "badges", "pkgeval"),
-                 Dict(name => Render.badge_svg("PkgEval", state, Render.PKGEVAL_BADGES[state]) for (name, state) in states))
+    svgs = Dict(name => Render.badge_svg("PkgEval", state, Render.PKGEVAL_BADGES[state]) for (name, state) in states)
+    # What Caddy serves for a package with no badge of its own, such as one not yet
+    # registered. No package can have this name, as it has a dash.
+    svgs["not-evaluated"] = Render.badge_svg("PkgEval", "not evaluated", "#9f9f9f")
+    write_badges(joinpath(out, "badges", "pkgeval"), svgs)
     @info "pkgeval" reports=length(payload["reports"]) badges=length(states)
 end
 

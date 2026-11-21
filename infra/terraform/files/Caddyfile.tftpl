@@ -92,6 +92,13 @@
   handle_path /badges/* {
     root * ${export_root}/badges
     header Cache-Control "public, max-age=3600"
+    # A package with no PkgEval badge yet, such as a new one a template made, gets
+    # a "not evaluated" badge rather than a broken image
+    @nopkgevalbadge {
+      path_regexp ^/pkgeval/[A-Za-z_][A-Za-z0-9_]*\.svg$
+      not file
+    }
+    rewrite @nopkgevalbadge /pkgeval/not-evaluated.svg
     file_server
   }
   # What the ingest renders: the files the site reads, health.json, the
