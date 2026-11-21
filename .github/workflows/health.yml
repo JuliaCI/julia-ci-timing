@@ -62,9 +62,11 @@ jobs:
             age=$(( (now - $(date -u -d "${last:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))
             ok=$(jq -r ".sources[\"$source\"].last_ok" health.json)
             latest=$(jq -r ".sources[\"$source\"].latest_data // empty" health.json)
-            data_age=$(( (now - $(date -u -d "${latest:-1970-01-01T00:00:00Z}" +%s)) / 3600 ))
-            echo "$source: last success ${age} h ago, last run ok=$ok, newest data ${data_age} h old"
+            echo "$source: last success ${age} h ago, last run ok=$ok, newest data ${latest:-not reported}"
             [ "$age" -le 6 ] || { echo "::error::$source has not succeeded for ${age} h"; failed=1; }
+            # Some sources report no newest data, so only their runs are checked
+            [ -n "$latest" ] || continue
+            data_age=$(( (now - $(date -u -d "$latest" +%s)) / 3600 ))
             limit=${max_data_age[$source]:-168}
             [ "$data_age" -le "$limit" ] || { echo "::error::$source's newest data is ${data_age} h old (limit ${limit})"; failed=1; }
           done
