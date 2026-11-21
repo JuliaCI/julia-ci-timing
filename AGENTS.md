@@ -374,6 +374,15 @@ a site change locally before pushing it:
 
 Check the phone layout too, by loading the page in an iframe about 390 px wide.
 
+CI (`.github/workflows/ci.yml`) runs on every pull request and push, and the
+deploy runs it first, so a push that fails it does not deploy (a manual deploy
+can skip it). Run the same checks locally before pushing:
+`julia --project test/runtests.jl` (every API route over the precompile
+fixture, the export, the fetchers loading, the Datasette metadata against the
+schema) and `node tools/check-site.mjs` (scripts parse, inline handlers and
+`?tab=` links resolve, local files exist). A new API route needs an example
+request in `other_targets` in `src/api.jl`, or the tests fail.
+
 The image serves the scripts under `assets/` minified, with source maps beside
 them (the first stage of the `Dockerfile`); a local preview serves them as they
 are. The minifier keeps every name, since the pages' `onclick` attributes call

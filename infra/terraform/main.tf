@@ -21,9 +21,9 @@ locals {
   # they flow into the host env file, the scripts and the Caddyfile.
   data_mount_path  = "/var/lib/ci-timing"
   db_filename      = "ci-timing.sqlite"
-  export_dir       = "export" # under data_mount_path; Caddy serves it at /data/
-  site_dir         = "site"   # under data_mount_path; the static site
-  datasette_port   = 8001     # served from the ingest image, see files/ci-timing-run-datasette
+  export_dir       = "export"     # under data_mount_path; Caddy serves it at /data/
+  site_dir         = "site"       # under data_mount_path; the static site
+  datasette_port   = 8001         # served from the ingest image, see files/ci-timing-run-datasette
   api_ports        = [8002, 8003] # db/serve.jl from the same image, one server at a time; a deploy warms the new one on the other port, see files/ci-timing-deploy
   caddy_data_dir   = "/var/lib/caddy/data"
   caddy_config_dir = "/var/lib/caddy/config"

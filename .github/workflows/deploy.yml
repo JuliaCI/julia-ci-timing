@@ -8,6 +8,11 @@ name: Deploy to the ingest host
 #
 on:
   workflow_dispatch:
+    inputs:
+      skip_checks:
+        description: "Deploy without running CI first (for an urgent fix)"
+        type: boolean
+        default: false
   push:
     branches: [main]
     # Everything the image or the synced site is built from (Dockerfile,
@@ -50,7 +55,14 @@ env:
   ECR_REPOSITORY: ci-timing-ingest
 
 jobs:
+  checks:
+    if: ${{ !inputs.skip_checks }}
+    uses: ./.github/workflows/ci.yml
+
   build-and-deploy:
+    needs: checks
+    # Runs after the checks pass, or without them when they were skipped
+    if: ${{ !cancelled() && (needs.checks.result == 'success' || needs.checks.result == 'skipped') }}
     # Native arm64: the host is Graviton
     runs-on: ubuntu-24.04-arm
     steps:

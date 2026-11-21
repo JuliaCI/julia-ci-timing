@@ -1,0 +1,44 @@
+name: Image
+
+# Builds the ingest image, without pushing it, for pull requests that change
+# what it is built from beyond the code: the Dockerfile, the Julia
+# dependencies, Datasette's. Dependabot's bumps are most of these. The
+# deploy builds the image itself on main.
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Project.toml'
+      - 'Manifest.toml'
+      - 'infra/docker/**'
+      - '.github/workflows/image.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # The host's platform, as the deploy builds it
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Reads the deploy's layer cache; a pull request does not write to it
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          cache-from: type=gha
+          provenance: false
+          sbom: false
