@@ -123,6 +123,15 @@
     header @versioned Cache-Control "public, max-age=31536000, immutable"
     header @unversioned Cache-Control "public, max-age=300"
     header @pages Cache-Control "no-cache"
+    header @pages Vary User-Agent
+    # Link previews read a page without running its script, so every URL would
+    # get the site's own title. Their bots get a page naming what the URL shows.
+    @preview {
+      header_regexp User-Agent (?i)(discourse|slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|telegrambot|whatsapp/|zulip|mastodon|bluesky|cardyb|redditbot|skypeuripreview|embedly|iframely|mattermost)
+      not path /assets/* /favicon.svg /robots.txt /llms.txt /site.webmanifest
+    }
+    rewrite @preview /preview.html
+    templates /preview.html
     # /commit/<SHA or PR number> is the Commit page's shorthand
     @commitref path_regexp ^/commit/([0-9a-fA-F]{7,40}|[0-9]{1,6})/?$
     rewrite @commitref /commit/index.html

@@ -1,0 +1,74 @@
+{{- /*
+  What link-preview bots get in place of a page, from Caddy's templates: a title
+  and description for what the URL shows, read from the URL alone. It names the
+  package or commit a URL picks but gives no numbers, since a preview is kept by
+  the site showing it long after they change.
+*/ -}}
+{{- $site := "Julia Performance Tracking" -}}
+{{- $q := .OriginalReq.URL.Query -}}
+{{- $segs := splitList "/" (trimAll "/" .OriginalReq.URL.Path) -}}
+{{- /* Each tab's ?tab= value, and the directory of its short path */ -}}
+{{- $dirs := dict "overview" "overview" "commit" "commit" "package" "package" "bench-diff" "diff" "bench-history" "history"
+      "ci-timing" "timing" "ci-workers" "workers" "bench-ttfx" "ttfx" "bench-runtime" "runtime" "bench-sizes" "sizes"
+      "ci-build-stages" "build-stages" "ci-coverage" "coverage" "eco-downloads" "downloads" "eco-pkgeval" "pkgeval"
+      "repo-activity" "activity" -}}
+{{- $known := dict -}}
+{{- range $v := values $dirs }}{{ $_ := set $known $v true }}{{ end -}}
+{{- $dir := first $segs -}}
+{{- if or (eq $dir "") (eq $dir "index.html") }}{{ $dir = get $dirs ($q.Get "tab") }}{{ end -}}
+{{- /* The package or commit the URL names, in the path or its tab's parameter */ -}}
+{{- $keys := dict "package" "p" "pkgeval" "pkg" "downloads" "edpkg" "commit" "c" -}}
+{{- $name := "" -}}
+{{- if gt (len $segs) 1 }}{{ $name = index $segs 1 }}{{ else if hasKey $keys $dir }}{{ $name = $q.Get (get $keys $dir) }}{{ end -}}
+{{- $title := $site -}}
+{{- $desc := "Benchmarks, CI build timing, TTFX and PkgEval results for the Julia language." -}}
+{{- if hasKey $known $dir -}}
+  {{- $page := include (printf "/%s/index.html" $dir) -}}
+  {{- $title = regexReplaceAll "(?s).*<title>([^<]*)</title>.*" $page "${1}" -}}
+  {{- $desc = regexReplaceAll "(?s).*<meta name=\"description\" content=\"([^\"]*)\".*" $page "${1}" -}}
+{{- end -}}
+{{- if and (has $dir (list "package" "pkgeval" "downloads")) (regexMatch "^[A-Za-z_][A-Za-z0-9_]{0,99}$" $name) -}}
+  {{- if eq $dir "package" -}}
+    {{- $title = printf "%s: Julia package" $name -}}
+    {{- $desc = printf "Everything recorded for the Julia package %s: its PkgEval results and README badges, its downloads and rank, and its TTFX tasks." $name -}}
+  {{- else if eq $dir "pkgeval" -}}
+    {{- $title = printf "%s on PkgEval" $name -}}
+    {{- $desc = printf "%s's PkgEval result on every daily run against Julia master: status, failure reason, error line and log." $name -}}
+  {{- else -}}
+    {{- $title = printf "%s downloads" $name -}}
+    {{- $desc = printf "Package server requests for %s per day, from users and from CI." $name -}}
+  {{- end -}}
+{{- else if and (eq $dir "commit") (regexMatch "^([0-9a-fA-F]{7,40}|[0-9]{1,6})$" $name) -}}
+  {{- if regexMatch "^[0-9]+$" $name -}}
+    {{- $title = printf "Julia pull request #%s" $name -}}
+    {{- $desc = printf "Everything recorded for JuliaLang/julia#%s: its CI jobs, TTFX and size against master, or once merged, its commit's results." $name -}}
+  {{- else -}}
+    {{- $title = printf "Julia commit %s" (trunc 10 $name) -}}
+    {{- $desc = "Everything recorded for one Julia master commit: its CI jobs and their times, TTFX, runtime benchmarks, sizes, and the benchmark and PkgEval runs that include it." -}}
+  {{- end -}}
+{{- end -}}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{ html $title }}</title>
+    <meta name="description" content="{{ html $desc }}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="{{ $site }}" />
+    <meta property="og:title" content="{{ html $title }}" />
+    <meta property="og:description" content="{{ html $desc }}" />
+    <meta property="og:url" content="https://perf.julialang.org{{ html .OriginalReq.URL.RequestURI }}" />
+    <meta property="og:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="{{ $site }}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{ html $title }}" />
+    <meta name="twitter:description" content="{{ html $desc }}" />
+    <meta name="twitter:image" content="https://perf.julialang.org/assets/icons/og-image.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <a href="https://perf.julialang.org{{ html .OriginalReq.URL.RequestURI }}">{{ html $title }}</a>
+  </body>
+</html>
