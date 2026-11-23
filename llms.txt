@@ -74,6 +74,9 @@ Sysimage:
 - `/api/coverage/commit/<sha>`: every file of one commit's Codecov report (path, lines, hits), for any commit listed by `/api/coverage/files`
 - `/api/notes/sysimage_annotations`: notes on builds where how CI builds julia changed, so a step there is not a commit's
 
+Docs:
+- `/api/docs/summary?since=`: the docs jobs of every master build, from their logs: the public docstrings missing from the manual (count and names), the time of each Documenter stage (doctests, HTML, deploy, the PDF's latexmk), and the sizes of the search index, the largest HTML pages, the HTML tarball and the PDF
+
 Downloads:
 - `/api/downloads/top?days=7`: the 50 most requested packages over the window
 - `/api/downloads/package/<Name>`: one package's daily downloads

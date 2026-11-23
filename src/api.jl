@@ -137,7 +137,7 @@ end
 # Some PkgEval routes rank the packages by their downloads. The index reads no
 # source, so only a deploy changes it.
 const ROUTE_SOURCES = Dict("timing" => ["timing"], "benchmarks" => ["benchmarks"], "pkgeval" => ["pkgeval"],
-                           "ttfx" => ["ttfx"], "runtime" => ["runtime"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "coverage" => ["timing"], "downloads" => ["packages"], "agents" => ["agents"],
+                           "ttfx" => ["ttfx"], "runtime" => ["runtime"], "sizes" => ["sizes"], "sysimage" => ["sysimage"], "docs" => ["docs"], "coverage" => ["timing"], "downloads" => ["packages"], "agents" => ["agents"],
                            "github" => ["github"], "commits" => ["timing", "benchmarks", "pkgeval"],
                            "commit" => ["timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "github"],
                            "package" => ["pkgeval", "packages", "ttfx"])
@@ -184,7 +184,7 @@ end
 
 # --- routes ------------------------------------------------------------------
 
-const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "sysimage", "packages", "agents", "github")
+const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "sysimage", "docs", "packages", "agents", "github")
 
 function status(db)
     return Dict("change_seq" => Store.current_seq(db),
@@ -351,6 +351,9 @@ const ROUTES = [
     Route("sysimage/summary", [SINCE],
           "How long the build job of every julia-ci master build spent making the system image, stage by stage, in seconds, from the job logs. stages lists the stages in build order: compiler (compiling the compiler, Base_compiler.jl), compiler_output (emitting basecompiler: from the end of that to its link, from the log's line timestamps), base and stdlibs (loading Base and the sysimage's stdlibs, sysimg.jl), sysbase_output (emitting sysbase, timed like compiler_output), precompile (running the precompile statements, generate_precompile.jl), sys_output (emitting sys), then stdlib_pkgimages, the stdlib pkgimages precompiled after the image (stdlib_pkgimages_count of them: about 110 before build 1002, both bounds-checking configurations, and 55 since). platforms has per build triplet the jobs that started in the window in time order (job UUID, build, commit, start, agent), one array per stage aligned with them, the precompile statements run, and stdlibs, the seconds of each stdlib loaded into the image (null where the log does not have them). subjects has the subject of each commit. Linux jobs share their machine with other jobs, so the times are noisy.",
           (db, _, p) -> Render.sysimage(db; since=instant(p, "since"))),
+    Route("docs/summary", [SINCE],
+          "What the docs jobs of every julia-ci master build print about the manual, from their logs: doctest (the doctests, then the HTML manual, deployed to docs.julialang.org) and pdf_docs_build (the PDF manual). stages lists each job's stages in job order, in seconds from the log's line timestamps: setup (installing and precompiling Documenter), doctest, document (expanding the pages, cross-references, checks, indices), render (writing the HTML pages or the LaTeX file), deploy (deploydocs: cloning docs.julialang.org and pushing) and latexmk (compiling the PDF). jobs has per job the runs that started in the window in time order (job UUID, build, commit, start, agent, Buildkite state), one array per stage aligned with them, missing_docs (the public docstrings not in the manual, which Documenter warns about since JuliaLang/julia#55267 in November 2026; doc/make.jl fails the build when the count differs from the one it records) and missing_set (the id of their list in missing_sets), search_index_kib, output_kib (the uploaded HTML tarball or PDF) and pages (each HTML page over Documenter's 200 KiB warning limit, null where it was under). missing_sets has each list's names, sorted. subjects has the subject of each commit.",
+          (db, _, p) -> Render.docs(db; since=instant(p, "since"))),
     Route("coverage/files", [SINCE, "days" => "how far back the files are compared, 30 days by default"],
           "Codecov's file-level coverage of julia master, one report a day from the coverage job. commits has each report in the window (commit, time, coverage %, lines Codecov counts as code, hits, files, sessions: the uploads merged into it, whose number moves the total) and groups the lines and hits of each top-level directory (base, Compiler, stdlib, ...) per report, aligned with commits. files has every file of head, the latest report that merged every platform's upload (as many as any report of the week before), with its lines and hits, and base_lines and base_hits in base, the latest report at least days older (null where the file is new). Line by line coverage is on app.codecov.io.",
           (db, _, p) -> Render.coverage_files(db; since=instant(p, "since"), days=days_param(p, 30))),
@@ -440,7 +443,7 @@ end
 function api_index()
     routes = [OrderedDict("path" => "/api/" * r.path, "params" => OrderedDict(r.params), "description" => r.description) for r in ROUTES]
     return OrderedDict(
-        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, runtime benchmarks, distribution sizes, sysimage build times, package downloads and Buildkite agents, from one SQLite database refreshed every 5 to 30 minutes. All routes are GET and answer JSON, compressed with zstd or gzip when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
+        "about" => "The API behind perf.julialang.org: Julia's CI timing, Nanosoldier benchmarks, PkgEval, TTFX, runtime benchmarks, distribution sizes, sysimage build times, the docs build, package downloads and Buildkite agents, from one SQLite database refreshed every 5 to 30 minutes. All routes are GET and answer JSON, compressed with zstd or gzip when asked (curl --compressed), with an ETag for revalidation. It is the site's own interface, so shapes can change; the database schema is the stable reference.",
         "guide" => "https://perf.julialang.org/llms.txt",
         "sql" => "https://perf.julialang.org/db/ (Datasette, read-only SQL; 2 s and 5000 rows per query)",
         "snapshot" => "https://perf.julialang.org/data/ci-timing.sqlite.gz (the whole database, taken once a week, about 300 MB)",
@@ -743,7 +746,7 @@ const CONTENT_TYPES = Dict(".html" => "text/html; charset=utf-8", ".js" => "text
 # and data/. Paths are resolved before the containment check, so a
 # symbolic link cannot lead outside either.
 const SITE_PATHS = Set(["index.html", "favicon.svg", "site.webmanifest", "llms.txt", "assets", "data",
-                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "runtime", "runtime-run", "sizes", "build-stages", "coverage", "downloads", "pkgeval", "activity"])
+                        "overview", "commit", "diff", "history", "timing", "builds", "commits", "workers", "ttfx", "runtime", "runtime-run", "sizes", "build-stages", "coverage", "downloads", "pkgeval", "activity", "manual"])
 
 function static(root, path; allowed=SITE_PATHS)
     rel = HTTP.unescapeuri(path)
@@ -849,7 +852,7 @@ function other_targets(db)
             "/api/agents/build-hours?since=$since",
             "/api/sizes/summary", "/api/sizes/commit/$(sizes_commit_example(db))", "/api/sizes/prs", "/api/sizes/pr/$(sizes_pr_example(db))",
             "/api/ttfx/job/$(ttfx_job_example(db))", "/api/runtime/summary", "/api/runtime/job/$(runtime_job_example(db))",
-            "/api/sysimage/summary", "/api/coverage/files?since=$since", "/api/coverage/commit/$(coverage_commit_example(db))",
+            "/api/sysimage/summary", "/api/docs/summary", "/api/coverage/files?since=$since", "/api/coverage/commit/$(coverage_commit_example(db))",
             "/api/commit/$(isempty(latest) ? "0000000" : latest[1]["commit"])",
             (isempty(groups) ? String[] : ["/api/benchmarks/groups/$(groups[1])?since=$since"])...]
 end

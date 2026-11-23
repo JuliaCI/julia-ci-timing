@@ -134,6 +134,11 @@ only the files that changed. `AGENTS.md` describes their shapes.
   making the system image took, in seconds, parsed from the job's log) and
   `sysimage_stdlibs` (each stdlib loaded into the image). The Linux jobs share their
   machine with other jobs, so compare medians over several builds rather than two builds.
+- **Docs.** `docs_jobs` (one `doctest` or `pdf_docs_build` job of a julia-ci master
+  build: the seconds of each Documenter stage, the public docstrings missing from the
+  manual, the search index and the uploaded HTML tarball or PDF, parsed from its log),
+  `docs_missing_sets` (each distinct list of those missing names, once) and `docs_pages`
+  (every HTML page over Documenter's 200 KiB warning limit).
 - **Downloads.** `dl_series` (requests per day), `dl_mix` (by Julia version and release
   stage), `dl_packages` (per package, day and client type), `dl_package_uuids` and
   `registry_packages` (uuid to name), `julia_tags`.
@@ -238,6 +243,14 @@ SELECT date(started_at) AS day, count(*) AS jobs,
   round(avg(compiler_s)) AS compiler_s, round(avg(sys_output_s)) AS sys_output_s
 FROM sysimage_jobs WHERE state = 'ok' AND triplet = 'x86_64-linux-gnu'
 GROUP BY day ORDER BY day
+```
+
+The public docstrings missing from the manual in the latest doctest job:
+
+```sql
+SELECT d.build, s.count, s.names
+FROM docs_jobs d JOIN docs_missing_sets s ON s.id = d.missing_set
+WHERE d.job_name = 'doctest' ORDER BY d.started_at DESC LIMIT 1
 ```
 
 The files of the latest Codecov report with the most lines the tests never run:

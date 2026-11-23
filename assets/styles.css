@@ -3624,7 +3624,8 @@ th.sorted .sort-indicator {
 .ttfx-stats .sysimage-selected {
   background: var(--color-accent-subtle);
 }
-.ttfx-stats th button.btn-link {
+.ttfx-stats th button.btn-link,
+.ttfx-stats td button.btn-link {
   font: inherit;
   color: var(--color-accent-fg);
   background: none;

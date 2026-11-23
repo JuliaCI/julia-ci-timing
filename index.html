@@ -256,6 +256,18 @@
             </button>
             <button
               class="tab-btn"
+              id="tab-ci-docs"
+              role="tab"
+              aria-selected="false"
+              aria-controls="docs-view"
+              tabindex="-1"
+              onclick="switchTab('ci-docs')"
+              title="The manual's build on every master build: public docstrings missing from it, how long each stage of the docs jobs takes, and the size of what they make"
+            >
+              Docs
+            </button>
+            <button
+              class="tab-btn"
               id="tab-ci-coverage"
               role="tab"
               aria-selected="false"
@@ -1790,6 +1802,115 @@
             <table>
               <thead id="sysimage-stats-thead"></thead>
               <tbody id="sysimage-stats-tbody">
+                <tr>
+                  <td class="loading">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="view-main view-hidden"
+      id="docs-view"
+      role="tabpanel"
+      aria-labelledby="tab-ci-docs"
+      tabindex="0"
+    >
+      <div class="view-toolbar filter-toolbar">
+        <select
+          class="time-select"
+          id="docs-time-range"
+          onchange="setDocsTimeRange(this.value)"
+          aria-label="Time range"
+        >
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90" selected>Last 90 days</option>
+          <option value="180">Last 180 days</option>
+          <option value="365">Last 365 days</option>
+          <option value="0">All time</option>
+        </select>
+        <select
+          class="time-select"
+          id="docs-smoothing"
+          onchange="setDocsSmoothing(this.value)"
+          aria-label="Smoothing"
+          title="The stage times are the median of this many builds around each one"
+        >
+          <option value="1">No smoothing</option>
+          <option value="5">Median of 5 builds</option>
+          <option value="11" selected>Median of 11 builds</option>
+          <option value="25">Median of 25 builds</option>
+        </select>
+        <select
+          class="time-select"
+          id="docs-table-view"
+          onchange="setDocsTableView(this.value)"
+          aria-label="Table"
+          title="What the table under the charts lists"
+        >
+          <option value="missing" selected>Missing docstrings</option>
+          <option value="changes">Changes to the list</option>
+        </select>
+        <input
+          type="search"
+          class="time-select workers-filter"
+          id="docs-filter"
+          placeholder="Filter names"
+          aria-label="Filter the missing docstrings by name"
+          oninput="setDocsFilter(this.value)"
+        />
+        <button
+          class="btn btn-primary"
+          id="docs-btn-reset-zoom"
+          onclick="resetDocsZoom()"
+          style="display: none"
+        >
+          Reset zoom
+        </button>
+        <a
+          class="btn btn-link"
+          href="https://github.com/JuliaCI/julia-ci-timing/blob/main/fetch_docs.jl"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="How each number is read from the docs jobs' logs"
+          >Method</a
+        >
+      </div>
+      <div class="ttfx-content">
+        <div class="ttfx-chart-area">
+          <div class="ttfx-chart-container">
+            <div class="ttfx-chart-wrapper">
+              <div class="loading-overlay" id="docs-chart-loading">
+                <span class="loading">Loading docs data...</span>
+              </div>
+              <div class="ttfx-summary-grid activity-grid" id="docs-grid">
+                <div class="ttfx-panel"><canvas id="docs-chart-missing"></canvas></div>
+                <div class="ttfx-panel"><canvas id="docs-chart-doctest"></canvas></div>
+                <div class="ttfx-panel"><canvas id="docs-chart-pdf_docs_build"></canvas></div>
+                <div class="ttfx-panel"><canvas id="docs-chart-index"></canvas></div>
+                <div class="ttfx-panel"><canvas id="docs-chart-pages"></canvas></div>
+                <div class="ttfx-panel"><canvas id="docs-chart-output"></canvas></div>
+              </div>
+            </div>
+          </div>
+          <div
+            class="resize-handle resize-handle-ttfx"
+            id="docs-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize docs table"
+          ></div>
+          <div class="ttfx-stats" id="docs-stats" style="height: 280px">
+            <div class="ttfx-stats-caption" id="docs-stats-caption"></div>
+            <table>
+              <thead id="docs-stats-thead"></thead>
+              <tbody id="docs-stats-tbody">
                 <tr>
                   <td class="loading">Loading...</td>
                 </tr>

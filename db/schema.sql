@@ -646,6 +646,55 @@ CREATE TABLE IF NOT EXISTS sysimage_stdlibs (
     PRIMARY KEY (job_uuid, stdlib)
 ) WITHOUT ROWID;
 
+-- ------------------------------------------------------------------ docs --
+-- What the docs jobs of julia-ci master builds print about the manual
+-- (fetch_docs.jl): `doctest` (the doctests, then the HTML manual, deployed)
+-- and `pdf_docs_build` (the PDF manual). The stage seconds are from
+-- Buildkite's line timestamps, each from its first line to the next stage's.
+-- A log without any of it (expired, or a job that failed early) is kept as
+-- state 'unparsed' with NULLs, so it is not fetched again.
+
+CREATE TABLE IF NOT EXISTS docs_jobs (
+    job_uuid         TEXT PRIMARY KEY,
+    build            INTEGER NOT NULL,   -- the julia-ci build
+    commit_sha       TEXT NOT NULL,
+    job_name         TEXT NOT NULL,      -- doctest | pdf_docs_build
+    agent            TEXT,
+    job_state        TEXT NOT NULL,      -- the job's Buildkite state: passed | failed
+    started_at       TEXT,
+    finished_at      TEXT,
+    state            TEXT NOT NULL,      -- ok | unparsed
+    setup_s          REAL,               -- from running doc/make.jl to Documenter's first stage: installing and precompiling Documenter
+    doctest_s        REAL,               -- the doctests (NULL in the PDF job, which skips them)
+    document_s       REAL,               -- expanding the pages, cross-references, checks, indices
+    render_s         REAL,               -- writing the HTML pages, or the LaTeX file
+    deploy_s         REAL,               -- deploydocs: cloning docs.julialang.org and pushing the HTML
+    latexmk_s        REAL,               -- compiling the PDF with latexmk
+    missing_docs     INTEGER,            -- "N docstrings not included in the manual", from Nov 2026
+    missing_set      INTEGER REFERENCES docs_missing_sets (id), -- the names of those
+    search_index_kib REAL,               -- search_index.js, when over Documenter's 500 KiB warning limit
+    output_kib       REAL,               -- the uploaded HTML tarball or PDF
+    change_seq       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS docs_jobs_started ON docs_jobs (started_at);
+
+-- Each distinct list of missing docstrings once, newline-separated and sorted.
+-- It only changes when someone documents a name or adds one, so jobs share it.
+CREATE TABLE IF NOT EXISTS docs_missing_sets (
+    id    INTEGER PRIMARY KEY,
+    names TEXT NOT NULL UNIQUE,
+    count INTEGER NOT NULL
+);
+
+-- The HTML pages over Documenter's 200 KiB warning limit, the only ones it
+-- prints the size of
+CREATE TABLE IF NOT EXISTS docs_pages (
+    job_uuid TEXT NOT NULL REFERENCES docs_jobs (job_uuid),
+    page     TEXT NOT NULL,      -- its source, e.g. manual/unicode-input.md
+    kib      REAL NOT NULL,
+    PRIMARY KEY (job_uuid, page)
+) WITHOUT ROWID;
+
 -- --------------------------------------------------------------- runtime --
 -- The runtime benchmarks (JuliaCI/julia-ci-benchmarks) of julia-ci builds, from
 -- the artifacts of the `Runtime benchmarks` job (fetch_runtime.jl). Each job

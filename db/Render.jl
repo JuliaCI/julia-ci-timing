@@ -1968,6 +1968,73 @@ function sysimage(db; since="")
                        "stages" => SYSIMAGE_STAGES, "platforms" => platforms, "subjects" => subjects)
 end
 
+# --- docs ----------------------------------------------------------------------
+
+# The stages each docs job has, in job order, as docs_jobs columns without the _s
+const DOCS_STAGES = OrderedDict("doctest" => ["setup", "doctest", "document", "render", "deploy"],
+                                "pdf_docs_build" => ["setup", "document", "render", "latexmk"])
+
+# Per docs job, the runs that started in the window in time order, with one array
+# per measure aligned with them; each list of missing docstrings they point to; and
+# the subject of each commit
+function docs(db; since="")
+    window = isempty(since) ? "" : " AND d.started_at >= ?"
+    params = isempty(since) ? () : (since,)
+    runs = rows(db, "SELECT d.*, c.subject FROM docs_jobs d LEFT JOIN commits c ON c.sha = d.commit_sha " *
+                   "WHERE d.state = 'ok'" * window * " ORDER BY d.started_at, d.build", params)
+    pages = Dict{String,Vector{Tuple{String,Float64}}}()
+    for r in rows(db, "SELECT p.job_uuid, p.page, p.kib FROM docs_pages p JOIN docs_jobs d USING (job_uuid) " *
+                      "WHERE d.state = 'ok'" * window, params)
+        push!(get!(pages, String(r.job_uuid), Tuple{String,Float64}[]), (String(r.page), Float64(r.kib)))
+    end
+    jobs = OrderedDict{String,Any}()
+    subjects = OrderedDict{String,Any}()
+    sets = Set{Int}()
+    for r in runs
+        name = String(r.job_name)
+        stages = get(DOCS_STAGES, name, nothing)
+        stages === nothing && continue
+        j = get!(jobs, name) do
+            OrderedDict{String,Any}("jobs" => String[], "builds" => Int[], "commits" => String[], "started_at" => Any[],
+                                    "agents" => Any[], "job_states" => String[],
+                                    "stages" => OrderedDict(s => Any[] for s in stages),
+                                    "missing_docs" => Any[], "missing_set" => Any[], "search_index_kib" => Any[],
+                                    "output_kib" => Any[], "pages" => OrderedDict{String,Any}())
+        end
+        n = length(j["jobs"])
+        push!(j["jobs"], String(r.job_uuid))
+        push!(j["builds"], Int(r.build))
+        push!(j["commits"], String(r.commit_sha))
+        push!(j["started_at"], js(r.started_at))
+        push!(j["agents"], js(r.agent))
+        push!(j["job_states"], String(r.job_state))
+        for s in stages
+            push!(j["stages"][s], js(getproperty(r, Symbol(s, "_s"))))
+        end
+        push!(j["missing_docs"], js(r.missing_docs))
+        push!(j["missing_set"], js(r.missing_set))
+        r.missing_set === missing || push!(sets, Int(r.missing_set))
+        push!(j["search_index_kib"], r.search_index_kib === missing ? nothing : round(r.search_index_kib; digits=1))
+        push!(j["output_kib"], r.output_kib === missing ? nothing : round(r.output_kib))
+        # A page under the warning limit in a job is null there
+        for (page, k) in get(pages, String(r.job_uuid), ())
+            col = get!(() -> Vector{Any}(nothing, n), j["pages"], page)
+            push!(col, k)
+        end
+        for col in values(j["pages"])
+            length(col) == n && push!(col, nothing)
+        end
+        r.subject === missing || (subjects[String(r.commit_sha)] = String(r.subject))
+    end
+    missing_sets = OrderedDict{String,Any}()
+    for r in rows(db, "SELECT id, names FROM docs_missing_sets WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id",
+                  (JSON3.write(collect(sets)),))
+        missing_sets[string(r.id)] = isempty(r.names) ? String[] : split(String(r.names), '\n')
+    end
+    return OrderedDict("generated_at" => generated_at(db, "docs"), "pipeline" => "julia-ci", "branch" => "master",
+                       "stages" => DOCS_STAGES, "jobs" => jobs, "missing_sets" => missing_sets, "subjects" => subjects)
+end
+
 # --- coverage files ---------------------------------------------------------------
 
 # A path's top-level directory: base, Compiler, stdlib, JuliaSyntax, JuliaLowering
@@ -3015,6 +3082,7 @@ const LATEST_DATA = Dict(
     "ttfx" => "SELECT MAX(build_created_at) AS t FROM ttfx_jobs",
     "runtime" => "SELECT MAX(build_created_at) AS t FROM rtb_jobs",
     "sizes" => "SELECT MAX(merged_at) AS t FROM size_builds WHERE source IN ('ci', 'pr')",
+    "docs" => "SELECT MAX(started_at) AS t FROM docs_jobs",
     "packages" => "SELECT MAX(date) AS t FROM dl_series",
     "agents" => "SELECT MAX(time) AS t FROM agent_snapshots",
     "github" => "SELECT MAX(gh_updated_at) AS t FROM gh_items")

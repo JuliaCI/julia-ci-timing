@@ -7,7 +7,7 @@ opportunities in JuliaLang/julia or JuliaCI/BaseBenchmarks.jl.
 
 ## Where the data lives
 
-The source of truth is a SQLite database on the site's host; the ten
+The source of truth is a SQLite database on the site's host; the eleven
 `fetch_*.jl` scripts write to it every half hour (at :05 and :35 UTC), and
 `fetch_timing.jl`, `fetch_agents.jl` and `fetch_github.jl` also at :15, :25, :45
 and :55. `docs/querying.md` is the
@@ -291,6 +291,17 @@ affected; every one when left out) and `platforms` (build triplets). The tab dra
 a dashed line at that build in the panels of those stages and shows the note in
 the build's popup. Use it for a step that is not the commit being slower, such as
 build 1002, from which the build precompiles 55 stdlib pkgimages instead of 110.
+
+The manual's build (the CI → Docs tab, `/manual`) comes from `fetch_docs.jl`, which
+parses the log of the `doctest` and `pdf_docs_build` jobs of every julia-ci master build
+into `docs_jobs`: the seconds of each Documenter stage (setup, the doctests, document,
+writing the HTML or LaTeX, deploydocs, latexmk), the search index and the uploaded HTML
+tarball or PDF, and `missing_docs`, the public docstrings Documenter's `checkdocs` finds
+missing from the manual. Their names are in `docs_missing_sets`, each distinct list once,
+since the list only changes when a name is documented or added: doc/make.jl records the
+count and fails the build when it differs (JuliaLang/julia#55267, from November 2026, so
+earlier jobs have none). `docs_pages` has every HTML page over Documenter's 200 KiB
+warning limit, the only ones it prints a size for. `api/docs/summary` serves them.
 
 File-level coverage (the CI → Coverage tab, `/coverage`) comes from `fetch_timing.jl`,
 which besides each commit's Codecov and Coveralls totals (`coverage`) fetches Codecov's

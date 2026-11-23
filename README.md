@@ -2,7 +2,7 @@
 
 Dashboard for Julia language performance: daily Nanosoldier benchmark reports,
 [CI build/test timing](https://buildkite.com/julialang/julia-ci), TTFX, runtime benchmarks, distribution size,
-sysimage build time, PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
+sysimage build time, the manual's build, PkgEval and package-server downloads. The Overview tab sums up every source, the Commit tab gathers
 everything recorded for one commit or PR (`/commit?c=<sha or PR number>`), the Package tab the same for one package
 (`/package/<Name>`), and the other tabs go deep.
 
@@ -43,7 +43,7 @@ requests from users, not CI). The Package page shows both, each with its markdow
 One EC2 host (`infra/terraform/`, see its README) runs everything from one
 container image (`Dockerfile`):
 
-- Ten fetchers write a SQLite database every half hour, and the CI timing,
+- Eleven fetchers write a SQLite database every half hour, and the CI timing,
   agent and GitHub ones every 5 minutes (`db/schema.sql`):
   - `fetch_timing.jl`: Buildkite job timings (`julia-ci`, plus the legacy
     `julia-master` and `julia-master-scheduled` pipelines, which stopped
@@ -76,6 +76,10 @@ container image (`Dockerfile`):
     spends making the system image, stage by stage (compiling the compiler, Base, the
     stdlibs, the precompile statements, emitting each image), parsed from the job's
     log; the jobs come from `fetch_timing.jl`'s rows and the logs need no token
+  - `fetch_docs.jl`: what the `doctest` and `pdf_docs_build` jobs of every `julia-ci`
+    master build print about the manual: the public docstrings missing from it, the
+    time of each Documenter stage, and the sizes of the search index, the largest pages
+    and the uploaded HTML and PDF, from their logs like `fetch_sysimage.jl`
   - `fetch_packages.jl`: package-server download rollups, per package too,
     with names from the General registry
   - `fetch_agents.jl`: a snapshot of the connected Buildkite agents on every

@@ -5752,6 +5752,11 @@ makeResizablePanel({
   targetId: "activity-stats",
   storageKey: "activity-stats-height",
 });
+makeResizablePanel({
+  handleId: "docs-resize-handle",
+  targetId: "docs-stats",
+  storageKey: "docs-stats-height",
+});
 
 // Close popup on Escape
 document.addEventListener("keydown", (e) => {
@@ -7333,6 +7338,7 @@ const SOURCE_VIEWS = {
   runtime: ["runtime"],
   sizes: ["sizes"],
   sysimage: ["sysimage"],
+  docs: ["docs"],
   packages: ["packages"],
   agents: ["agents", "backlog", "usage", "buildhours"],
   github: ["activity"],
@@ -7670,6 +7676,18 @@ const TABS = {
     stale: "activity",
     applyURL: applyActivityURLParams,
     writeURL: () => updateActivityURL(),
+  },
+  "ci-docs": {
+    url: "ci-docs",
+    path: "/manual",
+    view: "docs-view",
+    source: "docs",
+    keys: { dt: "docs time range", dw: "docs smoothing", dv: "docs table view", dq: "docs name filter" },
+    data: () => docsData,
+    load: loadDocsData,
+    stale: "docs",
+    applyURL: applyDocsURLParams,
+    writeURL: () => updateDocsURL(),
   },
 };
 
@@ -12785,7 +12803,7 @@ async function reopenDetailPopup(tab) {
   const key = new URLSearchParams(window.location.search).get("pop");
   if (!key || activeTab !== tab) return;
   if (key === "ttfx-method") return showTtfxMethodPopup();
-  const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit|sysimage-job|runtime-job|runtime-pr)-(.+)$/);
+  const m = key.match(/^(ttfx-job|ttfx-pr|sizes-pr|sizes-commit|sysimage-job|docs-job|runtime-job|runtime-pr)-(.+)$/);
   const kind = m?.[1];
   const id = m?.[2];
   if (kind === "ttfx-job") {
@@ -12808,6 +12826,11 @@ async function reopenDetailPopup(tab) {
     for (const [platform, p] of Object.entries(sysimageData.platforms)) {
       const i = p.jobs.indexOf(id);
       if (i >= 0) return showSysimageJobPopup(platform, i);
+    }
+  } else if (kind === "docs-job") {
+    for (const [name, j] of Object.entries(docsData.jobs)) {
+      const i = j.jobs.indexOf(id);
+      if (i >= 0) return showDocsJobPopup(name, i);
     }
   } else if (kind === "runtime-job") {
     const i = runtimeData.builds.findIndex((b) => b.job_id === id);
@@ -20114,6 +20137,605 @@ function updateActivityTable() {
   document.getElementById("activity-stats-tbody").innerHTML = html;
 }
 
+// === Docs ===
+// The manual's build on each julia-ci master build, from api/docs/summary: the
+// public docstrings Documenter finds missing from it, the stages of the two docs
+// jobs stacked like the Build stages tab's, and the sizes of the search index,
+// the largest HTML pages and what the jobs upload. The table lists the missing
+// docstrings of the latest build, or each build that changed the list.
+let docsData = null;
+let docsCharts = [];
+let docsTimeRangeDays = 90;
+let docsSince = null; // the start of the window loaded or on its way, "" for all time
+let docsSmoothing = 11;
+let docsTableView = "missing";
+let docsFilter = "";
+let docsSort = { col: "name", asc: true };
+const DOCS_SMOOTHINGS = [1, 5, 11, 25];
+const DOCS_TABLE_VIEWS = ["missing", "changes"];
+const DOCS_JOBS = {
+  doctest: { label: "Doctest and HTML job", short: "doctest" },
+  pdf_docs_build: { label: "PDF job", short: "pdf_docs_build" },
+};
+const DOCS_STAGES = {
+  setup: { label: "Setup", title: "From running doc/make.jl to Documenter's first stage: installing and precompiling Documenter" },
+  doctest: { label: "Doctests", title: "Running the doctests" },
+  document: { label: "Document", title: "Expanding the pages, building cross-references, the document checks and the indices" },
+  render: { label: "Write", title: "Writing the HTML pages, or the LaTeX file" },
+  deploy: { label: "Deploy", title: "deploydocs: cloning docs.julialang.org (several GiB) and pushing the new HTML" },
+  latexmk: { label: "latexmk", title: "Compiling the PDF from the LaTeX file" },
+};
+// The largest pages drawn; Documenter prints only those over 200 KiB
+const DOCS_TOP_PAGES = 8;
+const DOCS_POPUP_BASELINE = 10;
+
+function docsColors() {
+  const colors = SYSIMAGE_COLORS[isDarkMode() ? "dark" : "light"];
+  return Object.fromEntries(Object.keys(DOCS_STAGES).map((s, i) => [s, colors[i]]));
+}
+
+function docsWantedSince() {
+  return rangeSince(docsTimeRangeDays, 7);
+}
+
+function applyDocsURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  docsTimeRangeDays = readTimeRangeParam(params, "dt", "docs-time-range") ?? docsTimeRangeDays;
+  const dw = parseInt(params.get("dw"), 10);
+  if (DOCS_SMOOTHINGS.includes(dw)) {
+    docsSmoothing = dw;
+    document.getElementById("docs-smoothing").value = dw;
+  }
+  const dv = params.get("dv");
+  if (DOCS_TABLE_VIEWS.includes(dv)) {
+    docsTableView = dv;
+    document.getElementById("docs-table-view").value = dv;
+  }
+  docsFilter = params.get("dq") || "";
+  document.getElementById("docs-filter").value = docsFilter;
+}
+
+function updateDocsURL() {
+  writeTabURL((url) => {
+    setParam(url, "dt", docsTimeRangeDays, docsTimeRangeDays === 90);
+    setParam(url, "dw", docsSmoothing, docsSmoothing === 11);
+    setParam(url, "dv", docsTableView, docsTableView === "missing");
+    setParam(url, "dq", docsFilter, !docsFilter);
+  });
+}
+
+async function loadDocsData() {
+  const since = docsWantedSince();
+  docsSince = since;
+  try {
+    const d = await apiGet("docs/summary", { since });
+    // A wider window was asked for meanwhile
+    if (since !== docsSince) return;
+    docsData = d;
+    setUpdatedLabels();
+    document.getElementById("docs-chart-loading").style.display = "none";
+    updateDocsCharts();
+    updateDocsTable();
+    reopenDetailPopup("ci-docs");
+  } catch (err) {
+    showLoadError("docs", "the docs data", err);
+  }
+}
+
+function setDocsTimeRange(val) {
+  docsTimeRangeDays = parseInt(val, 10);
+  updateDocsURL();
+  // A longer range than the one loaded needs the jobs before it
+  if (docsData && widensSince(docsSince, docsWantedSince())) {
+    loadDocsData();
+    return;
+  }
+  updateDocsCharts();
+  updateDocsTable();
+}
+
+function setDocsSmoothing(val) {
+  docsSmoothing = parseInt(val, 10);
+  updateDocsURL();
+  updateDocsCharts();
+}
+
+function setDocsTableView(val) {
+  docsTableView = DOCS_TABLE_VIEWS.includes(val) ? val : "missing";
+  docsSort = docsTableView === "missing" ? { col: "name", asc: true } : { col: "build", asc: false };
+  updateDocsURL();
+  updateDocsTable();
+}
+
+function setDocsFilter(val) {
+  docsFilter = val.trim();
+  afterTyping("docs-filter", () => {
+    updateDocsURL();
+    updateDocsTable();
+  });
+}
+
+function syncDocsZoom({ chart }) {
+  syncPanelZoom(chart, docsCharts, "docs-btn-reset-zoom");
+}
+
+function resetDocsZoom() {
+  document.getElementById("docs-btn-reset-zoom").style.display = "none";
+  updateDocsCharts();
+}
+
+// The runs of a job in the range, as indices into its arrays
+function docsIndices(name) {
+  const j = docsData?.jobs?.[name];
+  if (!j) return [];
+  const start = rangeStart(docsTimeRangeDays);
+  const out = [];
+  j.started_at.forEach((t, i) => {
+    if (t && Date.parse(t) >= start) out.push(i);
+  });
+  return out;
+}
+
+const docsMiB = (kib) => (kib == null ? null : kib / 1024);
+
+function formatDocsKiB(kib) {
+  if (kib == null) return "—";
+  if (kib >= 1024 * 1024) return `${(kib / 1024 / 1024).toFixed(2)} GiB`;
+  if (kib >= 1024) return `${(kib / 1024).toFixed(kib >= 100 * 1024 ? 0 : 1)} MiB`;
+  return `${kib.toFixed(0)} KiB`;
+}
+
+// The names of a run's missing docstrings, or null when its log had none
+function docsMissingNames(j, i) {
+  const id = j.missing_set[i];
+  return id == null ? null : docsData.missing_sets[String(id)] || null;
+}
+
+// The run before `i` that has a list of missing docstrings
+function docsPrevWithList(j, i) {
+  for (let k = i - 1; k >= 0; k--) if (j.missing_set[k] != null) return k;
+  return null;
+}
+
+// What changed in the list from run `prev` to run `i`: names documented and
+// names newly missing
+function docsListChange(j, prev, i) {
+  const before = new Set(docsMissingNames(j, prev) || []);
+  const after = new Set(docsMissingNames(j, i) || []);
+  return {
+    documented: [...before].filter((n) => !after.has(n)),
+    added: [...after].filter((n) => !before.has(n)),
+  };
+}
+
+// The runs whose list differs from the one before, in order
+function docsListChanges(name = "doctest") {
+  const j = docsData?.jobs?.[name];
+  if (!j) return [];
+  const out = [];
+  let prev = null;
+  j.missing_set.forEach((id, i) => {
+    if (id == null) return;
+    if (prev != null && j.missing_set[prev] !== id) out.push({ i, prev, ...docsListChange(j, prev, i) });
+    prev = i;
+  });
+  return out;
+}
+
+function docsBuildLines(j, i) {
+  const subject = docsData.subjects?.[j.commits[i]];
+  const lines = [];
+  if (subject) lines.push(tooltipLine(subject));
+  if (j.job_states[i] !== "passed") lines.push(`Job ${j.job_states[i]}`);
+  return lines;
+}
+
+function docsJobURL(j, i) {
+  return `https://buildkite.com/julialang/julia-ci/builds/${j.builds[i]}#${j.jobs[i]}`;
+}
+
+function updateDocsCharts() {
+  if (!docsData) return;
+  for (const c of docsCharts) c.destroy();
+  docsCharts = [];
+  document.getElementById("docs-btn-reset-zoom").style.display = "none";
+  const theme = chartTheme();
+  const colors = docsColors();
+  const palette = SYSIMAGE_COLORS[theme.isDark ? "dark" : "light"];
+  const start = rangeStart(docsTimeRangeDays);
+  const all = Object.values(docsData.jobs).flatMap((j) => j.started_at.map((t) => Date.parse(t)).filter((t) => t >= start));
+  const xMin = all.length ? Math.min(...all) : undefined;
+  const xMax = all.length ? Math.max(...all) : undefined;
+  const xAxis = () => timeAxis({ textColor: theme.text, gridColor: theme.grid, tooltipFormat: "yyyy-MM-dd HH:mm", min: xMin, max: xMax });
+  const yAxis = (format, extra = {}) => ({
+    beginAtZero: true,
+    ticks: { color: theme.text, callback: format },
+    grid: { color: theme.grid },
+    ...extra,
+  });
+  const titleOf = (name, idx) => (items) => {
+    if (!items.length) return "";
+    const j = docsData.jobs[name];
+    const i = idx[items[0].raw.k];
+    return `#${j.builds[i]} · ${j.commits[i].slice(0, 10)} · ${j.started_at[i].slice(0, 16).replace("T", " ")}`;
+  };
+  const opener = (name, idx) =>
+    tapAgainToOpen((evt, elements, chart) => {
+      const e = elements[0];
+      if (!e) return;
+      showDocsJobPopup(name, idx[chart.data.datasets[e.datasetIndex].data[e.index].k]);
+    });
+  const legend = { labels: { color: theme.text, usePointStyle: true, boxWidth: 8, boxHeight: 8, font: { size: 11 } } };
+
+  // The missing docstrings: a step at each build that changed the list, with a
+  // bigger point there
+  {
+    const name = docsData.jobs.doctest ? "doctest" : "pdf_docs_build";
+    const j = docsData.jobs[name];
+    const idx = docsIndices(name).filter((i) => j?.missing_docs[i] != null);
+    const changed = new Set(docsListChanges(name).map((c) => c.i));
+    const xs = idx.map((i) => Date.parse(j.started_at[i]));
+    const color = palette[0];
+    docsCharts.push(
+      new Chart(document.getElementById("docs-chart-missing"), {
+        type: "line",
+        data: {
+          datasets: [
+            {
+              label: "Missing from the manual",
+              data: xs.map((x, k) => ({ x, y: j.missing_docs[idx[k]], k })),
+              stepped: "before",
+              borderColor: color,
+              backgroundColor: color,
+              borderWidth: 2,
+              pointRadius: idx.map((i) => (changed.has(i) ? 4 : 0)),
+              pointHoverRadius: 5,
+            },
+          ],
+        },
+        options: panelChartOptions({
+          // Documenter has checked them since November 2026
+          title: panelTitle(`Public docstrings missing from the manual${idx.length ? "" : " (none in the range)"}`, theme),
+          onZoom: syncDocsZoom,
+          interaction: { mode: "nearest", axis: "x", intersect: false },
+          elements: { line: { tension: 0 } },
+          onClick: opener(name, idx),
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: titleOf(name, idx),
+                label: (ctx) => ` ${ctx.raw.y} missing`,
+                afterBody: (items) => {
+                  if (!items.length) return [];
+                  const i = idx[items[0].raw.k];
+                  const lines = [];
+                  const c = docsListChanges(name).find((x) => x.i === i);
+                  if (c) {
+                    if (c.documented.length) lines.push(`Documented: ${c.documented.slice(0, 4).join(", ")}${c.documented.length > 4 ? ` +${c.documented.length - 4} more` : ""}`);
+                    if (c.added.length) lines.push(`Newly missing: ${c.added.slice(0, 4).join(", ")}${c.added.length > 4 ? ` +${c.added.length - 4} more` : ""}`);
+                  }
+                  return [...lines.map((l) => tooltipLine(l)), ...docsBuildLines(j, i)];
+                },
+                footer: () => TOOLTIP_DETAILS_HINT(),
+              },
+            },
+          },
+          scales: { x: xAxis(), y: yAxis((v) => compactNumber(v), { beginAtZero: false }) },
+        }),
+      }),
+    );
+  }
+
+  // Each job's stages, smoothed and stacked, so the top is the job's Documenter time
+  for (const name of Object.keys(DOCS_JOBS)) {
+    const j = docsData.jobs[name];
+    const canvas = document.getElementById(`docs-chart-${name}`);
+    if (!j) continue;
+    const idx = docsIndices(name);
+    const stages = docsData.stages[name] || Object.keys(j.stages);
+    const xs = idx.map((i) => Date.parse(j.started_at[i]));
+    const smooth = Object.fromEntries(stages.map((s) => [s, sysimageRolling(idx.map((i) => j.stages[s][i]), docsSmoothing)]));
+    const smoothText = docsSmoothing > 1 ? ` (median of ${docsSmoothing} builds)` : "";
+    const datasets = stages.map((s, n) => ({
+      label: DOCS_STAGES[s]?.label || s,
+      data: xs.map((x, k) => ({ x, y: smooth[s][k], k })),
+      borderColor: colors[s],
+      backgroundColor: colorToRgba(colors[s], 0.55),
+      borderWidth: 1,
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      fill: n === 0 ? "origin" : "-1",
+      _stage: s,
+    }));
+    docsCharts.push(
+      new Chart(canvas, {
+        type: "line",
+        data: { datasets },
+        options: panelChartOptions({
+          title: panelTitle(`${DOCS_JOBS[name].label}, stage by stage${smoothText}`, theme),
+          onZoom: syncDocsZoom,
+          interaction: { mode: "nearIndex", intersect: false },
+          elements: { line: { tension: 0 } },
+          onClick: opener(name, idx),
+          plugins: {
+            legend,
+            tooltip: {
+              usePointStyle: true,
+              boxPadding: 4,
+              itemSort: (a, b) => b.datasetIndex - a.datasetIndex,
+              callbacks: {
+                title: titleOf(name, idx),
+                label: (ctx) => {
+                  const raw = j.stages[ctx.dataset._stage][idx[ctx.raw.k]];
+                  const own = docsSmoothing > 1 && raw != null ? ` (this build ${formatDuration(raw)})` : "";
+                  return ` ${ctx.dataset.label}: ${formatDuration(ctx.raw.y)}${own}`;
+                },
+                footer: (items) => {
+                  if (!items.length) return "";
+                  const k = items[0].raw.k;
+                  const total = stages.reduce((sum, s) => sum + (smooth[s][k] ?? 0), 0);
+                  return [`Total: ${formatDuration(total)}`, ...docsBuildLines(j, idx[k]), TOOLTIP_DETAILS_HINT()];
+                },
+              },
+            },
+          },
+          scales: { x: xAxis(), y: yAxis((v) => formatDuration(v), { stacked: true, afterBuildTicks: durationTicks(1) }) },
+        }),
+      }),
+    );
+  }
+
+  // Sizes are the same on every run of the same commit, so they are drawn as they are
+  const doc = docsData.jobs.doctest;
+  const didx = docsIndices("doctest");
+  const dxs = didx.map((i) => Date.parse(doc.started_at[i]));
+  const sizeChart = (id, title, datasets, { tooltipLabel, y, y1 } = {}) =>
+    docsCharts.push(
+      new Chart(document.getElementById(id), {
+        type: "line",
+        data: { datasets },
+        options: panelChartOptions({
+          title: panelTitle(title, theme),
+          onZoom: syncDocsZoom,
+          interaction: { mode: "nearIndex", intersect: false },
+          elements: { line: { tension: 0 } },
+          onClick: opener("doctest", didx),
+          plugins: {
+            legend: { ...legend, display: datasets.length > 1 },
+            tooltip: {
+              usePointStyle: true,
+              boxPadding: 4,
+              callbacks: {
+                title: titleOf("doctest", didx),
+                label: tooltipLabel,
+                footer: (items) => (items.length ? [...docsBuildLines(doc, didx[items[0].raw.k]), TOOLTIP_DETAILS_HINT()] : ""),
+              },
+            },
+          },
+          scales: { x: xAxis(), y, ...(y1 ? { y1 } : {}) },
+        }),
+      }),
+    );
+  const line = (label, color, ys, extra = {}) => ({
+    label,
+    data: dxs.map((x, k) => (ys[k] == null ? null : { x, y: ys[k], k })).filter(Boolean),
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: 1.5,
+    pointRadius: 0,
+    pointHoverRadius: 3,
+    ...extra,
+  });
+  if (!doc) return;
+  sizeChart(
+    "docs-chart-index",
+    "Search index (search_index.js)",
+    [line("Search index", palette[2], didx.map((i) => docsMiB(doc.search_index_kib[i])))],
+    {
+      tooltipLabel: (ctx) => ` ${formatDocsKiB(ctx.raw.y * 1024)}`,
+      y: yAxis((v) => `${v} MiB`),
+    },
+  );
+  const last = didx[didx.length - 1];
+  const pages = Object.entries(doc.pages || {})
+    .filter(([, v]) => didx.some((i) => v[i] != null))
+    .sort((a, b) => (b[1][last] ?? 0) - (a[1][last] ?? 0))
+    .slice(0, DOCS_TOP_PAGES);
+  sizeChart(
+    "docs-chart-pages",
+    "HTML pages over 200 KiB",
+    pages.map(([page, v], n) => line(page.replace(/\.md$/, ""), palette[n % palette.length], didx.map((i) => v[i]))),
+    {
+      tooltipLabel: (ctx) => ` ${ctx.dataset.label}: ${formatDocsKiB(ctx.raw.y)}`,
+      y: yAxis((v) => `${v} KiB`),
+    },
+  );
+  // The HTML tarball is fifty times the PDF, so each has its own axis
+  const pdf = docsData.jobs.pdf_docs_build;
+  const pidx = docsIndices("pdf_docs_build");
+  const byBuild = new Map(pidx.map((i) => [pdf.builds[i], pdf.output_kib[i]]));
+  sizeChart(
+    "docs-chart-output",
+    "What the jobs upload",
+    [
+      line("HTML tarball", palette[1], didx.map((i) => docsMiB(doc.output_kib[i]))),
+      line("PDF (right axis)", palette[4], didx.map((i) => docsMiB(byBuild.get(doc.builds[i]))), { yAxisID: "y1", spanGaps: true }),
+    ],
+    {
+      tooltipLabel: (ctx) => ` ${ctx.dataset.label.replace(/ \(.*/, "")}: ${formatDocsKiB(ctx.raw.y * 1024)}`,
+      y: yAxis((v) => `${v} MiB`),
+      y1: { ...yAxis((v) => `${v} MiB`), position: "right", grid: { drawOnChartArea: false } },
+    },
+  );
+}
+
+// The missing docstrings of the latest run with a list, each with the build since
+// which it has been missing in the loaded runs; or each run that changed the list
+function updateDocsTable() {
+  if (!docsData) return;
+  const name = docsData.jobs.doctest ? "doctest" : "pdf_docs_build";
+  const j = docsData.jobs[name];
+  const thead = document.getElementById("docs-stats-thead");
+  const tbody = document.getElementById("docs-stats-tbody");
+  const caption = document.getElementById("docs-stats-caption");
+  const q = docsFilter.toLowerCase();
+  const match = (n) => !q || n.toLowerCase().includes(q);
+  const moduleOf = (n) => {
+    const m = n.match(/^([\w.]+?)\.(?:[^.\s]+|:\S+|@\S+)(?: ::.*)?$/);
+    return m ? m[1] : "";
+  };
+  const latest = j ? [...j.missing_set.keys()].reverse().find((i) => j.missing_set[i] != null) : undefined;
+  if (latest == null) {
+    thead.innerHTML = "";
+    caption.innerHTML = "";
+    tbody.innerHTML = '<tr><td class="text-muted">No build in the loaded range printed the missing docstrings.</td></tr>';
+    return;
+  }
+  const changes = docsListChanges(name);
+  if (docsTableView === "missing") {
+    const names = docsMissingNames(j, latest);
+    // Where each name's current run of builds started, from the last change that added it
+    const since = new Map();
+    for (const c of changes) {
+      for (const n of c.documented) since.delete(n);
+      for (const n of c.added) since.set(n, c.i);
+    }
+    const first = j.missing_set.findIndex((id) => id != null);
+    const rows = names.filter(match).map((n) => {
+      const i = since.get(n) ?? first;
+      return { name: n, module: moduleOf(n), build: j.builds[i], i, before: i === first };
+    });
+    thead.innerHTML = sortableHeaderRow(
+      [
+        ["name", "Docstring", "", "A public name with a docstring that no @docs or @autodocs block of the manual includes"],
+        ["module", "Module", "", "The module it belongs to"],
+        ["build", "Missing since", "num", "The build from which it has been missing, among the builds loaded; the first one loaded when it was missing all along"],
+      ],
+      docsSort,
+    );
+    bindSortHeaders(thead, (col) => {
+      docsSort = nextSort(docsSort, col, (c) => c !== "build");
+      updateDocsTable();
+    });
+    tbody.innerHTML =
+      sortRows(rows, docsSort, "name")
+        .map(
+          (r) =>
+            `<tr><td><code>${escapeHtml(r.name)}</code></td><td>${escapeHtml(r.module)}</td>` +
+            `<td class="num" title="${escapeHtml(j.started_at[r.i].slice(0, 10))}">${r.before ? "≤ " : ""}<button class="btn-link" data-i="${r.i}">#${r.build}</button></td></tr>`,
+        )
+        .join("") || '<tr><td colspan="3" class="text-muted">No missing docstring matches the filter.</td></tr>';
+    caption.innerHTML = `<b>${names.length} public docstrings missing from the manual</b> <span class="col-secondary">in build #${j.builds[latest]}${q ? `, ${rows.length} matching the filter` : ""}. doc/make.jl records how many there should be and fails the build when the count differs, so a pull request that adds a public docstring has to add it to the manual or raise that count.</span>`;
+  } else {
+    const rows = changes
+      .map((c) => ({ ...c, build: j.builds[c.i], before: j.missing_docs[c.prev], after: j.missing_docs[c.i] }))
+      .filter((c) => !q || c.documented.some(match) || c.added.some(match));
+    thead.innerHTML = sortableHeaderRow(
+      [
+        ["build", "Build", "num", "The first build with the new list"],
+        [null, "Commit", "", "The build's commit; a build can come several commits after the one before it"],
+        ["after", "Missing", "num", "How many were missing after it, and the change"],
+        [null, "Documented", "", "Names it added to the manual"],
+        [null, "Newly missing", "", "Public names with a docstring it left out of the manual"],
+      ],
+      docsSort,
+    );
+    bindSortHeaders(thead, (col) => {
+      docsSort = nextSort(docsSort, col);
+      updateDocsTable();
+    });
+    const names = (list) =>
+      list.length ? list.map((n) => `<code>${escapeHtml(n)}</code>`).join(", ") : '<span class="text-muted">—</span>';
+    tbody.innerHTML =
+      sortRows(rows, docsSort, "build")
+        .map((c) => {
+          const sha = j.commits[c.i];
+          const subject = docsData.subjects?.[sha] || "";
+          const d = c.after - c.before;
+          return (
+            `<tr><td class="num"><button class="btn-link" data-i="${c.i}">#${c.build}</button></td>` +
+            `<td class="msg">${commitShaLink(sha)} ${escapeHtml(subject)} ${extLink(githubCompareURL(j.commits[c.prev], sha), "diff", 'class="gh-link" title="Every commit since the build before"')}</td>` +
+            `<td class="num">${c.after} <span class="${d < 0 ? "ttfx-down" : d > 0 ? "ttfx-up" : ""}">(${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d)})</span></td>` +
+            `<td class="msg">${names(c.documented)}</td><td class="msg">${names(c.added)}</td></tr>`
+          );
+        })
+        .join("") || `<tr><td colspan="5" class="text-muted">${q ? "No change matches the filter." : "The list did not change in the loaded range."}</td></tr>`;
+    caption.innerHTML = `<b>Changes to the list</b> <span class="col-secondary">Each build whose missing docstrings differ from the build before, in the loaded range.</span>`;
+  }
+  tbody.querySelectorAll("button[data-i]").forEach((b) => (b.onclick = () => showDocsJobPopup(name, Number(b.dataset.i))));
+}
+
+// "+12.3s (+8%)" from `before` to `now`, in the job popup
+function docsChangeCell(now, before, format) {
+  if (now == null || before == null || now === before) return '<td class="num"></td>';
+  const d = now - before;
+  const pct = before ? (d / before) * 100 : null;
+  const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+  return `<td class="num ${ttfxPctClass(pct)}">${sign}${format(Math.abs(d)).replace(/<[^>]*>/g, "")}${pct == null ? "" : ` (${formatSignedPct(pct, { digits: 0 })})`}</td>`;
+}
+
+// One docs job: its links, every stage and size against the run before it and the
+// median of the DOCS_POPUP_BASELINE before it, and how it changed the list
+function showDocsJobPopup(name, i) {
+  const j = docsData.jobs[name];
+  if (!j) return;
+  const sha = j.commits[i];
+  const subject = docsData.subjects?.[sha] || "";
+  const pr = ttfxBuildPr({ message: subject });
+  const prev = i > 0 ? i - 1 : null;
+  const base = [];
+  for (let k = i - 1; k >= 0 && base.length < DOCS_POPUP_BASELINE; k--) base.push(k);
+  const row = (label, html) => (html ? `<div><span class="label">${label}:</span> ${html}</div>` : "");
+
+  let html = '<div class="ttfx-popup-actions">';
+  html += allStatsButton(sha);
+  html += extLink(docsJobURL(j, i), "Buildkite job", 'class="btn"');
+  if (pr) html += extLink(githubPrURL(pr), `GitHub PR #${pr}`, 'class="btn"');
+  html += extLink(githubCommitURL(sha), "GitHub commit", 'class="btn"');
+  if (prev != null && j.commits[prev] !== sha)
+    html += extLink(githubCompareURL(j.commits[prev], sha), "Commits since the previous build", 'class="btn" title="What changed between the build before this one and this one"');
+  html += "</div>";
+  html += row("Title", escapeHtml(subject));
+  html += row("Commit", `${commitShaLink(sha)} ${githubCommitLink(sha)}`);
+  html += row("Started", timeHtml(j.started_at[i]));
+  html += row("Build", `#${j.builds[i]}, ${escapeHtml(name)}${j.job_states[i] !== "passed" ? `, <b>${escapeHtml(j.job_states[i])}</b>` : ""}`);
+  html += row("Agent", escapeHtml(j.agents[i] || ""));
+  if (j.missing_docs[i] != null) html += row("Missing from the manual", `${j.missing_docs[i]} public docstrings`);
+
+  const header = `<table class="ttfx-popup-table"><thead><tr><th></th><th class="num">This build</th><th class="num">vs previous</th><th class="num" title="Against the median of the ${base.length} builds before this one">vs median of ${base.length} before</th></tr></thead><tbody>`;
+  const tableRow = (label, tip, vals, format) => {
+    const v = vals[i];
+    if (v == null && (prev == null || vals[prev] == null)) return "";
+    return (
+      `<tr><th title="${escapeHtml(tip)}">${escapeHtml(label)}</th><td class="num">${format(v)}</td>` +
+      docsChangeCell(v, prev == null ? null : vals[prev], format) +
+      docsChangeCell(v, medianOrNull(base.map((k) => vals[k])), format) +
+      "</tr>"
+    );
+  };
+  const stages = docsData.stages[name] || Object.keys(j.stages);
+  const total = j.started_at.map((_, k) => (stages.every((s) => j.stages[s][k] != null) ? stages.reduce((sum, s) => sum + j.stages[s][k], 0) : null));
+  html += header;
+  for (const s of stages) html += tableRow(DOCS_STAGES[s]?.label || s, DOCS_STAGES[s]?.title || "", j.stages[s], formatDuration);
+  html += tableRow("Total", "The stages above added up", total, formatDuration);
+  html += tableRow(name === "doctest" ? "HTML tarball" : "PDF", "The file the job uploads", j.output_kib, formatDocsKiB);
+  html += tableRow("Search index", "search_index.js", j.search_index_kib, formatDocsKiB);
+  for (const [page, vals] of Object.entries(j.pages || {}).sort((a, b) => (b[1][i] ?? 0) - (a[1][i] ?? 0)))
+    html += tableRow(page, "An HTML page over Documenter's 200 KiB warning limit", vals, formatDocsKiB);
+  html += "</tbody></table>";
+
+  const p = docsPrevWithList(j, i);
+  if (p != null && j.missing_set[i] != null && j.missing_set[p] !== j.missing_set[i]) {
+    const c = docsListChange(j, p, i);
+    const list = (names) => names.map((n) => `<code>${escapeHtml(n)}</code>`).join(", ");
+    html += `<div class="ttfx-popup-section">Missing docstrings against build #${j.builds[p]}</div>`;
+    if (c.documented.length) html += row("Now in the manual", list(c.documented));
+    if (c.added.length) html += row("Newly missing", list(c.added));
+  }
+  openDetailPopup({ title: `${DOCS_JOBS[name]?.label || name} of build #${j.builds[i]}`, html, key: `docs-job-${j.jobs[i]}` });
+}
+
 // === Coverage ===
 // Codecov's file-level coverage of master, from api/coverage/files: the share
 // of lines run in each top-level directory over time, and a table of every
@@ -23909,7 +24531,7 @@ const PHONE_SECTIONS = [
   { key: "overview", label: "Overview", tabs: ["overview"], icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { key: "commit", label: "Look up", tabs: ["commit", "package"], icon: "M2 12h7M15 12h7M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
   { key: "benchmarks", label: "Benchmarks", tabs: ["perf", "benchmarks", "ci-ttfx", "ci-runtime", "ci-sizes"], icon: "M5 20V11M12 20V5M19 20v-6M3 20h18" },
-  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
+  { key: "ci", label: "CI", tabs: ["ci-timing", "ci-workers", "ci-build-stages", "ci-docs", "ci-coverage"], icon: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2" },
   { key: "ecosystem", label: "Ecosystem", tabs: ["packages", "pkgeval", "activity"], icon: "M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10" },
 ];
 const PHONE_TOOLBARS = ".filter-toolbar";

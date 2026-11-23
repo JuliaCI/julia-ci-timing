@@ -378,6 +378,33 @@
         "sysimage_stdlibs": {
           "description": "Seconds each stdlib took to load into the system image in a sysimage_jobs row, from the per-module lines before the Sysimage built summary."
         },
+        "docs_jobs": {
+          "description": "One docs job of a julia-ci master build, parsed from its log by fetch_docs.jl: doctest (the doctests, then the HTML manual, deployed to docs.julialang.org) or pdf_docs_build (the PDF manual), from September 2026. The stage seconds come from Buildkite's line timestamps, each from its first line to the next stage's. The jobs run on shared Linux machines, so expect noise.",
+          "columns": {
+            "job_uuid": "the docs job, as in jobs.job_uuid",
+            "build": "the julia-ci build number",
+            "job_name": "doctest or pdf_docs_build",
+            "agent": "the agent's hostname",
+            "job_state": "the job's Buildkite state: passed, or failed (a job that failed on the docstring count still lists them)",
+            "state": "ok; unparsed when the log had none of it (expired, or the job failed early)",
+            "setup_s": "from running doc/make.jl to Documenter's first stage: installing and precompiling Documenter",
+            "doctest_s": "running the doctests (NULL in the PDF job, which skips them)",
+            "document_s": "expanding the pages, building cross-references, the document checks and the indices",
+            "render_s": "writing the HTML pages, or the LaTeX file",
+            "deploy_s": "deploydocs: cloning docs.julialang.org and pushing the new HTML (doctest only)",
+            "latexmk_s": "compiling the PDF with latexmk (pdf_docs_build only)",
+            "missing_docs": "how many public docstrings are not in the manual, from Documenter's checkdocs warning (since JuliaLang/julia#55267 in November 2026; doc/make.jl fails the build when the count differs from the one it records)",
+            "missing_set": "their names, as docs_missing_sets.id",
+            "search_index_kib": "the size of search_index.js, when over Documenter's 500 KiB warning limit",
+            "output_kib": "the file the job uploads: the HTML tarball or the PDF, as the upload rounds it"
+          }
+        },
+        "docs_missing_sets": {
+          "description": "Each distinct list of public docstrings missing from the manual, once however many docs_jobs printed it: the names newline-separated and sorted, and how many."
+        },
+        "docs_pages": {
+          "description": "The size in KiB of each HTML page of the manual over Documenter's 200 KiB warning limit in a docs_jobs row; Documenter prints no size for the others. page is the page's source, e.g. manual/unicode-input.md."
+        },
         "rtb_jobs": {
           "description": "One Runtime benchmarks job (JuliaCI/julia-ci-benchmarks, on the macOS aarch64 agent) of a julia-ci master or release branch build, from fetch_runtime.jl, or (pipeline manyjulias) one master commit of the backfill from manyjulias builds on another machine, from db/import_runtime.jl. Each benchmark runs in several blocks, each block its own process; the results are in rtb_results.",
           "columns": {
