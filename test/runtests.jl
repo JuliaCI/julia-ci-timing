@@ -49,6 +49,20 @@ body(r) = HTTP.header(r, "Content-Encoding") == "gzip" ? transcode(GzipDecompres
     end
 end
 
+@testset "ingest schedule matches the host's timers" begin
+    files = joinpath(ROOT, "infra", "terraform", "files")
+    for (kind, unit) in ("full" => "ci-timing-ingest", "fast" => "ci-timing-ingest-fast")
+        timer = read(joinpath(files, "$unit.timer"), String)
+        sched = CITiming.INGEST_SCHEDULE[kind]
+        minutes = match(r"OnCalendar=\*-\*-\* \*:([\d,]+):00 UTC", timer)[1]
+        @test parse.(Int, split(minutes, ",")) == sched["minutes"]
+        delay = match(r"RandomizedDelaySec=(\d+)m", timer)[1]
+        @test parse(Int, delay) * 60 == sched["delay_s"]
+    end
+    fast = match(r"ExecStart=\S+ (.*)", read(joinpath(files, "ci-timing-ingest-fast.service"), String))[1]
+    @test [replace(f, r"^fetch_|\.jl$" => "") for f in split(fast)] == CITiming.INGEST_SCHEDULE["fast"]["sources"]
+end
+
 @testset "export" begin
     mktempdir() do dir
         dbfile = joinpath(dir, "fixture.sqlite")

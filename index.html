@@ -344,7 +344,17 @@
       >
         ?
       </button>
-      <span class="updated" id="last-updated" aria-live="polite"></span>
+      <span class="updated ingest-status">
+        <button
+          class="ingest-btn"
+          id="last-updated"
+          aria-live="polite"
+          aria-expanded="false"
+          aria-controls="ingest-panel"
+          onclick="toggleIngestPanel()"
+        ></button>
+        <div class="ingest-panel" id="ingest-panel" hidden></div>
+      </span>
       <a
         href="https://github.com/JuliaCI/julia-ci-timing/commit/__BUILD_COMMIT__"
         target="_blank"

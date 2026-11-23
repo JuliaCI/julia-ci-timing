@@ -186,10 +186,37 @@ end
 
 const SOURCES = ("timing", "benchmarks", "pkgeval", "ttfx", "runtime", "sizes", "sysimage", "docs", "packages", "agents", "github")
 
+# The host's ingest timers, for the site's ingest indicator. The tests check
+# these against the timer and service files.
+const INGEST_SCHEDULE = Dict(
+    "full" => Dict("minutes" => [5, 35], "delay_s" => 300, "sources" => collect(SOURCES)),
+    "fast" => Dict("minutes" => [0, 10, 15, 20, 25, 30, 40, 45, 50, 55], "delay_s" => 60,
+                   "sources" => ["timing", "agents", "github"]))
+
+# A run with no finish older than the ingest's per-fetcher limit (30 minutes)
+# was killed, not still running
+const RUN_LIMIT_S = 35 * 60
+
+function ingest_runs(db)
+    now = Dates.now(Dates.UTC)
+    runs = Dict{String,Any}()
+    for source in SOURCES
+        r = Render.rows(db, "SELECT started_at, finished_at, ok FROM source_runs WHERE source = ? ORDER BY started_at DESC LIMIT 1", (source,))
+        isempty(r) && continue
+        r = r[1]
+        started = String(r.started_at)
+        age = Dates.value(now - DateTime(rstrip(started, 'Z'))) / 1000
+        state = r.finished_at !== missing ? (r.ok == 1 ? "ok" : "failed") : age < RUN_LIMIT_S ? "running" : "killed"
+        runs[source] = Dict("started_at" => started, "finished_at" => Render.js(r.finished_at), "state" => state)
+    end
+    return runs
+end
+
 function status(db)
     return Dict("change_seq" => Store.current_seq(db),
                 "source_seq" => Dict(source => Store.source_seq(db, source) for source in SOURCES),
                 "generated_at" => Dict(source => Render.generated_at(db, source) for source in SOURCES),
+                "ingest" => Dict("runs" => ingest_runs(db), "schedule" => INGEST_SCHEDULE),
                 "server_time" => Store.iso_now())
 end
 
@@ -225,7 +252,7 @@ function client_param(params)
 end
 
 const ROUTES = [
-    Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, and the server's time. Never cached, so it is the cheap thing to poll.",
+    Route("status", [], "The global change sequence, each source's sequence (the ETag of its routes, which moves when an ingest changes its rows), when each source's last successful ingest finished, the latest run of each source under `ingest.runs` (its start, finish and state: running, ok, failed, or killed when it never finished), the ingest timers under `ingest.schedule` (the minutes past the hour each starts, the most it is delayed by, and its sources), and the server's time. Never cached, so it is the cheap thing to poll.",
           (db, _, _) -> status(db)),
     Route("notes/<name>", [], "A hand-maintained file from the repository's data/ directory: ttfx_annotations (notes on TTFX jobs, drawn on the TTFX charts), runtime_annotations (notes on julia-ci builds where the runtime benchmarks' machine or suite changed, drawn on the Runtime charts), sysimage_annotations (notes on julia-ci builds where how CI builds julia changed, drawn on the Build stages charts) or methodology_changes (benchmark methodology changes). Served from the deployed code itself, so it changes at a deploy rather than at the next ingest.",
           (_, a, _) -> JSON3.read(note_file(a[1]))),

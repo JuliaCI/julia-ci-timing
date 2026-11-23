@@ -7370,8 +7370,123 @@ function setUpdatedLabels() {
   const at = t.source && (sourceTimes[t.source] || t.data()?.generated_at);
   const el = document.getElementById("last-updated");
   el.textContent = at ? `Updated ${timeAgo(at)}` : "";
-  el.title = at ? formatUtc(at) : "";
+  const ingest = ingestSummary();
+  el.dataset.state = ingest?.state || "";
+  el.title = [at && `This tab's data: ${formatUtc(at)}`, ingest?.line].filter(Boolean).join("\n");
+  if (!document.getElementById("ingest-panel").hidden) renderIngestPanel();
 }
+
+// === Ingest indicator ===
+// From the ingest part of api/status: each source's latest run and the host's
+// timers. The server's clock decides what is due, not the viewer's.
+let ingestStatus = null;
+let ingestClockOffset = 0;
+let ingestPollTimer = null;
+const INGEST_KIND_LABELS = { full: "Full ingest", fast: "Fast ingest" };
+
+function nextIngestStart(sched, now) {
+  const t = new Date(now);
+  t.setUTCSeconds(0, 0);
+  for (let i = 1; i <= 60; i++) {
+    t.setUTCMinutes(t.getUTCMinutes() + 1);
+    if (sched.minutes.includes(t.getUTCMinutes())) return t.getTime();
+  }
+  return null;
+}
+
+function ingestSummary() {
+  if (!ingestStatus) return null;
+  const now = Date.now() + ingestClockOffset;
+  const runs = Object.entries(ingestStatus.runs || {});
+  const schedule = ingestStatus.schedule || {};
+  const fast = new Set(schedule.fast?.sources || []);
+  const running = runs.filter(([, r]) => r.state === "running").map(([s]) => s);
+  const failed = runs.filter(([, r]) => r.state === "failed" || r.state === "killed").map(([s]) => s);
+  // Only the full ingest runs the slow sources, so one of them running means it is
+  const kind = running.length ? (running.some((s) => !fast.has(s)) ? "full" : "fast") : null;
+  const finished = runs.map(([, r]) => r.finished_at).filter(Boolean).sort();
+  const last = finished[finished.length - 1] || null;
+  const next = Object.entries(schedule)
+    .map(([k, sched]) => ({ kind: k, at: nextIngestStart(sched, now), delay: sched.delay_s }))
+    .filter((n) => n.at)
+    .sort((a, b) => a.at - b.at);
+  const state = running.length ? "running" : failed.length ? "failed" : "ok";
+  const line = running.length
+    ? `${INGEST_KIND_LABELS[kind]} running: ${running.join(", ")}`
+    : failed.length
+      ? `Ingest: the latest run of ${failed.join(", ")} failed`
+      : `Ingest idle; next at ${next[0] ? formatUtc(new Date(next[0].at).toISOString()).slice(11) : "?"}`;
+  return { now, runs, running, failed, kind, last, next, state, line };
+}
+
+function untilText(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m < 1 ? "now" : m < 60 ? `in ${m}m` : `in ${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function renderIngestPanel() {
+  const panel = document.getElementById("ingest-panel");
+  const s = ingestSummary();
+  if (!s) {
+    panel.innerHTML = `<div class="ingest-panel-row">No ingest status yet</div>`;
+    return;
+  }
+  const head = s.running.length
+    ? `<strong>${INGEST_KIND_LABELS[s.kind]} running</strong>`
+    : `<strong>Ingest idle</strong>${s.last ? ` · last run finished ${timeHtml(s.last, { relative: true })}` : ""}`;
+  const next = s.next
+    .map(
+      (n) =>
+        `<div class="ingest-panel-row">Next ${INGEST_KIND_LABELS[n.kind].toLowerCase()}: ` +
+        `${escapeHtml(formatUtc(new Date(n.at).toISOString()).slice(11))} (${untilText(n.at - s.now)}), ` +
+        `up to ${Math.round(n.delay / 60)} min later</div>`,
+    )
+    .join("");
+  const label = { running: "running", ok: "ok", failed: "failed", killed: "killed" };
+  const rows = s.runs
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([source, r]) => {
+      const when = r.state === "running" ? `started ${timeHtml(r.started_at, { relative: true })}` : timeHtml(r.finished_at || r.started_at, { relative: true });
+      return `<tr><td>${escapeHtml(source)}</td><td><span class="ingest-dot" data-state="${r.state === "killed" ? "failed" : r.state}"></span>${label[r.state] || escapeHtml(r.state)}</td><td>${when}</td></tr>`;
+    })
+    .join("");
+  panel.innerHTML =
+    `<div class="ingest-panel-row">${head}</div>${next}` +
+    `<table class="ingest-panel-table"><thead><tr><th>Source</th><th>Latest run</th><th></th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<div class="ingest-panel-row ingest-panel-foot"><a href="healthz" target="_blank" rel="noopener">healthz</a> · the full ingest runs every source, the fast one ${escapeHtml((ingestStatus.schedule?.fast?.sources || []).join(", "))}</div>`;
+}
+
+function toggleIngestPanel(open) {
+  const panel = document.getElementById("ingest-panel");
+  const show = open ?? panel.hidden;
+  panel.hidden = !show;
+  document.getElementById("last-updated").setAttribute("aria-expanded", String(show));
+  if (show) {
+    renderIngestPanel();
+    refreshData();
+  }
+  scheduleIngestPoll();
+}
+
+// The regular refresh is every 5 minutes. While the panel is open or a run is
+// under way, the status is read every 30 seconds instead, so it follows the run.
+function scheduleIngestPoll() {
+  clearTimeout(ingestPollTimer);
+  const open = !document.getElementById("ingest-panel").hidden;
+  if (!open && ingestSummary()?.state !== "running") return;
+  ingestPollTimer = setTimeout(() => {
+    if (document.visibilityState === "visible") refreshData();
+    else scheduleIngestPoll();
+  }, 30 * 1000);
+}
+
+document.addEventListener("click", (e) => {
+  const panel = document.getElementById("ingest-panel");
+  if (!panel.hidden && !e.target.closest(".ingest-status")) toggleIngestPanel(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !document.getElementById("ingest-panel").hidden) toggleIngestPanel(false);
+});
 
 let refreshController = null;
 async function refreshData() {
@@ -7389,6 +7504,9 @@ async function refreshData() {
     if (timingSeq === null) timingSeq = seqs.timing;
     sourceSeqs = seqs;
     sourceTimes = status.generated_at || {};
+    ingestStatus = status.ingest || null;
+    if (status.server_time) ingestClockOffset = new Date(status.server_time).getTime() - Date.now();
+    scheduleIngestPoll();
     for (const source of changed) for (const view of SOURCE_VIEWS[source] || []) staleViews.add(view);
     for (const source of changed) for (const key of OVERVIEW_SOURCE_KEYS[source] || []) overviewStale.add(key);
     for (const [url, { key }] of overviewBodies) if (overviewStale.has(key)) overviewBodies.delete(url);
