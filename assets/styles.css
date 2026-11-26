@@ -4334,6 +4334,30 @@ a.ttfx-pr-copy {
 .commit-card-links {
   font-size: 12px;
 }
+.commit-card .commit-card-anchor {
+  color: var(--color-fg-muted);
+  font-weight: 400;
+  margin-left: 4px;
+  opacity: 0.5;
+}
+.commit-card:hover .commit-card-anchor,
+.commit-card-anchor:focus-visible {
+  opacity: 1;
+}
+.commit-card .commit-card-anchor.copied {
+  color: var(--color-success-fg);
+  opacity: 1;
+}
+.commit-card .commit-card-anchor.copy-failed {
+  color: var(--color-danger-fg);
+  opacity: 1;
+}
+/* The section a link's focus= names */
+.commit-card-focus {
+  border-color: var(--color-accent-fg);
+  box-shadow: 0 0 0 1px var(--color-accent-fg);
+  scroll-margin-top: 12px;
+}
 .commit-nav {
   display: flex;
   justify-content: space-between;

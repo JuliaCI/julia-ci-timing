@@ -23,7 +23,11 @@ Commits:
 - `/api/commit/<sha or PR number>`: everything for one master commit (CI jobs, TTFX and
   size against the previous commit and the releases, the first benchmark and PkgEval
   reports that include it), or for an open pull request, under `pr`, its TTFX and size
-  against master and the releases
+  against master and the releases. `ttfx_variants` and `runtime_variants` list every job
+  variant measured (`variant` `''` for the regular job, `src` for the one built from source,
+  `opt` for the optimized build); `ttfx` and `runtime` stay the regular (or only) one. On the
+  site, `?tab=commit&c=<ref>&focus=ttfx-src` (or `ttfx`, `runtime`, `runtime-src`, `ttfx-opt`)
+  scrolls to that section
 - `/api/commits?limit=100`: master commits, newest first
 - `/api/package/<Name>`: everything for one package (case-sensitive name): its General
   registry entry, downloads per day and rank, PkgEval history and badge state, and its TTFX

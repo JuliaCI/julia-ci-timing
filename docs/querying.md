@@ -109,7 +109,8 @@ only the files that changed. `AGENTS.md` describes their shapes.
   causes of those), `ttfx_traces` and `ttfx_recompiles` (from the job's trace logs: the
   methods compiled again because an invalidation dropped their code),
   `ttfx_failures`, `ttfx_samples` (every repeat). `ttfx_prs` holds the latest TTFX
-  comparison of each open pull request (head against master: verdict, suite geomean ratios,
+  comparison of each open pull request per job `variant` (`''` the regular job, `src` the
+  one built from source; head against master: verdict, suite geomean ratios,
   flagged tasks) and the state of the newest julia-pr build of its current head (`ci_*`),
   current state only.
 - **Runtime benchmarks.** `rtb_jobs` (one julia-ci master build's `Runtime benchmarks` job:
@@ -119,7 +120,7 @@ only the files that changed. `AGENTS.md` describes their shapes.
   benchmark: `value`, the minimum over blocks of each block's 5th percentile of the judged metric (the minimum for instructions), cycles, instructions or ns per
   `metric`; `value_max`; `instructions`, exact across processes; `min_ns`, `allocs`,
   `bytes`, `ops`; `status` and `error`; the per-block values as JSON). `rtb_prs` holds the
-  latest comparison of each open pull request (verdict, counts, geomean, and
+  latest comparison of each open pull request per job `variant`, as `ttfx_prs` (verdict, counts, geomean, and
   `compare.json`'s categories and benchmarks as JSON), current state only.
 - **Sizes.** `size_builds` (one measurement of the unpacked linux-x86_64 distribution of a
   commit: source `ci` for the tarballs of julia-ci master builds, `manyjulias` for the

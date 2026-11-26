@@ -7569,7 +7569,7 @@ const TABS = {
     url: "commit",
     path: "/commit",
     view: "commit-view",
-    keys: { c: "commit lookup ref" },
+    keys: { c: "commit lookup ref", focus: "the Commit page section to scroll to, as ttfx, ttfx-src or runtime-src" },
     applyURL: applyCommitURLParams,
     show: () => renderCommitView(),
   },
@@ -15287,7 +15287,7 @@ function ttfxPrMarkdown(p, metrics = ttfxPrs.metrics) {
   const chained = st && st.complete ? st.suite : null;
   const job = p.web_url ? `[job](${p.web_url})` : "job";
   const lines = [
-    `**TTFX** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}).`,
+    `**${jobVariantTitle("TTFX", p.variant)}** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}).`,
   ];
   if (p.outdated) lines.push("", "Measured on an older commit; the pull request has newer commits.");
   if (st)
@@ -15366,10 +15366,14 @@ function copyToClipboard(button, text) {
 // The button is in the TTFX tab's popup or on the Commit page, which has its own copy
 function copyTtfxPrSummary(button) {
   const n = Number(button.dataset.copyPr);
-  const p = ttfxPrs?.prs?.find((x) => x.pr === n);
+  // A button without a variant is in a ranking, which lists each pull request once
+  const v = button.dataset.copyVariant;
+  const fits = (x) => x.pr === n && (v === undefined || (x.variant || "") === v);
+  const p = ttfxPrs?.prs?.find(fits);
   if (p) return copyToClipboard(button, ttfxPrMarkdown(p));
-  const c = commitResult?.data?.pr?.ttfx;
-  if (c && c.pr.pr === n) copyToClipboard(button, ttfxPrMarkdown(c.pr, c.metrics));
+  const list = commitResult?.data?.pr?.ttfx_variants || [commitResult?.data?.pr?.ttfx];
+  const c = list.find((x) => x && fits(x.pr));
+  if (c) copyToClipboard(button, ttfxPrMarkdown(c.pr, c.metrics));
 }
 
 // Captured so the click does not also reach the row, which opens the popup
@@ -15485,10 +15489,11 @@ function ttfxPrDetailsHtml(p, metrics, { allStats = true, weights = ttfxPrs && t
   if (allStats) html += allStatsButton(p.pr, { pr: true });
   html += `<a class="btn" href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${p.pr}</a>`;
   if (p.web_url) html += `<a class="btn" href="${escapeHtml(p.web_url)}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
-  html += `<button type="button" class="btn" data-copy-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
+  html += `<button type="button" class="btn" data-copy-pr="${p.pr}" data-copy-variant="${escapeHtml(p.variant || "")}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
+  if (p.variant) html += row("Job", escapeHtml(jobVariantTitle("TTFX", p.variant)));
   const ciText = escapeHtml(ci.title.replace(/^CI: /, ""));
   html += row("CI", `${ci.dot} ${ci.url ? `<a href="${escapeHtml(ci.url)}" target="_blank" rel="noopener noreferrer">${ciText}</a>` : ciText}`);
   // The head is not on master, so it links to GitHub rather than the Commit page
@@ -15634,6 +15639,7 @@ function renderTtfxPrsList() {
         p.draft ? "draft" : "",
         p.outdated ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(ttfxPrOutdatedText(p))}">older commit</span>` : "",
         ttfxPrStackBadge(p).trim(),
+        prVariantBadges(p, "ttfx", "TTFX").trim(),
         better || worse ? `<span class="m-good">${better}↓</span> <span class="m-bad">${worse}↑</span> tasks` : "",
         timeHtml(p.date, { relative: true }),
       ].filter(Boolean);
@@ -15871,7 +15877,8 @@ function renderTtfxPrsTable() {
       (p.outdated
         ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(ttfxPrOutdatedText(p))}">older commit</span> `
         : "") +
-      ttfxPrStackBadge(p);
+      ttfxPrStackBadge(p) +
+      prVariantBadges(p, "ttfx", "TTFX");
     const ci = ttfxPrCi(p);
     const ciDot = ci.url
       ? `<a class="ttfx-pr-ci" href="${escapeHtml(ci.url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${ci.dot}</a>`
@@ -19143,6 +19150,7 @@ function drawOverview(changed = null) {
 // builds keep cut at 80 characters, so a PR it cannot find is resolved to
 // its merge commit through GitHub's API instead.
 let commitRef = ""; // the URL's c=, normalized
+let commitFocus = ""; // the URL's focus=: the section to scroll to once the lookup is drawn
 let commitResult = null; // { ref, data, pr } of the last lookup
 const COMMIT_REF_RE = /^(\d{1,6}|[0-9a-f]{7,40})$/;
 const COMMIT_SHOWN_ROWS = 12;
@@ -19162,7 +19170,9 @@ function normalizeCommitRef(value) {
 }
 
 function applyCommitURLParams() {
-  commitRef = normalizeCommitRef(new URLSearchParams(window.location.search).get("c"));
+  const params = new URLSearchParams(window.location.search);
+  commitRef = normalizeCommitRef(params.get("c"));
+  commitFocus = params.get("focus") || "";
 }
 
 function submitCommitLookup(event) {
@@ -19171,21 +19181,102 @@ function submitCommitLookup(event) {
 }
 
 // Every lookup is its own history entry, so back returns to the last commit
-function lookupCommit(value) {
+function lookupCommit(value, focus = "") {
   commitRef = normalizeCommitRef(value);
+  commitFocus = focus;
   const url = new URL(window.location);
   url.searchParams.set("tab", tabToURLValue("commit"));
   if (commitRef) url.searchParams.set("c", commitRef);
   else url.searchParams.delete("c");
+  if (focus) url.searchParams.set("focus", focus);
+  else url.searchParams.delete("focus");
   if (url.href !== window.location.href) history.pushState(null, "", url);
   if (activeTab === "commit") renderCommitView();
   else switchTab("commit", { pushHistory: false });
 }
 
-// A link to the Commit page; a click on it does not reach the row it sits in
-function commitLink(ref, text) {
+// A link to the Commit page, or with `focus` to one of its sections; a click on it
+// does not reach the row it sits in
+function commitLink(ref, text, focus = "", attrs = "") {
   const r = escapeHtml(ref);
-  return `<a href="?tab=${tabToURLValue("commit")}&c=${r}" onclick="event.stopPropagation();lookupCommit('${r}');return false">${text}</a>`;
+  const f = escapeHtml(focus);
+  return `<a href="${commitPageURL(ref, focus)}"${attrs ? ` ${attrs}` : ""} onclick="event.stopPropagation();lookupCommit('${r}', '${f}');return false">${text}</a>`;
+}
+
+function commitPageURL(ref, focus = "", { absolute = false } = {}) {
+  const q = `?tab=${tabToURLValue("commit")}&c=${encodeURIComponent(ref)}${focus ? `&focus=${encodeURIComponent(focus)}` : ""}`;
+  return absolute ? new URL(q, window.location.href).href : q;
+}
+
+// What a job variant builds differently from the regular job, for its section's title
+const JOB_VARIANT_BUILDS = {
+  src: "built from source (USE_BINARYBUILDER=0)",
+  opt: "optimized build (PGO and ThinLTO)",
+};
+
+// "TTFX", or "TTFX, built from source (USE_BINARYBUILDER=0)" for a variant; plain text
+function jobVariantTitle(what, variant) {
+  return variant ? `${what}, ${JOB_VARIANT_BUILDS[variant] || variant.replace(/_/g, " ")}` : what;
+}
+
+// The focus= value of a section: ttfx, ttfx-src, runtime, runtime-src
+const commitFocusKey = (what, variant) => (variant ? `${what}-${variant}` : what);
+const commitSectionId = (focus) => `commit-section-${focus}`;
+
+// In a table of pull requests: the variant a row shows when it is not the regular
+// job, and the other variants the pull request has, linked to their Commit page section
+function prVariantBadges(p, what, label) {
+  const own = p.variant ? `<span class="ttfx-pr-badge" title="${escapeHtml(`${jobVariantTitle(label, p.variant)}: this pull request has no regular ${label} comparison`)}">${escapeHtml(p.variant)}</span> ` : "";
+  const others = (p.variants || []).filter((v) => v !== p.variant);
+  if (!others.length) return own;
+  const title = `Also measured: ${others.map((v) => jobVariantTitle(label, v)).join("; ")}. Opens it on the Commit page.`;
+  return own + commitLink(String(p.pr), `+${others.map(escapeHtml).join(", +")}`, commitFocusKey(what, others[0] || ""), `class="ttfx-pr-badge" title="${escapeHtml(title)}"`) + " ";
+}
+
+// Scrolls to the section focus= names and marks it, once the lookup is drawn. A
+// section's collapsed rows open, so a linked section shows in full. A redraw with
+// fresh data keeps the reader's place rather than scrolling back.
+let commitFocusScrolled = "";
+function focusCommitSection() {
+  document.querySelectorAll(".commit-card-focus").forEach((el) => el.classList.remove("commit-card-focus"));
+  if (!commitFocus) return;
+  const el = document.getElementById(commitSectionId(commitFocus));
+  if (!el) return;
+  el.classList.add("commit-card-focus");
+  el.querySelectorAll("details.commit-more").forEach((d) => (d.open = true));
+  const key = `${commitResult?.ref}|${commitFocus}`;
+  if (key === commitFocusScrolled) return;
+  commitFocusScrolled = key;
+  // The masonry places the new cards in the frame after they are drawn
+  requestAnimationFrame(() => requestAnimationFrame(() => el.scrollIntoView({ block: "start" })));
+}
+
+// The # beside a section's title: a link to the section, which a click also copies
+function commitSectionAnchor(focus) {
+  const ref = commitRef || commitResult?.ref || "";
+  if (!ref) return "";
+  const f = escapeHtml(focus);
+  return `<a class="commit-card-anchor" href="${commitPageURL(ref, focus)}" title="Copy a link to this section" aria-label="Copy a link to this section" onclick="return copyCommitSectionLink(this, '${f}')">#</a>`;
+}
+
+function copyCommitSectionLink(a, focus) {
+  const url = new URL(a.href, window.location.href);
+  history.replaceState(null, "", url);
+  commitFocus = focus;
+  focusCommitSection();
+  const done = (ok) => {
+    a.classList.add(ok ? "copied" : "copy-failed");
+    a.title = ok ? "Link copied" : "Could not copy the link";
+    setTimeout(() => {
+      a.classList.remove("copied", "copy-failed");
+      a.title = a.getAttribute("aria-label");
+    }, 1500);
+  };
+  navigator.clipboard.writeText(url.href).then(
+    () => done(true),
+    () => done(false),
+  );
+  return false;
 }
 
 // A master commit's short SHA linking to the Commit page
@@ -19410,9 +19501,12 @@ function commitSeconds(s) {
   return s < 10 ? `${s.toFixed(2)}s` : formatDuration(s);
 }
 
-function commitCard(title, bodyHtml, { links = "" } = {}) {
-  return `<section class="commit-card">
-    <div class="commit-card-header"><h3 class="commit-card-title">${title}</h3><span class="commit-card-links">${links}</span></div>
+// With `focus`, the card is a section focus= can name, with a link to itself
+function commitCard(title, bodyHtml, { links = "", focus = "" } = {}) {
+  const id = focus ? ` id="${escapeHtml(commitSectionId(focus))}"` : "";
+  const anchor = focus ? ` ${commitSectionAnchor(focus)}` : "";
+  return `<section class="commit-card"${id}>
+    <div class="commit-card-header"><h3 class="commit-card-title">${title}${anchor}</h3><span class="commit-card-links">${links}</span></div>
     ${bodyHtml}
   </section>`;
 }
@@ -19440,17 +19534,26 @@ function drawCommit({ ref, data, pr }) {
   setCommitListMinimized(!!(!data.commit && data.pr));
   if (!data.commit) {
     body.innerHTML = data.pr ? commitPrHtml(data.pr, pr) : commitMatchesHtml(ref, data, pr);
+    focusCommitSection();
     return;
   }
   body.innerHTML = [
     commitHeaderHtml(data, pr),
     commitCIHtml(data),
-    commitTtfxHtml(data),
-    commitRuntimeHtml(data),
+    commitVariantsHtml(data.ttfx_variants, data.ttfx, commitTtfxHtml),
+    commitVariantsHtml(data.runtime_variants, data.runtime, commitRuntimeHtml),
     commitSizesHtml(data),
     commitBenchHtml(data),
     commitPkgevalHtml(data),
   ].join("");
+  focusCommitSection();
+}
+
+// A section per kind of job measured on the commit, the regular build's first, or one
+// saying there is none. A server from before the variants sends only the regular one.
+function commitVariantsHtml(variants, regular, html) {
+  const list = variants || (regular ? [regular] : []);
+  return list.length ? list.map(html).join("") : html(null);
 }
 
 // A pull request is not in the list of master commits, so the list folds to a
@@ -19497,23 +19600,37 @@ function commitPrHtml(d, gh) {
     <div class="commit-meta">${pill}${meta.join(" · ")}</div>
     <p class="commit-line text-muted">${note}</p>
   </section>`;
-  const t = d.ttfx;
-  const ttfx = t
-    ? commitCard("TTFX", `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false, weights: t.score_weights })}${ttfxPrReleasesHtml(t)}</div>`, {
-        links: overviewTabLink("ci-ttfx", "TTFX tab"),
-      })
-    : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>');
+  // One section per job variant, the regular job's first; a server from before the variants sends only one
+  const jobLink = (url) => (url ? overviewExtLink(url, "Job") + " · " : "");
+  const ttfxList = d.ttfx_variants || (d.ttfx ? [d.ttfx] : []);
+  const ttfx = ttfxList.length
+    ? ttfxList
+        .map((t) =>
+          commitCard(
+            escapeHtml(jobVariantTitle("TTFX", t.pr.variant)),
+            `<div class="popup-info">${ttfxPrDetailsHtml(t.pr, t.metrics, { allStats: false, weights: t.score_weights })}${ttfxPrReleasesHtml(t)}</div>`,
+            { links: jobLink(t.pr.web_url) + overviewTabLink("ci-ttfx", "TTFX tab"), focus: commitFocusKey("ttfx", t.pr.variant) },
+          ),
+        )
+        .join("")
+    : commitCard("TTFX", '<p class="commit-line text-muted">No TTFX comparison recorded for this pull request.</p>', { focus: "ttfx" });
   const z = d.sizes;
   const sizes = z
     ? commitCard("Size", `<div class="popup-info">${sizesPrDetailsHtml(z, { allStats: false })}${sizesPrDiffHtml(z, sizesPrReleasesHtml(z))}</div>`, {
         links: overviewTabLink("ci-sizes", "Size tab"),
       })
     : commitCard("Size", '<p class="commit-line text-muted">No size measurement recorded for this pull request.</p>');
-  const runtime = d.runtime
-    ? commitCard("Runtime benchmarks", `<div class="popup-info">${runtimePrDetailsHtml(d.runtime, { allStats: false })}</div>`, {
-        links: overviewTabLink("ci-runtime", "Runtime tab"),
-      })
-    : commitCard("Runtime benchmarks", '<p class="commit-line text-muted">No runtime benchmark comparison recorded for this pull request.</p>');
+  const runtimeList = d.runtime_variants || (d.runtime ? [d.runtime] : []);
+  const runtime = runtimeList.length
+    ? runtimeList
+        .map((r) =>
+          commitCard(escapeHtml(jobVariantTitle("Runtime benchmarks", r.variant)), `<div class="popup-info">${runtimePrDetailsHtml(r, { allStats: false })}</div>`, {
+            links: jobLink(r.web_url) + overviewTabLink("ci-runtime", "Runtime tab"),
+            focus: commitFocusKey("runtime", r.variant),
+          }),
+        )
+        .join("")
+    : commitCard("Runtime benchmarks", '<p class="commit-line text-muted">No runtime benchmark comparison recorded for this pull request.</p>', { focus: "runtime" });
   return head + commitPrStackHtml(d.stack, n) + ttfx + runtime + sizes;
 }
 
@@ -19784,9 +19901,10 @@ function commitJobsHtml(j) {
   return `<p class="commit-line">${summary}</p>${commitRowsWithMore(head, notable.map(row), jobs.map(row), "jobs")}`;
 }
 
-function commitTtfxHtml(data) {
-  const t = data.ttfx;
-  if (!t) return commitCard("TTFX", '<p class="commit-line text-muted">No TTFX job recorded for this commit.</p>');
+// One TTFX job of the commit (`t`, an entry of ttfx_variants) against the previous of its kind
+function commitTtfxHtml(t) {
+  if (!t) return commitCard("TTFX", '<p class="commit-line text-muted">No TTFX job recorded for this commit.</p>', { focus: "ttfx" });
+  const variant = t.variant || "";
   const metrics = t.metrics;
   // The GC-off values and the instructions follow the metrics in each task's arrays,
   // for the overall changes only
@@ -19848,17 +19966,19 @@ function commitTtfxHtml(data) {
     .filter((x) => !x.failed && worst(x) >= COMMIT_CHANGE_PCT)
     .sort((a, b) => worst(b) - worst(a))
     .slice(0, COMMIT_SHOWN_ROWS);
+  const run = variant ? `TTFX ${escapeHtml(variant)} run` : "TTFX run";
+  const focus = commitFocusKey("ttfx", variant);
   const against = t.previous
-    ? `each time against the previous TTFX run, build #${t.previous.build} (${commitLink(t.previous.commit, `<code>${escapeHtml(t.previous.commit)}</code>`)})`
-    : "no earlier TTFX run to compare with";
+    ? `each time against the previous ${run}, build #${t.previous.build} (${commitLink(t.previous.commit, `<code>${escapeHtml(t.previous.commit)}</code>`, focus)})`
+    : `no earlier ${run} to compare with`;
   const intro = `<p class="commit-line">Build #${t.build}${t.version ? `, ${escapeHtml(t.version)}` : ""}, ${escapeHtml(t.state)}: ${against}. Geometric mean change over the tasks:</p>`;
   const links = `${t.url ? overviewExtLink(t.url, "Job") + " · " : ""}${overviewTabLink("ci-ttfx", "TTFX")}`;
   return commitCard(
-    "TTFX",
+    escapeHtml(jobVariantTitle("TTFX", variant)),
     `${intro}<div class="commit-figures">${[...startupFigures, ...figures].join("")}</div>${failedHtml}${commitRowsWithMore(head, notable.map(row), tasks.map(row), "tasks")}` +
       (t.previous ? `<div class="popup-info">${ttfxCountsHtml(t.counts, { head: "This commit", base: "Previous", hint: "From each job's untimed trace run, so exact counts, summed over the tasks both jobs have." })}</div>` : "") +
       ttfxReleasesHtml(metrics, t.releases),
-    { links },
+    { links, focus },
   );
 }
 
@@ -23815,10 +23935,11 @@ function runtimePrDetailsHtml(p, { allStats = true } = {}) {
   if (p.web_url) html += extLink(p.web_url, "Buildkite job", 'class="btn"');
   if (p.base.commit && p.head.commit) html += extLink(githubCompareURL(p.base.commit, p.head.commit), "Base…head", 'class="btn" title="The commits the job compared"');
   if (allStats) html += `<button type="button" class="btn" onclick="setRuntimePr(${p.pr})" title="Add this pull request's change of every benchmark to the Benchmarks table">Show in table</button>`;
-  html += `<button type="button" class="btn" data-copy-runtime-pr="${p.pr}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
+  html += `<button type="button" class="btn" data-copy-runtime-pr="${p.pr}" data-copy-variant="${escapeHtml(p.variant || "")}" title="Copy a markdown summary to paste on GitHub">Copy summary</button>`;
   html += "</div>";
   html += row("Title", `${escapeHtml(p.title)}${p.draft ? ' <span class="ttfx-pr-badge">draft</span>' : ""}`);
   html += row("Author", escapeHtml(p.author));
+  if (p.variant) html += row("Job", escapeHtml(jobVariantTitle("Runtime benchmarks", p.variant)));
   const llvm = (a) => (a.llvm ? `, LLVM ${escapeHtml(a.llvm)}` : "");
   html += row("Head", `${extLink(githubCommitURL(p.head.commit), `<code>${escapeHtml(p.head.commit.slice(0, 10))}</code>`)} (${escapeHtml(p.head.version)}${llvm(p.head)})`);
   html += row("Base", `${commitShaLink(p.base.commit)} ${githubCommitLink(p.base.commit)} (${escapeHtml(p.base.version)}${llvm(p.base)})`);
@@ -23871,7 +23992,7 @@ function runtimePrMarkdown(p) {
   const job = p.web_url ? `[job](${p.web_url})` : "job";
   const llvm = (a) => (a.llvm ? `, LLVM ${a.llvm}` : "");
   const lines = [
-    `**Runtime benchmarks** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}${llvm(p.head)}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}${llvm(p.base)}), ${p.blocks || "several"} blocks.`,
+    `**${jobVariantTitle("Runtime benchmarks", p.variant)}** (${job}): \`${p.head.commit.slice(0, 10)}\` (${p.head.version}${llvm(p.head)}) against \`${p.base.commit.slice(0, 10)}\` (${p.base.version}${llvm(p.base)}), ${p.blocks || "several"} blocks.`,
     "",
     `${p.n_regressions} regressions, ${p.n_improvements} improvements, ${p.n_instr_changed} benchmarks with a changed instruction count${p.n_errors ? `, ${p.n_errors} failed` : ""}; geomean over ${p.n_benchmarks} benchmarks ${runtimeRatioPct(p.geomean)}.`,
   ];
@@ -23916,7 +24037,10 @@ document.addEventListener(
     e.stopPropagation();
     if (show) return setRuntimePr(Number(show.dataset.showRuntimePr));
     const n = Number(copy.dataset.copyRuntimePr);
-    const p = runtimePrs?.prs?.find((x) => x.pr === n) || (commitResult?.data?.pr?.runtime?.pr === n ? commitResult.data.pr.runtime : null);
+    // A button without a variant is in the ranking, which lists each pull request once
+    const v = copy.dataset.copyVariant;
+    const pick = (list) => list?.find((x) => x && x.pr === n && (v === undefined || (x.variant || "") === v));
+    const p = pick(runtimePrs?.prs) || pick(commitResult?.data?.pr?.runtime_variants || [commitResult?.data?.pr?.runtime]);
     if (p) copyToClipboard(copy, runtimePrMarkdown(p));
   },
   true,
@@ -23996,7 +24120,8 @@ function renderRuntimePrsTable() {
     html += `<td class="num">${rank}</td>`;
     const badges =
       (p.draft ? '<span class="ttfx-pr-badge">draft</span> ' : "") +
-      (p.outdated ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(runtimePrOutdatedText(p))}">older commit</span> ` : "");
+      (p.outdated ? `<span class="ttfx-pr-badge ttfx-pr-old" title="${escapeHtml(runtimePrOutdatedText(p))}">older commit</span> ` : "") +
+      prVariantBadges(p, "runtime", "Runtime benchmarks");
     html += `<td class="msg"><a href="${githubPrURL(p.pr)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">#${p.pr}</a> ${badges}<span title="${escapeHtml(`${p.title}\nby ${p.author}, measured ${timeAgo(p.date)}`)}">${escapeHtml(p.title)}</span></td>`;
     html += `<td class="col-secondary runtime-wide">${escapeHtml(p.author)}</td>`;
     html += `<td class="num ${runtimeVerdictClass(p.verdict)}" title="${escapeHtml(`Verdict: ${p.verdict}, over ${p.n_benchmarks} benchmarks`)}"><b>${runtimeRatioPct(p.geomean)}</b></td>`;
@@ -24203,10 +24328,13 @@ function overviewRuntimeCard(src, prs) {
   });
 }
 
-// The commit's runtime benchmark job against the previous one with results
-function commitRuntimeHtml(data) {
-  const r = data.runtime;
-  if (!r) return commitCard("Runtime benchmarks", '<p class="commit-line text-muted">No runtime benchmark job recorded for this commit.</p>');
+// One runtime benchmark job of the commit (`r`, an entry of runtime_variants) against the
+// previous one of its kind with results
+function commitRuntimeHtml(r) {
+  if (!r) return commitCard("Runtime benchmarks", '<p class="commit-line text-muted">No runtime benchmark job recorded for this commit.</p>', { focus: "runtime" });
+  const variant = r.variant || "";
+  const focus = commitFocusKey("runtime", variant);
+  const kindJob = variant ? `${escapeHtml(variant)} job` : "job";
   const rows = r.benchmarks.map((x) => ({
     ...x,
     pct: runtimePct(x.now, x.previous),
@@ -24233,7 +24361,7 @@ function commitRuntimeHtml(data) {
   const head = [
     ["Benchmark"],
     ["Value", "num col-secondary", "The judged metric on this commit's build"],
-    ["Δ", "num", "The judged metric against the previous master job with results"],
+    ["Δ", "num", `The judged metric against the previous ${variant || "master"} job with results`],
     ["Instr. Δ", "num", "Retired instructions per call against the same job"],
     ["Allocs", "num col-secondary", "Allocations per call"],
   ];
@@ -24242,16 +24370,16 @@ function commitRuntimeHtml(data) {
   const prev = r.previous;
   const llvm = prev && prev.llvm && prev.llvm !== r.llvm ? ` LLVM changed from ${escapeHtml(prev.llvm)} to ${escapeHtml(r.llvm)}.` : "";
   const against = prev
-    ? `each benchmark against the previous job, ${runtimeIsBackfill(prev) ? "commit" : `build #${prev.build}`} (${commitLink(prev.commit.slice(0, 8), `<code>${escapeHtml(prev.commit.slice(0, 8))}</code>`)})`
-    : "no earlier job to compare with";
+    ? `each benchmark against the previous ${kindJob}, ${runtimeIsBackfill(prev) ? "commit" : `build #${prev.build}`} (${commitLink(prev.commit.slice(0, 8), `<code>${escapeHtml(prev.commit.slice(0, 8))}</code>`, focus)})`
+    : `no earlier ${kindJob} to compare with`;
   const intro = `<p class="commit-line">${runtimeIsBackfill(r) ? `Backfill (a manyjulias build on ${escapeHtml(r.machine || "another machine")}, not comparable with CI)` : `Build #${r.build}`}${r.version ? `, ${escapeHtml(r.version)}` : ""}, ${escapeHtml(r.state)}: ${against}.${llvm} Geometric mean change per category; one build against another moves by about 1% in cycles and several in wall time:</p>`;
   const links = `${r.url ? overviewExtLink(r.url, "Job") + " · " : ""}${overviewTabLink("ci-runtime", "Runtime")}`;
   return commitCard(
-    "Runtime benchmarks",
+    escapeHtml(jobVariantTitle("Runtime benchmarks", variant)),
     `${intro}<div class="commit-figures">${figures.join("")}</div>${failedHtml}` +
       (notable.length ? "" : '<p class="commit-line text-muted">No benchmark moved beyond its tolerance or changed its instruction count.</p>') +
       commitRowsWithMore(head, notable.map(row), ok.map(row), "benchmarks"),
-    { links },
+    { links, focus },
   );
 }
 

@@ -132,7 +132,17 @@ const COLUMN_MIGRATIONS = [
     ("pool_jobs", "branch", "TEXT"),
 ]
 
-function apply_schema!(db::SQLite.DB)
+# Tables whose primary key gained a column after they first shipped, by that column.
+# ALTER TABLE cannot change a key, so such a table is rebuilt once under the new
+# schema, its rows copied over with the column's default.
+const KEY_MIGRATIONS = [
+    ("ttfx_prs", "variant"),
+    ("rtb_prs", "variant"),
+]
+
+has_column(db, table, column) = any(r -> String(r.name) == column, query(db, "PRAGMA table_info($table)"))
+
+function create_tables!(db::SQLite.DB)
     sql = read(SCHEMA_FILE, String)
     # Strip comments (some hold semicolons), then split on statement
     # terminators. No string literal in the schema contains "--" or ";".
@@ -142,9 +152,24 @@ function apply_schema!(db::SQLite.DB)
         isempty(s) && continue
         SQLite.execute(db, s)
     end
+end
+
+function apply_schema!(db::SQLite.DB)
+    create_tables!(db)
     for (table, column, type) in COLUMN_MIGRATIONS
-        any(r -> String(r.name) == column, query(db, "PRAGMA table_info($table)")) && continue
+        has_column(db, table, column) && continue
         SQLite.execute(db, "ALTER TABLE $table ADD COLUMN $column $type")
+    end
+    for (table, column) in KEY_MIGRATIONS
+        has_column(db, table, column) && continue
+        transaction(db) do
+            old = table * "_before_" * column
+            SQLite.execute(db, "ALTER TABLE $table RENAME TO $old")
+            create_tables!(db)
+            cols = join([String(r.name) for r in query(db, "PRAGMA table_info($old)")], ", ")
+            SQLite.execute(db, "INSERT INTO $table ($cols) SELECT $cols FROM $old")
+            SQLite.execute(db, "DROP TABLE $old")
+        end
     end
 end
 

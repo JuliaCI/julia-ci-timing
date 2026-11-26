@@ -41,7 +41,8 @@
 # own thread over each phase of one more untimed run. They become the
 # `*_instructions` and `*_cycles` metrics, the minimum over blocks like the times.
 # startup.json has the whole process's counts of the startup runs, kept in ttfx_startup.
-# It also keeps the latest comparison of each open pull request in ttfx_prs (see below).
+# It also keeps the latest comparison of each job variant of each open pull request in
+# ttfx_prs (see below).
 
 using HTTP
 using JSON3
@@ -534,8 +535,11 @@ end
 #
 # On julia-pr the TTFX job runs when a pull request touches the paths it watches (or has
 # its label), measuring the head against the master build of the merge-base, and uploads
-# its verdict as ttfx/compare.json. ttfx_prs keeps the latest one of each open pull
-# request, for ranking them; nothing older is kept.
+# its verdict as ttfx/compare.json. A pull request with the `needs source build` or
+# `needs extended CI` label also runs `TTFX src`, which builds both arms from source
+# (USE_BINARYBUILDER=0) and uploads the same artifacts. ttfx_prs keeps the latest one of
+# each variant (the label's qualifier, '' for the regular job) of each open pull request,
+# for ranking them; nothing older is kept.
 
 const PR_PIPELINE = "julia-pr"
 # The task name compare.json gives the startup records
@@ -596,10 +600,17 @@ function confirm_missing!(pulls, numbers)
     return pulls
 end
 
-# Finished TTFX jobs of julia-pr builds created since `since`, by pull request number,
-# newest first, and the newest of those builds of each commit as (number, state, web_url).
+# A job's variant from its TTFX_JOB match: its label's qualifier ("src", "branch_nightly"),
+# or "opt" for an optimized build's triplet; "" for the regular job
+function job_variant(m)
+    m.captures[1] === nothing || return replace(String(m.captures[1]), ' ' => '_')
+    return endswith(String(m.captures[2]), "opt") ? "opt" : ""
+end
+
+# Finished TTFX jobs of julia-pr builds created since `since`, by pull request number and
+# variant, newest first, and the newest of those builds of each commit as (number, state, web_url).
 function pr_ttfx_jobs(since::DateTime)
-    jobs = Dict{Int,Vector{Any}}()
+    jobs = Dict{Tuple{Int,String},Vector{Any}}()
     ci = Dict{String,Any}()
     buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds", ["created_from" => Store.iso(since)]; max_pages=50) do builds, _
         for build in builds
@@ -614,17 +625,17 @@ function pr_ttfx_jobs(since::DateTime)
                 get(job, :type, nothing) == "script" || continue
                 name = get(job, :name, nothing)
                 m = name === nothing ? nothing : match(TTFX_JOB, String(name))
-                # Only the comparison job; a release run would have no verdict to keep
-                (m === nothing || m.captures[1] !== nothing) && continue
+                # A variant without a comparison (a release run) is passed over when its compare.json is missing
+                m === nothing && continue
                 String(get(job, :state, "")) in FINISHED_STATES || continue
-                push!(get!(jobs, n, Any[]), (build, job))
+                push!(get!(jobs, (n, job_variant(m)), Any[]), (build, job))
             end
         end
     end
     return jobs, ci
 end
 
-function pr_row(pull, build, job, compare, meta)
+function pr_row(pull, variant, build, job, compare, meta)
     arms = meta === nothing ? nothing : get(meta, :arms, nothing)
     arm(label) = arms === nothing ? nothing : get(arms, Symbol(String(get(compare, label, String(label)))), nothing)
     field(a, key) = a === nothing ? "" : String(something(get(a, key, ""), ""))
@@ -653,7 +664,7 @@ function pr_row(pull, build, job, compare, meta)
     sort!(flagged; by=t -> t["name"])
     settings = meta === nothing ? nothing : get(meta, :settings, nothing)
     user = get(pull, :user, nothing)
-    return (Int(pull.number), String(something(get(pull, :title, ""), "")), user === nothing ? "" : String(user.login),
+    return (Int(pull.number), variant, String(something(get(pull, :title, ""), "")), user === nothing ? "" : String(user.login),
             get(pull, :draft, false) === true ? 1 : 0, String(pull.head.sha),
             Int(build.number), String(job.id), String(job.state), Store.iso(Store.parse_upstream(String(build.created_at))),
             at(get(job, :finished_at, nothing)), str_or_missing(get(job, :web_url, nothing)),
@@ -667,13 +678,14 @@ function pr_row(pull, build, job, compare, meta)
             missing)
 end
 
-# Bring ttfx_prs up to date: a row for every open pull request whose latest finished
-# TTFX job produced a comparison, none for closed ones. Closed ones are only dropped
-# when the list of open ones is fetched again, so they can linger for PULLS_REFRESH.
+# Bring ttfx_prs up to date: a row for every variant of every open pull request whose
+# latest finished TTFX job of that variant produced a comparison, none for closed ones.
+# Closed ones are only dropped when the list of open ones is fetched again, so they can
+# linger for PULLS_REFRESH.
 function refresh_prs!(db)
-    existing = Dict(Int(r.pr_number) => r for r in query(db, "SELECT pr_number, build, job_uuid FROM ttfx_prs"))
+    existing = Dict((Int(r.pr_number), String(r.variant)) => r for r in query(db, "SELECT pr_number, variant, build, job_uuid FROM ttfx_prs"))
     pulls, listed_at, fresh = open_pulls(db)
-    fresh && confirm_missing!(pulls, keys(existing))
+    fresh && confirm_missing!(pulls, unique(first.(keys(existing))))
     now_time = now(Dates.UTC)
     since = now_time - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
     f = query(db, "SELECT value FROM meta WHERE key = ?", (PR_FULL_KEY,))
@@ -691,8 +703,8 @@ function refresh_prs!(db)
     jobs, ci = pr_ttfx_jobs(since)
     full && Store.setmeta!(db, PR_FULL_KEY, Store.iso(now_time))
     rows = Any[]
-    for (n, list) in jobs
-        known = get(existing, n, nothing)
+    for ((n, variant), list) in jobs
+        known = get(existing, (n, variant), nothing)
         isknown(build, job) = known !== nothing && (String(job.id) == known.job_uuid || build.number < known.build)
         isknown(list[1]...) && continue
         pull = get(pulls, n, nothing)
@@ -713,13 +725,13 @@ function refresh_prs!(db)
             compare, meta = fetched
             # The job stopped before comparing; an older one may have
             compare === nothing && continue
-            push!(rows, pr_row(pull, build, job, compare, meta))
+            push!(rows, pr_row(pull, variant, build, job, compare, meta))
             break
         end
     end
     transaction(db) do
         seq = next_seq!(db)
-        stmt = upsert_stmt(db, "ttfx_prs", ["pr_number"], PR_COLS)
+        stmt = upsert_stmt(db, "ttfx_prs", ["pr_number", "variant"], PR_COLS)
         for r in rows
             upsert!(stmt, (r..., seq))
         end
@@ -732,7 +744,7 @@ function refresh_prs!(db)
         meta = DBInterface.prepare(db, "UPDATE ttfx_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, head_ref = ?5, base_ref = ?6, change_seq = ?7 " *
                                        "WHERE pr_number = ?8 AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4 " *
                                        "OR head_ref IS NOT ?5 OR base_ref IS NOT ?6)")
-        for r in query(db, "SELECT pr_number FROM ttfx_prs")
+        for r in query(db, "SELECT DISTINCT pr_number FROM ttfx_prs")
             # Between refreshes a row can be for a pull request opened after the kept list was taken
             p = get(pulls, Int(r.pr_number), nothing)
             p === nothing && continue
@@ -942,7 +954,7 @@ end
 # the others cost a request each, for a pull request whose head moved or whose build
 # had not finished at the last look.
 function refresh_ci!(db, listed=Dict{String,Any}())
-    stale = query(db, "SELECT pr_number, pr_head_sha FROM ttfx_prs WHERE ci_commit IS NOT pr_head_sha " *
+    stale = query(db, "SELECT DISTINCT pr_number, pr_head_sha FROM ttfx_prs WHERE ci_commit IS NOT pr_head_sha " *
                       "OR ci_state IS NULL OR ci_state NOT IN (SELECT value FROM json_each(?))", (JSON3.write(collect(CI_FINAL_STATES)),))
     updates = Any[]
     for r in stale
