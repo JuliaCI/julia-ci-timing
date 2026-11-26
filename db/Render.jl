@@ -961,38 +961,72 @@ function ttfx_pr_stack(r, by_ref)
                        "exact" => exact, "suite" => suite)
 end
 
-function ttfx_prs(db)
-    prs = Any[]
-    all_rows = collect(rows(db, "SELECT * FROM ttfx_prs"))
-    by_ref = Dict(String(r.head_ref) => r for r in all_rows if !isempty(String(r.head_ref)))
+# A pull request's job variants, the regular one ('') first: a pull request is ranked by
+# the first of these it has, and its other variants follow in this order
+const PR_VARIANT_ORDER = ("", "src", "opt")
+pr_variant_rank(v) = something(findfirst(==(v), PR_VARIANT_ORDER), length(PR_VARIANT_ORDER) + 1)
+# The column is added by the next ingest after a deploy, not by the server
+row_variant(r) = String(coalesce(get(r, :variant, ""), ""))
+
+# Each pull request's rows of ttfx_prs or rtb_prs, its preferred variant first
+function pr_rows_by_number(all_rows)
+    by = Dict{Int,Vector{Any}}()
     for r in all_rows
-        suite = JSON3.read(String(r.suite))
-        own_score = ttfx_pr_score(suite)
-        stack = ttfx_pr_stack(r, by_ref)
-        stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"]))
-        push!(prs, OrderedDict(
-            "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
-            "head_ref" => String(r.head_ref), "base_ref" => String(r.base_ref),
-            # Ranked by the estimate against master: a stacked layer's own gains may only undo a regression below it
-            "score" => stack === nothing ? own_score : stack["score"], "own_score" => own_score,
-            "stack" => stack, "verdict" => String(r.verdict),
-            "n_improvements" => Int(r.n_improvements), "n_regressions" => Int(r.n_regressions),
-            "suite" => suite, "tasks" => JSON3.read(String(r.tasks)),
-            "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state), "web_url" => js(r.web_url),
-            "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
-            "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
-            "base" => OrderedDict("commit" => String(r.base_commit), "version" => String(r.base_version)),
-            "outdated" => String(r.pr_head_sha) != String(r.head_commit),
-            # CI on the pull request's current head, which may be newer than the measured commit
-            "ci" => r.ci_state === missing || !isequal(r.ci_commit, r.pr_head_sha) ? nothing :
-                    OrderedDict("state" => String(r.ci_state), "build" => js(r.ci_build), "url" => js(r.ci_url)),
-            "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks),
-            # The column is added by the next ingest after a deploy, not by the server
-            "counts" => coalesce(get(r, :counts, missing), nothing) === nothing ? nothing : JSON3.read(String(r.counts))))
+        push!(get!(by, Int(r.pr_number), Any[]), r)
     end
-    sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"]))
+    for list in values(by)
+        sort!(list; by=r -> (pr_variant_rank(row_variant(r)), row_variant(r)))
+    end
+    return by
+end
+
+# The open pull requests' TTFX comparisons: the ranked entries, one per pull request
+# (its preferred variant), and every variant's entry by pull request, preferred first.
+# A stack is walked through each layer's preferred comparison, and only that one gets it.
+function ttfx_pr_entries(db)
+    by_number = pr_rows_by_number(rows(db, "SELECT * FROM ttfx_prs"))
+    by_ref = Dict(String(list[1].head_ref) => list[1] for list in values(by_number) if !isempty(String(list[1].head_ref)))
+    variants = Dict{Int,Vector{Any}}()
+    for (n, list) in by_number
+        names = [row_variant(r) for r in list]
+        variants[n] = [ttfx_pr_entry(r, i == 1 ? by_ref : nothing, names) for (i, r) in enumerate(list)]
+    end
+    prs = [first(v) for v in values(variants)]
+    sort!(prs; by=p -> (p["score"] === nothing, something(p["score"], 0.0), -p["n_improvements"], p["n_regressions"], p["pr"]))
+    return prs, variants
+end
+
+function ttfx_prs(db)
+    prs, _ = ttfx_pr_entries(db)
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => "julia-pr", "metrics" => TTFX_PR_METRICS,
                        "score_weights" => OrderedDict(TTFX_PR_WEIGHTS), "prs" => prs)
+end
+
+function ttfx_pr_entry(r, by_ref, variants)
+    suite = JSON3.read(String(r.suite))
+    own_score = ttfx_pr_score(suite)
+    stack = by_ref === nothing ? nothing : ttfx_pr_stack(r, by_ref)
+    stack === nothing || (stack["score"] = stack["suite"] === nothing ? nothing : ttfx_pr_score(stack["suite"]))
+    return OrderedDict(
+        "pr" => Int(r.pr_number), "variant" => row_variant(r), "variants" => variants,
+        "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+        "head_ref" => String(r.head_ref), "base_ref" => String(r.base_ref),
+        # Ranked by the estimate against master: a stacked layer's own gains may only undo a regression below it
+        "score" => stack === nothing ? own_score : stack["score"], "own_score" => own_score,
+        "stack" => stack, "verdict" => String(r.verdict),
+        "n_improvements" => Int(r.n_improvements), "n_regressions" => Int(r.n_regressions),
+        "suite" => suite, "tasks" => JSON3.read(String(r.tasks)),
+        "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state), "web_url" => js(r.web_url),
+        "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
+        "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version)),
+        "base" => OrderedDict("commit" => String(r.base_commit), "version" => String(r.base_version)),
+        "outdated" => String(r.pr_head_sha) != String(r.head_commit),
+        # CI on the pull request's current head, which may be newer than the measured commit
+        "ci" => r.ci_state === missing || !isequal(r.ci_commit, r.pr_head_sha) ? nothing :
+                OrderedDict("state" => String(r.ci_state), "build" => js(r.ci_build), "url" => js(r.ci_url)),
+        "blocks" => js(r.blocks), "n_tasks" => js(r.n_tasks),
+        # The column is added by the next ingest after a deploy, not by the server
+        "counts" => coalesce(get(r, :counts, missing), nothing) === nothing ? nothing : JSON3.read(String(r.counts)))
 end
 
 # --- commit lookup -------------------------------------------------------------
@@ -1138,16 +1172,16 @@ function commit_jobs(db, build)
                        "jobs" => jobs)
 end
 
-# The TTFX job of the commit's build against the latest earlier one with
+# The commit's TTFX job of `kind` against the latest earlier one of that kind with
 # results on another commit
-function commit_ttfx(db, prefix, sha)
-    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
-                  "ORDER BY build_created_at DESC LIMIT 1", (commit_glob(prefix, sha),))
+function commit_ttfx(db, prefix, sha; kind="master")
+    tj = rows(db, "SELECT job_uuid, build, state, build_created_at, version, web_url FROM ttfx_jobs WHERE commit_sha GLOB ? AND kind = ? " *
+                  "ORDER BY build_created_at DESC LIMIT 1", (commit_glob(prefix, sha), kind))
     isempty(tj) && return nothing
     j = tj[1]
-    prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
+    prev = rows(db, "SELECT job_uuid, build, commit_sha FROM ttfx_jobs t WHERE kind = ? AND build_created_at < ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at DESC LIMIT 1",
-                (j.build_created_at, commit_glob(prefix, sha)))
+                (kind, j.build_created_at, commit_glob(prefix, sha)))
     have = ttfx_result_columns(db)
     # The load and run with every stdlib loaded first only when the job measured them
     stdlibs = filter(["load_stdlibs", "run_stdlibs"]) do m
@@ -1173,9 +1207,9 @@ function commit_ttfx(db, prefix, sha)
     # The next job tells a lasting failure from a one-off, such as a broken
     # package release that was yanked before the next build
     next = isempty(failed) ? [] :
-           rows(db, "SELECT job_uuid FROM ttfx_jobs t WHERE kind = 'master' AND build_created_at > ? AND commit_sha NOT GLOB ? AND EXISTS " *
+           rows(db, "SELECT job_uuid FROM ttfx_jobs t WHERE kind = ? AND build_created_at > ? AND commit_sha NOT GLOB ? AND EXISTS " *
                     "(SELECT 1 FROM ttfx_results r WHERE r.job_uuid = t.job_uuid) ORDER BY build_created_at LIMIT 1",
-                (j.build_created_at, commit_glob(prefix, sha)))
+                (kind, j.build_created_at, commit_glob(prefix, sha)))
     failed_after = isempty(next) ? nothing : failures(String(next[1].job_uuid))
     tasks = Any[]
     for task in sort!(unique([collect(keys(now_)); collect(keys(failed))]))
@@ -1183,14 +1217,35 @@ function commit_ttfx(db, prefix, sha)
                                  "failed" => get(failed, task, nothing), "failed_before" => haskey(failed_before, task),
                                  "failed_after" => failed_after === nothing || !haskey(failed, task) ? nothing : haskey(failed_after, task)))
     end
-    return OrderedDict("build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
+    return OrderedDict("kind" => kind, "variant" => kind_variant(kind),
+                       "build" => Int(j.build), "job_id" => String(j.job_uuid), "state" => String(j.state), "version" => String(j.version),
                        "url" => js(j.web_url), "metrics" => metrics, "gcoff_metrics" => gcoff, "counter_metrics" => counters,
                        "previous" => isempty(prev) ? nothing : OrderedDict("build" => Int(prev[1].build), "commit" => first(String(prev[1].commit_sha), 8)),
                        "counts" => isempty(prev) ? nothing : ttfx_job_counts(db, String(j.job_uuid), String(prev[1].job_uuid)),
                        "startup" => startup_now === nothing ? nothing :
                                     OrderedDict("metrics" => TTFX_STARTUP_METRICS, "now" => startup_now,
                                                 "previous" => isempty(prev) ? nothing : ttfx_job_startup(db, String(prev[1].job_uuid))),
-                       "tasks" => tasks, "releases" => isempty(now_) ? Any[] : ttfx_release_ratios(db, String(j.job_uuid), metrics))
+                       # The release series are measured with the regular build
+                       "tasks" => tasks, "releases" => isempty(now_) || kind != "master" ? Any[] : ttfx_release_ratios(db, String(j.job_uuid), metrics))
+end
+
+# The kinds of julia-ci TTFX and runtime benchmark job the Commit view shows for a
+# commit, the regular build's first: master or release branch, then the nightly
+# schedule's builds from source and optimized
+const COMMIT_JOB_KINDS = ("master", "release_branch", "src", "opt")
+# A kind as the variant of a pull request's job is named: '' for the regular build
+kind_variant(kind) = kind in ("master", "release_branch") ? "" : kind
+
+# `f(kind)` for each kind of job of `table` the commit has, `regular` for master's
+function commit_variants(f, db, table, prefix, sha, regular)
+    kinds = Set(String(r.kind) for r in rows(db, "SELECT DISTINCT kind FROM $table WHERE commit_sha GLOB ?", (commit_glob(prefix, sha),)))
+    out = Any[]
+    for kind in COMMIT_JOB_KINDS
+        kind in kinds || continue
+        v = kind == "master" ? regular : f(kind)
+        v === nothing || push!(out, v)
+    end
+    return out
 end
 
 const TTFX_COUNT_TASKS = 10
@@ -1337,18 +1392,20 @@ function commit_pr(db, n)
         OrderedDict("title" => String(gh[1].title), "author" => js(gh[1].author),
                     "labels" => String(gh[1].labels), "created_at" => String(gh[1].created_at),
                     "closed_at" => js(gh[1].closed_at), "merged_at" => js(gh[1].merged_at))
-    ttfx_all = ttfx_prs(db)["prs"]
-    ttfx = nothing
-    i = findfirst(p -> p["pr"] == n, ttfx_all)
-    i === nothing || (ttfx = OrderedDict("metrics" => TTFX_PR_METRICS, "score_weights" => OrderedDict(TTFX_PR_WEIGHTS), "pr" => ttfx_all[i],
-                                         "releases" => commit_pr_ttfx_releases(db, ttfx_all[i])))
+    ttfx_all, ttfx_by = ttfx_pr_entries(db)
+    # Only the regular job's merge-base has a master job to compare with the releases
+    ttfx_variants = [OrderedDict("variant" => p["variant"], "metrics" => TTFX_PR_METRICS, "score_weights" => OrderedDict(TTFX_PR_WEIGHTS),
+                                 "pr" => p, "releases" => isempty(p["variant"]) ? commit_pr_ttfx_releases(db, p) : nothing)
+                     for p in get(ttfx_by, n, Any[])]
     sizes = size_pr(db, string(n))
     sizes === nothing || (sizes["releases"] = size_release_series(db))
-    rt = rows(db, "SELECT * FROM rtb_prs WHERE pr_number = ?", (n,))
-    runtime = isempty(rt) ? nothing : runtime_pr_entry(rt[1])
+    rt = get(pr_rows_by_number(rows(db, "SELECT * FROM rtb_prs WHERE pr_number = ?", (n,))), n, Any[])
+    runtime_variants = [runtime_pr_entry(r; variants=[row_variant(x) for x in rt]) for r in rt]
+    ttfx, runtime = get(ttfx_variants, 1, nothing), get(runtime_variants, 1, nothing)
     github === nothing && ttfx === nothing && sizes === nothing && runtime === nothing && return nothing
     stack = commit_pr_stack(db, n, ttfx_all, size_prs(db)["prs"])
-    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "sizes" => sizes, "runtime" => runtime, "stack" => stack)
+    return OrderedDict("number" => n, "github" => github, "ttfx" => ttfx, "ttfx_variants" => ttfx_variants, "sizes" => sizes,
+                       "runtime" => runtime, "runtime_variants" => runtime_variants, "stack" => stack)
 end
 
 function latest_ttfx_job(db, cond, params=())
@@ -1520,14 +1577,18 @@ function commit(db, ref)
     builds = commit_builds(db, prefix, sha)
     primary = primary_build(builds)
     t = info["created_at"]
+    ttfx = commit_ttfx(db, prefix, sha)
+    runtime = commit_runtime(db, prefix, sha)
     return OrderedDict(
         "query" => ref, "commit" => info,
         "previous" => primary === nothing ? nothing : neighbour(db, primary["pipeline"], primary["build"], prefix, :prev),
         "next" => primary === nothing ? nothing : neighbour(db, primary["pipeline"], primary["build"], prefix, :next),
         "builds" => builds,
         "jobs" => primary === nothing ? nothing : commit_jobs(db, primary),
-        "ttfx" => commit_ttfx(db, prefix, sha),
-        "runtime" => commit_runtime(db, prefix, sha),
+        "ttfx" => ttfx,
+        "ttfx_variants" => commit_variants(kind -> commit_ttfx(db, prefix, sha; kind), db, "ttfx_jobs", prefix, sha, ttfx),
+        "runtime" => runtime,
+        "runtime_variants" => commit_variants(kind -> commit_runtime(db, prefix, sha; kind), db, "rtb_jobs", prefix, sha, runtime),
         "benchmarks" => commit_benchmarks(db, prefix, sha, t),
         "sizes" => commit_sizes(db, something(sha, prefix)),
         "pkgeval" => commit_pkgeval(db, prefix, sha, t),
@@ -2260,11 +2321,11 @@ function runtime_refs(db, kind, where, params)
     return out
 end
 
-# The master job with results before `j` on another commit and the same machine (source),
-# nothing when there is none
-function runtime_previous(db, j)
-    r = rows(db, "SELECT * FROM rtb_jobs WHERE kind = 'master' AND has_results = 1 AND build_created_at < ? AND commit_sha != ? " *
-                 "AND pipeline = ? ORDER BY build_created_at DESC LIMIT 1", (j.build_created_at, j.commit_sha, j.pipeline))
+# The job of `kind` with results before `j` on another commit and the same machine
+# (source), nothing when there is none
+function runtime_previous(db, j; kind="master")
+    r = rows(db, "SELECT * FROM rtb_jobs WHERE kind = ? AND has_results = 1 AND build_created_at < ? AND commit_sha != ? " *
+                 "AND pipeline = ? ORDER BY build_created_at DESC LIMIT 1", (kind, j.build_created_at, j.commit_sha, j.pipeline))
     return isempty(r) ? nothing : r[1]
 end
 
@@ -2321,7 +2382,7 @@ runtime_pr_changes(benchmarks) = OrderedDict(
                                     "verdict" => String(get(b, :verdict, "same")))
     for b in benchmarks if haskey(b, :name))
 
-function runtime_pr_entry(r; brief=false)
+function runtime_pr_entry(r; brief=false, variants=[row_variant(r)])
     benchmarks = JSON3.read(String(r.benchmarks))
     ratio(b) = (x = get(b, :ratio, nothing); x isa Number ? Float64(x) : 1.0)
     worst = isempty(benchmarks) ? nothing : benchmarks[argmax([ratio(b) for b in benchmarks])]
@@ -2329,7 +2390,8 @@ function runtime_pr_entry(r; brief=false)
     pick(b) = b === nothing ? nothing : OrderedDict(f => get(b, Symbol(f), nothing) for f in RUNTIME_PR_FIELDS)
     errors = JSON3.read(String(r.errors))
     e = OrderedDict{String,Any}(
-        "pr" => Int(r.pr_number), "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
+        "pr" => Int(r.pr_number), "variant" => row_variant(r), "variants" => variants,
+        "title" => String(r.title), "author" => String(r.author), "draft" => r.draft == 1,
         "base_ref" => String(r.base_ref), "build" => Int(r.build), "job_id" => String(r.job_uuid), "state" => String(r.job_state),
         "web_url" => js(r.web_url), "date" => String(r.build_created_at), "finished_at" => js(r.finished_at),
         "head" => OrderedDict("commit" => String(r.head_commit), "version" => String(r.head_version), "llvm" => String(r.head_llvm)),
@@ -2345,23 +2407,25 @@ function runtime_pr_entry(r; brief=false)
 end
 
 # Open pull requests by their latest runtime benchmark comparison, best first: by the
-# geometric mean of every benchmark's ratio, head against base
+# geometric mean of every benchmark's ratio, head against base. A pull request is listed
+# once, by its preferred variant; `variants` names all it has.
 function runtime_prs(db; brief=false)
-    prs = [runtime_pr_entry(r; brief) for r in rows(db, "SELECT * FROM rtb_prs")]
-    sort!(prs; by=p -> (p["geomean"] === nothing, something(p["geomean"], 0.0), p["n_regressions"] - p["n_improvements"]))
+    prs = [runtime_pr_entry(first(list); brief, variants=[row_variant(r) for r in list])
+           for list in values(pr_rows_by_number(rows(db, "SELECT * FROM rtb_prs")))]
+    sort!(prs; by=p -> (p["geomean"] === nothing, something(p["geomean"], 0.0), p["n_regressions"] - p["n_improvements"], p["pr"]))
     return OrderedDict("generated_at" => generated_at(db, "runtime"), "pipeline" => "julia-pr", "prs" => prs)
 end
 
-# The commit's runtime benchmark job (CI's, else the backfill's) against the latest
-# earlier one of the same source with results on another commit: every benchmark's value,
-# instructions and allocations in both
-function commit_runtime(db, prefix, sha)
-    tj = rows(db, "SELECT * FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = 'master' " *
+# The commit's runtime benchmark job of `kind` (CI's, else the backfill's) against the
+# latest earlier one of that kind and source with results on another commit: every
+# benchmark's value, instructions and allocations in both
+function commit_runtime(db, prefix, sha; kind="master")
+    tj = rows(db, "SELECT * FROM rtb_jobs WHERE commit_sha GLOB ? AND kind = ? " *
                   "ORDER BY pipeline = 'manyjulias', build_created_at DESC LIMIT 1",
-              (commit_glob(prefix, sha),))
+              (commit_glob(prefix, sha), kind))
     isempty(tj) && return nothing
     j = tj[1]
-    prev = runtime_previous(db, j)
+    prev = runtime_previous(db, j; kind)
     results(uuid) = Dict(String(r.name) => r for r in rows(db, "SELECT name, category, metric, status, error, value, instructions, " *
                                                                    "min_ns, allocs, ops FROM rtb_results WHERE job_uuid = ?", (uuid,)))
     now_ = results(String(j.job_uuid))
@@ -2378,6 +2442,7 @@ function commit_runtime(db, prefix, sha)
             "ops" => js(r.ops), "failed_before" => p !== nothing && String(p.status) != "ok"))
     end
     out = runtime_build(j)
+    out["kind"], out["variant"] = kind, kind_variant(kind)
     out["previous"] = prev === nothing ? nothing : OrderedDict("build" => Int(prev.build), "job_id" => String(prev.job_uuid),
                                                                 "source" => runtime_source(String(prev.pipeline)),
                                                                 "commit" => String(prev.commit_sha), "llvm" => String(prev.llvm))

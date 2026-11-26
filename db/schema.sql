@@ -479,11 +479,12 @@ CREATE TABLE IF NOT EXISTS ttfx_samples (
 ) WITHOUT ROWID;
 
 -- The latest finished TTFX comparison (head against the master build of the
--- merge-base) of every open julia pull request that has one. Current state
--- only: a run replaces a pull request's row when a newer job finishes and
--- deletes it once the pull request is closed.
+-- merge-base) of every open julia pull request that has one, per variant of
+-- the job. Current state only: a run replaces a row when a newer job of its
+-- variant finishes and deletes the pull request's rows once it is closed.
 CREATE TABLE IF NOT EXISTS ttfx_prs (
-    pr_number        INTEGER PRIMARY KEY,
+    pr_number        INTEGER NOT NULL,
+    variant          TEXT NOT NULL DEFAULT '',   -- the job's qualifier: '' for the regular job, 'src' for `TTFX src` (built with USE_BINARYBUILDER=0), 'opt', ...
     title            TEXT NOT NULL DEFAULT '',
     author           TEXT NOT NULL DEFAULT '',
     draft            INTEGER NOT NULL DEFAULT 0,
@@ -512,7 +513,8 @@ CREATE TABLE IF NOT EXISTS ttfx_prs (
     ci_build         INTEGER,                    -- newest julia-pr build of ci_commit, NULL if none
     ci_state         TEXT,                       -- its Buildkite state, or 'none' when the commit has no build
     ci_url           TEXT,
-    counts           TEXT                        -- JSON: invalidations and recompiled methods per arm; NULL until fetched
+    counts           TEXT,                       -- JSON: invalidations and recompiled methods per arm; NULL until fetched
+    PRIMARY KEY (pr_number, variant)
 );
 
 -- Buildkite artifacts expire; keep the pair we parsed.
@@ -767,9 +769,10 @@ CREATE TABLE IF NOT EXISTS rtb_results (
 
 -- The latest finished runtime benchmark comparison (head against the master
 -- build of the merge-base, interleaved in one job) of every open julia pull
--- request that has one. Current state only, like ttfx_prs.
+-- request that has one, per variant of the job. Current state only, like ttfx_prs.
 CREATE TABLE IF NOT EXISTS rtb_prs (
-    pr_number        INTEGER PRIMARY KEY,
+    pr_number        INTEGER NOT NULL,
+    variant          TEXT NOT NULL DEFAULT '',   -- '' for the regular job, 'src' for `Runtime benchmarks src` (USE_BINARYBUILDER=0), ...
     title            TEXT NOT NULL DEFAULT '',
     author           TEXT NOT NULL DEFAULT '',
     draft            INTEGER NOT NULL DEFAULT 0,
@@ -798,7 +801,8 @@ CREATE TABLE IF NOT EXISTS rtb_prs (
     categories       TEXT NOT NULL,              -- JSON: compare.json's categories
     benchmarks       TEXT NOT NULL,              -- JSON: compare.json's benchmarks
     errors           TEXT NOT NULL,              -- JSON: compare.json's errors and failures
-    change_seq       INTEGER NOT NULL
+    change_seq       INTEGER NOT NULL,
+    PRIMARY KEY (pr_number, variant)
 );
 
 -- Buildkite artifacts expire; keep the pair we parsed.

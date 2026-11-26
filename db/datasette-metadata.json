@@ -227,8 +227,9 @@
           }
         },
         "ttfx_prs": {
-          "description": "The latest finished TTFX comparison of every open julia pull request that has one: the head against the master build of the merge-base, as the julia-pr TTFX job judged it. Current state only; a closed pull request's row is deleted.",
+          "description": "The latest finished TTFX comparison of every open julia pull request that has one, per variant of the job: the head against the master build of the merge-base, as the julia-pr TTFX job judged it. Current state only; a closed pull request's rows are deleted.",
           "columns": {
+            "variant": "the job's qualifier: empty for the regular TTFX job, src for TTFX src (both arms built from source, USE_BINARYBUILDER=0), opt, ...",
             "pr_head_sha": "the pull request's head now; differs from head_commit when it has moved on since the job",
             "head_ref": "the pull request's branch, empty when it is in a fork",
             "base_ref": "the branch it targets; not master when it is stacked on another pull request, which the job then measured it against",
@@ -445,8 +446,9 @@
           }
         },
         "rtb_prs": {
-          "description": "The latest runtime benchmark comparison of every open julia pull request that has one: the head against the master build of the merge-base, interleaved in one julia-pr job. Current state only.",
+          "description": "The latest runtime benchmark comparison of every open julia pull request that has one, per variant of the job: the head against the master build of the merge-base, interleaved in one julia-pr job. Current state only.",
           "columns": {
+            "variant": "the job's qualifier: empty for the regular Runtime benchmarks job, src for Runtime benchmarks src (both arms built from source, USE_BINARYBUILDER=0)",
             "verdict": "regression when a benchmark or a category regressed robustly (every block beyond the tolerance), else improvement when a benchmark improved, else same",
             "n_instr_changed": "benchmarks retiring a different number of instructions in every block",
             "n_errors": "benchmarks that failed on either arm",

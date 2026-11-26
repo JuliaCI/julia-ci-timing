@@ -15,7 +15,8 @@
 # for the benchmarks whose work leaves the calling thread; instructions their minimum),
 # its maximum over blocks, the retired instructions, the wall time,
 # allocations and the per-block values. The parsed artifacts are kept, compressed, in
-# raw_rtb. rtb_prs keeps the latest compare.json of each open pull request (see below).
+# raw_rtb. rtb_prs keeps the latest compare.json of each job variant of each open pull
+# request (see below).
 # The weekly julia-ci build that measures published releases (TTFX_RELEASE) runs the
 # job on the newest stable release (kind 'release'), the LTS ('lts') and the nightly of
 # the next release's branch ('branch_nightly'); their rows sit beside the master ones.
@@ -293,8 +294,11 @@ end
 # --- pull requests ---------------------------------------------------------------
 #
 # On julia-pr the job measures the head against the master build of the merge-base and
-# uploads compare.json. rtb_prs keeps the latest one of each open pull request; a
-# closed one's row is deleted.
+# uploads compare.json. A pull request with the `needs source build` or `needs extended
+# CI` label also runs `Runtime benchmarks src`, which builds both arms from source
+# (USE_BINARYBUILDER=0). rtb_prs keeps the latest one of each variant (the label's
+# qualifier, '' for the regular job) of each open pull request; a closed one's rows are
+# deleted.
 
 const PR_BACKFILL_DAYS = 30
 # The job runs on the same macOS machine as TTFX and can finish a day or more after its
@@ -324,9 +328,9 @@ function open_pulls(db)
 end
 
 # Finished runtime benchmark jobs of julia-pr builds created since `since`, by pull
-# request number, newest first
+# request number and variant ("src", or "" for the regular job), newest first
 function pr_jobs(since::DateTime)
-    jobs = Dict{Int,Vector{Any}}()
+    jobs = Dict{Tuple{Int,String},Vector{Any}}()
     buildkite_pages("organizations/$BUILDKITE_ORG/pipelines/$PR_PIPELINE/builds", ["created_from" => Store.iso(since)]; max_pages=50) do builds, _
         for build in builds
             pr = get(build, :pull_request, nothing)
@@ -336,11 +340,10 @@ function pr_jobs(since::DateTime)
                 get(job, :type, nothing) == "script" || continue
                 name = get(job, :name, nothing)
                 m = name === nothing ? nothing : match(RTB_JOB, String(name))
-                # Only the comparison job; a pull request with the `needs extended CI`
-                # label also measures its from-source build
-                (m === nothing || m.captures[1] !== nothing) && continue
+                m === nothing && continue
                 String(get(job, :state, "")) in FINISHED_STATES || continue
-                push!(get!(jobs, n, Any[]), (build, job))
+                variant = m.captures[1] === nothing ? "" : replace(String(m.captures[1]), ' ' => '_')
+                push!(get!(jobs, (n, variant), Any[]), (build, job))
             end
         end
     end
@@ -385,17 +388,17 @@ function delete_retired!(db)
     !isempty(seen) && seen[1].value == stamp && return 0
     marks = join(fill("?", length(names)), ", ")
     retired = "SELECT 1 FROM json_each(benchmarks) WHERE json_extract(value, '\$.name') IN ($marks)"
-    prs = query(db, "SELECT pr_number, benchmarks, categories FROM rtb_prs WHERE EXISTS ($retired)", names)
+    prs = query(db, "SELECT pr_number, variant, benchmarks, categories FROM rtb_prs WHERE EXISTS ($retired)", names)
     n = query(db, "SELECT count(*) AS n FROM rtb_results WHERE name IN ($marks)", names)[1].n
     transaction(db) do
         DBInterface.execute(db, "DELETE FROM rtb_results WHERE name IN ($marks)", names)
         seq = next_seq!(db)
         stmt = DBInterface.prepare(db, "UPDATE rtb_prs SET benchmarks = ?, verdict = ?, n_benchmarks = ?, n_regressions = ?, " *
-                                       "n_improvements = ?, n_instr_changed = ?, geomean = ?, change_seq = ? WHERE pr_number = ?")
+                                       "n_improvements = ?, n_instr_changed = ?, geomean = ?, change_seq = ? WHERE pr_number = ? AND variant = ?")
         for r in prs
             benchmarks, s = pr_benchmarks(JSON3.read(r.benchmarks), JSON3.read(r.categories))
             DBInterface.execute(stmt, (JSON3.write(benchmarks), s.verdict, s.n_benchmarks, s.n_regressions, s.n_improvements,
-                                       s.n_instr_changed, miss(s.geomean), seq, r.pr_number))
+                                       s.n_instr_changed, miss(s.geomean), seq, r.pr_number, r.variant))
         end
         Store.setmeta!(db, "runtime_retired", stamp)
     end
@@ -404,20 +407,20 @@ function delete_retired!(db)
 end
 
 """
-    pr_row(pull, build, job, compare, meta) -> Tuple
+    pr_row(pull, build, job, compare, meta; variant="") -> Tuple
 
-A pull request's row (in the order of `["pr_number"; PR_COLS]`) from its GitHub listing
-(or the summary of it kept in meta), the julia-pr build and job, and the job's
+A pull request's row (in the order of `["pr_number"; "variant"; PR_COLS]`) from its GitHub
+listing (or the summary of it kept in meta), the julia-pr build and job, and the job's
 compare.json and results-meta.json.
 """
-function pr_row(pull, build, job, compare, meta)
+function pr_row(pull, build, job, compare, meta; variant="")
     arm(label) = getin(meta, :arms, Symbol(String(get(compare, label, String(label)))))
     head, base = arm(:head), arm(:base)
     categories = collect(get(compare, :categories, []))
     errors = Dict("errors" => something(get(compare, :errors, nothing), Dict()), "failures" => something(get(compare, :failures, nothing), []))
     benchmarks, s = pr_benchmarks(get(compare, :benchmarks, []), categories)
     blocks = maxornothing([get(b, :blocks, nothing) for b in benchmarks])
-    return (Int(pull.number), str(get(pull, :title, nothing)), str(getin(pull, :user, :login)), get(pull, :draft, false) === true ? 1 : 0,
+    return (Int(pull.number), variant, str(get(pull, :title, nothing)), str(getin(pull, :user, :login)), get(pull, :draft, false) === true ? 1 : 0,
             str(getin(pull, :head, :sha)), str(getin(pull, :base, :ref)),
             Int(build.number), String(job.id), String(job.state), Store.iso(Store.parse_upstream(String(build.created_at))),
             at(get(job, :finished_at, nothing)), miss(get(job, :web_url, nothing)),
@@ -436,7 +439,7 @@ them whose build is older than `listed_at`, when the list was taken.
 """
 function write_prs!(db, rows; open_numbers=nothing, listed_at=nothing)
     seq = next_seq!(db)
-    stmt = upsert_stmt(db, "rtb_prs", ["pr_number"], PR_COLS)
+    stmt = upsert_stmt(db, "rtb_prs", ["pr_number", "variant"], PR_COLS)
     for r in rows
         upsert!(stmt, (r..., seq))
     end
@@ -448,16 +451,16 @@ function write_prs!(db, rows; open_numbers=nothing, listed_at=nothing)
 end
 
 function refresh_prs!(db)
-    existing = Dict(Int(r.pr_number) => String(r.job_uuid) for r in query(db, "SELECT pr_number, job_uuid FROM rtb_prs"))
+    existing = Dict((Int(r.pr_number), String(r.variant)) => String(r.job_uuid) for r in query(db, "SELECT pr_number, variant, job_uuid FROM rtb_prs"))
     pulls, listed_at = open_pulls(db)
     since = now(UTC) - Day(isempty(existing) ? PR_BACKFILL_DAYS : PR_LOOKBACK_DAYS)
     rows = Any[]
-    for (n, list) in pr_jobs(since)
+    for ((n, variant), list) in pr_jobs(since)
         pull = get(pulls, n, nothing)
         pull === nothing && continue
         for (build, job) in list
             # The newest job with a comparison is what the row has already
-            get(existing, n, "") == String(job.id) && break
+            get(existing, (n, variant), "") == String(job.id) && break
             fetched = fetch_job_artifacts(PR_PIPELINE, build, job, ("compare.json", "results-meta.json"))
             if fetched === nothing
                 @warn "Could not fetch the artifacts; the job is retried next run" pr=n build=build.number
@@ -466,7 +469,7 @@ function refresh_prs!(db)
             compare, meta = fetched
             # The job stopped before comparing; an older one may have
             compare === nothing && continue
-            push!(rows, pr_row(pull, build, job, compare, meta))
+            push!(rows, pr_row(pull, build, job, compare, meta; variant))
             break
         end
     end
@@ -476,7 +479,7 @@ function refresh_prs!(db)
         stmt = DBInterface.prepare(db, "UPDATE rtb_prs SET title = ?1, author = ?2, draft = ?3, pr_head_sha = ?4, base_ref = ?5, change_seq = ?6 " *
                                        "WHERE pr_number = ?7 AND (title IS NOT ?1 OR author IS NOT ?2 OR draft IS NOT ?3 OR pr_head_sha IS NOT ?4 OR base_ref IS NOT ?5)")
         seq = next_seq!(db)
-        for r in query(db, "SELECT pr_number FROM rtb_prs")
+        for r in query(db, "SELECT DISTINCT pr_number FROM rtb_prs")
             p = get(pulls, Int(r.pr_number), nothing)
             p === nothing && continue
             DBInterface.execute(stmt, (str(get(p, :title, nothing)), str(getin(p, :user, :login)), get(p, :draft, false) === true ? 1 : 0,

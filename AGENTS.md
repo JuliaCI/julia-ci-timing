@@ -155,16 +155,22 @@ effect of the optimizations, and `base_startup`, the regular build's startup. Th
 series and shows the paired difference in its tooltip and details.
 `src` is the same for the `TTFX src` job, which measures the nightly build with its
 dependencies, LLVM included, built from source (`USE_BINARYBUILDER=0`). The job also
-runs on pull requests with the `needs extended CI` label, to measure LLVM changes; those
-runs are not kept, as `ttfx_prs` holds only the regular job's comparison.
+runs on pull requests with the `needs source build` or `needs extended CI` label, to
+measure LLVM changes, comparing head and merge-base both built from source; those
+comparisons are kept as the pull request's `src` variant (below).
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base
 (a pull request stacked on another is compared with the one below it, `ttfx_prs.base_ref`)
 and uploading `ttfx/compare.json`. `fetch_ttfx.jl` keeps only the latest
-comparison of each open pull request, in `ttfx_prs` (no history: a closed
-pull request's row is deleted), and `api/ttfx/prs` ranks them for the TTFX
-tab's "Open PRs" table. A job whose driver reads the CPU's counters also reports the
+comparison of each job variant (`ttfx_prs.variant`: `''` for the regular job, `src` for
+`TTFX src`, the label's qualifier for any other) of each open pull request, in `ttfx_prs`
+(no history: a closed pull request's rows are deleted). `api/ttfx/prs` ranks them for
+the TTFX tab's "Open PRs" table, one entry per pull request: its regular comparison, or
+its first other variant when it has none, with `variants` naming the rest. The Commit view
+(`api/commit/<number>`, `ttfx_variants`) shows every variant, each in its own section;
+`focus=ttfx-src` (`ttfx`, `runtime`, `runtime-src`, ...) in its URL scrolls to one. For a
+master commit it shows the `src` and `opt` jobs of the daily schedule the same way. A job whose driver reads the CPU's counters also reports the
 instruction changes, which it never judges: `suite` has `precompile_instructions`,
 `load_instructions`, `run_instructions`, `startup_instructions` and
 `startup_repl_instructions`, head against base per block, with verdict `same`. The
@@ -358,7 +364,7 @@ The `Runtime benchmarks src` job of the daily schedule measures the build with i
 dependencies, LLVM included, built from source (`USE_BINARYBUILDER=0`); its rows have
 kind `src`, and `api/runtime/summary` serves them under `src` like the weekly references
 under `releases`, `lts` and `branch_nightly`. Like `TTFX src` it also runs on labelled
-pull requests, which `rtb_prs` leaves out.
+pull requests; `rtb_prs` keeps those as the `src` variant, like `ttfx_prs`.
 
 `min_ns / ops` is the time per work item. On julia-pr the job compares the head with the
 master build of the merge-base and uploads `compare.json`; `rtb_prs` keeps the latest one
