@@ -19,7 +19,9 @@
 # weekly job does the same for the newest patch release of the LTS series (kind 'lts'),
 # and a third for the nightly of the next release's branch (kind 'branch_nightly').
 # The nightly schedule's optimized build (PGO and ThinLTO, JULIA_CI_BUILD_MODE=opt) is
-# measured too; its rows have kind 'opt'. Once a release branch has commits of its own,
+# measured too; its rows have kind 'opt'. So is its from-source build (USE_BINARYBUILDER=0,
+# for LLVM changes), with kind 'src'; both jobs also measure the regular build of the same
+# commit, as arm `base`. Once a release branch has commits of its own,
 # julia-ci measures each of its builds as it does master's; those rows have kind
 # 'release_branch'.
 # Jobs whose driver logs invalidations add, per task, how many MethodInstances the task
@@ -56,9 +58,10 @@ const CI_PIPELINE = "julia-ci"
 # Job label is ":macos: TTFX <triplet>" (pipelines/main/misc/ttfx/ttfx_macos.yml),
 # ":macos: TTFX release <triplet>", ":macos: TTFX lts <triplet>" and
 # ":macos: TTFX branch nightly <triplet>" for the weekly references, or
-# ":macos: TTFX opt <triplet>" for the nightly optimized build; the triplet keeps the
+# ":macos: TTFX opt <triplet>" for the nightly optimized build, or ":macos: TTFX src <triplet>"
+# for the nightly from-source build; the triplet keeps the
 # group's "Launch TTFX benchmark jobs" step from matching
-const TTFX_JOB = r"\bTTFX\s+(?:(release|lts|opt|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
+const TTFX_JOB = r"\bTTFX\s+(?:(release|lts|opt|src|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 # Metric order in each task's array; the frontend indexes by this. A metric added
 # later leaves earlier rows' arrays short: the newest REFETCH_BUILDS such rows are

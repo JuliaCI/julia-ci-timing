@@ -19,6 +19,8 @@
 # The weekly julia-ci build that measures published releases (TTFX_RELEASE) runs the
 # job on the newest stable release (kind 'release'), the LTS ('lts') and the nightly of
 # the next release's branch ('branch_nightly'); their rows sit beside the master ones.
+# The daily schedule's from-source build (USE_BINARYBUILDER=0, for LLVM changes) is
+# measured too, with kind 'src'.
 # The backfill of master commits measured before CI ran the job, from manyjulias builds
 # on another machine, comes as a bundle published with julia-ci-benchmarks (see below);
 # its rows have pipeline 'manyjulias'.
@@ -40,9 +42,10 @@ using SQLite, DBInterface
 const CI_PIPELINE = "julia-ci"
 const PR_PIPELINE = "julia-pr"
 # ":macos: Runtime benchmarks aarch64-apple-darwin", or ":macos: Runtime benchmarks
-# release <triplet>" (also lts, branch nightly) for the weekly references; the triplet
+# release <triplet>" (also lts, branch nightly) for the weekly references, or
+# ":macos: Runtime benchmarks src <triplet>" for the nightly from-source build; the triplet
 # keeps a group step of the same name from matching
-const RTB_JOB = r"\bRuntime benchmarks\s+(?:(release|lts|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
+const RTB_JOB = r"\bRuntime benchmarks\s+(?:(release|lts|src|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out")
 const ARTIFACT_DIR = "runtime-benchmarks/out/"
 # The parsed results are some MB of samples per job; the store keeps them at a higher
@@ -332,7 +335,10 @@ function pr_jobs(since::DateTime)
             for job in get(build, :jobs, [])
                 get(job, :type, nothing) == "script" || continue
                 name = get(job, :name, nothing)
-                (name === nothing || match(RTB_JOB, String(name)) === nothing) && continue
+                m = name === nothing ? nothing : match(RTB_JOB, String(name))
+                # Only the comparison job; a pull request with the `needs extended CI`
+                # label also measures its from-source build
+                (m === nothing || m.captures[1] !== nothing) && continue
                 String(get(job, :state, "")) in FINISHED_STATES || continue
                 push!(get!(jobs, n, Any[]), (build, job))
             end

@@ -153,6 +153,10 @@ entry adds `base`, the regular build's times per task (the time metrics only,
 from the job's `base` samples), so `tasks[t][i] / base[t][i]` is the paired
 effect of the optimizations, and `base_startup`, the regular build's startup. The site draws the optimized build as a separate
 series and shows the paired difference in its tooltip and details.
+`src` is the same for the `TTFX src` job, which measures the nightly build with its
+dependencies, LLVM included, built from source (`USE_BINARYBUILDER=0`). The job also
+runs on pull requests with the `needs extended CI` label, to measure LLVM changes; those
+runs are not kept, as `ttfx_prs` holds only the regular job's comparison.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base
@@ -350,6 +354,11 @@ the code layout) are listed in `RETIRED_BENCHMARKS`: the fetcher leaves them out
 jobs and pull request comparisons and deletes their rows once (raw_rtb keeps them).
 The run page, `/runtime-run`, reads a job's artifacts from Buildkite live, so the API
 server needs the Buildkite token.
+The `Runtime benchmarks src` job of the daily schedule measures the build with its
+dependencies, LLVM included, built from source (`USE_BINARYBUILDER=0`); its rows have
+kind `src`, and `api/runtime/summary` serves them under `src` like the weekly references
+under `releases`, `lts` and `branch_nightly`. Like `TTFX src` it also runs on labelled
+pull requests, which `rtb_prs` leaves out.
 
 `min_ns / ops` is the time per work item. On julia-pr the job compares the head with the
 master build of the merge-base and uploads `compare.json`; `rtb_prs` keeps the latest one
