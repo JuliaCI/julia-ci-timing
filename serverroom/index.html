@@ -2125,6 +2125,208 @@
           text(ctx, "Yggdrasil", w / 2, 0.98 * h - 2, 0.035 * h, "#7f93a8");
         });
 
+      // The Grand Canyon as a motivational poster: no single flood carved it, and no single
+      // commit makes julia fast. Behind it, as in The Shawshank Redemption ("geology is the
+      // study of pressure and time"), is a tunnel dug one chip at a time, which a click on the
+      // poster rolls it up to show. Built once and hung again in each rebuilt room, so it stays
+      // as it was left across refreshes. Sizes in metres; the hole is placed from the poster's middle
+      const CANYON = { w: 1.5, h: 2.0, y: 1.75, holeY: -0.1, holeR: 0.4, depth: 4.5 };
+      const canyon = { open: false, k: 0, v: 0, group: null, face: null, roll: null, tunnel: null };
+      function canyonPoster() {
+        if (canyon.group) return canyon.group;
+        const { w, h, depth } = CANYON;
+        const g = (canyon.group = new THREE.Group());
+        // Drawn into the poster and the tunnel's far end once it has loaded
+        const photo = new Image();
+
+        const face = (canyon.face = picture(w, h, (ctx, cw, ch) => {
+          frame(ctx, cw, ch, "#111", "#111", 4);
+          const pw = 0.84 * cw, ph = (pw * 520) / 500, x0 = 0.08 * cw, y0 = 0.045 * ch;
+          const border = () => {
+            ctx.strokeStyle = "#ddd";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x0, y0, pw, ph);
+          };
+          ctx.fillStyle = "#3b2a25";
+          ctx.fillRect(x0, y0, pw, ph);
+          border();
+          photo.addEventListener("load", () => {
+            ctx.drawImage(photo, x0, y0, pw, ph);
+            border();
+            face.material.map.needsUpdate = true;
+          });
+          ctx.textAlign = "center";
+          text(ctx, "PERSISTENCE", cw / 2, 0.8 * ch, 0.065 * ch, "#f2f2f2", "bold");
+          text(ctx, "No single commit carved this.", cw / 2, 0.87 * ch, 0.036 * ch, "#bbb");
+          text(ctx, "A canyon is just a lot of −0.1%.", cw / 2, 0.925 * ch, 0.036 * ch, "#bbb");
+        }, 340));
+        // A photo under the room's dim light: let it glow a little
+        Object.assign(face.material, { emissive: new THREE.Color(0xffffff), emissiveMap: face.material.map, emissiveIntensity: 0.3 });
+        // Pinned at its top edge, which it rolls up towards
+        face.geometry.translate(0, -h / 2, 0);
+        face.position.y = h / 2;
+        face.userData.poster = true;
+        const roll = (canyon.roll = new THREE.Mesh(GEO.cyl, surface(0xe9e4d6, { roughness: 0.9, metalness: 0 })));
+        roll.rotation.z = Math.PI / 2;
+        roll.userData.poster = true;
+        g.add(face, roll);
+
+        const tunnel = (canyon.tunnel = new THREE.Group());
+        // The poster hangs a little off the wall; the tunnel starts just behind it
+        tunnel.position.set(0, CANYON.holeY, -0.05);
+        const tubeGeo = new THREE.CylinderGeometry(0.36, 0.5, depth, 24, 1, true);
+        tubeGeo.rotateX(-Math.PI / 2);
+        tubeGeo.translate(0, 0, -depth / 2);
+        let seed = 11;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+        const rock = canvasTexture(256, 512, (ctx, cw, ch) => {
+          // From the daylight at the far end (the top) to the room's light at the mouth
+          const shade = ctx.createLinearGradient(0, 0, 0, ch);
+          for (const [at, col] of [[0, "#a8652c"], [0.1, "#2a170c"], [0.35, "#0c0907"], [0.75, "#241c16"], [1, "#5a4a3c"]]) shade.addColorStop(at, col);
+          ctx.fillStyle = shade;
+          ctx.fillRect(0, 0, cw, ch);
+          // Every mark one swing of the rock hammer
+          ctx.lineWidth = 2;
+          for (let i = 0; i < 900; i++) {
+            const x = rnd() * cw, y = rnd() * ch, a = rnd() * Math.PI;
+            ctx.strokeStyle = rnd() < 0.6 ? "rgba(0, 0, 0, 0.35)" : "rgba(255, 226, 190, 0.1)";
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + Math.cos(a) * 9, y + Math.sin(a) * 9);
+            ctx.stroke();
+          }
+        });
+        tunnel.add(new THREE.Mesh(tubeGeo, new THREE.MeshBasicMaterial({ map: rock, side: THREE.BackSide })));
+        // It comes out at the canyon
+        const exit = new THREE.Mesh(
+          new THREE.CircleGeometry(0.36, 24),
+          new THREE.MeshBasicMaterial({
+            fog: false,
+            map: canvasTexture(256, 256, (ctx, cw) => {
+              ctx.fillStyle = "#ffb45e";
+              ctx.fillRect(0, 0, cw, cw);
+              photo.addEventListener("load", () => {
+                ctx.drawImage(photo, 60, 0, 380, 380, 0, 0, cw, cw);
+                exit.material.map.needsUpdate = true;
+              });
+            }),
+          }),
+        );
+        exit.position.z = -depth;
+        tunnel.add(exit);
+        // The rock hammer, left just inside
+        const hammer = new THREE.Group();
+        const handle = new THREE.Mesh(GEO.box, surface(0x8a5a2b, { roughness: 0.8, metalness: 0 }));
+        handle.scale.set(0.26, 0.022, 0.03);
+        const head = new THREE.Mesh(GEO.box, MAT.rackTrim);
+        head.scale.set(0.035, 0.035, 0.13);
+        head.position.x = 0.13;
+        hammer.add(handle, head);
+        // Propped against the side, its head up where it shows from the room
+        hammer.position.set(0.1, -0.38, -0.45);
+        hammer.rotation.set(0, 0.6, 0.5);
+        tunnel.add(hammer);
+        // Nothing in the tunnel is something to click or fly to
+        tunnel.traverse((o) => (o.raycast = () => {}));
+        g.add(tunnel);
+
+        // What the hammer took out, a chip at a time, swept against the wall
+        const chipGeo = new THREE.DodecahedronGeometry(1, 0);
+        for (let i = 0; i < 18; i++) {
+          const chip = new THREE.Mesh(chipGeo, MAT.dust);
+          const s = 0.012 + rnd() * 0.03;
+          chip.scale.set(s, s * 0.6, s);
+          chip.position.set((rnd() - 0.5) * 0.9, -CANYON.y + s * 0.5, 0.05 + rnd() * rnd() * 0.5);
+          chip.rotation.y = rnd() * Math.PI;
+          chip.castShadow = true;
+          g.add(chip);
+        }
+        // Scrawled on the wall below, with a tally that someone gave up keeping
+        const scrawl = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.7, 0.62),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            depthWrite: false,
+            map: canvasTexture(510, 186, (ctx, cw, ch) => {
+              ctx.rotate(-0.05);
+              ctx.textAlign = "center";
+              ctx.font = `62px ${MARKER}`;
+              ctx.fillStyle = "rgba(226, 232, 240, 0.8)";
+              ctx.fillText("pressure + time", cw / 2 - 6, 0.5 * ch);
+              ctx.strokeStyle = "rgba(226, 232, 240, 0.6)";
+              ctx.lineWidth = 3;
+              ctx.lineCap = "round";
+              ctx.beginPath();
+              for (let i = 0; i < 11; i++) {
+                const x = 34 + i * 41 + rnd() * 4, y = 0.68 * ch + rnd() * 5;
+                // The last group is not full yet
+                for (let j = 0; j < (i === 10 ? 2 : 4); j++) {
+                  ctx.moveTo(x + j * 7 + rnd() * 2, y);
+                  ctx.lineTo(x + j * 7 + rnd() * 2, y + 30);
+                }
+                if (i < 10) {
+                  ctx.moveTo(x - 5, y + 24);
+                  ctx.lineTo(x + 27, y + 6);
+                }
+              }
+              ctx.stroke();
+            }),
+          }),
+        );
+        scrawl.position.set(0, -CANYON.y + 0.4, -0.012);
+        g.add(scrawl);
+        // The page is also served at /serverroom, without the slash, so a bare relative path would miss
+        photo.src = "../serverroom/canyon.jpg";
+        updateCanyon(0);
+        return g;
+      }
+      // A wall of `w` by `h` with the tunnel's rough mouth knocked through it at (`x`, `y`) from its middle
+      function holedWall(w, h, x, y) {
+        const wall = new THREE.Shape();
+        wall.moveTo(-w / 2, -h / 2).lineTo(w / 2, -h / 2).lineTo(w / 2, h / 2).lineTo(-w / 2, h / 2).closePath();
+        const hole = new THREE.Path();
+        for (let i = 0; i < 28; i++) {
+          const a = (i / 28) * Math.PI * 2;
+          const r = CANYON.holeR * (1 + 0.09 * Math.sin(3 * a + 1) + 0.05 * Math.sin(7 * a) + 0.03 * Math.sin(11 * a + 2));
+          hole[i ? "lineTo" : "moveTo"](x + r * Math.cos(a), y + r * Math.sin(a));
+        }
+        hole.closePath();
+        wall.holes.push(hole);
+        return new THREE.ShapeGeometry(wall);
+      }
+      // The poster springs up to a fifth of its height, and back down
+      function updateCanyon(dt) {
+        if (!canyon.face) return;
+        const goal = canyon.open ? 1 : 0;
+        if (reduceMotion || (Math.abs(goal - canyon.k) < 0.001 && Math.abs(canyon.v) < 0.01)) {
+          canyon.k = goal;
+          canyon.v = 0;
+        } else {
+          canyon.v += ((goal - canyon.k) * 110 - canyon.v * 12) * dt;
+          canyon.k += canyon.v * dt;
+        }
+        const k = Math.min(1.05, Math.max(0, canyon.k));
+        const s = 1 - 0.8 * k;
+        const { face, roll } = canyon;
+        face.scale.y = s;
+        // The part still hanging keeps its place in the picture
+        face.material.map.repeat.y = s;
+        face.material.map.offset.y = 1 - s;
+        const r = 0.012 + 0.045 * k;
+        roll.scale.set(r, CANYON.w + 0.02, r);
+        roll.position.set(0, CANYON.h / 2 - CANYON.h * s, r);
+        roll.visible = canyon.tunnel.visible = k > 0.002;
+      }
+      function toggleCanyon() {
+        canyon.open = !canyon.open;
+        tip.style.display = "none";
+      }
+      const canyonTipHtml = () =>
+        `<b>Pressure and time</b>` +
+        (canyon.open
+          ? `<div class="cap">Dug one chip at a time.</div><div class="hosts">Click to hang it back</div>`
+          : `<div class="cap">Many small improvements, none of them much alone.</div><div class="hosts">That, and a big poster.</div>`);
+
       // A cooling unit; its display shows a supply temperature that rises with the load
       function coolingUnit(temp) {
         const g = new THREE.Group();
@@ -2166,6 +2368,8 @@
       function buildRoom(data) {
         if (roomGroup) {
           scene.remove(roomGroup);
+          // Kept for the next room
+          canyon.group?.removeFromParent();
           roomGroup.traverse((o) => {
             if (o.isSprite || (o.material && o.material.map)) {
               o.material.map?.dispose();
@@ -2296,8 +2500,11 @@
           [wallClock(), 2.45],
           [flakyBoard(), 2.1],
           [whiteboard(), 2.05],
+          [canyonPoster(), CANYON.y],
           [employeePoster(best), 2.15],
         ]);
+        back.geometry.dispose();
+        back.geometry = holedWall(W, wallH, canyon.group.position.x, CANYON.y + CANYON.holeY - wallH / 2);
         spread("left", [
           [dispatchPoster(), 1.9],
           [revertSign(), 1.6],
@@ -2430,12 +2637,19 @@
         if (gesture && pointers.size === 0) {
           // A click, not a drag: fly to what was clicked
           if (walk.on) {
-            if (!gesture.moved && e.pointerType === "mouse") canvas.requestPointerLock?.();
+            // With the mouse captured the crosshair aims
+            const at = document.pointerLockElement === canvas ? [innerWidth / 2, innerHeight / 2] : [e.clientX, e.clientY];
+            if (gesture.moved || e.type !== "pointerup") {
+            } else if (thingAt(...at).poster) toggleCanyon();
+            else if (e.pointerType === "mouse") canvas.requestPointerLock?.();
           } else if (!gesture.moved && !gesture.panning && e.type === "pointerup" && performance.now() - gesture.at < 500) {
             // A waiting person opens their job's pull request; on a touch screen
             // the first tap shows which job it is and a second one opens it
-            const job = jobAt(e.clientX, e.clientY);
-            if (job && (e.pointerType === "mouse" || tappedJob === job)) {
+            const { job, poster } = thingAt(e.clientX, e.clientY);
+            if (poster) {
+              tappedJob = null;
+              toggleCanyon();
+            } else if (job && (e.pointerType === "mouse" || tappedJob === job)) {
               tappedJob = null;
               open(jobUrl(job), "_blank", "noopener");
             } else if (job) {
@@ -2693,19 +2907,21 @@
           `<div class="hosts">Click to open the ${j.pull_request ? "pull request" : "build"}</div>`
         );
       }
-      // The waiting job of the person under the screen position, unless something solid is in front
-      function jobAt(x, y) {
-        if (!renderer || !roomGroup) return null;
+      // What a click acts on under the screen position, unless something solid is in front:
+      // the waiting job of a person, or the canyon poster
+      function thingAt(x, y) {
+        if (!renderer || !roomGroup) return {};
         ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
         ray.setFromCamera(ndc, camera);
         for (const h of ray.intersectObject(roomGroup, true)) {
-          if (h.object.isSprite) continue;
+          if (h.object.isSprite || !h.object.visible) continue;
+          if (h.object.userData.poster) return { poster: true };
           let o = h.object;
           while (o && !o.userData.job) o = o.parent;
-          if (o) return o.userData.job;
-          if (h.object.material.visible !== false && !h.object.material.transparent) return null;
+          if (o) return { job: o.userData.job };
+          if (h.object.material.visible !== false && !h.object.material.transparent) return {};
         }
-        return null;
+        return {};
       }
       function showTip(html, cx, cy) {
         tip.innerHTML = html;
@@ -2717,9 +2933,10 @@
       }
       function hover(e) {
         if (!renderer || !rows.length) return;
-        const job = jobAt(e.clientX, e.clientY);
-        canvas.classList.toggle("job", !!job);
+        const { job, poster } = thingAt(e.clientX, e.clientY);
+        canvas.classList.toggle("job", !!job || !!poster);
         if (job) return showTip(jobTipHtml(job), e.clientX, e.clientY);
+        if (poster) return showTip(canyonTipHtml(), e.clientX, e.clientY);
         const hit = ray.intersectObjects(rows.map((r) => r.hit))[0];
         if (!hit) {
           tip.style.display = "none";
@@ -3188,6 +3405,7 @@
         if (walk.on) updateWalk(dt);
         else placeCamera();
         updateClock();
+        updateCanyon(dt);
         // A sound problem must not stop the room from drawing
         try {
           updateSound(dt);
