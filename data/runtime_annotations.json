@@ -15,6 +15,14 @@
       "description": "The suite now runs its benchmark processes with JULIA_OBJCACHE=0. Before this build the JIT object cache gave every sample after the first the object code of an earlier compile, so these benchmarks timed loading it rather than LLVM. With the cache off they measure the compile: llvm_large_function takes about 13.6x the cycles, first_call 4.1x and infer_workload 1.3x.",
       "url": "https://github.com/JuliaCI/julia-ci-benchmarks/commit/c4d9a01ad7a246cf2c4e764a76727304d297b100",
       "benchmarks": ["compiler/llvm_large_function", "compiler/first_call", "compiler/infer_workload"]
+    },
+    {
+      "build": 1811,
+      "kind": "driver",
+      "label": "Input reshuffled",
+      "description": "bitarray_ops now reshuffles the chunks of its input before every sample. Its input used to repeat, and the M6's branch predictor learned the loop exits of findall from it, more or less of them depending on where the build placed the loop: builds jumped between about 495k and 812k cycles for the same instructions. With no pattern to learn every build measures about 887k, so the step up here is the benchmark, not a Julia commit.",
+      "url": "https://github.com/JuliaCI/julia-ci-benchmarks/pull/5",
+      "benchmarks": ["array/bitarray_ops"]
     }
   ]
 }
