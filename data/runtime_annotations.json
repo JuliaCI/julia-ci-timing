@@ -7,6 +7,14 @@
       "label": "M2 → M6",
       "description": "The runtime benchmarks moved from the M2 Mac minis (honeycrisp-*) to the M6 Mac minis (jonagold-*), which have room for them (julia-buildkite#789). Timings before and after this build come from different CPUs and are not comparable.",
       "url": "https://github.com/JuliaCI/julia-buildkite/pull/789"
+    },
+    {
+      "build": 1800,
+      "kind": "driver",
+      "label": "Object cache off",
+      "description": "The suite now runs its benchmark processes with JULIA_OBJCACHE=0. Before this build the JIT object cache gave every sample after the first the object code of an earlier compile, so these benchmarks timed loading it rather than LLVM. With the cache off they measure the compile: llvm_large_function takes about 13.6x the cycles, first_call 4.1x and infer_workload 1.3x.",
+      "url": "https://github.com/JuliaCI/julia-ci-benchmarks/commit/c4d9a01ad7a246cf2c4e764a76727304d297b100",
+      "benchmarks": ["compiler/llvm_large_function", "compiler/first_call", "compiler/infer_workload"]
     }
   ]
 }
