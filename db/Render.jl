@@ -763,14 +763,14 @@ function ttfx(db; since="")
     for r in rows(db, "SELECT job_uuid, task, error FROM ttfx_failures" * windowed, params)
         get!(failures, String(r.job_uuid), Dict{String,String}())[String(r.task)] = String(r.error)
     end
-    # An optimized build's job measures the regular build of the same commit beside it,
-    # interleaved (arm `base`); its time metrics per task come from the samples, reduced
-    # as fetch_ttfx.jl reduces the head arm's into ttfx_results
+    # An optimized or from-source build's job measures the regular build of the same
+    # commit beside it, interleaved (arm `base`); its time metrics per task come from the
+    # samples, reduced as fetch_ttfx.jl reduces the head arm's into ttfx_results
     bases = Dict{String,Dict{String,Any}}()
-    opt_where = where * (isempty(where) ? " WHERE" : " AND") * " kind = 'opt'"
+    paired_where = where * (isempty(where) ? " WHERE" : " AND") * " kind IN ('opt', 'src')"
     let samples = Dict{Tuple{String,String},Vector{Any}}()
         for r in rows(db, "SELECT job_uuid, task, precompile_s, load_s, run_s, total_s, load_gcoff_s, run_gcoff_s, total_gcoff_s " *
-                          "FROM ttfx_samples WHERE arm = 'base' AND status = 'ok' AND job_uuid IN (SELECT job_uuid FROM ttfx_jobs$opt_where)", params)
+                          "FROM ttfx_samples WHERE arm = 'base' AND status = 'ok' AND job_uuid IN (SELECT job_uuid FROM ttfx_jobs$paired_where)", params)
             push!(get!(samples, (String(r.job_uuid), String(r.task)), Any[]), r)
         end
         arr(x) = x === missing ? Float64[] : Float64.(JSON3.read(String(x)))
@@ -815,9 +815,9 @@ function ttfx(db; since="")
             if arms !== nothing
                 s = get(arms, String(coalesce(j.selected_arm, "head")), nothing)
                 s === nothing || (out[end]["startup"] = s)
-                kind == "opt" && haskey(arms, "base") && (out[end]["base_startup"] = arms["base"])
+                kind in ("opt", "src") && haskey(arms, "base") && (out[end]["base_startup"] = arms["base"])
             end
-            kind == "opt" && (out[end]["base"] = get(bases, String(j.job_uuid), Dict{String,Any}()))
+            kind in ("opt", "src") && (out[end]["base"] = get(bases, String(j.job_uuid), Dict{String,Any}()))
         end
         return out
     end
@@ -835,10 +835,11 @@ function ttfx(db; since="")
     branch_builds = filter(ahead, jobs("release_branch"))
     isempty(branch_builds) || sort!(append!(branch_nightly, branch_builds); by=b -> (b["date"], b["build"]))
     opt = jobs("opt")
+    src = jobs("src")
     task_names = sort!(unique(String[k for b in builds for d in (b["tasks"], b["failed"]) for k in keys(d)]))
     return OrderedDict("generated_at" => generated_at(db, "ttfx"), "pipeline" => pipeline, "branch" => "master",
                        "metrics" => TTFX_METRICS, "startup_metrics" => TTFX_STARTUP_METRICS, "tasks" => task_names, "builds" => builds, "releases" => releases, "lts" => lts,
-                       "branch_nightly" => branch_nightly, "opt" => opt)
+                       "branch_nightly" => branch_nightly, "opt" => opt, "src" => src)
 end
 
 # What one job recorded about compilation, per task: the statements its trace marks as
@@ -2199,7 +2200,7 @@ function runtime(db; since="", source="")
     names = sort!(collect(keys(info)); by=n -> (runtime_category_rank(info[n].category), n))
     benchmarks = [OrderedDict("name" => n, "category" => info[n].category, "metric" => info[n].metric, "ops" => info[n].ops) for n in names]
     categories = sort!(unique([info[n].category for n in names]); by=runtime_category_rank)
-    # The weekly references run on CI's machine
+    # The references run on CI's machine
     refs = source != "manyjulias" ? (key => runtime_refs(db, kind, where, params[1:end-length(cparams)]) for (kind, key) in RUNTIME_REF_KINDS) :
            (key => Any[] for (_, key) in RUNTIME_REF_KINDS)
     markers = Any[]
@@ -2235,10 +2236,11 @@ function runtime_series(db, windowed, params, index::Dict{String,Int}, n)
     return series, newest
 end
 
-const RUNTIME_REF_KINDS = ("release" => "releases", "lts" => "lts", "branch_nightly" => "branch_nightly")
+const RUNTIME_REF_KINDS = ("release" => "releases", "lts" => "lts", "branch_nightly" => "branch_nightly", "src" => "src")
 
-# The weekly runs of a published julia of one kind in the window, in time order, each with
-# its fastest and slowest block per benchmark. A run that measured nothing (no release
+# The runs of one reference kind in the window, in time order, each with its fastest and
+# slowest block per benchmark: the weekly runs of a published julia, or the nightly
+# from-source build. A run that measured nothing (no release
 # branch ahead of the latest release) is left out.
 function runtime_refs(db, kind, where, params)
     jobs = rows(db, "SELECT * FROM rtb_jobs" * (isempty(where) ? " WHERE" : where * " AND") *

@@ -12609,7 +12609,7 @@ function showTtfxBuildPopup(b, task) {
 
   let html = '<div class="ttfx-popup-actions">';
   // The release, LTS and branch nightly runs measure commits off master
-  if (!ref || ref === "opt") html += allStatsButton(b.commit);
+  if (!ref || TTFX_REFS[ref]?.paired) html += allStatsButton(b.commit);
   html += `<a class="btn" href="${escapeHtml(ttfxJobUrl(b))}" target="_blank" rel="noopener noreferrer">Buildkite job</a>`;
   if (pr) html += `<a class="btn" href="${githubPrURL(pr)}" target="_blank" rel="noopener noreferrer">GitHub PR #${pr}</a>`;
   html += `<a class="btn" href="${githubCommitURL(escapeHtml(b.commit))}" target="_blank" rel="noopener noreferrer">GitHub commit</a>`;
@@ -12689,7 +12689,7 @@ function showTtfxBuildPopup(b, task) {
 
   openDetailPopup({
     title: TTFX_REFS[ttfxRefOf(b)]?.versioned ? `TTFX ${TTFX_REFS[ttfxRefOf(b)].versioned} ${b.version} ${formatUtc(b.date)}`
-      : ttfxRefOf(b) === "opt" ? `TTFX optimized build ${formatUtc(b.date)}`
+      : TTFX_REFS[ttfxRefOf(b)]?.paired ? `TTFX ${TTFX_REFS[ttfxRefOf(b)].paired} build ${formatUtc(b.date)}`
       : `TTFX build ${formatUtc(b.date)}`,
 
     html,
@@ -12713,7 +12713,7 @@ function ttfxBuildMarkdown(b, task) {
   const pr = ttfxBuildPr(b);
   const failed = b.failed ? Object.keys(b.failed).sort() : [];
   const nOk = b.tasks ? Object.keys(b.tasks).length : 0;
-  const what = TTFX_REFS[ref]?.versioned ? `${TTFX_REFS[ref].versioned} ${b.version}` : ref === "opt" ? `optimized build #${b.build}` : `build #${b.build}`;
+  const what = TTFX_REFS[ref]?.versioned ? `${TTFX_REFS[ref].versioned} ${b.version}` : TTFX_REFS[ref]?.paired ? `${TTFX_REFS[ref].paired} build #${b.build}` : `build #${b.build}`;
   const lines = [
     `**TTFX** ${what} ([job](${ttfxJobUrl(b)})): \`${b.commit.slice(0, 10)}\` (${b.version || "?"}), ${formatUtc(b.date)}` +
       (pr ? `, from #${pr}` : "") + ".",
@@ -13400,7 +13400,7 @@ function getTtfxFilteredBuilds() {
 // `lts` those of the newest LTS release, `branch_nightly` those of the nightly
 // of the next release's branch, `opt` the nightly optimized (PGO and ThinLTO)
 // builds of master.
-const TTFX_REF_KEYS = { release: "releases", lts: "lts", branch_nightly: "branch_nightly", opt: "opt" };
+const TTFX_REF_KEYS = { release: "releases", lts: "lts", branch_nightly: "branch_nightly", opt: "opt", src: "src" };
 function getTtfxFilteredRefs(ref) {
   return ttfxData ? ttfxInTimeRange(ttfxData[TTFX_REF_KEYS[ref]] || []) : [];
 }
@@ -13520,10 +13520,10 @@ function ttfxSuiteValue(b, tasks, metric = ttfxMetric, twin = null) {
   return s;
 }
 
-// For an optimized build's job, which measured the regular build of the same
-// commit beside it (`b.base`), the geomean over `tasks` of the optimized/regular
-// ratio of a time metric, with the number of tasks both arms measured; null
-// for any other run or a count
+// For an optimized or from-source build's job, which measured the regular build of
+// the same commit beside it (`b.base`), the geomean over `tasks` of the ratio of
+// that build to the regular one for a time metric, with the number of tasks both
+// arms measured; null for any other run or a count
 function ttfxPairedRatio(b, tasks, metric = ttfxMetric, twin = null) {
   if (ttfxIsJob(metric)) {
     const h = ttfxJobValue(b.startup, metric);
@@ -14302,7 +14302,8 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
             const b = items[0].raw.build;
             const versioned = TTFX_REFS[items[0].dataset._ref]?.versioned;
             if (versioned) return `${formatUtc(b.date)}  Julia ${b.version} (${versioned})  ${b.commit.slice(0, 10)}`;
-            if (items[0].dataset._ref === "opt") return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""} (optimized)`;
+            const paired = TTFX_REFS[items[0].dataset._ref]?.paired;
+            if (paired) return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""} (${paired})`;
             return `${formatUtc(b.date)}  ${b.commit.slice(0, 10)}${b.version ? "  " + b.version : ""}`;
           },
           label: (item) => {
@@ -14332,7 +14333,7 @@ function ttfxChartOptions({ metric = ttfxMetric, metricLabel, title, titleTail =
             const failed = b.failed ? Object.keys(b.failed).length : 0;
             const lines = [];
             const chart = items[0].chart;
-            if (items[0].dataset._ref === "opt") {
+            if (TTFX_REFS[items[0].dataset._ref]?.paired) {
               const p = ttfxPairedRatio(b, items[0].dataset._refCommon, metric, items[0].dataset._twin);
               if (p) lines.push(`vs regular build: ${formatTtfxRatio(p.ratio)}${ttfxTasksNote(metric, p.n)}`);
             }
@@ -14643,12 +14644,24 @@ const TTFX_REFS = {
     pointColor: (b) => ttfxReleaseVersionColor(b?.version),
     pointStyle: "circle",
   },
+  // `paired`: the job also measured the regular build of the same commit, so a point
+  // can be compared with it
   opt: {
     label: "Nightly Optimized",
     short: "Nightly Optimized",
     legend: "The nightly optimized build (PGO and ThinLTO), measured daily",
     legendTwin: "The optimized build",
+    paired: "optimized",
     color: () => (isDarkMode() ? "#d29922" : "#9a6700"),
+    pointStyle: "triangle",
+  },
+  src: {
+    label: "Nightly from source",
+    short: "Nightly from source",
+    legend: "The nightly build with its dependencies, LLVM included, built from source (USE_BINARYBUILDER=0), measured daily",
+    legendTwin: "The from-source build",
+    paired: "from-source",
+    color: () => (isDarkMode() ? "#bc8cff" : "#8250df"),
     pointStyle: "triangle",
   },
 };
@@ -22703,11 +22716,14 @@ function loadRuntimePrs() {
 }
 
 // The weekly runs of published julias, drawn on a benchmark's chart beside master:
-// [payload key, label, point style], as the TTFX tab's references
+// [payload key, label, point style], as the TTFX tab's references. A fourth item, a
+// colour, marks a nightly series of master's own commits, which has no release versions
+// to colour by.
 const RUNTIME_REFS = [
   ["releases", "Latest release", "rectRot"],
   ["lts", "LTS", "rect"],
   ["branch_nightly", "Next release nightly", "circle"],
+  ["src", "Nightly from source", "triangle", () => (isDarkMode() ? "#bc8cff" : "#8250df")],
 ];
 
 // One reference series' runs in the range, measured on `machine` (the machine of the
@@ -23170,18 +23186,21 @@ function updateRuntimeCharts() {
       k > 0 && !runtimeSameSource(i, list[k - 1]) ? [{ x: (runtimeTime(runtimeData.builds[list[k - 1]]) + runtimeTime(runtimeData.builds[i])) / 2, y: null }, point(i, key)] : [point(i, key)]);
   const notes = { interaction: { mode: "nearest", intersect: true }, annotations: runtimeNoteLines(idx, name, theme.isDark) };
   // The weekly references have the judged metric only
-  const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle]) => {
+  const refs = (judged ? RUNTIME_REFS : []).map(([refKey, label, pointStyle, nightlyColor]) => {
     const pts = runtimeRefPoints(refKey, name, refMachine);
     const back = refBackfills(runtimeData[refKey]);
     const newest = refNewest(pts.map((p) => p.r).sort((a, b) => runtimeTime(a) - runtimeTime(b)))?.version ?? null;
+    const color = nightlyColor ? nightlyColor() : ttfxReleaseVersionColor(newest);
+    const pointColor = (p) => (nightlyColor ? color : ttfxReleaseVersionColor(p.r.version));
     return {
       label,
       _ref: true,
+      _nightly: !!nightlyColor,
       data: pts,
-      borderColor: ttfxReleaseVersionColor(newest),
-      backgroundColor: ttfxReleaseVersionColor(newest),
-      pointBackgroundColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
-      pointBorderColor: pts.map((p) => ttfxReleaseVersionColor(p.r.version)),
+      borderColor: color,
+      backgroundColor: color,
+      pointBackgroundColor: pts.map(pointColor),
+      pointBorderColor: pts.map(pointColor),
       borderWidth: 1,
       borderDash: [4, 3],
       // Backfilled older releases stand off the line (they come last in the data)
@@ -23191,11 +23210,13 @@ function updateRuntimeCharts() {
       pointHoverRadius: 5,
     };
   }).filter((ds) => ds.data.length);
-  const refTitle = (raw) => `${raw.r.version} · weekly reference · ${formatUtc(raw.r.date)}`;
+  const refTitle = (item) => item.dataset._nightly
+    ? `${item.raw.r.commit.slice(0, 10)} · ${item.dataset.label.toLowerCase()} · ${formatUtc(item.raw.r.date)}`
+    : `${item.raw.r.version} · weekly reference · ${formatUtc(item.raw.r.date)}`;
   const benchTooltip = {
     filter: (item) => !item.dataset._band,
     callbacks: {
-      title: (items) => (items.length && items[0].raw.r ? refTitle(items[0].raw) : runtimeTooltipTitle(items)),
+      title: (items) => (items.length && items[0].raw.r ? refTitle(items[0]) : runtimeTooltipTitle(items)),
       label: (ctx) => {
         if (ctx.raw.r) {
           const [v, max] = ctx.raw.r.values[name];

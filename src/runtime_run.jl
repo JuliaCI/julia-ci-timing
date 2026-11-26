@@ -13,8 +13,9 @@ include(joinpath(@__DIR__, "..", "db", "Fetch.jl"))
 
 const PIPELINES = ("julia-pr", "julia-ci", "julia-buildkite-ci")
 const JOB_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-# As fetch_runtime.jl matches the job: ":macos: Runtime benchmarks aarch64-apple-darwin"
-const RTB_JOB = r"\bRuntime benchmarks\s+([a-z0-9_]+-[a-z0-9_-]+)$"
+# As fetch_runtime.jl matches the job: ":macos: Runtime benchmarks aarch64-apple-darwin",
+# or with a kind before the triplet (":macos: Runtime benchmarks src aarch64-apple-darwin")
+const RTB_JOB = r"\bRuntime benchmarks\s+(?:(?:release|lts|src|branch nightly)\s+)?([a-z0-9_]+-[a-z0-9_-]+)$"
 const FINISHED_STATES = ("passed", "failed", "timed_out", "canceled")
 const ARTIFACT_DIR = "runtime-benchmarks/out/"
 # The first comparison, and on a pull request with regressions the confirmation run
