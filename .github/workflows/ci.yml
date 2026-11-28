@@ -33,11 +33,11 @@ jobs:
         id: version
         run: echo "julia=$(sed -n 's/^FROM julia:\([0-9.]*\).*/\1/p' Dockerfile)" >> "$GITHUB_OUTPUT"
 
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ steps.version.outputs.julia }}
 
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
 
       - name: Instantiate
         run: |
@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 26
 
@@ -85,7 +85,7 @@ jobs:
           for f in $files; do bash -n "$f"; done
           shellcheck --severity=warning --exclude=SC2034 $files
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
 
