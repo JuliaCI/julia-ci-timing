@@ -158,6 +158,9 @@ dependencies, LLVM included, built from source (`USE_BINARYBUILDER=0`). The job 
 runs on pull requests with the `needs source build` or `needs extended CI` label, to
 measure LLVM changes, comparing head and merge-base both built from source; those
 comparisons are kept as the pull request's `src` variant (below).
+The TTFX tab's Latest view (`ts=latest`) puts the newest run of each series side
+by side, one bar chart per metric, over the selected tasks all of those runs
+measured; it ignores the time range.
 
 The TTFX job also runs on julia-pr builds of pull requests that touch the
 paths it watches, comparing the head with the master build of the merge-base

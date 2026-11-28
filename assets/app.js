@@ -7656,7 +7656,7 @@ const TABS = {
       tq: "ttfx task filter",
       tx: "ttfx excluded tasks (when most are selected)",
       tv: "ttfx table view",
-      ts: "ttfx chart mode (summary, per task or startup)",
+      ts: "ttfx chart mode (summary, per task, startup or latest)",
     },
     data: () => ttfxData,
     load: loadTtfxData,
@@ -13759,8 +13759,9 @@ function updateTtfxGcButtons() {
   btn.classList.toggle("btn-primary", ttfxGcOff);
 }
 
-// The charts drawn now, by summary panel or "task" for the per-task chart
+// The time charts drawn now, by summary panel or "task" for the per-task chart
 function ttfxChartsByKey() {
+  if (ttfxMode === "latest") return {};
   return ttfxDrawsPanels() ? { ...ttfxSummaryCharts } : ttfxChart ? { task: ttfxChart } : {};
 }
 
@@ -13975,7 +13976,8 @@ function applyTtfxURLParams() {
   }
   // A count or a detail has no summary panel, and the startup view only startup's
   if (params.get("ts") === "startup" && !ttfxIsJob()) ttfxMetric = "startup";
-  applyTtfxMode(ttfxModeFor(ttfxMetric, params.get("ts") === "tasks" ? "tasks" : "summary"));
+  const ts = params.get("ts");
+  applyTtfxMode(ttfxModeFor(ttfxMetric, ts === "tasks" || ts === "latest" ? ts : "summary"));
   const tv = params.get("tv");
   if (tv === "tasks" || tv === "builds") {
     ttfxTableView = tv;
@@ -14786,23 +14788,24 @@ function applyTtfxMode(mode) {
   destroyTtfxCharts();
 }
 
-// The summary and startup views draw panels, one per metric; the per-task view one chart
-const TTFX_MODES = ["summary", "tasks", "startup"];
+// The summary, startup and latest views draw panels, one per metric; the per-task view one chart
+const TTFX_MODES = ["summary", "tasks", "startup", "latest"];
 function ttfxDrawsPanels() {
   return ttfxMode !== "tasks";
 }
 
 // The view that shows `metric`, staying in the current one when it can: a job metric
-// is in the startup view alone, a count or a detail in the per-task chart alone
+// is in the startup and latest views alone, a count or a detail in the per-task chart alone
 function ttfxModeFor(metric, mode = ttfxMode) {
-  if (ttfxIsJob(metric)) return "startup";
   if (!ttfxHasPanel(metric)) return "tasks";
+  if (mode === "latest") return mode;
+  if (ttfxIsJob(metric)) return "startup";
   return mode === "startup" ? "summary" : mode;
 }
 
-// Whether the panel of `metric` belongs to the current view
+// Whether the panel of `metric` belongs to the current view; the latest view has them all
 function ttfxInView(metric) {
-  return ttfxHasPanel(metric) && ttfxIsJob(metric) === (ttfxMode === "startup");
+  return ttfxHasPanel(metric) && (ttfxMode === "latest" || ttfxIsJob(metric) === (ttfxMode === "startup"));
 }
 
 function setTtfxMode(mode) {
@@ -14832,7 +14835,7 @@ function updateTtfxMetricPills() {
   if (!el) return;
   el.innerHTML = Object.keys(TTFX_METRICS)
     // The startup view's pills pick its panels; the other views' every other metric
-    .filter((m) => !ttfxIsDetail(m) && ttfxIsJob(m) === (ttfxMode === "startup"))
+    .filter((m) => (ttfxMode === "latest" ? ttfxHasPanel(m) : !ttfxIsDetail(m) && ttfxIsJob(m) === (ttfxMode === "startup")))
     .map((m) => `<button type="button" class="${m === ttfxMetric ? "active" : ""}" onclick="setTtfxMetric('${m}')" title="${escapeHtml(ttfxMetricHelp(m))}">${TTFX_PILL_LABELS[m]}</button>`)
     .join("");
   document.getElementById("ttfx-summary-grid").dataset.metric = ttfxMetric;
@@ -14848,7 +14851,8 @@ function updateTtfxChart() {
   normalize.title = normalize.disabled
     ? "A count is drawn as recorded: it is often 0, which has no % change"
     : "Plot every series as % change from its first build in the range";
-  if (ttfxDrawsPanels()) updateTtfxSummaryCharts();
+  if (ttfxMode === "latest") updateTtfxLatestCharts();
+  else if (ttfxDrawsPanels()) updateTtfxSummaryCharts();
   else updateTtfxTaskChart();
 }
 
@@ -14962,6 +14966,125 @@ function updateTtfxSummaryCharts() {
     ttfxSummaryCharts[metric] = new Chart(canvas, { type: "line", data: { datasets }, options });
   }
   renderTtfxSummaryLegend();
+}
+
+// Short enough for five bars side by side in a third of the width
+const TTFX_LATEST_LABELS = { lts: "LTS", release: "Release", branch_nightly: "Next release", opt: "Optimized", src: "From source" };
+
+// The runs the latest view compares, oldest Julia first: each reference
+// series' newest run and master's newest build that measured any task.
+// The time range does not apply.
+function ttfxLatestRuns() {
+  const builds = (ttfxData && ttfxData.builds) || [];
+  let master = null;
+  for (let i = builds.length - 1; i >= 0 && !master; i--) if (Object.keys(builds[i].tasks || {}).length) master = builds[i];
+  const ref = (key) => {
+    const b = refNewest(ttfxData?.[TTFX_REF_KEYS[key]]);
+    return b && { b, label: TTFX_LATEST_LABELS[key], color: TTFX_REFS[key].color() };
+  };
+  const nightly = master && { b: master, label: TTFX_SUITE_LABEL, color: ttfxSuiteColor() };
+  return [ref("lts"), ref("release"), ref("branch_nightly"), nightly, ref("opt"), ref("src")].filter(Boolean);
+}
+
+// The value above each bar
+const ttfxBarValuesPlugin = {
+  id: "ttfxBarValues",
+  afterDatasetsDraw(chart) {
+    const fmt = chart.data.datasets[0]?._format;
+    if (!fmt) return;
+    const { ctx } = chart;
+    const meta = chart.getDatasetMeta(0);
+    ctx.save();
+    ctx.font = "11px " + Chart.defaults.font.family;
+    ctx.fillStyle = chartTheme().text;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    chart.data.datasets[0].data.forEach((v, i) => {
+      const bar = meta.data[i];
+      if (v == null || !bar) return;
+      ctx.fillText(fmt(v), bar.x, Math.min(bar.y, bar.base) - 2);
+    });
+    ctx.restore();
+  },
+};
+
+// One bar chart per metric, a bar per run of ttfxLatestRuns: the geomean over
+// the selected tasks every one of those runs measured, or with normalize on
+// the % change from master's build
+function updateTtfxLatestCharts() {
+  destroyTtfxCharts();
+  document.getElementById("ttfx-summary-legend").innerHTML = "";
+  const runs = ttfxLatestRuns();
+  const tasks = ttfxSelectedList();
+  if (!runs.length || !tasks.length) return;
+  const theme = chartTheme();
+  for (const metric of Object.keys(TTFX_METRICS)) {
+    if (!ttfxInView(metric)) continue;
+    const pool = ttfxIsJob(metric) ? [TTFX_STARTUP_TASK] : tasks;
+    // A run without any value of the metric gets no bar, rather than emptying the others
+    const measured = runs.filter((r) => pool.some((t) => ttfxValue(r.b, t, metric) != null));
+    const common = pool.filter((t) => measured.every((r) => ttfxValue(r.b, t, metric) != null));
+    const values = runs.map((r) => (measured.includes(r) ? ttfxSuiteValue(r.b, common, metric) : null));
+    const master = runs.find((r) => !ttfxRefOf(r.b));
+    const base = master && values[runs.indexOf(master)];
+    const normalized = ttfxNormalizedFor(metric) && base != null;
+    const data = normalized ? values.map((v) => (v == null ? null : (v / base - 1) * 100)) : values;
+    const fmt = normalized ? (v) => formatSignedPct(v, { digits: 1 }) : (v) => formatTtfxValue(v, metric);
+    const label = ttfxShownLabel(metric);
+    const tail = !common.length ? "None measured by every run" : ttfxIsJob(metric) ? "Median run, lowest block" : `Geomean of ${common.length} task${common.length > 1 ? "s" : ""}`;
+    const options = {
+      ...baseChartOptions(),
+      onClick: (e, els) => els.length && showTtfxBuildPopup(runs[els[0].index].b),
+      onHover: (e, els) => (e.native.target.style.cursor = els.length ? "pointer" : ""),
+      plugins: {
+        title: panelTitle(`${label}: ${tail}`, theme),
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => runs[items[0].dataIndex].label,
+            label: (item) => {
+              const r = runs[item.dataIndex];
+              const v = values[item.dataIndex];
+              const own = formatTtfxValue(v, metric) + (normalized && v !== base ? ` (${fmt(item.raw)} vs ${TTFX_SUITE_LABEL})` : "");
+              return [own, `Julia ${r.b.version || "?"}`, `${r.b.date} UTC${r.b.commit ? ", " + r.b.commit.slice(0, 10) : ""}`];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: theme.text,
+            autoSkip: false,
+            maxRotation: 0,
+            font: { size: 10 },
+            // Narrow bars drop a prerelease's build number: "1.15.0-DEV.1039" as "1.15-DEV"
+            callback(v, i) {
+              const version = runs[i].b.version || "";
+              const narrow = this.chart.width / runs.length < 90 && /-/.test(version);
+              return [runs[i].label, narrow ? version.replace(/^(\d+\.\d+)\.\d+-([A-Za-z]+\d*).*$/, "$1-$2") : version];
+            },
+          },
+          grid: { display: false },
+        },
+        y: {
+          beginAtZero: true,
+          grace: "12%",
+          ticks: { color: theme.text, callback: (v) => fmt(v) },
+          grid: { color: theme.grid },
+        },
+      },
+    };
+    const labels = runs.map((r) => r.label);
+    const colors = runs.map((r) => colorToRgba(r.color, 0.75));
+    const dataset = { data, _format: fmt, backgroundColor: colors, borderColor: runs.map((r) => r.color), borderWidth: 1, maxBarThickness: 56 };
+    ttfxSummaryCharts[metric] = new Chart(document.getElementById("ttfx-chart-" + metric), {
+      type: "bar",
+      data: { labels, datasets: [dataset] },
+      options,
+      plugins: [ttfxBarValuesPlugin],
+    });
+  }
 }
 
 function updateTtfxTaskChart() {

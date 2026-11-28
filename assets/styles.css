@@ -3243,6 +3243,11 @@ th.sorted .sort-indicator {
   #ttfx-summary-grid[data-mode="startup"] {
     grid-template-rows: auto 1fr;
   }
+  /* The latest view's six panels, without a legend */
+  #ttfx-summary-grid[data-mode="latest"] {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 1fr 1fr;
+  }
 }
 /* display: grid above would otherwise beat the hidden attribute */
 .ttfx-summary-grid[hidden],
